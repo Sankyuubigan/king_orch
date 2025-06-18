@@ -1,0 +1,5 @@
+/.venv
+/ollama
+/open-webui
+/ollama_runtime
+/uni_orch
