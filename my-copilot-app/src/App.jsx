@@ -1,3 +1,5 @@
+// src/App.jsx - КОД С ИСПРАВЛЕНИЕМ КОПИРОВАНИЯ
+
 import React from 'react';
 import { CopilotKit } from "@copilotkit/react-core";
 import { CopilotPopup } from "@copilotkit/react-ui";
@@ -5,15 +7,12 @@ import "@copilotkit/react-ui/styles.css";
 
 const appStyles = `
   .container {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100vh;
+    display: flex; flex-direction: column; align-items: center;
+    justify-content: center; height: 100vh;
   }
 `;
 
-// Этот стиль позволяет выделять и копировать текст из красного окна ошибки
+// ЭТОТ CSS ПОЗВОЛЯЕТ КОПИРОВАТЬ ТЕКСТ ИЗ КРАСНОГО ОКНА ОШИБКИ
 const fixErrorSelectionStyles = `
   [data-copilotkit-error-popup] {
     user-select: text !important;
@@ -25,23 +24,15 @@ const App = () => {
     <>
       <style>{appStyles}</style>
       <style>{fixErrorSelectionStyles}</style>
-      <CopilotKit
-        runtimeUrl="http://127.0.0.1:8000/api/copilotkit"
-        showDevConsole={true}
-      >
+      <CopilotKit runtimeUrl="http://127.0.0.1:8000/api/copilotkit">
         <div className="container">
-          <h1>🎭 The Orchestrator</h1>
-          <p>
-            Нажмите на иконку в правом нижнем углу, чтобы начать чат.
-          </p>
+          <h1>Тест соединения</h1>
         </div>
-        
         <CopilotPopup
-          instructions="Отвечай всегда на русском языке."
           defaultOpen={true}
           labels={{
-            title: "Чат с Оркестратором",
-            initial: "Привет! Спроси меня что-нибудь.",
+            title: "Тестовый чат",
+            initial: "Это просто тест. Отправь любое сообщение. Если я отвечу - соединение работает.",
           }}
         />
       </CopilotKit>

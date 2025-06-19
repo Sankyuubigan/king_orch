@@ -6,3 +6,4 @@
 /my-copilot-app/node_modules
 /my-copilot-app/dist
 /__pycache__
+/.condaenv
