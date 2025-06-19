@@ -3,4 +3,6 @@
 /open-webui
 /ollama_runtime
 /uni_orch
-/my-copilot-app
+/my-copilot-app/node_modules
+/my-copilot-app/dist
+/__pycache__

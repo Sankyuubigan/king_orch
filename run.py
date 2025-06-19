@@ -7,10 +7,83 @@ import os
 import sys
 import requests
 import logging
+import subprocess
 
 # Настройка логирования
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+def auto_build_frontend():
+    """Автоматическая пересборка React приложения."""
+    frontend_dir = "my-copilot-app"
+    
+    if not os.path.exists(frontend_dir):
+        logger.warning(f"⚠️ Frontend directory not found: {frontend_dir}")
+        return False
+    
+    try:
+        logger.info(f"🔨 Building React application in {frontend_dir}...")
+        
+        # Проверяем наличие package.json
+        package_json_path = os.path.join(frontend_dir, "package.json")
+        if not os.path.exists(package_json_path):
+            logger.warning(f"⚠️ package.json not found in {frontend_dir}")
+            return False
+        
+        # Проверяем наличие node_modules
+        node_modules_path = os.path.join(frontend_dir, "node_modules")
+        if not os.path.exists(node_modules_path):
+            logger.info("📦 Installing npm dependencies...")
+            result = subprocess.run(
+                ["npm", "install"], 
+                cwd=frontend_dir, 
+                capture_output=True, 
+                text=True,
+                timeout=300  # 5 минут на установку
+            )
+            
+            if result.returncode != 0:
+                logger.error(f"❌ npm install failed: {result.stderr}")
+                return False
+            
+            logger.info("✅ Dependencies installed successfully")
+        
+        # Выполняем сборку
+        logger.info("🏗️ Running npm run build...")
+        result = subprocess.run(
+            ["npm", "run", "build"], 
+            cwd=frontend_dir, 
+            capture_output=True, 
+            text=True,
+            timeout=120  # 2 минуты на сборку
+        )
+        
+        if result.returncode == 0:
+            logger.info("✅ React application built successfully!")
+            
+            # Проверяем, что папка dist создалась
+            dist_path = os.path.join(frontend_dir, "dist")
+            if os.path.exists(dist_path):
+                files_count = len(os.listdir(dist_path))
+                logger.info(f"📁 Build output: {files_count} files in {dist_path}")
+                return True
+            else:
+                logger.warning("⚠️ Build completed but dist folder not found")
+                return False
+        else:
+            logger.error(f"❌ Build failed: {result.stderr}")
+            logger.info(f"Build stdout: {result.stdout}")
+            return False
+            
+    except subprocess.TimeoutExpired:
+        logger.error("❌ Build process timed out")
+        return False
+    except FileNotFoundError:
+        logger.error("❌ npm not found. Please install Node.js and npm")
+        return False
+    except Exception as e:
+        logger.error(f"❌ Build error: {e}")
+        return False
 
 def check_server_health(max_attempts=40, delay=0.5):
     """Проверка здоровья сервера с таймаутом."""
@@ -51,13 +124,22 @@ if __name__ == '__main__':
     logger.info("🚀 --- STARTING THE ORCHESTRATOR APPLICATION ---")
     
     try:
-        # Запускаем сервер в отдельном процессе
+        # 1. АВТОМАТИЧЕСКАЯ ПЕРЕСБОРКА FRONTEND
+        logger.info("🔧 Step 1: Auto-building frontend...")
+        build_success = auto_build_frontend()
+        
+        if not build_success:
+            logger.warning("⚠️ Frontend build failed, but continuing anyway...")
+            logger.info("💡 You can try building manually: cd my-copilot-app && npm run build")
+        
+        # 2. ЗАПУСК СЕРВЕРА
+        logger.info("🔧 Step 2: Starting backend server...")
         server_process = multiprocessing.Process(target=start_server, daemon=True)
         server_process.start()
         logger.info(f"✅ Server process started with PID: {server_process.pid}")
         
-        # Ждем запуска сервера с проверкой здоровья
-        logger.info("⏳ Waiting for server to initialize...")
+        # 3. ОЖИДАНИЕ ГОТОВНОСТИ СЕРВЕРА
+        logger.info("🔧 Step 3: Waiting for server to initialize...")
         
         if not check_server_health():
             logger.error("❌ Server failed to start within timeout period")
@@ -68,7 +150,7 @@ if __name__ == '__main__':
         
         logger.info("✅ Server is healthy and ready!")
         
-        # Получаем информацию о сервере
+        # 4. ПОЛУЧЕНИЕ ИНФОРМАЦИИ О СЕРВЕРЕ
         try:
             info_response = requests.get("http://127.0.0.1:8000/info", timeout=5)
             if info_response.status_code == 200:
@@ -77,10 +159,10 @@ if __name__ == '__main__':
         except Exception as e:
             logger.warning(f"⚠️ Could not get server info: {e}")
         
-        # Создаем и запускаем окно
-        logger.info("🪟 Creating application window...")
+        # 5. СОЗДАНИЕ И ЗАПУСК ОКНА
+        logger.info("🔧 Step 4: Creating application window...")
         window = webview.create_window(
-            title="The Orchestrator",
+            title="The Orchestrator 🎭",
             url="http://127.0.0.1:8000",
             width=1200,
             height=800,
@@ -91,12 +173,15 @@ if __name__ == '__main__':
         )
         
         logger.info("🎯 Starting webview...")
-        webview.start(debug=False)  # Отключаем debug для продакшена
+        logger.info("🎉 Application ready! The chat should work now.")
+        webview.start(debug=False)
         
     except KeyboardInterrupt:
         logger.info("🛑 Application interrupted by user")
     except Exception as e:
         logger.error(f"❌ Application error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         # Очистка ресурсов
         logger.info("🧹 Cleaning up...")
