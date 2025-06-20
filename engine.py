@@ -1,4 +1,4 @@
-# engine.py - ИСПРАВЛЕННАЯ ВЕРСИЯ
+# engine.py - ИСПРАВЛЕННАЯ ВЕРСИЯ С НАДЕЖНЫМ ПОДКЛЮЧЕНИЕМ И ОБРАБОТКОЙ ОШИБОК
 
 import os
 import gc
@@ -7,7 +7,9 @@ import traceback
 import requests
 from llama_cpp import Llama
 
-MCP_SERVER_URL = "http://localhost:7777/v1/action"
+# <<< ИЗМЕНЕНИЕ №1: Используем явный IP-адрес для стабильности >>>
+# Это решает ошибку подключения "WinError 10061"
+MCP_SERVER_URL = "http://127.0.0.1:7777/v1/action"
 
 class OrchestratorEngine:
     def __init__(self, log_callback):
@@ -78,20 +80,13 @@ class OrchestratorEngine:
     def get_response(self, user_prompt):
         if self.llm is None: return "Модель не загружена."
         self.history.append({"role": "user", "content": user_prompt})
-        full_prompt = self._create_chat_prompt()
         
         try:
-            # Вызов модели для получения ответа
+            full_prompt = self._create_chat_prompt()
             output = self.llm(prompt=full_prompt, max_tokens=512, stop=["<|im_end|>", "```"])
-            
-            ####################################################################
-            ### ИСПРАВЛЕНИЕ ЗДЕСЬ (1/2): ДОБАВЛЕН ИНДЕКС               ###
-            ####################################################################
-            # 'choices' - это список, поэтому получаем первый элемент
             model_response_text = output['choices'][0]['text'].strip()
             
             try:
-                # Попытка найти и обработать вызов инструмента
                 json_part = model_response_text[model_response_text.find('{'):model_response_text.rfind('}')+1]
                 tool_call = json.loads(json_part)
 
@@ -99,6 +94,7 @@ class OrchestratorEngine:
                     query = tool_call.get("query")
                     self.log(f"[TOOL] Модель запросила поиск: '{query}'")
                     
+                    # <<< ИЗМЕНЕНИЕ №2: Полностью переработан блок обработки ошибок сети >>>
                     try:
                         self.log(f"[MCP Client] Отправка запроса на {MCP_SERVER_URL}...")
                         payload = {"action": {"type": "browse", "goal": query}}
@@ -106,31 +102,38 @@ class OrchestratorEngine:
                         response.raise_for_status()
                         result_content = response.json().get("result", "Инструмент не вернул результат.")
                         self.log(f"[MCP Client] Получен результат.")
-                    except requests.exceptions.RequestException as e:
-                        self.log(f"[ERROR] Ошибка подключения к MCP-серверу: {e}")
-                        result_content = "Не удалось подключиться к инструменту поиска. Убедитесь, что mcp_server.js запущен."
+                        
+                        # Если всё успешно, добавляем в историю и делаем второй вызов
+                        self.history.append({"role": "assistant", "content": model_response_text})
+                        self.history.append({"role": "tool_result", "content": result_content})
+                        
+                        final_prompt = self._create_chat_prompt()
+                        final_output = self.llm(prompt=final_prompt, max_tokens=512, stop=["<|im_end|>"])
+                        final_result = final_output['choices'][0]['text'].strip()
+                        
+                        self.history.append({"role": "assistant", "content": final_result})
+                        return final_result
 
-                    self.history.append({"role": "assistant", "content": model_response_text})
-                    self.history.append({"role": "tool_result", "content": result_content})
-                    
-                    # Второй вызов модели с результатами от инструмента
-                    final_prompt = self._create_chat_prompt()
-                    final_output = self.llm(prompt=final_prompt, max_tokens=512, stop=["<|im_end|>"])
-                    
-                    ####################################################################
-                    ### ИСПРАВЛЕНИЕ ЗДЕСЬ (2/2): ДОБАВЛЕН ИНДЕКС               ###
-                    ####################################################################
-                    final_result = final_output['choices'][0]['text'].strip()
-                    
-                    self.history.append({"role": "assistant", "content": final_result})
-                    return final_result
+                    except requests.exceptions.RequestException as e:
+                        # Если произошла ошибка сети, НЕ ДЕЛАЕМ второй вызов к LLM.
+                        # Сразу возвращаем пользователю понятное сообщение об ошибке.
+                        error_message = f"Не удалось подключиться к инструменту поиска. Убедитесь, что MCP-сервер запущен и доступен. Ошибка: {e}"
+                        self.log(f"[ERROR] {error_message}")
+                        
+                        # Добавляем в историю информацию о неудаче, чтобы модель знала контекст
+                        self.history.append({"role": "assistant", "content": model_response_text})
+                        self.history.append({"role": "tool_result", "content": f"Ошибка: {error_message}"})
+                        
+                        # Возвращаем сообщение напрямую, это предотвратит пустые ответы.
+                        return "Извините, я не смог подключиться к инструменту поиска. Пожалуйста, проверьте логи и попробуйте еще раз позже."
+
             except (json.JSONDecodeError, KeyError):
                 # Если это не вызов инструмента, просто возвращаем ответ
                 self.history.append({"role": "assistant", "content": model_response_text})
                 return model_response_text
+                
         except Exception:
             self.log(f"[ERROR] Ошибка генерации ответа!\n{traceback.format_exc()}")
-            # Важно очистить последний user_prompt из истории, если произошла ошибка
             if self.history and self.history[-1]["role"] == "user":
                 self.history.pop()
-            return "Произошла ошибка при генерации ответа."
+            return "Произошла критическая ошибка при генерации ответа."

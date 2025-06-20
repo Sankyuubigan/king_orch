@@ -1,4 +1,4 @@
-# ui.py - ВОССТАНОВЛЕННАЯ ВЕРСИЯ С НИЗКОУРОВНЕВЫМ ОБРАБОТЧИКОМ
+# ui.py - ВЕРСИЯ С ИНДИКАТОРОМ ЗАГРУЗКИ В ЧАТЕ
 
 import threading
 import tkinter as tk
@@ -9,41 +9,33 @@ class AppUI:
     def __init__(self, root_window, engine: OrchestratorEngine):
         self.root = root_window
         self.engine = engine
-        self.root.title("The Orchestrator v6.5 (Handler Restored)")
+        self.root.title("The Orchestrator v7.0 (Connection & UI Fixed)")
         self.root.geometry("1200x800")
         
+        # <<< ИЗМЕНЕНИЕ №1: Добавляем переменную для хранения индикатора загрузки >>>
+        self.chat_progress_bar = None
+
         self.create_widgets()
         self.populate_models_dropdown()
         self.update_token_count()
 
-    # <<< ВАШ НИЗКОУРОВНЕВЫЙ ОБРАБОТЧИК ВОЗВРАЩЕН НА МЕСТО >>>
     def _handle_key_press(self, event):
-        """Анализирует низкоуровневые атрибуты событий для Ctrl+C и Ctrl+V."""
         CONTROL_MASK = 0x0004
-        
-        # Проверяем, зажата ли клавиша Control
         if event.state & CONTROL_MASK:
             widget = event.widget
-            
-            # Обработка Ctrl+C (char code \x03)
             if event.char == '\x03':
                 try:
                     if widget.selection_get():
                         self.root.clipboard_clear()
                         self.root.clipboard_append(widget.selection_get())
-                        return "break" # Прерываем дальнейшую обработку события
-                except tk.TclError:
-                    pass # Нет выделения
-
-            # Обработка Ctrl+V (char code \x16)
+                        return "break"
+                except tk.TclError: pass
             elif event.char == '\x16':
-                # Вставка работает только в поле ввода
                 if widget == self.chat_input:
                     try:
                         widget.insert(tk.INSERT, self.root.clipboard_get())
-                        return "break" # Прерываем дальнейшую обработку события
-                    except tk.TclError:
-                        pass # Буфер обмена пуст
+                        return "break"
+                    except tk.TclError: pass
 
     def log_to_widget(self, message):
         if self.root.winfo_exists():
@@ -85,12 +77,10 @@ class AppUI:
         notebook.add(chat_tab, text='Чат')
         notebook.add(log_tab, text='Логи')
         
-        # <<< ИСПРАВЛЕНИЕ МОЕЙ ОШИБКИ: Виджеты создаются без state=DISABLED, >>>
-        # <<< чтобы они могли получать события клавиатуры. >>>
-        self.log_area = scrolledtext.ScrolledText(log_tab, wrap=tk.WORD)
+        self.log_area = scrolledtext.ScrolledText(log_tab, wrap=tk.WORD, state=tk.DISABLED)
         self.log_area.pack(fill=tk.BOTH, expand=True)
         
-        self.chat_area = scrolledtext.ScrolledText(chat_tab, wrap=tk.WORD)
+        self.chat_area = scrolledtext.ScrolledText(chat_tab, wrap=tk.WORD, state=tk.DISABLED)
         self.chat_area.pack(fill=tk.BOTH, expand=True)
         
         input_frame = ttk.Frame(chat_tab)
@@ -103,7 +93,6 @@ class AppUI:
         self.send_button = ttk.Button(input_frame, text="Отправить", command=self.start_chat_task)
         self.send_button.pack(side=tk.RIGHT)
 
-        # <<< ПРИВЯЗКА ВАШЕГО ОБРАБОТЧИКА ВОССТАНОВЛЕНА >>>
         self.chat_input.bind("<KeyPress>", self._handle_key_press)
         self.chat_area.bind("<KeyPress>", self._handle_key_press)
         self.log_area.bind("<KeyPress>", self._handle_key_press)
@@ -136,10 +125,8 @@ class AppUI:
         self.send_button.config(state=state)
         self.chat_input.config(state=state)
         
-        if is_busy:
-            self.progress_bar.start()
-        else:
-            self.progress_bar.stop()
+        if is_busy: self.progress_bar.start()
+        else: self.progress_bar.stop()
 
     def start_load_task(self):
         selected_model = self.model_combo.get()
@@ -167,10 +154,20 @@ class AppUI:
 
     def start_chat_task(self, event=None):
         prompt = self.chat_input.get()
-        if not prompt: return
+        if not prompt or self.chat_progress_bar: return
         self.chat_input.delete(0, tk.END)
         self._insert_chat_message(f"Вы: {prompt}")
         self.set_ui_busy(True)
+        
+        # <<< ИЗМЕНЕНИЕ №2: Создаем и показываем индикатор загрузки в чате >>>
+        self.chat_area.config(state=tk.NORMAL)
+        self.chat_progress_bar = ttk.Progressbar(self.chat_area, mode='indeterminate', length=100)
+        self.chat_area.window_create(tk.END, window=self.chat_progress_bar)
+        self.chat_area.insert(tk.END, '\n\n') # Добавляем отступ после индикатора
+        self.chat_area.see(tk.END)
+        self.chat_area.config(state=tk.DISABLED)
+        self.chat_progress_bar.start()
+
         threading.Thread(target=self._get_engine_response, args=(prompt,), daemon=True).start()
 
     def _get_engine_response(self, prompt):
@@ -178,6 +175,16 @@ class AppUI:
         self.root.after(0, self._finalize_chat_response, response)
 
     def _finalize_chat_response(self, response):
+        # <<< ИЗМЕНЕНИЕ №3: Удаляем индикатор загрузки перед показом ответа >>>
+        if self.chat_progress_bar:
+            self.chat_progress_bar.stop()
+            self.chat_progress_bar.destroy()
+            self.chat_progress_bar = None
+            # Очищаем место, где был индикатор (необязательно, но делает чат чище)
+            self.chat_area.config(state=tk.NORMAL)
+            self.chat_area.delete("end-3l", "end-1l") # Удаляем виджет и пустые строки
+            self.chat_area.config(state=tk.DISABLED)
+
         self._insert_chat_message(f"Модель: {response}")
         self.set_ui_busy(False)
         self.root.after(0, self.update_token_count)

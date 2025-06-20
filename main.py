@@ -1,4 +1,4 @@
-# main.py - ОБНОВЛЕННАЯ ВЕРСИЯ С ПЕРЕХВАТОМ ЛОГОВ
+# main.py - ИСПРАВЛЕНАЯ ВЕРСИЯ С ЧИСТЫМ ЛОГИРОВАНИЕМ
 
 import tkinter as tk
 import subprocess
@@ -10,16 +10,16 @@ import threading
 from ui import AppUI
 from engine import OrchestratorEngine
 
-# --- Логика автозапуска и остановки MCP-сервера ---
 mcp_process = None
 log_thread = None
 
 def _log_mcp_output(pipe, log_callback):
     """Читает вывод из потока сервера и передает его в логгер UI."""
     try:
-        # Читаем построчно, пока процесс не завершится
         for line in iter(pipe.readline, ''):
-            log_callback(f"[MCP Server] {line.strip()}")
+            # <<< ИЗМЕНЕНИЕ: Убран лишний префикс [MCP Server] >>>
+            # Теперь в лог передается "чистая" строка от самого сервера.
+            log_callback(line.strip())
     finally:
         pipe.close()
 
@@ -34,19 +34,16 @@ def start_mcp_server(log_callback):
 
     try:
         log_callback("[Launcher] Запуск MCP-сервера...")
-        # <<< ИЗМЕНЕНИЕ: Перехватываем stdout и stderr >>>
         mcp_process = subprocess.Popen(
             ["node", script_path],
             stdout=subprocess.PIPE, 
-            stderr=subprocess.PIPE, # Перехватываем и ошибки
+            stderr=subprocess.PIPE,
             text=True, 
             encoding='utf-8',
-            # Важно для Windows, чтобы консольное окно не появлялось
             creationflags=subprocess.CREATE_NO_WINDOW 
         )
         log_callback(f"[Launcher] MCP-сервер запущен с PID: {mcp_process.pid}")
 
-        # <<< НОВОЕ: Запускаем поток для чтения логов сервера >>>
         log_thread = threading.Thread(
             target=_log_mcp_output, 
             args=(mcp_process.stdout, log_callback), 
@@ -54,7 +51,6 @@ def start_mcp_server(log_callback):
         )
         log_thread.start()
         
-        # <<< НОВОЕ: Запускаем второй поток для чтения ошибок сервера >>>
         error_log_thread = threading.Thread(
             target=_log_mcp_output,
             args=(mcp_process.stderr, log_callback),
@@ -70,27 +66,27 @@ def stop_mcp_server():
     """Останавливает MCP-сервер при выходе из приложения."""
     global mcp_process
     if mcp_process:
-        print("[Launcher] Остановка MCP-сервера...") # Вывод в консоль при закрытии
+        print("[Launcher] Остановка MCP-сервера...")
         mcp_process.terminate()
-        mcp_process.wait()
-        print("[Launcher] MCP-сервер остановлен.")
+        try:
+            mcp_process.wait(timeout=5)
+            print("[Launcher] MCP-сервер штатно остановлен.")
+        except subprocess.TimeoutExpired:
+            print("[Launcher] MCP-сервер не ответил на terminate, принудительное завершение...")
+            mcp_process.kill()
+            print("[Launcher] MCP-сервер принудительно завершен.")
 
-# Регистрируем функцию остановки
+
 atexit.register(stop_mcp_server)
 
-# --- Основная точка входа в приложение ---
 if __name__ == "__main__":
     main_window = tk.Tk()
     
-    # Создаем движок и UI
     engine = OrchestratorEngine(log_callback=lambda msg: print(f"[Engine Log] {msg}"))
     app = AppUI(main_window, engine)
     
-    # <<< ИЗМЕНЕНИЕ: Передаем метод логирования из UI в движок и сервер >>>
     engine.log = app.log_to_widget
     
-    # 1. Запускаем фоновый MCP-сервер, передавая ему колбэк для логов
     start_mcp_server(app.log_to_widget)
     
-    # 2. Запускаем главный цикл приложения
     main_window.mainloop()
