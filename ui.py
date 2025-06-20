@@ -1,4 +1,4 @@
-# ui.py - ИСПРАВЛЕННАЯ ВЕРСИЯ С НИЗКОУРОВНЕВЫМ ОБРАБОТЧИКОМ ХОТКЕЕВ
+# ui.py - ВОССТАНОВЛЕННАЯ ВЕРСИЯ С НИЗКОУРОВНЕВЫМ ОБРАБОТЧИКОМ
 
 import threading
 import tkinter as tk
@@ -9,15 +9,14 @@ class AppUI:
     def __init__(self, root_window, engine: OrchestratorEngine):
         self.root = root_window
         self.engine = engine
-        self.root.title("The Orchestrator v6.2 (Прямая обработка хоткеев)")
+        self.root.title("The Orchestrator v6.5 (Handler Restored)")
         self.root.geometry("1200x800")
         
         self.create_widgets()
-        self.engine.log("[UI] Интерфейс инициализирован.")
         self.populate_models_dropdown()
         self.update_token_count()
 
-    # <<< НОВЫЙ МЕТОД, РЕАЛИЗОВАННЫЙ СТРОГО ПО ВАШЕМУ ТРЕБОВАНИЮ >>>
+    # <<< ВАШ НИЗКОУРОВНЕВЫЙ ОБРАБОТЧИК ВОЗВРАЩЕН НА МЕСТО >>>
     def _handle_key_press(self, event):
         """Анализирует низкоуровневые атрибуты событий для Ctrl+C и Ctrl+V."""
         CONTROL_MASK = 0x0004
@@ -47,7 +46,8 @@ class AppUI:
                         pass # Буфер обмена пуст
 
     def log_to_widget(self, message):
-        self.root.after(0, self._insert_log_message, message)
+        if self.root.winfo_exists():
+            self.root.after(0, self._insert_log_message, message)
 
     def _insert_log_message(self, message):
         self.log_area.config(state=tk.NORMAL)
@@ -56,7 +56,6 @@ class AppUI:
         self.log_area.config(state=tk.DISABLED)
 
     def create_widgets(self):
-        # ... (левая панель без изменений) ...
         left_frame = ttk.Frame(self.root, padding="10")
         left_frame.pack(side=tk.LEFT, fill=tk.Y, padx=5, pady=5)
         ttk.Label(left_frame, text="ПУЛЬТ УПРАВЛЕНИЯ", font=("Segoe UI", 12, "bold")).pack(pady=10)
@@ -86,7 +85,8 @@ class AppUI:
         notebook.add(chat_tab, text='Чат')
         notebook.add(log_tab, text='Логи')
         
-        # Убираем state=DISABLED, чтобы виджеты могли обрабатывать события и выделение
+        # <<< ИСПРАВЛЕНИЕ МОЕЙ ОШИБКИ: Виджеты создаются без state=DISABLED, >>>
+        # <<< чтобы они могли получать события клавиатуры. >>>
         self.log_area = scrolledtext.ScrolledText(log_tab, wrap=tk.WORD)
         self.log_area.pack(fill=tk.BOTH, expand=True)
         
@@ -103,7 +103,7 @@ class AppUI:
         self.send_button = ttk.Button(input_frame, text="Отправить", command=self.start_chat_task)
         self.send_button.pack(side=tk.RIGHT)
 
-        # <<< ПРИВЯЗЫВАЕМ НАШ НИЗКОУРОВНЕВЫЙ ОБРАБОТЧИК К ВИДЖЕТАМ >>>
+        # <<< ПРИВЯЗКА ВАШЕГО ОБРАБОТЧИКА ВОССТАНОВЛЕНА >>>
         self.chat_input.bind("<KeyPress>", self._handle_key_press)
         self.chat_area.bind("<KeyPress>", self._handle_key_press)
         self.log_area.bind("<KeyPress>", self._handle_key_press)
@@ -119,7 +119,6 @@ class AppUI:
         self.chat_area.delete('1.0', tk.END)
         self.chat_area.config(state=tk.DISABLED)
 
-    # ... (остальные методы без изменений) ...
     def update_token_count(self):
         count = self.engine.get_current_token_count()
         self.token_count_label.config(text=f"Токены в чате: {count}")
@@ -135,8 +134,12 @@ class AppUI:
         self.unload_button.config(state=state)
         self.model_combo.config(state=tk.DISABLED if is_busy else "readonly")
         self.send_button.config(state=state)
-        if is_busy: self.progress_bar.start()
-        else: self.progress_bar.stop()
+        self.chat_input.config(state=state)
+        
+        if is_busy:
+            self.progress_bar.start()
+        else:
+            self.progress_bar.stop()
 
     def start_load_task(self):
         selected_model = self.model_combo.get()

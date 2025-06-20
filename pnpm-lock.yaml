@@ -9,8 +9,11 @@ importers:
   .:
     dependencies:
       '@browserbasehq/stagehand':
-        specifier: github:browserbase/stagehand
-        version: https://codeload.github.com/browserbase/stagehand/tar.gz/4810a08e1fd0dca4b176fbe9b10c0a64c5f45b1e(@playwright/test@1.53.1)(deepmerge@4.3.1)(dotenv@16.5.0)(react@19.1.0)(zod@3.25.67)
+        specifier: ^2.0.0
+        version: 2.3.1(@playwright/test@1.53.1)(deepmerge@4.3.1)(dotenv@16.5.0)(react@19.1.0)(zod@3.25.67)
+      playwright:
+        specifier: ^1.44.1
+        version: 1.53.1
 
 packages:
 
@@ -118,9 +121,8 @@ packages:
   '@browserbasehq/sdk@2.6.0':
     resolution: {integrity: sha512-83iXP5D7xMm8Wyn66TUaUrgoByCmAJuoMoZQI3sGg3JAiMlTfnCIMqyVBoNSaItaPIkaCnrsj6LiusmXV2X9YA==}
 
-  '@browserbasehq/stagehand@https://codeload.github.com/browserbase/stagehand/tar.gz/4810a08e1fd0dca4b176fbe9b10c0a64c5f45b1e':
-    resolution: {tarball: https://codeload.github.com/browserbase/stagehand/tar.gz/4810a08e1fd0dca4b176fbe9b10c0a64c5f45b1e}
-    version: 2.3.1
+  '@browserbasehq/stagehand@2.3.1':
+    resolution: {integrity: sha512-fEsnBE8cj7oyb6wYEnU1d38zuQs4LmPWmjnsYbnXY1B3c/wD7e0uzxO72lKeN98P1bA26k3T6ayD8OwRq2LGuw==}
     peerDependencies:
       '@playwright/test': ^1.42.1
       deepmerge: ^4.3.1
@@ -727,7 +729,7 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
-  '@browserbasehq/stagehand@https://codeload.github.com/browserbase/stagehand/tar.gz/4810a08e1fd0dca4b176fbe9b10c0a64c5f45b1e(@playwright/test@1.53.1)(deepmerge@4.3.1)(dotenv@16.5.0)(react@19.1.0)(zod@3.25.67)':
+  '@browserbasehq/stagehand@2.3.1(@playwright/test@1.53.1)(deepmerge@4.3.1)(dotenv@16.5.0)(react@19.1.0)(zod@3.25.67)':
     dependencies:
       '@anthropic-ai/sdk': 0.39.0
       '@browserbasehq/sdk': 2.6.0
