@@ -1,4 +1,4 @@
-# engine.py - ВЕРСИЯ С ПОЛНЫМ ЛОГИРОВАНИЕМ РЕЗУЛЬТАТА ПОИСКА
+# engine.py - ВЕРСИЯ С ПОДДЕРЖКОЙ НЕСКОЛЬКИХ MCP-ИНСТРУМЕНТОВ
 
 import os
 import gc
@@ -7,7 +7,6 @@ import traceback
 import requests
 from llama_cpp import Llama
 
-MCP_SERVER_URL = "http://127.0.0.1:7777/v1/action"
 TOOL_CALL_MARKER = "[TOOL_CALL]"
 
 class OrchestratorEngine:
@@ -17,16 +16,37 @@ class OrchestratorEngine:
         self.llm = None
         self.model_name = None
         self.history = []
+        self.tools = {}
         
+        # Загрузка конфигурации инструментов
+        try:
+            with open("tools_config.json", "r", encoding="utf-8") as f:
+                self.tools = json.load(f)
+            self.log(f"[Engine] Загружены инструменты: {', '.join(self.tools.keys())}")
+        except Exception as e:
+            self.log(f"[ERROR] Не удалось загрузить tools_config.json: {e}")
+
+        self.system_prompt_template = ""
         try:
             with open("system_prompt.md", "r", encoding="utf-8") as f:
-                self.system_prompt = f.read()
-            self.log("[Engine] Системный промпт загружен.")
+                self.system_prompt_template = f.read()
+            self.log("[Engine] Шаблон системного промпта загружен.")
         except FileNotFoundError:
             self.log("[ERROR] Файл system_prompt.md не найден!")
-            self.system_prompt = "Ты — полезный ассистент."
+            self.system_prompt_template = "Ты — полезный ассистент."
         
         self.log("[Engine] Движок инициализирован.")
+
+    def _get_dynamic_system_prompt(self):
+        if not self.tools or not self.system_prompt_template:
+            return "Ты — полезный ассистент."
+        
+        tools_description = "\n\n### ДОСТУПНЫЕ ИНСТРУМЕНТЫ ###\n"
+        for name, details in self.tools.items():
+            tools_description += f'- **`{name}`**: {details["description"]}\n'
+            
+        return self.system_prompt_template + tools_description
+
 
     def get_available_models(self):
         try:
@@ -36,12 +56,13 @@ class OrchestratorEngine:
             return []
 
     def _create_chat_prompt(self):
-        system_message = {"role": "system", "content": self.system_prompt}
+        system_prompt = self._get_dynamic_system_prompt()
+        system_message = {"role": "system", "content": system_prompt}
         full_history = [system_message] + self.history
         prompt_str = ""
         for message in full_history:
             if message.get("role") == "tool_result":
-                 prompt_str += f"Результат от инструмента stagehand_search:\n{message['content']}\n"
+                 prompt_str += f"Результат от инструмента:\n{message['content']}\n"
             else:
                  prompt_str += f"<|im_start|>{message['role']}\n{message['content']}<|im_end|>\n"
         prompt_str += "<|im_start|>assistant\n"
@@ -95,15 +116,19 @@ class OrchestratorEngine:
                 
                 try:
                     tool_call_data = json.loads(json_str)
-                    self.log(f"[TOOL] Модель решила использовать поиск. Сообщение: '{user_message}'. Запрос: '{tool_call_data.get('query')}'")
+                    tool_name = tool_call_data.get("tool")
+                    if tool_name not in self.tools:
+                        raise ValueError(f"Модель вызвала неизвестный инструмент: {tool_name}")
+
+                    self.log(f"[TOOL] Модель решила использовать '{tool_name}'. Сообщение: '{user_message}'. Запрос: '{tool_call_data.get('query')}'")
                     return {
                         "status": "tool_call",
                         "user_message": user_message,
                         "tool_data": tool_call_data,
                         "full_model_response": model_response_text
                     }
-                except json.JSONDecodeError:
-                    self.log(f"[ERROR] Не удалось распознать JSON в вызове инструмента: {json_str}")
+                except (json.JSONDecodeError, ValueError) as e:
+                    self.log(f"[ERROR] Ошибка в вызове инструмента: {e}")
                     self.history.append({"role": "assistant", "content": model_response_text})
                     return {"status": "done", "content": model_response_text}
             else:
@@ -116,17 +141,19 @@ class OrchestratorEngine:
             return {"status": "error", "content": "Произошла критическая ошибка при генерации ответа."}
 
     def execute_tool_and_continue(self, tool_call_data, full_model_response):
+        tool_name = tool_call_data.get("tool")
         query = tool_call_data.get("query")
-        
+        tool_url = self.tools[tool_name]["url"]
+
         try:
-            self.log(f"[MCP Client] Отправка запроса к серверу: {MCP_SERVER_URL}...")
-            payload = {"action": {"type": "browse", "goal": query}}
-            response = requests.post(MCP_SERVER_URL, json=payload, timeout=120)
+            self.log(f"[MCP Client] Отправка запроса к '{tool_name}' на {tool_url}...")
+            # Стандартная структура MCP
+            payload = {"action": {"type": "browse", "goal": query}} # В будущем можно будет кастомизировать 'type'
+            response = requests.post(tool_url, json=payload, timeout=120)
             response.raise_for_status()
             
             result_content = response.json().get("result", "Инструмент не вернул результат.")
-            # <<< ГЛАВНОЕ ИСПРАВЛЕНИЕ: ПОЛНОЕ ЛОГИРОВАНИЕ РЕЗУЛЬТАТА >>>
-            self.log(f"[MCP Client] Успех! Получен результат:\n------\n{result_content[:1000]}...\n------")
+            self.log(f"[MCP Client] Успех! Получен результат от '{tool_name}'.")
             
             self.history.append({"role": "assistant", "content": full_model_response})
             self.history.append({"role": "tool_result", "content": result_content})
@@ -139,7 +166,14 @@ class OrchestratorEngine:
             return {"status": "done", "content": final_result}
 
         except requests.exceptions.RequestException as e:
-            error_message = f"Произошла ошибка при выполнении запроса к инструменту: {e}"
+            error_message = f"Ошибка при вызове инструмента '{tool_name}': {e}"
             self.log(f"[ERROR] {error_message}")
             if self.history and self.history[-1]["role"] == "user": self.history.pop()
-            return {"status": "error", "content": "Произошла ошибка подключения к инструменту поиска. Хотя сервер был готов, запрос не удался."}
+            # Возвращаем ошибку модели, чтобы она могла сказать об этом пользователю
+            self.history.append({"role": "assistant", "content": full_model_response})
+            self.history.append({"role": "tool_result", "content": f"Не удалось выполнить запрос: {error_message}"})
+            final_prompt = self._create_chat_prompt()
+            final_output = self.llm(prompt=final_prompt, max_tokens=512, stop=["<|im_end|>"])
+            final_result = final_output['choices'][0]['text'].strip()
+            self.history.append({"role": "assistant", "content": final_result})
+            return {"status": "done", "content": final_result}

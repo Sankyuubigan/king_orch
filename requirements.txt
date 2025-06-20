@@ -1,0 +1,6 @@
+requests
+llama-cpp-python
+Pillow
+playwright
+fastapi
+uvicorn

@@ -1,4 +1,4 @@
-# ui.py - ВЕРСИЯ С УЛУЧШЕННЫМ ОТОБРАЖЕНИЕМ "ТЕЛЕВИЗОРА"
+# ui.py - ВЕРСИЯ С UI ПО УМОЛЧАНИЮ И ПОВЫШЕННОЙ СТАБИЛЬНОСТЬЮ
 
 import threading
 import tkinter as tk
@@ -22,11 +22,15 @@ class AppUI:
         self.stop_screenshot_thread = threading.Event()
 
         self.root.title("The Orchestrator v15.0 (Stealth Mode)")
+        # ИЗМЕНЕНИЕ: Геометрия окна соответствует требованию
         self.root.geometry("1700x800")
         
         self.create_widgets()
         self.populate_models_dropdown()
         self.update_token_count()
+        
+        # ИЗМЕНЕНИЕ: Показываем браузер по умолчанию при запуске
+        self.root.after(100, self.toggle_browser_visibility)
 
     def _handle_key_press(self, event):
         CONTROL_MASK = 0x0004
@@ -89,8 +93,8 @@ class AppUI:
         self.progress_bar = ttk.Progressbar(status_bar, mode='indeterminate', length=150)
         self.progress_bar.pack(side=tk.RIGHT)
 
-        self.browser_container = ttk.Frame(self.main_pane, width=600)
-        # <<< ИЗМЕНЕНИЕ: Добавляем текст по умолчанию >>>
+        # ИЗМЕНЕНИЕ: Убираем width, т.к. размер будет управляться PanedWindow
+        self.browser_container = ttk.Frame(self.main_pane)
         self.screenshot_label = ttk.Label(self.browser_container, text="Ожидание скриншота...", anchor="center")
         self.screenshot_label.pack(fill=tk.BOTH, expand=True)
 
@@ -105,6 +109,8 @@ class AppUI:
             self.stop_screenshot_thread.clear()
             self.screenshot_thread = threading.Thread(target=self._screenshot_loop, daemon=True)
             self.screenshot_thread.start()
+            # ИЗМЕНЕНИЕ: Устанавливаем ширину левой панели в 600px
+            self.root.after(100, lambda: self.main_pane.sashpos(0, 600))
         self.browser_visible = not self.browser_visible
 
     def _screenshot_loop(self):
@@ -120,14 +126,14 @@ class AppUI:
                     image_data.thumbnail((container_width, container_height), Image.Resampling.LANCZOS)
 
                 photo = ImageTk.PhotoImage(image_data)
-                # Убираем текст и ставим изображение
                 self.root.after(0, self.screenshot_label.config, {"image": photo, "text": ""})
                 self.screenshot_label.image = photo
             except requests.exceptions.RequestException:
-                self.root.after(0, self.screenshot_label.config, {"image": "", "text": "Не удалось получить скриншот..."})
+                self.root.after(0, self.screenshot_label.config, {"image": None, "text": "Не удалось получить скриншот..."})
                 time.sleep(1)
             except Exception as e:
-                self.log_to_widget(f"[Screenshot] Ошибка: {e}")
+                if self.root.winfo_exists():
+                    self.log_to_widget(f"[Screenshot] Ошибка: {e}")
             
             time.sleep(3)
 
@@ -147,7 +153,8 @@ class AppUI:
 
     def _get_engine_decision(self, prompt):
         response = self.engine.get_response(prompt)
-        self.root.after(0, self._process_engine_decision, response)
+        if self.root.winfo_exists():
+            self.root.after(0, self._process_engine_decision, response)
 
     def _process_engine_decision(self, response):
         status = response.get("status")
@@ -156,14 +163,15 @@ class AppUI:
             self._insert_chat_message(f"Модель: {user_message}")
             threading.Thread(target=self._execute_tool_and_get_final_answer, args=(response,), daemon=True).start()
         else:
-            self._finalize_chat_response(response["content"])
+            self._finalize_chat_response(response.get("content", "[Модель не вернула ответ]"))
 
     def _execute_tool_and_get_final_answer(self, decision_response):
         final_response_obj = self.engine.execute_tool_and_continue(
             decision_response["tool_data"], 
             decision_response["full_model_response"]
         )
-        self.root.after(0, self._finalize_chat_response, final_response_obj["content"])
+        if self.root.winfo_exists():
+            self.root.after(0, self._finalize_chat_response, final_response_obj["content"])
 
     def _finalize_chat_response(self, response_text):
         final_response = response_text.strip() if response_text and response_text.strip() else "[Модель не вернула ответ]"
@@ -174,13 +182,14 @@ class AppUI:
     def set_ui_busy(self, is_busy):
         self.is_processing = is_busy
         state = tk.DISABLED if is_busy else tk.NORMAL
-        self.load_button.config(state=state)
-        self.unload_button.config(state=state)
-        self.model_combo.config(state=tk.DISABLED if is_busy else "readonly")
-        self.send_button.config(state=state)
-        self.chat_input.config(state=state)
-        if is_busy: self.progress_bar.start()
-        else: self.progress_bar.stop()
+        if self.load_button.winfo_exists():
+            self.load_button.config(state=state)
+            self.unload_button.config(state=state)
+            self.model_combo.config(state=tk.DISABLED if is_busy else "readonly")
+            self.send_button.config(state=state)
+            self.chat_input.config(state=state)
+            if is_busy: self.progress_bar.start()
+            else: self.progress_bar.stop()
 
     def _clear_chat_display(self):
         self.chat_area.config(state=tk.NORMAL)
@@ -189,7 +198,8 @@ class AppUI:
 
     def update_token_count(self):
         count = self.engine.get_current_token_count()
-        self.token_count_label.config(text=f"Токены: {count}")
+        if self.token_count_label.winfo_exists():
+            self.token_count_label.config(text=f"Токены: {count}")
 
     def populate_models_dropdown(self):
         models = self.engine.get_available_models()
@@ -207,9 +217,10 @@ class AppUI:
 
     def _load_model_thread_target(self, model_name):
         success = self.engine.load_model(model_name)
-        if success: self.root.after(0, self._clear_chat_display)
-        self.root.after(0, self.set_ui_busy, False)
-        self.root.after(0, self.update_token_count)
+        if self.root.winfo_exists():
+            if success: self.root.after(0, self._clear_chat_display)
+            self.root.after(0, self.set_ui_busy, False)
+            self.root.after(0, self.update_token_count)
 
     def start_unload_task(self):
         if self.is_processing: return
@@ -218,9 +229,10 @@ class AppUI:
 
     def _unload_model_thread_target(self):
         self.engine.unload_model()
-        self.root.after(0, self._clear_chat_display)
-        self.root.after(0, self.set_ui_busy, False)
-        self.root.after(0, self.update_token_count)
+        if self.root.winfo_exists():
+            self.root.after(0, self._clear_chat_display)
+            self.root.after(0, self.set_ui_busy, False)
+            self.root.after(0, self.update_token_count)
         
     def log_to_widget(self, message):
         if self.root.winfo_exists():
