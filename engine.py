@@ -1,4 +1,4 @@
-# engine.py - ИСПРАВЛЕННАЯ ВЕРСИЯ С НАДЕЖНЫМ ПОДКЛЮЧЕНИЕМ И ОБРАБОТКОЙ ОШИБОК
+# engine.py - ВЕРСИЯ БЕЗ ЦИКЛА ПОДКЛЮЧЕНИЯ (Т.К. ГАРАНТИРОВАНО MAIN.PY)
 
 import os
 import gc
@@ -7,9 +7,8 @@ import traceback
 import requests
 from llama_cpp import Llama
 
-# <<< ИЗМЕНЕНИЕ №1: Используем явный IP-адрес для стабильности >>>
-# Это решает ошибку подключения "WinError 10061"
 MCP_SERVER_URL = "http://127.0.0.1:7777/v1/action"
+TOOL_CALL_MARKER = "[TOOL_CALL]"
 
 class OrchestratorEngine:
     def __init__(self, log_callback):
@@ -49,10 +48,8 @@ class OrchestratorEngine:
         return prompt_str
 
     def get_current_token_count(self):
-        if not self.llm or not self.history:
-            return 0
-        full_prompt_for_counting = self._create_chat_prompt()
-        tokens = self.llm.tokenize(full_prompt_for_counting.encode("utf-8"))
+        if not self.llm or not self.history: return 0
+        tokens = self.llm.tokenize(self._create_chat_prompt().encode("utf-8"))
         return len(tokens)
 
     def load_model(self, model_name_to_load):
@@ -78,62 +75,71 @@ class OrchestratorEngine:
         self.log("[INFO] Модель выгружена.")
 
     def get_response(self, user_prompt):
-        if self.llm is None: return "Модель не загружена."
+        if self.llm is None: return {"status": "error", "content": "Модель не загружена."}
         self.history.append({"role": "user", "content": user_prompt})
         
         try:
             full_prompt = self._create_chat_prompt()
-            output = self.llm(prompt=full_prompt, max_tokens=512, stop=["<|im_end|>", "```"])
+            output = self.llm(prompt=full_prompt, max_tokens=512, stop=["<|im_end|>"])
             model_response_text = output['choices'][0]['text'].strip()
-            
-            try:
-                json_part = model_response_text[model_response_text.find('{'):model_response_text.rfind('}')+1]
-                tool_call = json.loads(json_part)
 
-                if tool_call.get("tool") == "stagehand_search":
-                    query = tool_call.get("query")
-                    self.log(f"[TOOL] Модель запросила поиск: '{query}'")
-                    
-                    # <<< ИЗМЕНЕНИЕ №2: Полностью переработан блок обработки ошибок сети >>>
-                    try:
-                        self.log(f"[MCP Client] Отправка запроса на {MCP_SERVER_URL}...")
-                        payload = {"action": {"type": "browse", "goal": query}}
-                        response = requests.post(MCP_SERVER_URL, json=payload, timeout=120)
-                        response.raise_for_status()
-                        result_content = response.json().get("result", "Инструмент не вернул результат.")
-                        self.log(f"[MCP Client] Получен результат.")
-                        
-                        # Если всё успешно, добавляем в историю и делаем второй вызов
-                        self.history.append({"role": "assistant", "content": model_response_text})
-                        self.history.append({"role": "tool_result", "content": result_content})
-                        
-                        final_prompt = self._create_chat_prompt()
-                        final_output = self.llm(prompt=final_prompt, max_tokens=512, stop=["<|im_end|>"])
-                        final_result = final_output['choices'][0]['text'].strip()
-                        
-                        self.history.append({"role": "assistant", "content": final_result})
-                        return final_result
+            if not model_response_text:
+                self.log("[ERROR] Модель вернула пустой ответ. Очистка истории.")
+                if self.history and self.history[-1]["role"] == "user": self.history.pop()
+                return {"status": "error", "content": "Модель не сгенерировала ответ. Попробуйте еще раз."}
 
-                    except requests.exceptions.RequestException as e:
-                        # Если произошла ошибка сети, НЕ ДЕЛАЕМ второй вызов к LLM.
-                        # Сразу возвращаем пользователю понятное сообщение об ошибке.
-                        error_message = f"Не удалось подключиться к инструменту поиска. Убедитесь, что MCP-сервер запущен и доступен. Ошибка: {e}"
-                        self.log(f"[ERROR] {error_message}")
-                        
-                        # Добавляем в историю информацию о неудаче, чтобы модель знала контекст
-                        self.history.append({"role": "assistant", "content": model_response_text})
-                        self.history.append({"role": "tool_result", "content": f"Ошибка: {error_message}"})
-                        
-                        # Возвращаем сообщение напрямую, это предотвратит пустые ответы.
-                        return "Извините, я не смог подключиться к инструменту поиска. Пожалуйста, проверьте логи и попробуйте еще раз позже."
-
-            except (json.JSONDecodeError, KeyError):
-                # Если это не вызов инструмента, просто возвращаем ответ
+            if TOOL_CALL_MARKER in model_response_text:
+                parts = model_response_text.split(TOOL_CALL_MARKER, 1)
+                user_message = parts[0].strip()
+                json_str = parts[1].strip()
+                
+                try:
+                    tool_call_data = json.loads(json_str)
+                    self.log(f"[TOOL] Модель решила использовать поиск. Сообщение: '{user_message}'. Запрос: '{tool_call_data.get('query')}'")
+                    return {
+                        "status": "tool_call",
+                        "user_message": user_message,
+                        "tool_data": tool_call_data,
+                        "full_model_response": model_response_text
+                    }
+                except json.JSONDecodeError:
+                    self.log(f"[ERROR] Не удалось распознать JSON в вызове инструмента: {json_str}")
+                    self.history.append({"role": "assistant", "content": model_response_text})
+                    return {"status": "done", "content": model_response_text}
+            else:
                 self.history.append({"role": "assistant", "content": model_response_text})
-                return model_response_text
+                return {"status": "done", "content": model_response_text}
                 
         except Exception:
             self.log(f"[ERROR] Ошибка генерации ответа!\n{traceback.format_exc()}")
-            if self.history and self.history[-1]["role"] == "user":
-                self.history.pop()
-            return "Произошла критическая ошибка при генерации ответа."
+            if self.history and self.history[-1]["role"] == "user": self.history.pop()
+            return {"status": "error", "content": "Произошла критическая ошибка при генерации ответа."}
+
+    def execute_tool_and_continue(self, tool_call_data, full_model_response):
+        query = tool_call_data.get("query")
+        
+        try:
+            # Цикл больше не нужен, main.py гарантирует готовность сервера
+            self.log(f"[MCP Client] Отправка запроса к серверу (гарантированно готов): {MCP_SERVER_URL}...")
+            payload = {"action": {"type": "browse", "goal": query}}
+            response = requests.post(MCP_SERVER_URL, json=payload, timeout=120)
+            response.raise_for_status()
+            
+            result_content = response.json().get("result", "Инструмент не вернул результат.")
+            self.log(f"[MCP Client] Успех! Получен результат.")
+            
+            self.history.append({"role": "assistant", "content": full_model_response})
+            self.history.append({"role": "tool_result", "content": result_content})
+            
+            final_prompt = self._create_chat_prompt()
+            final_output = self.llm(prompt=final_prompt, max_tokens=512, stop=["<|im_end|>"])
+            final_result = final_output['choices'][0]['text'].strip()
+            
+            self.history.append({"role": "assistant", "content": final_result})
+            return {"status": "done", "content": final_result}
+
+        except requests.exceptions.RequestException as e:
+            error_message = f"Произошла ошибка при выполнении запроса к инструменту: {e}"
+            self.log(f"[ERROR] {error_message}")
+            if self.history and self.history[-1]["role"] == "user": self.history.pop()
+            return {"status": "error", "content": "Произошла ошибка подключения к инструменту поиска. Хотя сервер был готов, запрос не удался."}
