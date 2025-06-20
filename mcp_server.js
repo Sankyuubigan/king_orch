@@ -1,4 +1,4 @@
-// mcp_server.js - ФИНАЛЬНАЯ ВЕРСИЯ. ВОЗВРАЩАЕМ ВИДИМЫЙ БРАУЗЕР ДЛЯ СТАБИЛЬНОСТИ.
+// mcp_server.js - ВЕРСИЯ С ПЕРЕХОДОМ НА SEARXNG И ПРОСТЫМ СБОРОМ ДАННЫХ
 
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
@@ -24,11 +24,12 @@ async function main() {
   process.on('SIGTERM', cleanup);
 
   try {
-    // <<< ГЛАВНОЕ ИЗМЕНЕНИЕ: ВОЗВРАЩАЕМ ВИДИМЫЙ РЕЖИМ >>>
-    // Это единственный надежный способ обойти сетевые блокировки в некоторых системах.
-    console.log('[MCP Server] Запуск браузера в ВИДИМОМ режиме для максимальной совместимости...');
-    browser = await chromium.launch({ headless: false });
-    const context = await browser.newContext();
+    console.log('[MCP Server] Запуск браузера в невидимом режиме...');
+    browser = await chromium.launch({ headless: true });
+    
+    const context = await browser.newContext({
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+    });
     page = await context.newPage();
     console.log('[MCP Server] Браузер и страница готовы.');
 
@@ -61,11 +62,19 @@ async function main() {
 
       console.log(`[ACTION] Получена задача: ${goal}`);
       try {
-        await page.goto(`https://www.google.com/search?q=${encodeURIComponent(goal)}`, { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await page.waitForTimeout(2000);
+        // <<< ГЛАВНОЕ ИСПРАВЛЕНИЕ №1: ИСПОЛЬЗУЕМ SEARXNG >>>
+        console.log(`[ACTION] Выполняю поиск в SearXNG...`);
+        const searchUrl = `https://searx.be/search?q=${encodeURIComponent(goal)}`;
+        await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        
+        await page.waitForTimeout(1500);
+
+        // <<< ГЛАВНОЕ ИСПРАВЛЕНИЕ №2: САМЫЙ ПРОСТОЙ И НАДЕЖНЫЙ СБОР ДАННЫХ >>>
         const content = await page.evaluate(() => document.body.innerText);
-        res.json({ result: content.substring(0, 2000) });
+        
+        res.json({ result: content.substring(0, 3000) }); // Увеличим лимит
         console.log(`[ACTION] Задача выполнена, результат отправлен.`);
+
       } catch (e) {
         console.error(`[ACTION] Ошибка выполнения задачи: ${e}`);
         res.status(500).json({ error: e.message });

@@ -1,4 +1,4 @@
-# ui.py - ВЕРСИЯ СО СТРИМИНГОМ СКРИНШОТОВ С ЕДИНОГО СЕРВЕРА
+# ui.py - ВЕРСИЯ С УЛУЧШЕННЫМ ОТОБРАЖЕНИЕМ "ТЕЛЕВИЗОРА"
 
 import threading
 import tkinter as tk
@@ -10,7 +10,7 @@ from PIL import Image, ImageTk
 
 from engine import OrchestratorEngine
 
-SCREENSHOT_URL = "http://127.0.0.1:7777/screenshot" # ПОРТ ИЗМЕНЕН НА 7777
+SCREENSHOT_URL = "http://127.0.0.1:7777/screenshot"
 
 class AppUI:
     def __init__(self, root_window, engine: OrchestratorEngine):
@@ -21,8 +21,8 @@ class AppUI:
         self.screenshot_thread = None
         self.stop_screenshot_thread = threading.Event()
 
-        self.root.title("The Orchestrator v14.0 (No Stagehand)")
-        self.root.geometry("1200x800")
+        self.root.title("The Orchestrator v15.0 (Stealth Mode)")
+        self.root.geometry("1700x800")
         
         self.create_widgets()
         self.populate_models_dropdown()
@@ -90,7 +90,8 @@ class AppUI:
         self.progress_bar.pack(side=tk.RIGHT)
 
         self.browser_container = ttk.Frame(self.main_pane, width=600)
-        self.screenshot_label = ttk.Label(self.browser_container)
+        # <<< ИЗМЕНЕНИЕ: Добавляем текст по умолчанию >>>
+        self.screenshot_label = ttk.Label(self.browser_container, text="Ожидание скриншота...", anchor="center")
         self.screenshot_label.pack(fill=tk.BOTH, expand=True)
 
     def toggle_browser_visibility(self):
@@ -119,9 +120,11 @@ class AppUI:
                     image_data.thumbnail((container_width, container_height), Image.Resampling.LANCZOS)
 
                 photo = ImageTk.PhotoImage(image_data)
-                self.root.after(0, self.screenshot_label.config, {"image": photo})
+                # Убираем текст и ставим изображение
+                self.root.after(0, self.screenshot_label.config, {"image": photo, "text": ""})
                 self.screenshot_label.image = photo
             except requests.exceptions.RequestException:
+                self.root.after(0, self.screenshot_label.config, {"image": "", "text": "Не удалось получить скриншот..."})
                 time.sleep(1)
             except Exception as e:
                 self.log_to_widget(f"[Screenshot] Ошибка: {e}")

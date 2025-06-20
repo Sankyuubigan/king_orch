@@ -1,4 +1,4 @@
-# engine.py - ВЕРСИЯ БЕЗ ЦИКЛА ПОДКЛЮЧЕНИЯ (Т.К. ГАРАНТИРОВАНО MAIN.PY)
+# engine.py - ВЕРСИЯ С ПОЛНЫМ ЛОГИРОВАНИЕМ РЕЗУЛЬТАТА ПОИСКА
 
 import os
 import gc
@@ -119,14 +119,14 @@ class OrchestratorEngine:
         query = tool_call_data.get("query")
         
         try:
-            # Цикл больше не нужен, main.py гарантирует готовность сервера
-            self.log(f"[MCP Client] Отправка запроса к серверу (гарантированно готов): {MCP_SERVER_URL}...")
+            self.log(f"[MCP Client] Отправка запроса к серверу: {MCP_SERVER_URL}...")
             payload = {"action": {"type": "browse", "goal": query}}
             response = requests.post(MCP_SERVER_URL, json=payload, timeout=120)
             response.raise_for_status()
             
             result_content = response.json().get("result", "Инструмент не вернул результат.")
-            self.log(f"[MCP Client] Успех! Получен результат.")
+            # <<< ГЛАВНОЕ ИСПРАВЛЕНИЕ: ПОЛНОЕ ЛОГИРОВАНИЕ РЕЗУЛЬТАТА >>>
+            self.log(f"[MCP Client] Успех! Получен результат:\n------\n{result_content[:1000]}...\n------")
             
             self.history.append({"role": "assistant", "content": full_model_response})
             self.history.append({"role": "tool_result", "content": result_content})
