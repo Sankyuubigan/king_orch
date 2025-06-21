@@ -1,6 +1,6 @@
 /.venv
 /ollama
-/__pycache__
+__pycache__
 /.condaenv
 node_modules
 /.conda

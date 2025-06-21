@@ -1,179 +1,86 @@
-# engine.py - ВЕРСИЯ С ПОДДЕРЖКОЙ НЕСКОЛЬКИХ MCP-ИНСТРУМЕНТОВ
+# engine.py - ЦЕНТРАЛИЗОВАНА ЗАГРУЗКА КОНФИГУРАЦИИ
 
 import os
-import gc
-import json
 import traceback
-import requests
+import json
 from llama_cpp import Llama
-
-TOOL_CALL_MARKER = "[TOOL_CALL]"
+from crews.research_crew import ResearchCrew
+from crews.coding_crew import CodingCrew
+from agents.dispatcher_agent import DispatcherAgent
 
 class OrchestratorEngine:
     def __init__(self, log_callback):
         self.log = log_callback
         self.MODELS_DIR = r"D:\nn\models"
+        self.model_name = "cognitivecomputations_Dolphin-Mistral-24B-Venice-Edition-Q4_K_M.gguf"
+        self.model_path = os.path.join(self.MODELS_DIR, self.model_name)
         self.llm = None
-        self.model_name = None
-        self.history = []
-        self.tools = {}
-        
-        # Загрузка конфигурации инструментов
+        self.tools_config = {}
+        self.log("[Engine] Движок инициализирован.")
+        self._load_tools_config()
+
+    def _load_tools_config(self):
+        """Загружает конфигурацию инструментов один раз при запуске."""
         try:
             with open("tools_config.json", "r", encoding="utf-8") as f:
-                self.tools = json.load(f)
-            self.log(f"[Engine] Загружены инструменты: {', '.join(self.tools.keys())}")
-        except Exception as e:
-            self.log(f"[ERROR] Не удалось загрузить tools_config.json: {e}")
+                self.tools_config = json.load(f)
+            self.log("[Engine] Конфигурация инструментов успешно загружена.")
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            self.log(f"[Engine] [CRITICAL ERROR] Не удалось загрузить tools_config.json: {e}")
+            self.tools_config = {} # Используем пустой конфиг, чтобы не падать
 
-        self.system_prompt_template = ""
+    def load_model(self):
+        if self.llm:
+            self.log("[Engine] Модель уже загружена.")
+            return True
+        if not os.path.exists(self.model_path):
+            self.log(f"[Engine] [ERROR] Файл модели не найден: {self.model_path}")
+            return False
         try:
-            with open("system_prompt.md", "r", encoding="utf-8") as f:
-                self.system_prompt_template = f.read()
-            self.log("[Engine] Шаблон системного промпта загружен.")
-        except FileNotFoundError:
-            self.log("[ERROR] Файл system_prompt.md не найден!")
-            self.system_prompt_template = "Ты — полезный ассистент."
-        
-        self.log("[Engine] Движок инициализирован.")
-
-    def _get_dynamic_system_prompt(self):
-        if not self.tools or not self.system_prompt_template:
-            return "Ты — полезный ассистент."
-        
-        tools_description = "\n\n### ДОСТУПНЫЕ ИНСТРУМЕНТЫ ###\n"
-        for name, details in self.tools.items():
-            tools_description += f'- **`{name}`**: {details["description"]}\n'
-            
-        return self.system_prompt_template + tools_description
-
-
-    def get_available_models(self):
-        try:
-            return [f for f in os.listdir(self.MODELS_DIR) if f.endswith('.gguf')]
-        except FileNotFoundError:
-            self.log(f"[ERROR] Папка с моделями не найдена: {self.MODELS_DIR}")
-            return []
-
-    def _create_chat_prompt(self):
-        system_prompt = self._get_dynamic_system_prompt()
-        system_message = {"role": "system", "content": system_prompt}
-        full_history = [system_message] + self.history
-        prompt_str = ""
-        for message in full_history:
-            if message.get("role") == "tool_result":
-                 prompt_str += f"Результат от инструмента:\n{message['content']}\n"
-            else:
-                 prompt_str += f"<|im_start|>{message['role']}\n{message['content']}<|im_end|>\n"
-        prompt_str += "<|im_start|>assistant\n"
-        return prompt_str
-
-    def get_current_token_count(self):
-        if not self.llm or not self.history: return 0
-        tokens = self.llm.tokenize(self._create_chat_prompt().encode("utf-8"))
-        return len(tokens)
-
-    def load_model(self, model_name_to_load):
-        if not model_name_to_load: return False
-        self.unload_model()
-        model_path = os.path.join(self.MODELS_DIR, model_name_to_load)
-        self.log(f"[INFO] Загрузка модели: {model_name_to_load}")
-        try:
-            self.llm = Llama(model_path=model_path, n_gpu_layers=-1, n_ctx=4096, verbose=False)
-            self.model_name = model_name_to_load
-            self.log(f"[SUCCESS] Модель '{self.model_name}' загружена!")
+            self.log(f"[Engine] Загрузка модели: {self.model_name}...")
+            self.llm = Llama(model_path=self.model_path, n_gpu_layers=-1, n_ctx=4096, verbose=False)
+            self.log("[Engine] Модель успешно загружена!")
             return True
         except Exception:
-            self.log(f"[ERROR] ПРОВАЛ ЗАГРУЗКИ МОДЕЛИ!\n{traceback.format_exc()}")
-            self.llm = None; self.model_name = None
+            self.log(f"[Engine] [ERROR] КРИТИЧЕСКАЯ ОШИБКА ЗАГРУЗКИ МОДЕЛИ!\n{traceback.format_exc()}")
+            self.llm = None
             return False
 
-    def unload_model(self):
-        if self.llm is None: return
-        self.log(f"[INFO] Выгрузка модели '{self.model_name}'...")
-        self.llm = None; self.model_name = None; self.history = []
-        gc.collect()
-        self.log("[INFO] Модель выгружена.")
-
     def get_response(self, user_prompt):
-        if self.llm is None: return {"status": "error", "content": "Модель не загружена."}
-        self.history.append({"role": "user", "content": user_prompt})
-        
+        if not self.llm:
+            return {"status": "error", "content": "Модель не загружена."}
+            
         try:
-            full_prompt = self._create_chat_prompt()
-            output = self.llm(prompt=full_prompt, max_tokens=512, stop=["<|im_end|>"])
-            model_response_text = output['choices'][0]['text'].strip()
+            self.log(f"[Dispatcher] Получена задача: '{user_prompt}'. Определяю тип задачи...")
+            dispatcher = DispatcherAgent(self.llm, self.log)
+            crew_type = dispatcher.choose_crew(user_prompt)
+            self.log(f"[Dispatcher] Задача классифицирована как '{crew_type}'.")
 
-            if not model_response_text:
-                self.log("[ERROR] Модель вернула пустой ответ. Очистка истории.")
-                if self.history and self.history[-1]["role"] == "user": self.history.pop()
-                return {"status": "error", "content": "Модель не сгенерировала ответ. Попробуйте еще раз."}
+            crew_to_run = None
+            if crew_type == "coding":
+                self.log("[Dispatcher] Нанимаю команду 'Кодеры'...")
+                crew_to_run = CodingCrew(self.llm, self.tools_config) # Передаем конфиг
+            elif crew_type == "research":
+                self.log("[Dispatcher] Нанимаю команду 'Исследователи'...")
+                crew_to_run = ResearchCrew(self.llm, self.tools_config) # Передаем конфиг
+            else: 
+                self.log("[Dispatcher] Простое приветствие или диалог. Отвечаю напрямую...")
 
-            if TOOL_CALL_MARKER in model_response_text:
-                parts = model_response_text.split(TOOL_CALL_MARKER, 1)
-                user_message = parts[0].strip()
-                json_str = parts[1].strip()
-                
-                try:
-                    tool_call_data = json.loads(json_str)
-                    tool_name = tool_call_data.get("tool")
-                    if tool_name not in self.tools:
-                        raise ValueError(f"Модель вызвала неизвестный инструмент: {tool_name}")
+            if crew_to_run:
+                result_data = crew_to_run.run(user_prompt, self.log)
+            else: 
+                prompt = f"<|im_start|>system\nТы — полезный ассистент.<|im_end|>\n<|im_start|>user\n{user_prompt}<|im_end|>\n<|im_start|>assistant\n"
+                output = self.llm(prompt, max_tokens=512, stop=["<|im_end|>"])
+                answer = output['choices'][0]['text'].strip()
+                result_data = {
+                    "final_result": answer,
+                    "trajectory": ["Ответ сгенерирован напрямую, без использования команд."]
+                }
+            
+            self.log("[Dispatcher] Задача обработана.")
+            return {"status": "done", "content": result_data}
 
-                    self.log(f"[TOOL] Модель решила использовать '{tool_name}'. Сообщение: '{user_message}'. Запрос: '{tool_call_data.get('query')}'")
-                    return {
-                        "status": "tool_call",
-                        "user_message": user_message,
-                        "tool_data": tool_call_data,
-                        "full_model_response": model_response_text
-                    }
-                except (json.JSONDecodeError, ValueError) as e:
-                    self.log(f"[ERROR] Ошибка в вызове инструмента: {e}")
-                    self.history.append({"role": "assistant", "content": model_response_text})
-                    return {"status": "done", "content": model_response_text}
-            else:
-                self.history.append({"role": "assistant", "content": model_response_text})
-                return {"status": "done", "content": model_response_text}
-                
         except Exception:
-            self.log(f"[ERROR] Ошибка генерации ответа!\n{traceback.format_exc()}")
-            if self.history and self.history[-1]["role"] == "user": self.history.pop()
-            return {"status": "error", "content": "Произошла критическая ошибка при генерации ответа."}
-
-    def execute_tool_and_continue(self, tool_call_data, full_model_response):
-        tool_name = tool_call_data.get("tool")
-        query = tool_call_data.get("query")
-        tool_url = self.tools[tool_name]["url"]
-
-        try:
-            self.log(f"[MCP Client] Отправка запроса к '{tool_name}' на {tool_url}...")
-            # Стандартная структура MCP
-            payload = {"action": {"type": "browse", "goal": query}} # В будущем можно будет кастомизировать 'type'
-            response = requests.post(tool_url, json=payload, timeout=120)
-            response.raise_for_status()
-            
-            result_content = response.json().get("result", "Инструмент не вернул результат.")
-            self.log(f"[MCP Client] Успех! Получен результат от '{tool_name}'.")
-            
-            self.history.append({"role": "assistant", "content": full_model_response})
-            self.history.append({"role": "tool_result", "content": result_content})
-            
-            final_prompt = self._create_chat_prompt()
-            final_output = self.llm(prompt=final_prompt, max_tokens=512, stop=["<|im_end|>"])
-            final_result = final_output['choices'][0]['text'].strip()
-            
-            self.history.append({"role": "assistant", "content": final_result})
-            return {"status": "done", "content": final_result}
-
-        except requests.exceptions.RequestException as e:
-            error_message = f"Ошибка при вызове инструмента '{tool_name}': {e}"
-            self.log(f"[ERROR] {error_message}")
-            if self.history and self.history[-1]["role"] == "user": self.history.pop()
-            # Возвращаем ошибку модели, чтобы она могла сказать об этом пользователю
-            self.history.append({"role": "assistant", "content": full_model_response})
-            self.history.append({"role": "tool_result", "content": f"Не удалось выполнить запрос: {error_message}"})
-            final_prompt = self._create_chat_prompt()
-            final_output = self.llm(prompt=final_prompt, max_tokens=512, stop=["<|im_end|>"])
-            final_result = final_output['choices'][0]['text'].strip()
-            self.history.append({"role": "assistant", "content": final_result})
-            return {"status": "done", "content": final_result}
+            error_message = f"Критическая ошибка в работе команды: {traceback.format_exc()}"
+            self.log(f"[Dispatcher] [ERROR] {error_message}")
+            return {"status": "error", "content": "Критическая ошибка в работе AI-агентов."}

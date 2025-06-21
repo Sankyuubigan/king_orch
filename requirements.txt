@@ -3,4 +3,5 @@ llama-cpp-python
 Pillow
 playwright
 fastapi
-uvicorn
+uvicorn[standard]
+python-multipart
