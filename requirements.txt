@@ -1,3 +1,6 @@
+# Этот файл теперь используется только для справки или для IDE.
+# Вся логика установки перенесена в install_dependencies.py
+
 requests
 llama-cpp-python
 Pillow
@@ -5,11 +8,6 @@ playwright
 fastapi
 uvicorn[standard]
 python-multipart
-playwright-mcp
-mcp-searxng
-mcp-text-editor
-FileScopeMCP
-mcp-language-server
 mcp-code-runner
 chroma-mcp
 tree-sitter

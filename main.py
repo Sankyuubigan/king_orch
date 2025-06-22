@@ -1,4 +1,4 @@
-# main.py - Голосовой движок запускается, но не слушает сразу
+# main.py - Добавлен запуск Node.js сервера
 
 import tkinter as tk
 from tkinter import messagebox
@@ -14,45 +14,42 @@ from engine import OrchestratorEngine
 from voice_engine.controller import VoiceController
 
 tool_processes = []
+VENDOR_DIR = "vendor"
 
 def create_dirs():
+    # ... (код без изменений)
     os.makedirs("agents", exist_ok=True)
     os.makedirs("crews", exist_ok=True)
     os.makedirs("mcp_servers", exist_ok=True)
     os.makedirs("prompts", exist_ok=True)
     os.makedirs("utils", exist_ok=True)
     os.makedirs("tools", exist_ok=True)
-    # Создаем папки по вашей структуре
     os.makedirs("voice_engine/vosk", exist_ok=True)
-    os.makedirs("voice_engine/silero/hub_cache", exist_ok=True)
+    os.makedirs("voice_engine/silero_cache", exist_ok=True)
     for d in ["agents", "crews", "utils", "voice_engine"]:
-        # Создаем __init__.py, если его нет
         init_file = os.path.join(d, "__init__.py")
         if not os.path.exists(init_file):
             with open(init_file, "a"): pass
 
-def start_tool_server(command, log_prefix, ready_signal):
+def start_tool_server(command, log_prefix, ready_signal, cwd=None):
     # ... (код без изменений)
     global tool_processes
     
-    is_module_launch = "-m" in command
-    if not is_module_launch:
-        script_path = command[-1]
-        if not os.path.exists(script_path):
-            return False, f"[{log_prefix}] ERROR: Файл '{script_path}' не найден."
-
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     
     log_messages = []
     creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='ignore', creationflags=creation_flags, env=env)
+    # Для node.js используем shell=True в Windows, чтобы найти команду 'node'
+    use_shell = sys.platform == "win32" if command[0] == "node" else False
+    
+    process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='ignore', creationflags=creation_flags, env=env, cwd=cwd, shell=use_shell)
     tool_processes.append(process)
     log_messages.append(f"[{log_prefix}] Сервер запущен (PID: {process.pid})")
     
     initial_signal_ok = False
     start_time = time.time()
-    timeout = 60
+    timeout = 30
 
     while time.time() - start_time < timeout:
         if process.poll() is not None:
@@ -99,39 +96,43 @@ if __name__ == "__main__":
     main_window.withdraw()
     
     servers_to_start = {
-        # ... (список серверов без изменений)
-        "Playwright": ([sys.executable, "-m", "playwright_mcp"], "Uvicorn running"),
-        "WebSearch": ([sys.executable, "-m", "mcp_searxng"], "Uvicorn running"),
-        "TextEditor": ([sys.executable, "-m", "mcp_text_editor"], "Uvicorn running"),
-        "FileScope": ([sys.executable, "-m", "filescopemcp"], "Uvicorn running"),
-        "LSPServer": ([sys.executable, "-m", "mcp_language_server"], "Uvicorn running on http://127.0.0.1:8009"),
-        "CodeSandbox": ([sys.executable, "-m", "mcp_code_runner.runner"], "Uvicorn running on http://127.0.0.1:8010"),
-        "ChromaDB": ([sys.executable, "-m", "chroma_mcp"], "Uvicorn running"),
+        "Playwright": { "cmd": [sys.executable, "mcp_server_playwright/server.py"], "signal": "Uvicorn running on http://127.0.0.1:7800", "cwd": os.path.join(VENDOR_DIR, "mcp-server-playwright") },
+        "WebSearch": { "cmd": [sys.executable, "main.py"], "signal": "Uvicorn running", "cwd": os.path.join(VENDOR_DIR, "mcp-searxng") },
+        "TextEditor": { "cmd": [sys.executable, "-m", "mcp_text_editor.main"], "signal": "Uvicorn running", "cwd": os.path.join(VENDOR_DIR, "mcp-text-editor") },
+        "FileScope": { "cmd": [sys.executable, "-m", "filescopemcp"], "signal": "Uvicorn running", "cwd": os.path.join(VENDOR_DIR, "FileScopeMCP") },
+        "LSPServer": { "cmd": [sys.executable, "main.py"], "signal": "Uvicorn running on http://127.0.0.1:8009", "cwd": os.path.join(VENDOR_DIR, "mcp-language-server") },
+        "CodeSandbox": { "cmd": [sys.executable, "runner.py"], "signal": "Uvicorn running on http://127.0.0.1:8010", "cwd": os.path.join(VENDOR_DIR, "mcp-code-runner") },
         
-        "AshraLauncher": ([sys.executable, "-u", "mcp_servers/mcp_ashra_server.py"], "MCP_ASHRA_READY"),
-        "RAGLauncher": ([sys.executable, "-u", "mcp_servers/mcp_rag_server.py"], "MCP_RAG_READY"),
-        "FeedbackServer": ([sys.executable, "-u", "mcp_servers/mcp_feedback_server.py"], "MCP_FEEDBACK_READY"),
-        "FileSystem": ([sys.executable, "-u", "mcp_servers/mcp_file_server.py"], "MCP_FILE_SYSTEM_READY"),
-        "GitHub": ([sys.executable, "-u", "mcp_servers/mcp_github_server.py"], "MCP_GITHUB_READY"),
-        "GitLab": ([sys.executable, "-u", "mcp_servers/mcp_gitlab_server.py"], "MCP_GITLAB_READY"),
+        # --- ИЗМЕНЕНО: Запуск Node.js сервера ---
+        "Ashra": {
+            "cmd": ["node", "build/index.js"],
+            "signal": "Ashra MCP Server running on stdio",
+            "cwd": os.path.join(VENDOR_DIR, "ashra-mcp")
+        },
+        
+        "RAGLauncher": { "cmd": [sys.executable, "-u", "mcp_servers/mcp_rag_server.py"], "signal": "MCP_RAG_READY" },
+        "FeedbackServer": { "cmd": [sys.executable, "-u", "mcp_servers/mcp_feedback_server.py"], "signal": "MCP_FEEDBACK_READY" },
+        "FileSystem": { "cmd": [sys.executable, "-u", "mcp_servers/mcp_file_server.py"], "signal": "MCP_FILE_SYSTEM_READY" },
+        "GitHub": { "cmd": [sys.executable, "-u", "mcp_servers/mcp_github_server.py"], "signal": "MCP_GITHUB_READY" },
+        "GitLab": { "cmd": [sys.executable, "-u", "mcp_servers/mcp_gitlab_server.py"], "signal": "MCP_GITLAB_READY" },
     }
-
-    all_servers_ok = True
-    for name, (command, signal) in servers_to_start.items():
-        print(f"[Launcher] Запускаю сервер '{name}'...")
-        current_env = os.environ.copy()
-        current_env["PYTHONIOENCODING"] = "utf-8"
-        
-        success, logs = start_tool_server(command, name, signal)
-        if not success:
-            logs_str = "\n".join(logs)
-            messagebox.showerror("Критическая ошибка запуска", f"Не удалось запустить сервер '{name}'.\n\nПолный лог:\n\n{logs_str}")
-            all_servers_ok = False
-            break
     
-    if not all_servers_ok:
-        stop_all_tool_servers()
-        sys.exit(1)
+    # Мы больше не используем mcp_ashra_server.py, так как запускаем сервер напрямую
+    # Удаляем его из списка запуска
+    if "AshraLauncher" in servers_to_start:
+         del servers_to_start["AshraLauncher"]
+
+    failed_servers = []
+    for name, config in servers_to_start.items():
+        print(f"[Launcher] Запускаю сервер '{name}'...")
+        success, logs = start_tool_server(config["cmd"], name, config["signal"], cwd=config.get("cwd"))
+        if not success:
+            failed_servers.append(name)
+            print(f"[Launcher] [ERROR] Не удалось запустить сервер '{name}'. Продолжаю запуск остальных...")
+    
+    if failed_servers:
+        failed_list = "\n - ".join(failed_servers)
+        messagebox.showwarning("Предупреждение при запуске", f"Не удалось запустить следующие MCP-серверы:\n - {failed_list}\n\nПриложение продолжит работу, но функционал, зависящий от этих серверов, будет недоступен.")
 
     main_window.deiconify()
     
@@ -140,10 +141,9 @@ if __name__ == "__main__":
     try:
         voice_controller = VoiceController(engine)
         engine.set_voice_controller(voice_controller)
-        # УБРАН АВТОМАТИЧЕСКИЙ ЗАПУСК: voice_controller.start()
     except Exception as e:
-        messagebox.showerror("Ошибка запуска VoiceEngine", f"Не удалось запустить голосовой движок: {e}\n\nПрограмма продолжит работу без голосового управления.")
-        print(f"[Launcher] [CRITICAL] Ошибка инициализации VoiceController: {e}")
+        messagebox.showwarning("Ошибка VoiceEngine", f"Не удалось запустить голосовой движок: {e}\n\nПрограмма продолжит работу без голосового управления.")
+        print(f"[Launcher] [WARNING] Ошибка инициализации VoiceController: {e}")
 
     app = AppUI(main_window, engine)
     

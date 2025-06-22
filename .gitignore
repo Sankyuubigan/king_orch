@@ -7,12 +7,12 @@ node_modules
 /vector_db
 /sandbox
 
-# --- НОВОЕ: Игнорируем большие файлы моделей ---
-# Игнорируем содержимое папок с моделями, но не сами папки
+# Игнорируем большие файлы моделей
 voice_engine/vosk/*
 voice_engine/silero/*
 voice_engine/silero_cache/*
-
-# Не игнорируем файлы-инструкции
 !voice_engine/vosk/README.md
 !voice_engine/silero/README.md
+
+# Игнорируем папку с внешними библиотеками
+/vendor/
