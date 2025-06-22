@@ -1,11 +1,11 @@
-# agents/code_agent.py - ОБНОВЛЕН С ЗАПРЕТОМ НА ИЗМЕНЕНИЕ СВЯЩЕННЫХ ФАЙЛОВ
+# agents/code_agent.py - ПЕРЕДАЧА agent_router В super()
 
 from .base_agent import BaseAgent
 from llama_cpp import Llama
 import os
 
 class CodeAgent(BaseAgent):
-    def __init__(self, llm_instance: Llama, tools_config: dict, log_callback):
+    def __init__(self, llm_instance: Llama, tools_config: dict, log_callback, agent_router=None):
         
         # --- Загрузка священных файлов ---
         sacred_files_content = ""
@@ -21,7 +21,7 @@ class CodeAgent(BaseAgent):
                 reliability_prompt = f.read()
         except FileNotFoundError:
             log_callback("[CodeAgent] [ERROR] Файл prompts/coding_prompt.md не найден. Использую запасной промпт.")
-            reliability_prompt = "Ты — AI-ассистент, инженер-программист. Твоя главная и единственная ценность — НАДЕЖНОСТЬ."
+            reliability_prompt = "Ты — AI-ассистент, инженер-программист."
 
         # --- Формирование финального системного промпта ---
         system_prompt = (
@@ -30,13 +30,6 @@ class CodeAgent(BaseAgent):
             f"{sacred_files_content}\n"
             "ТЫ ОБЯЗАН СЛЕДОВАТЬ ЭТИМ ЗАПРЕТАМ.\n"
             "--------------------------\n\n"
-            "Твой ответ ДОЛЖЕН быть либо мыслью, либо вызовом инструмента в формате: "
-            '[TOOL_CALL] {"tool": "название", "params": {"ключ": "значение"}}.\n'
         )
         
-        super().__init__(llm_instance, system_prompt, tools_config, log_callback)
-
-    def work_on_task(self, task: str) -> str:
-        self.history = []
-        result, _ = self.execute_step(task)
-        return result
+        super().__init__(llm_instance, system_prompt, tools_config, log_callback, agent_router)

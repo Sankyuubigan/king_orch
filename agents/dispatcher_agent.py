@@ -1,39 +1,68 @@
-# agents/dispatcher_agent.py - НОВЫЙ АГЕНТ-МАРШРУТИЗАТОР
+# agents/dispatcher_agent.py - НАУЧИЛСЯ ВЫБИРАТЬ МОДЕЛЬ
 
 from .base_agent import BaseAgent
 from llama_cpp import Llama
+import json
+import re
 
 class DispatcherAgent(BaseAgent):
     def __init__(self, llm_instance: Llama, log_callback):
-        system_prompt = """Твоя единственная задача — классифицировать запрос пользователя и определить, какая команда агентов должна его обработать.
-Ты должен ответить ОДНИМ СЛОВОМ из следующего списка:
-- `coding`: если запрос связан с написанием или изменением кода, созданием файлов, скриптов, программ, выполнением команд в терминале.
-- `research`: если запрос связан с поиском информации, анализом веб-страниц, поиском репозиториев, составлением отчетов или ответом на общие вопросы.
-- `general_conversation`: если это простое приветствие, прощание или короткий диалог, не требующий выполнения сложных задач.
+        system_prompt = """Твоя задача — классифицировать запрос пользователя и определить, какая команда агентов и какая AI-модель должны его обработать.
 
-Примеры:
-Запрос: "привет, как дела?" -> Ответ: general_conversation
-Запрос: "напиши скрипт на питоне для парсинга сайта" -> Ответ: coding
-Запрос: "найди мне информацию о лучших фреймворках для python" -> Ответ: research
-Запрос: "создай файл main.py и запусти его" -> Ответ: coding
-Запрос: "какие есть mcp-серверы для работы с github?" -> Ответ: research
+**МОДЕЛИ:**
+- `default`: Универсальная модель для общения, исследований, браузинга.
+- `coding`: Специализированная модель, заточенная под написание, анализ и рефакторинг кода.
 
-Твой ответ должен содержать ТОЛЬКО одно из этих трех слов. Никаких объяснений.
+**КОМАНДЫ:**
+- `coding`: Запрос связан с написанием или изменением кода. **ИСПОЛЬЗУЙ `coding` МОДЕЛЬ.**
+- `browsing`: Запрос требует действий в браузере. **ИСПОЛЬЗУЙ `default` МОДЕЛЬ.**
+- `documentation_query`: Запрос к документации. **ИСПОЛЬЗУЙ `default` МОДЕЛЬ.**
+- `research`: Общий поиск информации. **ИСПОЛЬЗУЙ `default` МОДЕЛЬ.**
+- `general_conversation`: Простое общение. **ИСПОЛЬЗУЙ `default` МОДЕЛЬ.**
+
+Твой ответ **ОБЯЗАН** быть JSON-объектом с двумя ключами:
+- `crew_type`: Название команды (одно из списка выше).
+- `model_key`: Ключ модели (`default` или `coding`).
+
+**ПРИМЕРЫ:**
+Запрос: "привет"
+Твой ответ:
+{"crew_type": "general_conversation", "model_key": "default"}
+
+Запрос: "напиши скрипт на питоне для парсинга сайта"
+Твой ответ:
+{"crew_type": "coding", "model_key": "coding"}
+
+Запрос: "зайди на vk.com/durov"
+Твой ответ:
+{"crew_type": "browsing", "model_key": "default"}
 """
-        # У этого агента нет инструментов, поэтому tools_config - пустой словарь
         super().__init__(llm_instance, system_prompt, {}, log_callback)
 
-    def choose_crew(self, goal: str) -> str:
+    def choose_crew_and_model(self, goal: str) -> dict:
+        """Определяет команду и необходимую модель, возвращая словарь."""
         self.history = []
-        # Мы ожидаем однословный ответ, поэтому max_tokens можно сильно ограничить
-        self.llm.max_tokens = 10
-        category, _ = self.execute_step(f"Классифицируй этот запрос: \"{goal}\"")
-        self.llm.max_tokens = 1024 # Возвращаем обратно для других агентов
+        self.llm.max_tokens = 100 # Увеличим лимит для JSON
         
-        # Очистка ответа модели до одного из трех ключевых слов
-        clean_category = category.strip().lower().replace(".", "")
-        if "coding" in clean_category:
-            return "coding"
-        if "research" in clean_category:
-            return "research"
-        return "general_conversation"
+        response, _ = self.execute_step(f"Классифицируй этот запрос: \"{goal}\"")
+        
+        self.llm.max_tokens = 1024 # Возвращаем стандартное значение
+        
+        try:
+            # Ищем JSON объект в ответе
+            match = re.search(r'\{[\s\S]*\}', response)
+            if not match:
+                raise ValueError("JSON-объект не найден в ответе модели.")
+            
+            json_part = match.group(0)
+            result = json.loads(json_part)
+            
+            # Проверяем наличие ключей и возвращаем с sane defaults
+            return {
+                "crew_type": result.get("crew_type", "general_conversation"),
+                "model_key": result.get("model_key", "default")
+            }
+        except (json.JSONDecodeError, ValueError) as e:
+            self.log(f"[DispatcherAgent] [ERROR] Не удалось извлечь JSON: {e}\nОтвет был: {response}")
+            # Возвращаем дефолтное значение в случае ошибки
+            return {"crew_type": "general_conversation", "model_key": "default"}

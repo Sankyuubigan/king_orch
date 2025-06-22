@@ -1,91 +1,98 @@
-# crews/coding_crew.py - УБРАНА ЛОКАЛЬНАЯ ЗАГРУЗКА КОНФИГА
+# crews/coding_crew.py - ИНТЕГРАЦИЯ РЕТРИВЕРА ДЛЯ ПОЛУЧЕНИЯ КОНТЕКСТА
 
 import json
-import requests
 from agents.planner_agent import PlannerAgent
 from agents.code_agent import CodeAgent
 from agents.debugger_agent import DebuggerAgent
+from agents.code_analyzer_agent import CodeAnalyzerAgent
+from agents.code_retriever_agent import CodeRetrieverAgent # <-- Импорт Ретривера
+
 from llama_cpp import Llama
 
 class CodingCrew:
     def __init__(self, llm_instance: Llama, tools_config: dict):
         self.llm = llm_instance
-        self.trajectory = []
-        # Конфиг теперь передается снаружи, а не загружается здесь
         self.tools_config = tools_config
+        self.trajectory = []
+        self.update_callback = None
+        self.agents = {}
 
     def _log(self, message):
         self.log_callback(message)
         self.trajectory.append(message)
 
-    def _get_project_context(self) -> str:
-        """Использует инструмент file_lister для получения структуры проекта."""
-        try:
-            tool_info = self.tools_config["file_lister"]
-            url = tool_info["url"]
-            response = requests.get(url, params={"path": "."}, timeout=10)
-            response.raise_for_status()
-            return response.json().get("result", "Не удалось получить список файлов.")
-        except Exception as e:
-            self._log(f"[Crew] [WARNING] Не удалось получить контекст проекта: {e}")
-            return "Не удалось получить список файлов."
+    def _send_update(self, update_type: str, data: any):
+        if self.update_callback:
+            self.update_callback({"type": update_type, "data": data})
 
-    def run(self, topic: str, log_callback_from_engine):
-        self.log_callback = log_callback_from_engine
+    def _handle_agent_call(self, agent_name: str, task: str):
+        self._log(f"[CrewRouter] Поступил вызов для агента '{agent_name}' с задачей: {task[:60]}...")
         
-        planner = PlannerAgent(self.llm, self._log)
-        coder = CodeAgent(self.llm, self.tools_config, self._log)
-        debugger = DebuggerAgent(self.llm, self.tools_config, self._log)
+        agent_instance = self.agents.get(agent_name)
+        if not agent_instance:
+            error_msg = f"Ошибка маршрутизации: Агент '{agent_name}' не найден."
+            self._log(f"[CrewRouter] [ERROR] {error_msg}")
+            return error_msg
 
-        self._log("[Crew] Получаю контекст проекта...")
-        project_context = self._get_project_context()
-        self._log(f"[Crew] Контекст получен:\n{project_context}")
+        # Маршрутизация вызовов к соответствующим методам агентов
+        if agent_name == "CodeAnalyzerAgent":
+            return agent_instance.analyze_code(task, project_path="sandbox")
+        elif agent_name == "CodeRetrieverAgent":
+            return agent_instance.retrieve_code_snippets(task)
+        elif agent_name == "DebuggerAgent":
+            lang, code = "python", task 
+            return agent_instance.run_and_analyze(lang, code)
+        else:
+            return agent_instance.work_on_task(task)
+
+    def run(self, topic: str, log_callback_from_engine, update_callback_from_engine):
+        self.log_callback = log_callback_from_engine
+        self.update_callback = update_callback_from_engine
+        
+        # --- Инициализация всех агентов команды ---
+        self.agents = {
+            "PlannerAgent": PlannerAgent(self.llm, self._log),
+            "CodeAgent": CodeAgent(self.llm, self.tools_config, self._log, agent_router=self._handle_agent_call),
+            "DebuggerAgent": DebuggerAgent(self.llm, self.tools_config, self._log, agent_router=self._handle_agent_call),
+            "CodeAnalyzerAgent": CodeAnalyzerAgent(self.llm, self.tools_config, self._log),
+            "CodeRetrieverAgent": CodeRetrieverAgent(self.llm, self.tools_config, self._log)
+        }
+        
+        planner = self.agents["PlannerAgent"]
+        coder = self.agents["CodeAgent"]
 
         self._log(f"[Crew] Получена задача: '{topic}'. Начинаю планирование...")
-        plan = planner.create_plan(topic, project_context)
+        plan = planner.create_plan(topic)
         if not plan:
-            final_report = "Планировщик не смог составить план."
-            self._log(f"[Crew] [ERROR] {final_report}")
-            return {"final_result": final_report, "trajectory": self.trajectory}
+            self._send_update("final_result", {"final_result": "Планировщик не смог составить план.", "trajectory": self.trajectory})
+            return
         
-        self._log("[Crew] План составлен:")
-        for i, step in enumerate(plan): self._log(f"  {i+1}. {step}")
+        self._log("[Crew] План составлен.")
+        self._send_update("plan", plan)
 
-        self._log("[Crew] Начинаю выполнение плана...")
-        MAX_CORRECTION_ATTEMPTS = 2 
-
-        for i, task in enumerate(plan):
-            self._log(f"\n[Crew] --- Шаг {i+1}: {task} ---")
+        for step in plan:
+            task_id = step['id']
+            task_description = step['description']
             
-            if task.lower().startswith("запустить") or task.lower().startswith("проверить"):
-                command_to_run = task.split('`', 2)[1] if '`' in task else task
-                
-                result = debugger.run_and_debug(command_to_run)
-                
-                correction_attempts = 0
-                while "обнаружена ошибка" in result.lower() and correction_attempts < MAX_CORRECTION_ATTEMPTS:
-                    correction_attempts += 1
-                    self._log(f"[Crew] [САМОКОРРЕКЦИЯ] Ошибка на шаге {i+1}. Попытка исправления #{correction_attempts}...")
-                    
-                    correction_task = f"Предыдущая команда '{command_to_run}' провалилась. Вот лог ошибки:\n{result}\nПроанализируй ошибку и исправь код в соответствующих файлах, чтобы решить эту проблему."
-                    
-                    self._log(f"[Crew] [САМОКОРРЕКЦИЯ] Новая задача для CodeAgent: {correction_task[:150]}...")
-                    coder.work_on_task(correction_task)
-                    
-                    self._log(f"[Crew] [САМОКОРРЕКЦИЯ] Повторный запуск команды '{command_to_run}' для проверки исправления.")
-                    result = debugger.run_and_debug(command_to_run)
+            self._log(f"\n[Crew] --- Шаг {task_id}: {task_description} ---")
+            self._send_update("status_update", {"id": task_id, "status": "running"})
 
-                if "обнаружена ошибка" in result.lower():
-                    final_report = f"Не удалось исправить ошибку на шаге '{task}' после {MAX_CORRECTION_ATTEMPTS} попыток. Выполнение прервано."
-                    self._log(f"[Crew] [ERROR] {final_report}")
-                    return {"final_result": final_report, "trajectory": self.trajectory}
+            try:
+                # Просто передаем задачу ведущему инженеру (CodeAgent)
+                # Он сам решит, когда и какого "коллегу" (Retriever или Analyzer) вызвать
+                result = coder.work_on_task(task_description)
+                
+                if "ошибка" in str(result).lower() or "error" in str(result).lower():
+                     self._send_update("status_update", {"id": task_id, "status": "failed"})
+                else:
+                     self._send_update("status_update", {"id": task_id, "status": "done"})
 
-            else:
-                result = coder.work_on_task(task)
-            
-            self._log(f"[Crew] Результат шага: {result}")
-        
-        final_report = "Все шаги плана выполнены. Проверьте рабочую директорию 'workspace' для результатов."
-        self._log(f"[Crew] Завершено. {final_report}")
-        
-        return {"final_result": final_report, "trajectory": self.trajectory}
+            except Exception as e:
+                self._log(f"[Crew] [FATAL ERROR] Критическая ошибка на шаге {task_id}: {e}")
+                self._send_update("status_update", {"id": task_id, "status": "failed"})
+                self._send_update("final_result", {"final_result": f"Критическая ошибка: {e}", "trajectory": self.trajectory})
+                return
+
+        final_report = "Все шаги плана выполнены."
+        self._log(f"[Crew] Завершено.")
+        self._send_update("final_result", {"final_result": final_report, "trajectory": self.trajectory})
