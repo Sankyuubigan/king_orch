@@ -1,4 +1,4 @@
-# engine.py - Добавлена функция перезагрузки настроек
+# engine.py - ДОБАВЛЕНЫ ЛОГИ ДЛЯ ИЗМЕРЕНИЯ ВРЕМЕНИ РАБОТЫ LLM
 
 import os
 import traceback
@@ -38,14 +38,13 @@ class OrchestratorEngine:
         self.model_lock = threading.Lock()
 
         self.log_callback("[Engine] Движок инициализирован.")
-        self.reload_settings() # <-- Загружаем настройки при старте
+        self.reload_settings()
         self._load_tools_config()
         
         self.processing_thread = threading.Thread(target=self._processing_loop, daemon=True)
         self.processing_thread.start()
         
     def reload_settings(self):
-        """Загружает или перезагружает настройки из файла."""
         self.log_callback("[Engine] Загрузка/перезагрузка настроек...")
         try:
             if os.path.exists(SETTINGS_FILE):
@@ -60,7 +59,6 @@ class OrchestratorEngine:
         self.assistant_name = self.settings.get("assistant_name", "Ассистент")
         self.log_callback(f"[Engine] Имя ассистента установлено: '{self.assistant_name}'")
 
-        # Если голосовой контроллер уже существует, вызываем его перезагрузку
         if self.voice_controller:
             self.voice_controller.reload()
 
@@ -130,6 +128,10 @@ class OrchestratorEngine:
     def _process_single_task(self, user_prompt: str):
         final_answer = ""
         try:
+            # --- НОВЫЙ БЛОК: Измерение времени работы LLM ---
+            llm_start_time = time.time()
+            self.log_callback("[Engine] >>> НАЧАЛО РАБОТЫ LLM/КОМАНДЫ...")
+            
             if not self._switch_model("default"): return
             dispatcher = DispatcherAgent(self.current_llm, self.log_callback)
             self.log_callback(f"[Dispatcher] Получена задача: '{user_prompt}'. Определяю тип и модель...")
@@ -152,9 +154,17 @@ class OrchestratorEngine:
                 if self.update_callback:
                     result_data = {"final_result": answer, "trajectory": ["Ответ сгенерирован напрямую, без использования команд."]}
                     self.update_callback({"type": "final_result", "data": result_data})
+            
+            llm_end_time = time.time()
+            self.log_callback(f"[Engine] <<< КОНЕЦ РАБОТЫ LLM/КОМАНДЫ. ВРЕМЯ ВЫПОЛНЕНИЯ: {llm_end_time - llm_start_time:.2f} сек.")
+            # --- КОНЕЦ НОВОГО БЛОКА ---
+
         except Exception as e:
             error_message = f"Критическая ошибка в работе команды: {traceback.format_exc()}"
             self.log_callback(f"[Engine] [ERROR] {error_message}")
             final_answer = f"Произошла критическая ошибка: {e}"
             if self.update_callback: self.update_callback({"type": "error", "data": f"Критическая ошибка в работе AI-агентов: {e}"})
-        if self.voice_controller and final_answer: self.voice_controller.say(final_answer)
+        
+        if self.voice_controller and final_answer:
+            self.log_callback("[Engine] Отправка финального ответа в TTS...")
+            self.voice_controller.say(final_answer)

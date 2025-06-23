@@ -1,4 +1,4 @@
-# voice_engine/tts.py - ПРИНИМАЕТ УСТРОЙСТВО ИЗ НАСТРОЕК
+# voice_engine/tts.py - ВОЗВРАЩЕН К ИСХОДНОЙ ВЕРСИИ + 1 СТРОКА ДЛЯ ОТКЛЮЧЕНИЯ ПРОФАЙЛЕРА
 
 import torch
 import sounddevice as sd
@@ -8,11 +8,13 @@ import time
 import traceback
 import re
 
+# --- РЕШЕНИЕ: Отключаем JIT-профайлер, чтобы убрать задержку первого запуска ---
+torch._C._jit_set_profiling_mode(False)
+
 class TextToSpeech:
     def __init__(self, model_base_path: str, speaker: str, device: str):
         print("[TTS] Инициализация движка синтеза речи...")
         
-        # --- ИЗМЕНЕНИЕ: Используем устройство, переданное из настроек ---
         if device == 'cuda' and not torch.cuda.is_available():
             print("[TTS] [WARNING] CUDA выбрана, но недоступна. Переключаюсь на CPU.")
             self.device = torch.device('cpu')
@@ -59,8 +61,10 @@ class TextToSpeech:
         stream = None
         
         try:
-            stream = sd.OutputStream(samplerate=self.sample_rate, channels=1, dtype='float32')
-            stream.start()
+            # При прогреве поток не создается, чтобы не было звука
+            if not is_warm_up:
+                stream = sd.OutputStream(samplerate=self.sample_rate, channels=1, dtype='float32')
+                stream.start()
 
             for i, sentence in enumerate(sentences):
                 if stop_event.is_set():
@@ -88,10 +92,10 @@ class TextToSpeech:
                 if stop_event.is_set():
                     break
 
-                if not is_warm_up:
+                if not is_warm_up and stream:
                     stream.write(audio_chunk.numpy())
 
-            if not is_warm_up:
+            if not is_warm_up and stream:
                 stream.stop()
             
         except Exception:

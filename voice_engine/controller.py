@@ -1,4 +1,4 @@
-# voice_engine/controller.py - ЧИТАЕТ НАСТРОЙКУ УСТРОЙСТВА ИЗ ФАЙЛА
+# voice_engine/controller.py - ВОЗВРАЩЕН К ИСХОДНОЙ ПРОСТОЙ ЛОГИКЕ
 
 import threading
 import os
@@ -10,6 +10,7 @@ from .stt import SpeechToText
 from .tts import TextToSpeech
 
 SETTINGS_FILE = "settings.json"
+# Возвращаем исходную команду для прогрева
 WARM_UP_COMMAND = "Это тестовое предложение для прогрева системы синтеза речи."
 
 class VoiceController:
@@ -43,8 +44,7 @@ class VoiceController:
         stt_model_name = settings.get("stt_model")
         tts_speaker_name = settings.get("tts_speaker")
         self.activation_word = settings.get("activation_word")
-        # --- НОВЫЙ БЛОК: Читаем настройку устройства ---
-        tts_device = settings.get("tts_device", "cuda") # По умолчанию cuda
+        tts_device = settings.get("tts_device", "cuda")
 
         try:
             if stt_model_name:
@@ -52,7 +52,6 @@ class VoiceController:
                 self.stt = SpeechToText(model_path=stt_model_path)
             if tts_speaker_name:
                 tts_model_base_path = os.path.join("voice_engine", "tts")
-                # Передаем выбранное устройство в конструктор TTS
                 self.tts = TextToSpeech(model_base_path=tts_model_base_path, speaker=tts_speaker_name, device=tts_device)
         except Exception as e:
             print(f"[VoiceController] [ERROR] Ошибка при пересоздании компонентов: {e}")
@@ -63,12 +62,27 @@ class VoiceController:
         self.tts_thread = threading.Thread(target=self._tts_worker, daemon=True)
         self.tts_thread.start()
         
-        if self.tts:
-            print("[VoiceController] Отправка команды на прогрев в рабочий поток TTS...")
-            self.tts_queue.put((WARM_UP_COMMAND, time.time()))
+        # Возвращаем простой блокирующий прогрев, как в самом начале
+        self.warm_up()
         
         self.start_listening()
         print("[VoiceController] Перезагрузка завершена.")
+
+    def warm_up(self):
+        """
+        Выполняет блокирующий прогрев TTS, отправляя специальную команду в очередь.
+        """
+        if self.tts:
+            print("[VoiceController] Выполняю блокирующий прогрев TTS...")
+            start_time = time.time()
+            # Прямой вызов speak с флагом is_warm_up, как было в оригинале
+            self.tts.speak(
+                WARM_UP_COMMAND,
+                threading.Event(), # Пустое событие, т.к. прерывать нечего
+                is_warm_up=True
+            )
+            end_time = time.time()
+            print(f"[VoiceController] Прогрев TTS завершен за {end_time - start_time:.2f} сек.")
 
     def _load_settings(self) -> dict:
         if os.path.exists(SETTINGS_FILE):
@@ -84,17 +98,16 @@ class VoiceController:
             item = self.tts_queue.get()
             if item is None: break
             
-            text_to_speak, start_time = item
+            text_to_speak, _ = item
             
             if self.tts_stop_event.is_set(): continue
             
             if self.tts:
-                is_warm_up = text_to_speak == WARM_UP_COMMAND
-                self.tts.speak(text_to_speak, self.tts_stop_event, is_warm_up)
+                # Простой вызов speak без сложной логики
+                self.tts.speak(text_to_speak, self.tts_stop_event, is_warm_up=False)
             
             self.tts_queue.task_done()
 
-    # ... (остальные методы без изменений) ...
     def _listen_loop(self):
         if not self.stt: return
         print(f"[VoiceController] Цикл прослушивания запущен. Слово активации: '{self.activation_word}'")

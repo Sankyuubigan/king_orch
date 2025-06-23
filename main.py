@@ -125,3 +125,6 @@ if __name__ == "__main__":
     startup_thread = threading.Thread(target=background_startup_tasks, args=(app,), daemon=True)
     startup_thread.start()
     main_window.mainloop()
+
+
+    
