@@ -1,74 +1,18 @@
 {
-  "browser_action": {
-    "url": "http://127.0.0.1:7800/call",
-    "description": "Выполняет одно действие в браузере через Playwright."
-  },
-  "web_search": {
-    "url": "http://127.0.0.1:8080/search",
-    "description": "Инструмент для поиска информации в интернете."
-  },
-  "analyze_codebase": {
-    "url": "http://127.0.0.1:8008/analyze",
-    "description": "Анализирует структуру проекта, находит важные файлы и зависимости. Принимает 'path'."
-  },
-  "edit_file": {
-    "url": "http://127.0.0.1:8007/edit",
-    "description": "Выполняет точечное, строчно-ориентированное редактирование файла. Принимает 'path', 'action', 'line_number', 'content'."
-  },
-  "lsp_initialize": {
-    "url": "http://127.0.0.1:8009/initialize",
-    "description": "Инициализирует LSP-сервер для указанной директории проекта. Принимает 'root_uri'."
-  },
-  "lsp_get_diagnostics": {
-    "url": "http://127.0.0.1:8009/get_diagnostics",
-    "description": "Возвращает список ошибок и предупреждений для указанного файла. Принимает 'uri'."
-  },
-  "lsp_get_definition": {
-    "url": "http://127.0.0.1:8009/get_definition",
-    "description": "Находит определение символа. Принимает 'textDocument' и 'position'."
-  },
-  "lsp_get_references": {
-    "url": "http://127.0.0.1:8009/get_references",
-    "description": "Находит все ссылки на символ. Принимает 'textDocument' и 'position'."
-  },
-  "code_sandbox": {
-    "url": "http://127.0.0.1:8010/run",
-    "description": "Выполняет код в безопасной песочнице (Docker). Принимает 'language' и 'code'."
-  },
-  "chroma_add_texts": {
-    "url": "http://127.0.0.1:8011/add_texts",
-    "description": "Добавляет текстовые фрагменты и их метаданные в коллекцию ChromaDB. Принимает 'collection_name', 'texts', 'metadatas'."
-  },
-  "chroma_query": {
-    "url": "http://127.0.0.1:8011/query",
-    "description": "Выполняет семантический поиск по коллекции ChromaDB. Принимает 'collection_name', 'query_texts', 'n_results'."
-  },
-  "file_reader": {
-    "url": "http://127.0.0.1:7780/read_file",
-    "description": "Инструмент для чтения текстового файла. Принимает 'path'."
-  },
-  "file_lister": {
-    "url": "http://127.0.0.1:7780/list_files",
-    "description": "Инструмент для получения списка файлов и папок в директории. Принимает 'path'."
-  },
-  "ask_docs": {
-    "url": "http://127.0.0.1:8001/query",
-    "description": "Задает вопрос к локальной базе знаний (документации)."
-  },
-  "ask_human": {
-    "url": "http://127.0.0.1:7787/ask",
-    "description": "Задает уточняющий вопрос пользователю."
-  },
-  "github_search": {
-    "url": "http://127.0.0.1:7782/v1/action",
-    "description": "Инструмент для поиска репозиториев на GitHub."
-  },
-  "gitlab_search": {
-    "url": "http://127.0.0.1:7783/v1/action",
-    "description": "Инструмент для поиска проектов на GitLab."
-  },
-  "ashra_extract": {
-    "url": "http://127.0.0.1:8000/extract",
-    "description": "Извлекает структурированные данные со страницы."
-  }
+  "browser_action": { "url": "http://127.0.0.1:7800/call", "description": "Выполняет одно действие в браузере через Playwright." },
+  "web_search": { "url": "http://127.0.0.1:8080/search", "description": "Инструмент для поиска информации в интернете." },
+  "edit_file": { "url": "http://127.0.0.1:8007/edit", "description": "Выполняет точечное, строчно-ориентированное редактирование файла." },
+  "lsp_initialize": { "url": "http://127.0.0.1:8009/initialize", "description": "Инициализирует LSP-сервер для указанной директории проекта." },
+  "lsp_get_diagnostics": { "url": "http://127.0.0.1:8009/get_diagnostics", "description": "Возвращает список ошибок и предупреждений для указанного файла." },
+  "lsp_get_definition": { "url": "http://127.0.0.1:8009/get_definition", "description": "Находит определение символа." },
+  "lsp_get_references": { "url": "http://127.0.0.1:8009/get_references", "description": "Находит все ссылки на символ." },
+  "code_sandbox": { "url": "http://127.0.0.1:8010/run", "description": "Выполняет код в безопасной песочнице." },
+  "chroma_query": { "url": "http://127.0.0.1:8011/query", "description": "Выполняет семантический поиск по коллекции ChromaDB." },
+  "file_reader": { "url": "http://127.0.0.1:7780/read_file", "description": "Инструмент для чтения текстового файла." },
+  "file_lister": { "url": "http://127.0.0.1:7780/list_files", "description": "Инструмент для получения списка файлов и папок в директории." },
+  "ask_docs": { "url": "http://127.0.0.1:8001/query", "description": "Задает вопрос к локальной базе знаний (документации)." },
+  "ask_human": { "url": "http://127.0.0.1:7787/ask", "description": "Задает уточняющий вопрос пользователю." },
+  "github_search": { "url": "http://127.0.0.1:7782/v1/action", "description": "Инструмент для поиска репозиториев на GitHub." },
+  "gitlab_search": { "url": "http://127.0.0.1:7783/v1/action", "description": "Инструмент для поиска проектов на GitLab." },
+  "ashra_extract": { "url": "http://127.0.0.1:8000/extract", "description": "Извлекает структурированные данные со страницы." }
 }

@@ -16,3 +16,4 @@ voice_engine/silero_cache/*
 
 # Игнорируем папку с внешними библиотеками
 /vendor/
+/modules

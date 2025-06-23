@@ -1,4 +1,4 @@
-# voice_engine/controller.py - "Мозг" голосового движка с управлением
+# voice_engine/controller.py - Исправление пути к модели Vosk
 
 import threading
 from .stt import SpeechToText
@@ -13,8 +13,8 @@ class VoiceController:
         print("[VoiceController] Инициализация голосового движка...")
         self.engine = orchestrator_engine
         
-        # Пути к моделям адаптированы под вашу структуру
-        vosk_model_path = "voice_engine/vosk"
+        # --- ИСПРАВЛЕНО: Путь должен указывать прямо на папку с файлами модели ---
+        vosk_model_path = "voice_engine/vosk/vosk-model-tts-ru-0.8-multi"
         silero_model_path = "voice_engine/silero"
         
         self.stt = SpeechToText(model_path=vosk_model_path)
@@ -24,8 +24,7 @@ class VoiceController:
         self.tts_thread = None
         self.tts_lock = threading.Lock()
         
-        # --- НОВЫЕ ЭЛЕМЕНТЫ УПРАВЛЕНИЯ ---
-        self.is_running_event = threading.Event() # Флаг, который контролирует цикл прослушивания
+        self.is_running_event = threading.Event()
         self.listener_thread = None
         
         print("[VoiceController] Голосовой движок инициализирован и готов к запуску.")
@@ -39,18 +38,13 @@ class VoiceController:
         while self.is_running_event.is_set():
             recognized_text = self.stt.listen()
             
-            # Проверяем флаг еще раз после блокирующего вызова listen()
-            if not self.is_running_event.is_set():
-                break
-
+            if not self.is_running_event.is_set(): break
             if recognized_text:
                 print(f"[VoiceController] Распознана команда: '{recognized_text}'")
-                
                 if self.tts_thread and self.tts_thread.is_alive():
                     print("[VoiceController] Barge-in! Прерываю текущую речь.")
                     self.tts_stop_event.set()
                     self.tts_thread.join()
-                
                 self.engine.submit_task(recognized_text)
         print("[VoiceController] Цикл прослушивания остановлен.")
 
@@ -68,18 +62,12 @@ class VoiceController:
         if self.is_running_event.is_set():
             print("[VoiceController] Получена команда на остановку прослушивания.")
             self.is_running_event.clear()
-            # Важно: сам поток завершится после следующей итерации listen()
 
     def say(self, text: str):
         """Публичный метод для озвучивания текста."""
         with self.tts_lock:
             if self.tts_thread and self.tts_thread.is_alive():
                 self.tts_thread.join()
-
             self.tts_stop_event.clear()
-            
-            self.tts_thread = threading.Thread(
-                target=self.tts.speak,
-                args=(text, self.tts_stop_event)
-            )
+            self.tts_thread = threading.Thread(target=self.tts.speak, args=(text, self.tts_stop_event))
             self.tts_thread.start()
