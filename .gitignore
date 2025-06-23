@@ -8,12 +8,16 @@ node_modules
 /sandbox
 
 # Игнорируем большие файлы моделей
-voice_engine/vosk/*
-voice_engine/silero/*
+voice_engine/stt/*
+voice_engine/tts/*
 voice_engine/silero_cache/*
-!voice_engine/vosk/README.md
-!voice_engine/silero/README.md
+!voice_engine/stt/README.md
+!voice_engine/tts/README.md
 
 # Игнорируем папку с внешними библиотеками
 /vendor/
 /modules
+
+# Игнорируем автоматически генерируемые файлы
+tools_config.json
+settings.json

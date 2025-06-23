@@ -1,8 +1,9 @@
-# mcp_servers/mcp_feedback_server.py - НОВЫЙ СЕРВЕР ДЛЯ ОБРАТНОЙ СВЯЗИ С ЧЕЛОВЕКОМ
+# mcp_servers/mcp_feedback_server.py - ИСПРАВЛЕНА ОШИБКА С JSONResponse
 
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+# ИСПРАВЛЕНО: Импортируем 'Response' для корректной отправки статуса 204
+from fastapi.responses import JSONResponse, Response 
 from contextlib import asynccontextmanager
 import asyncio
 
@@ -31,12 +32,10 @@ async def ask_user(request: Request):
     
     log_message(f"[FeedbackServer] Получен вопрос от агента: {question}")
     
-    # Устанавливаем вопрос и сбрасываем событие
     feedback_request["question"] = question
     feedback_request["answer"] = None
     feedback_request["event"].clear()
     
-    # Ждем, пока UI-поток установит ответ и вызовет .set()
     try:
         await asyncio.wait_for(feedback_request["event"].wait(), timeout=300.0)
     except asyncio.TimeoutError:
@@ -50,7 +49,10 @@ async def get_question():
     """UI вызывает этот эндпоинт, чтобы проверить, есть ли вопрос от агента."""
     if feedback_request["question"]:
         return JSONResponse(status_code=200, content={"question": feedback_request["question"]})
-    return JSONResponse(status_code=204) # No Content
+    
+    # ИСПРАВЛЕНО: Для статуса 204 No Content нужно возвращать Response без тела,
+    # а не JSONResponse, который требует 'content'. Это исправит TypeError.
+    return Response(status_code=204)
 
 @app.post("/provide_answer")
 async def provide_answer(request: Request):

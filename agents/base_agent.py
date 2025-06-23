@@ -1,4 +1,4 @@
-# agents/base_agent.py - ДОБАВЛЕНА ПОДДЕРЖКА ВЫЗОВОВ A2A (AGENT-TO-AGENT)
+# agents/base_agent.py - ВОЗВРАЩЕНА ПРОСТАЯ HTTP-ЛОГИКА
 
 from llama_cpp import Llama
 import json
@@ -30,6 +30,7 @@ class BaseAgent:
         url = tool_info["url"]
 
         try:
+            # Простая и надежная логика: GET для чтения, POST для всего остального
             if tool_name in ["file_reader", "file_lister"]:
                 response = requests.get(url, params=tool_params, timeout=30)
             else:
@@ -37,12 +38,13 @@ class BaseAgent:
             
             response.raise_for_status()
             try:
+                # Пытаемся вернуть JSON, если не получается - возвращаем текст
                 return response.json()
             except json.JSONDecodeError:
                 return response.text
                 
         except Exception as e:
-            self.log(f"[{self.__class__.__name__}] Ошибка вызова инструмента: {e}")
+            self.log(f"[{self.__class__.__name__}] Ошибка вызова инструмента '{tool_name}': {e}")
             return f"Ошибка: {e}"
 
     def execute_step(self, current_task: str) -> (str, bool):
@@ -55,7 +57,6 @@ class BaseAgent:
         
         self.history.append({"role": "assistant", "content": response_text})
 
-        # --- НОВАЯ ЛОГИКА: ПРОВЕРКА ВЫЗОВА АГЕНТА ---
         if "[AGENT_CALL]" in response_text:
             if not self.agent_router:
                 error_msg = "Ошибка: этот агент не уполномочен вызывать других агентов."
