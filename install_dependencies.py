@@ -8,8 +8,15 @@ import shutil
 PYPI_PACKAGES = [
     "requests", "llama-cpp-python", "Pillow", "playwright", "fastapi",
     "uvicorn[standard]", "python-multipart", "tree-sitter",
-    "sentence-transformers", "tree-sitter-languages", "vosk", "torch",
-    "silero", "pyaudio", "sounddevice"
+    "sentence-transformers", "tree-sitter-languages", "vosk",
+    "pyaudio", "sounddevice"
+]
+
+# Пакеты, которые нужно обновить в конце для разрешения конфликтов
+CONFLICT_RESOLUTION_PACKAGES = [
+    "Pillow",
+    "typing-extensions",
+    "jinja2"
 ]
 
 GIT_APPS = [
@@ -46,9 +53,24 @@ def main():
     python_exe = sys.executable
     failed_packages = []
     
+    print("\n" + "="*80)
+    print("!!! ВАЖНО: УСТАНОВКА PYTORCH !!!")
+    print("Для максимальной производительности (особенно для синтеза речи) его нужно установить с поддержкой CUDA.")
+    print("\n1. Если у вас есть видеокарта NVIDIA (рекомендуется):")
+    print("   Скопируйте и выполните в вашем терминале (conda/venv):")
+    print("   pip install torch torchvision torchaudio --force-reinstall --index-url https://download.pytorch.org/whl/cu121")
+    print("\n2. Если у вас НЕТ видеокарты NVIDIA:")
+    print("   Выполните команду:")
+    print("   pip install torch torchvision torchaudio")
+    print("="*80 + "\n")
+
     print("\n--- Шаг 1: Установка базовых Python-пакетов с PyPI ---")
     if not run_command([python_exe, "-m", "pip", "install"] + PYPI_PACKAGES):
         failed_packages.append("базовые пакеты Python")
+    
+    print("\n--- Установка Silero ---")
+    if not run_command([python_exe, "-m", "pip", "install", "silero"]):
+        failed_packages.append("silero")
 
     print("\n--- Шаг 2: Клонирование и настройка внешних MCP-приложений ---")
     vendor_dir = "vendor"
@@ -103,9 +125,16 @@ def main():
         if not success:
             failed_packages.append(app_name)
 
+    # --- НОВЫЙ ШАГ 3: Разрешение конфликтов ---
+    print("\n--- Шаг 3: Финальное разрешение конфликтов зависимостей ---")
+    print("Обновляем пакеты, которые могли вызвать конфликты, до последних совместимых версий.")
+    if not run_command([python_exe, "-m", "pip", "install", "--upgrade"] + CONFLICT_RESOLUTION_PACKAGES):
+        failed_packages.append("разрешение конфликтов")
+
+
     print("\n\n--- Установка завершена! ---")
     if failed_packages:
-        print("\n!!! ВНИМАНИЕ: Некоторые компоненты не удалось установить:")
+        print("\n!!! ВНИМАНИЕ: Некоторые компоненты не удалось установить или настроить:")
         for pkg in failed_packages:
             print(f" - {pkg}")
         print("Пожалуйста, просмотрите лог выше, чтобы понять причину.")

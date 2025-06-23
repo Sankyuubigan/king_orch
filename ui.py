@@ -1,4 +1,4 @@
-# ui.py - Реализована визуальная обратная связь для голосового ввода
+# ui.py - Реализована визуальная обратная связь, установлена иконка приложения
 
 import threading
 import tkinter as tk
@@ -7,6 +7,8 @@ import time
 import requests
 from io import BytesIO
 from PIL import Image, ImageTk
+import sys
+import os
 
 from engine import OrchestratorEngine
 from utils.clipboard_fortress import handle_keypress_event
@@ -15,7 +17,6 @@ from settings_window import SettingsWindow
 FEEDBACK_URL_GET = "http://127.0.0.1:7787/get_question"
 FEEDBACK_URL_POST = "http://127.0.0.1:7787/provide_answer"
 STATUS_ICONS = {"pending": "⏳", "running": "⚙️", "done": "✅", "failed": "❌", "fixing": "🛠️"}
-# --- НОВЫЙ ПАРАМЕТР: Цвет фона для режима прослушивания ---
 LISTENING_BG_COLOR = "#E0F7FF" 
 
 class AppUI:
@@ -26,10 +27,24 @@ class AppUI:
         self.plan_widgets = {}
         self.voice_engine_enabled = tk.BooleanVar(value=False)
         self.last_input_was_voice = False
-        self.default_bg_color = None # Сохраним стандартный цвет
+        self.default_bg_color = None
 
         self.root.title("The Orchestrator v35.0 (Live Feedback)")
         self.root.geometry("1700x800")
+        
+        # --- ИЗМЕНЕНИЕ: Установка иконки приложения ---
+        # Эта логика специфична для Windows и устанавливает иконку в панели задач.
+        # Используется try-except для надежности, так как файл иконки может отсутствовать
+        # или быть поврежденным, что является внешним фактором, а не ошибкой логики.
+        if sys.platform == "win32":
+            icon_path = "logo.ico"
+            if os.path.exists(icon_path):
+                try:
+                    self.root.iconbitmap(icon_path)
+                except tk.TclError:
+                    # Записываем предупреждение в консоль, если иконку не удалось загрузить
+                    print(f"[UI] [WARNING] Не удалось загрузить иконку '{icon_path}'. Файл может быть поврежден.")
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
         
         self.create_widgets()
         self.default_bg_color = self.chat_input.cget("background")
@@ -52,7 +67,6 @@ class AppUI:
             self.engine.voice_controller.set_ui_linker(self)
         self.start_initial_load_task()
 
-    # --- НОВЫЕ МЕТОДЫ ДЛЯ ОБРАТНОЙ СВЯЗИ ---
     def set_listening_status(self, is_listening: bool):
         """Изменяет состояние UI, показывая, слушает ли ассистент."""
         if self.root.winfo_exists():
@@ -64,7 +78,6 @@ class AppUI:
             self.chat_input.config(background=LISTENING_BG_COLOR)
             self.chat_input.delete(0, tk.END)
         else:
-            # Возвращаем стандартное состояние, если не занят другой обработкой
             if not self.is_processing:
                  self.info_label.config(text="Готов к работе. Ожидание задач...")
             self.chat_input.config(background=self.default_bg_color)
@@ -78,7 +91,6 @@ class AppUI:
     def _update_input_text(self, text: str):
         self.chat_input.delete(0, tk.END)
         self.chat_input.insert(0, text)
-    # --- КОНЕЦ НОВЫХ МЕТОДОВ ---
 
     def _toggle_voice_engine(self):
         if not self.engine:
@@ -125,7 +137,6 @@ class AppUI:
         self.last_input_was_voice = False
         self.engine.submit_task(prompt)
     
-    # ... (остальные методы без изменений) ...
     def create_widgets(self):
         self.main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         self.main_pane.pack(fill=tk.BOTH, expand=True)
@@ -230,7 +241,6 @@ class AppUI:
     def set_ui_busy(self, is_busy, status_text=None):
         self.is_processing = is_busy
         if status_text: self.info_label.config(text=status_text)
-        # Если мы разблокируем UI, но он все еще в режиме прослушивания, не меняем текст
         if not is_busy and self.chat_input.cget("background") != self.default_bg_color:
             pass
         elif not is_busy:
