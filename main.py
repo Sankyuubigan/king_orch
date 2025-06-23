@@ -116,8 +116,13 @@ if __name__ == "__main__":
             print(f"[Launcher] [ERROR] Не удалось запустить сервер '{name}'.")
     
     if failed_servers:
-        failed_list = "\n - ".join(failed_servers)
-        messagebox.showwarning("Предупреждение при запуске", f"Не удалось запустить следующие MCP-серверы:\n - {failed_list}\n\nПриложение продолжит работу, но их функционал будет недоступен.")
+        print("\n" + "="*80)
+        print("!!! ПРЕДУПРЕЖДЕНИЕ ПРИ ЗАПУСКЕ !!!")
+        print("Не удалось запустить следующие MCP-серверы:")
+        for server in failed_servers:
+            print(f" - {server}")
+        print("Приложение продолжит работу, но их функционал будет недоступен.")
+        print("="*80 + "\n")
 
     main_window.deiconify()
     
@@ -127,7 +132,12 @@ if __name__ == "__main__":
         voice_controller = VoiceController(engine)
         engine.set_voice_controller(voice_controller)
     except Exception as e:
-        messagebox.showwarning("Ошибка VoiceEngine", f"Не удалось запустить голосовой движок: {e}\n\nПрограмма продолжит работу без голосового управления.")
+        print("\n" + "="*80)
+        print("!!! ПРЕДУПРЕЖДЕНИЕ: ОШИБКА VOICEENGINE !!!")
+        print(f"Не удалось запустить голосовой движок: {e}")
+        print("Проверьте, что модели Vosk и Silero скачаны и находятся в правильных папках.")
+        print("Программа продолжит работу без голосового управления.")
+        print("="*80 + "\n")
 
     app = AppUI(main_window, engine)
     

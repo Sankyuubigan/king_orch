@@ -30,7 +30,6 @@ def command_exists(cmd):
 def run_command(command, cwd=None):
     print(f"\n>>> Running: {' '.join(command)} in {cwd or '.'}")
     try:
-        # Запускаем и ждем завершения, но не вылетаем при ошибке
         result = subprocess.run(command, check=False, cwd=cwd, shell=False, capture_output=True, text=True, encoding='utf-8')
         if result.returncode != 0:
             print(f"!!! ПРЕДУПРЕЖДЕНИЕ: Команда '{' '.join(command)}' завершилась с ошибкой.")
