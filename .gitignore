@@ -21,3 +21,4 @@ voice_engine/silero_cache/*
 # Игнорируем автоматически генерируемые файлы
 tools_config.json
 settings.json
+/voice_engine/snakers4_silero-models_master

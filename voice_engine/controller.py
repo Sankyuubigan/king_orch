@@ -1,14 +1,16 @@
-# voice_engine/controller.py - ВОЗВРАЩЕНА ПРОСТАЯ И РАБОЧАЯ ЛОГИКА
+# voice_engine/controller.py - ЧИТАЕТ НАСТРОЙКУ УСТРОЙСТВА ИЗ ФАЙЛА
 
 import threading
 import os
 import json
 import re
+import time
 from queue import Queue
 from .stt import SpeechToText
 from .tts import TextToSpeech
 
 SETTINGS_FILE = "settings.json"
+WARM_UP_COMMAND = "Это тестовое предложение для прогрева системы синтеза речи."
 
 class VoiceController:
     def __init__(self, orchestrator_engine):
@@ -41,6 +43,8 @@ class VoiceController:
         stt_model_name = settings.get("stt_model")
         tts_speaker_name = settings.get("tts_speaker")
         self.activation_word = settings.get("activation_word")
+        # --- НОВЫЙ БЛОК: Читаем настройку устройства ---
+        tts_device = settings.get("tts_device", "cuda") # По умолчанию cuda
 
         try:
             if stt_model_name:
@@ -48,7 +52,8 @@ class VoiceController:
                 self.stt = SpeechToText(model_path=stt_model_path)
             if tts_speaker_name:
                 tts_model_base_path = os.path.join("voice_engine", "tts")
-                self.tts = TextToSpeech(model_base_path=tts_model_base_path, speaker=tts_speaker_name)
+                # Передаем выбранное устройство в конструктор TTS
+                self.tts = TextToSpeech(model_base_path=tts_model_base_path, speaker=tts_speaker_name, device=tts_device)
         except Exception as e:
             print(f"[VoiceController] [ERROR] Ошибка при пересоздании компонентов: {e}")
             return
@@ -57,6 +62,10 @@ class VoiceController:
         self.tts_stop_event.clear()
         self.tts_thread = threading.Thread(target=self._tts_worker, daemon=True)
         self.tts_thread.start()
+        
+        if self.tts:
+            print("[VoiceController] Отправка команды на прогрев в рабочий поток TTS...")
+            self.tts_queue.put((WARM_UP_COMMAND, time.time()))
         
         self.start_listening()
         print("[VoiceController] Перезагрузка завершена.")
@@ -68,6 +77,24 @@ class VoiceController:
             except Exception: return {}
         return {}
 
+    def _tts_worker(self):
+        thread_id = threading.get_ident()
+        print(f"[TTS Worker] Поток {thread_id} запущен.")
+        while True:
+            item = self.tts_queue.get()
+            if item is None: break
+            
+            text_to_speak, start_time = item
+            
+            if self.tts_stop_event.is_set(): continue
+            
+            if self.tts:
+                is_warm_up = text_to_speak == WARM_UP_COMMAND
+                self.tts.speak(text_to_speak, self.tts_stop_event, is_warm_up)
+            
+            self.tts_queue.task_done()
+
+    # ... (остальные методы без изменений) ...
     def _listen_loop(self):
         if not self.stt: return
         print(f"[VoiceController] Цикл прослушивания запущен. Слово активации: '{self.activation_word}'")
@@ -78,7 +105,6 @@ class VoiceController:
         for event_type, text in self.stt.listen():
             if not self.is_running_event.is_set(): break
 
-            # --- ВОЗВРАЩЕНА ПРОСТАЯ ЛОГИКА BARGE-IN ---
             if self.activation_word in text:
                 if not self.tts_queue.empty() or (self.tts_thread and self.tts_thread.is_alive()):
                     print("[VoiceController] Barge-In! Очистка очереди TTS.")
@@ -113,18 +139,6 @@ class VoiceController:
                         full_command.append(text)
                         if self.ui_linker: self.ui_linker.show_partial_transcription(" ".join(full_command))
 
-    def _tts_worker(self):
-        while True:
-            text_to_speak = self.tts_queue.get()
-            if text_to_speak is None: break
-            
-            if self.tts_stop_event.is_set(): continue
-            
-            if self.tts:
-                self.tts.speak(text_to_speak, self.tts_stop_event)
-            
-            self.tts_queue.task_done()
-
     def start_listening(self):
         if not self.is_running_event.is_set():
             self.is_running_event.set()
@@ -142,5 +156,4 @@ class VoiceController:
         self.tts_stop_event.clear()
         with self.tts_queue.mutex: self.tts_queue.queue.clear()
         
-        # Простая логика: одна задача - одна озвучка
-        self.tts_queue.put(text)
+        self.tts_queue.put((text, time.time()))
