@@ -22,11 +22,16 @@ NPX_CMD = os.path.join(NODE_DIR, "npx.cmd")
 NODE_FILENAME = f"node-{NODE_VERSION}-win-x64"
 NODE_URL = f"https://nodejs.org/dist/{NODE_VERSION}/{NODE_FILENAME}.zip"
 
-# --- Конфигурация зависимостей ---
+# --- Зависимости, разделенные на этапы для надежной установки ---
+# Этап 1: Проблемный пакет, который нужно установить из wheel-файла
+PRE_BUILD_DEPS = ["docopt==0.6.2"]
+# Этап 2: Остальные зависимости для сборки
+BUILD_DEPS = ["Cython", "numpy", "torch", "torchaudio", "torchvision"]
+# Этап 3: Основные пакеты
 PYPI_PACKAGES = [
     "requests", "Pillow", "playwright", "fastapi", "uvicorn[standard]",
     "python-multipart", "tree-sitter", "sentence-transformers", "tree-sitter-languages",
-    "vosk", "pyaudio", "sounddevice", "torch", "torchaudio", "torchvision",
+    "vosk", "pyaudio", "sounddevice",
     "markitdown-mcp", "llama-cpp-python[server,llava]", "huggingface-hub",
     "TTS", "transformers", "phonemizer", "scipy", "ruaccent"
 ]
@@ -42,10 +47,14 @@ GIT_APPS = [
 def run_command(command, cwd=None, env=None):
     print(f"\n>>> Running: {' '.join(command)} in '{cwd or '.'}'")
     try:
+        local_env = env if env is not None else os.environ.copy()
+        node_dir_abs = os.path.abspath(NODE_DIR)
+        local_env["PATH"] = f"{node_dir_abs}{os.pathsep}{local_env.get('PATH', '')}"
+
         use_shell = sys.platform == "win32"
         process = subprocess.Popen(
             command, cwd=cwd, shell=use_shell, stdout=sys.stdout, stderr=sys.stderr,
-            text=True, encoding='utf-8', errors='ignore', env=env
+            text=True, encoding='utf-8', errors='ignore', env=local_env
         )
         process.wait()
         if process.returncode != 0:
@@ -68,30 +77,38 @@ def setup_portable_python():
         except Exception as e:
             print(f"!!! ОШИБКА скачивания Python: {e}"); return False
 
-    # --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: Явно добавляем site-packages в ._pth файл ---
-    pth_file = os.path.join(PYTHON_DIR, f"python{PYTHON_VERSION.replace('.', '')[:2]}._pth")
-    site_packages_path = "Lib\\site-packages" # Путь, который нужно добавить
+    pth_file = os.path.join(PYTHON_DIR, f"python{PYTHON_VERSION.replace('.', '')[:3]}._pth")
+    site_packages_path = "Lib\\site-packages"
     if os.path.exists(pth_file):
         with open(pth_file, "r+") as f:
             content = f.read()
-            # Добавляем путь, только если его еще нет
             if site_packages_path not in content:
                 print(f"Добавляю '{site_packages_path}' в '{pth_file}' для поиска модулей...")
                 f.write(f"\n{site_packages_path}\n")
-    
-    # Теперь, когда Python "прозрел", проверяем и устанавливаем pip
+    else:
+        print(f"!!! ПРЕДУПРЕЖДЕНИЕ: Не найден pth-файл по пути '{pth_file}'. pip может не работать.")
+
     print("Проверка и установка pip для портативного Python...")
     if not run_command([PYTHON_EXE, "-m", "pip", "--version"]):
         get_pip_path = os.path.join(PYTHON_DIR, "get-pip.py")
         print("Скачиваю get-pip.py...")
-        response = requests.get(GET_PIP_URL)
-        with open(get_pip_path, 'wb') as f: f.write(response.content)
+        try:
+            response = requests.get(GET_PIP_URL)
+            response.raise_for_status()
+            with open(get_pip_path, 'wb') as f: f.write(response.content)
+        except requests.RequestException as e:
+            print(f"!!! ОШИБКА скачивания get-pip.py: {e}"); return False
+        
         if not run_command([PYTHON_EXE, get_pip_path]):
             print("!!! Не удалось установить pip."); return False
         os.remove(get_pip_path)
 
     print("Обновляю pip, setuptools, wheel...")
-    return run_command([PYTHON_EXE, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"])
+    if not run_command([PYTHON_EXE, "-m", "pip", "install", "--upgrade", "pip", "setuptools", "wheel"]):
+        print("!!! Не удалось обновить pip. Проверьте лог выше.")
+        return False
+    
+    return True
 
 def setup_portable_nodejs():
     print("\n--- Настройка портативного Node.js ---")
@@ -117,10 +134,23 @@ def main():
     if not setup_portable_python(): sys.exit("Критическая ошибка: не удалось настроить портативный Python.")
     if not setup_portable_nodejs(): sys.exit("Критическая ошибка: не удалось настроить портативный Node.js.")
 
-    print("\n--- Шаг 1: Установка базовых пакетов в портативный Python ---")
-    run_command([PYTHON_EXE, "-m", "pip", "install", "--upgrade"] + PYPI_PACKAGES)
+    print("\n--- Шаг 1: Установка зависимостей в портативный Python ---")
+    
+    print("\n--- Этап 1.1: Установка 'docopt' с запретом на использование исходного кода ---")
+    # --- ИЗМЕНЕНИЕ: Добавлен флаг --only-binary :all: ---
+    if not run_command([PYTHON_EXE, "-m", "pip", "install", "--only-binary", ":all:"] + PRE_BUILD_DEPS):
+        sys.exit("Не удалось установить 'docopt'.")
 
-    print("\n--- Шаг 2: Клонирование и ИЗОЛИРОВАННАЯ настройка MCP-приложений ---")
+    print("\n--- Этап 1.2: Установка зависимостей для сборки (Cython, numpy, torch) ---")
+    if not run_command([PYTHON_EXE, "-m", "pip", "install", "--upgrade"] + BUILD_DEPS):
+        sys.exit("Не удалось установить базовые зависимости для сборки.")
+    
+    print("\n--- Этап 1.3: Установка основных пакетов ---")
+    if not run_command([PYTHON_EXE, "-m", "pip", "install", "--upgrade"] + PYPI_PACKAGES):
+        sys.exit("Не удалось установить основные пакеты.")
+
+
+    print("\n--- Шаг 2: Клонирование и настройка MCP-приложений ---")
     for app in GIT_APPS:
         app_name, app_url, app_type = app["name"], app["url"], app.get("type", "python")
         app_dir = os.path.join(VENDOR_DIR, app_name)
@@ -130,11 +160,9 @@ def main():
         else: print(f"Папка '{app_dir}' уже существует.")
         
         if app_type == "python":
-            venv_dir = os.path.join(app_dir, ".venv")
-            if not os.path.exists(venv_dir): run_command([PYTHON_EXE, "-m", "venv", venv_dir])
-            venv_pip_exe = os.path.join(venv_dir, "Scripts", "pip.exe")
-            if os.path.exists(os.path.join(app_dir, 'requirements.txt')):
-                run_command([venv_pip_exe, "install", "-r", "requirements.txt"], cwd=app_dir)
+            requirements_path = os.path.join(app_dir, 'requirements.txt')
+            if os.path.exists(requirements_path):
+                run_command([PYTHON_EXE, "-m", "pip", "install", "-r", requirements_path], cwd=app_dir)
         elif app_type == "node":
             run_command([NPM_CMD, "install"], cwd=app_dir)
             package_json_path = os.path.join(app_dir, 'package.json')
