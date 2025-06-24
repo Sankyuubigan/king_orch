@@ -1,4 +1,4 @@
-# agents/browser_agent.py - ПЕРЕПИСАН ДЛЯ НАДЕЖНОЙ РАБОТЫ С HTTP-СЕРВЕРОМ
+# agents/browser_agent.py - ДОБАВЛЕНА КОМАНДА ДЛЯ СОЗДАНИЯ СКРИНШОТОВ
 
 from .base_agent import BaseAgent
 from llama_cpp import Llama
@@ -37,6 +37,10 @@ class BrowserAgent(BaseAgent):
 5.  **Чтение текста:** Чтобы прочитать текст ОДНОГО элемента, используй `page.inner_text`. Первый аргумент - селектор.
     -   *Задача:* `Прочитай текст из элемента 'h1.title'`
     -   *Твой ответ:* `[TOOL_CALL] {"tool": "browser_action", "params": {"call_path": "page.inner_text", "args": ["h1.title"], "kwargs": {}}}`
+
+6.  **Скриншот:** Чтобы сделать скриншот и получить его в формате base64, используй `page.screenshot`.
+    -   *Задача:* `сделай скриншот страницы в формате base64`
+    -   *Твой ответ:* `[TOOL_CALL] {"tool": "browser_action", "params": {"call_path": "page.screenshot", "args": [], "kwargs": {"encoding": "base64"}}}`
 
 Твой ответ ВСЕГДА должен быть ТОЛЬКО вызовом инструмента в формате `[TOOL_CALL] {...}`.
 """

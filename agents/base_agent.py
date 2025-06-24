@@ -1,8 +1,9 @@
-# agents/base_agent.py - ВОЗВРАЩЕНА ПРОСТАЯ HTTP-ЛОГИКА
+# agents/base_agent.py - УЛУЧШЕН ПАРСИНГ JSON ДЛЯ НАДЕЖНОСТИ
 
 from llama_cpp import Llama
 import json
 import requests
+import re # <-- Импортируем модуль для регулярных выражений
 
 class BaseAgent:
     def __init__(self, llm_instance: Llama, system_prompt: str, tools_config: dict, log_callback, agent_router=None):
@@ -63,7 +64,12 @@ class BaseAgent:
                 self.history.append({"role": "agent", "content": error_msg})
                 return error_msg, False
             try:
-                agent_call_str = response_text.split("[AGENT_CALL]")[1].strip()
+                # ИЗМЕНЕНО: Используем регулярное выражение для надежного извлечения JSON
+                match = re.search(r'\{[\s\S]*\}', response_text)
+                if not match:
+                    raise ValueError("JSON-объект для вызова агента не найден в ответе модели.")
+                
+                agent_call_str = match.group(0)
                 agent_call = json.loads(agent_call_str)
                 agent_name = agent_call.get("agent")
                 agent_task = agent_call.get("task", "")
@@ -81,7 +87,12 @@ class BaseAgent:
 
         elif "[TOOL_CALL]" in response_text:
             try:
-                tool_call_str = response_text.split("[TOOL_CALL]")[1].strip()
+                # ИЗМЕНЕНО: Используем регулярное выражение для надежного извлечения JSON
+                match = re.search(r'\{[\s\S]*\}', response_text)
+                if not match:
+                    raise ValueError("JSON-объект для вызова инструмента не найден в ответе модели.")
+
+                tool_call_str = match.group(0)
                 tool_call = json.loads(tool_call_str)
                 tool_name = tool_call.get("tool")
                 tool_params = tool_call.get("params", {})

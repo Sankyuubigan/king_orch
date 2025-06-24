@@ -1,41 +1,32 @@
-# --- ФИНАЛЬНЫЙ СКРИПТ С ИЗМЕНЕННЫМ "ПАСПОРТОМ" ---
+# test_connect_nodemcp.py - ОБНОВЛЕННЫЙ ТЕСТОВЫЙ ФАЙЛ
 
 import asyncio
 import subprocess
 import time
 import json
 import os
-import websocket # <-- НАША НАДЕЖНАЯ БИБЛИОТЕКА
+import websocket
 
 # --- Настройки ---
 PORT = 8931
-URL_TO_OPEN = "https://www.google.com/search?q=WE+DID+IT" # Победный запрос
+URL_TO_OPEN = "https://www.google.com/search?q=PORTABLE+NODEJS+WORKS"
 
-# --- Пути ---
+# --- Пути к портативному Node.js ---
 project_dir = os.path.dirname(os.path.abspath(__file__))
-npx_path = os.path.join(project_dir, "modules", "nodejs", "npx.cmd")
-cache_path = os.path.join(project_dir, "modules", "npm-cache")
+npx_cmd = os.path.join(project_dir, "vendor", "nodejs", "npx.cmd")
 
 # --- Команда для запуска сервера ---
 command = [
-    npx_path, "--yes", "--cache", cache_path,
+    npx_cmd, "--yes",
     "@playwright/mcp@latest", f"--port={PORT}",
 ]
 
 def run_sync_client():
-    """
-    Эта функция работает с новой библиотекой.
-    """
     uri = f"ws://localhost:{PORT}/mcp"
+    headers = {"X-MCP-Client-Name": "VSCode"}
     
-    # --- КЛЮЧЕВОЕ ИЗМЕНЕНИЕ ЗДЕСЬ ---
-    # Мы меняем наше имя на то, которое сервер, скорее всего, знает и доверяет.
-    headers = {"X-MCP-Client-Name": "VSCode"} # <--- ПРИТВОРЯЕМСЯ VS CODE
-    
-    print(f">>> Клиент (новая библиотека) подключается к {uri}...")
-    
+    print(f">>> Клиент подключается к {uri}...")
     ws = websocket.create_connection(uri, header=headers)
-    
     print("УСПЕШНО ПОДКЛЮЧИЛИСЬ!")
     
     message_id = "final-request-1"
@@ -59,11 +50,12 @@ def run_sync_client():
 async def main():
     server_process = None
     try:
-        os.makedirs(cache_path, exist_ok=True)
-        print("Запускаем сервер MCP...")
-        
+        if not os.path.exists(npx_cmd):
+            raise FileNotFoundError(f"Не найден npx.cmd по пути {npx_cmd}. Запустите install_dependencies.py")
+
+        print("Запускаем тестовый сервер MCP...")
         server_process = subprocess.Popen(
-            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
+            command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, shell=True
         )
         
         print("Ожидаем запуска сервера...")

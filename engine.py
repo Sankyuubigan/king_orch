@@ -1,4 +1,4 @@
-# engine.py - ДОБАВЛЕНЫ ЛОГИ ДЛЯ ИЗМЕРЕНИЯ ВРЕМЕНИ РАБОТЫ LLM
+# engine.py - КОД ОСТАЕТСЯ БЕЗ ИЗМЕНЕНИЙ, ТАК КАК ЗАЩИТА УЖЕ БЫЛА ДОБАВЛЕНА
 
 import os
 import traceback
@@ -128,7 +128,6 @@ class OrchestratorEngine:
     def _process_single_task(self, user_prompt: str):
         final_answer = ""
         try:
-            # --- НОВЫЙ БЛОК: Измерение времени работы LLM ---
             llm_start_time = time.time()
             self.log_callback("[Engine] >>> НАЧАЛО РАБОТЫ LLM/КОМАНДЫ...")
             
@@ -139,12 +138,23 @@ class OrchestratorEngine:
             crew_type = task_routing['crew_type']; model_key = task_routing['model_key']
             self.log_callback(f"[Dispatcher] Задача классифицирована как '{crew_type}'. Рекомендованная модель: '{model_key}'.")
             if not self._switch_model(model_key): raise Exception(f"Не удалось переключиться на модель {model_key}")
+            
             crew_map = {"coding": CodingCrew, "research": ResearchCrew, "browsing": BrowserCrew, "documentation_query": DocsCrew}
             crew_class = crew_map.get(crew_type)
+            
             if crew_class:
                 crew_to_run = crew_class(self.current_llm, self.tools_config)
                 result = crew_to_run.run(user_prompt, self.log_callback, self.update_callback)
-                final_answer = result.get("final_result", "Команда завершила работу без финального ответа.")
+                
+                if result:
+                    final_answer = result.get("final_result", "Команда завершила работу без финального ответа.")
+                else:
+                    error_msg = f"Команда '{crew_type}' завершилась некорректно и не вернула результат (None)."
+                    self.log_callback(f"[Engine] [ERROR] {error_msg}")
+                    final_answer = "Произошла внутренняя ошибка: команда не вернула результат."
+                    if self.update_callback:
+                        self.update_callback({"type": "error", "data": error_msg})
+
             else: 
                 self.log_callback("[Dispatcher] Простое приветствие. Отвечаю напрямую...")
                 system_prompt = f"Ты — полезный ассистент по имени {self.assistant_name}."
@@ -157,7 +167,6 @@ class OrchestratorEngine:
             
             llm_end_time = time.time()
             self.log_callback(f"[Engine] <<< КОНЕЦ РАБОТЫ LLM/КОМАНДЫ. ВРЕМЯ ВЫПОЛНЕНИЯ: {llm_end_time - llm_start_time:.2f} сек.")
-            # --- КОНЕЦ НОВОГО БЛОКА ---
 
         except Exception as e:
             error_message = f"Критическая ошибка в работе команды: {traceback.format_exc()}"

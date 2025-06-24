@@ -1,4 +1,4 @@
-# main.py - Добавлено создание новых директорий
+# main.py - ИСПОЛЬЗОВАНИЕ ПОРТАТИВНОЙ ВЕРСИИ NODE.JS
 
 import tkinter as tk
 import subprocess
@@ -17,17 +17,21 @@ import build_active_tools
 
 tool_processes = []
 VENDOR_DIR = "vendor"
+# --- НОВЫЙ БЛОК: Определение путей к портативному Node.js ---
+NODE_DIR = os.path.join(VENDOR_DIR, "nodejs")
+NODE_EXE = os.path.join(NODE_DIR, "node.exe")
+NPX_CMD = os.path.join(NODE_DIR, "npx.cmd")
 
 def create_dirs():
-    # --- ИЗМЕНЕНО: Добавлено создание папок для новой структуры ---
     os.makedirs("agents", exist_ok=True); os.makedirs("crews", exist_ok=True)
     os.makedirs("mcp_servers", exist_ok=True); os.makedirs("prompts", exist_ok=True)
     os.makedirs("utils", exist_ok=True); os.makedirs("tools", exist_ok=True)
-    os.makedirs("voice_engine/stt", exist_ok=True) # <-- STT
-    os.makedirs("voice_engine/tts/silero", exist_ok=True) # <-- TTS
+    os.makedirs("voice_engine/stt", exist_ok=True)
+    os.makedirs("voice_engine/tts/silero", exist_ok=True)
     os.makedirs("voice_engine/silero_cache", exist_ok=True)
     os.makedirs(VENDOR_DIR, exist_ok=True)
-    for d in ["agents", "crews", "utils", "voice_engine"]:
+    os.makedirs("workspace", exist_ok=True)
+    for d in ["agents", "crews", "utils", "voice_engine", "mcp_servers"]:
         init_file = os.path.join(d, "__init__.py")
         if not os.path.exists(init_file):
             with open(init_file, "a"): pass
@@ -37,39 +41,44 @@ def is_port_in_use(port: int) -> bool:
         return s.connect_ex(('127.0.0.1', port)) == 0
 
 def get_port_from_command(command: list) -> int | None:
-    for arg in command:
-        match = re.search(r'(?:--port(?:=|\s)|:)(\d+)', arg)
-        if match: return int(match.group(1))
+    for i, arg in enumerate(command):
+        if arg == '--port' and i + 1 < len(command):
+            return int(command[i+1])
+        if arg.startswith('--port='):
+            return int(arg.split('=', 1)[1])
     return None
 
 def background_startup_tasks(app_ui: AppUI):
+    # ИЗМЕНЕНО: Команды запуска используют портативный Node.js
     servers_to_start = {
-        "Playwright": { "cmd": ["npx", "--yes", "@playwright/mcp@latest", "--port=7800"], "signal": "Listening on", "cwd": None },
-        "WebSearch": { "cmd": [sys.executable, "main.py"], "signal": "Uvicorn running", "cwd": os.path.join(VENDOR_DIR, "mcp-searxng") },
-        "TextEditor": { "cmd": [sys.executable, "-m", "mcp_text_editor.main"], "signal": "Uvicorn running", "cwd": os.path.join(VENDOR_DIR, "mcp-text-editor") },
-        "FileScope": { "cmd": [sys.executable, "-m", "filescopemcp"], "signal": "Uvicorn running", "cwd": os.path.join(VENDOR_DIR, "FileScopeMCP") },
-        "LSPServer": { "cmd": [sys.executable, "main.py"], "signal": "Uvicorn running on http://127.0.0.1:8009", "cwd": os.path.join(VENDOR_DIR, "mcp-language-server") },
-        "CodeSandbox": { "cmd": [sys.executable, "runner.py"], "signal": "Uvicorn running on http://127.0.0.1:8010", "cwd": os.path.join(VENDOR_DIR, "mcp-code-runner") },
-        "Ashra": { "cmd": ["node", "build/index.js"], "signal": "Ashra MCP Server running on stdio", "cwd": os.path.join(VENDOR_DIR, "ashra-mcp") },
-        "RAG": { "cmd": [sys.executable, "main.py"], "signal": "Uvicorn running on http://127.0.0.1:8001", "cwd": os.path.join(VENDOR_DIR, "rag-mcp") },
-        "Chroma": { "cmd": [sys.executable, "-m", "chroma_mcp"], "signal": "Uvicorn running", "cwd": os.path.join(VENDOR_DIR, "chroma-mcp") },
+        "Playwright": { "cmd": [NPX_CMD, "--yes", "@playwright/mcp@latest", "--port", "7800"], "signal": "Listening on", "cwd": None },
+        "WebSearch": { "cmd": [NODE_EXE, "dist/main.js"], "signal": "Server is running on port", "cwd": os.path.join(VENDOR_DIR, "mcp-searxng") },
+        "CodeSandbox": { "cmd": [sys.executable, "-u", "runner.py"], "signal": "Uvicorn running on http://127.0.0.1:8010", "cwd": os.path.join(VENDOR_DIR, "mcp-code-runner") },
+        "LSPServer": { "cmd": [sys.executable, "-u", "main.py"], "signal": "Uvicorn running on http://127.0.0.1:8009", "cwd": os.path.join(VENDOR_DIR, "mcp-language-server") },
+        "Chroma": { "cmd": [sys.executable, "-u", "-m", "chroma_mcp"], "signal": "Uvicorn running", "cwd": os.path.join(VENDOR_DIR, "chroma-mcp") },
+        "RAG": { "cmd": [NODE_EXE, "dist/main.js"], "signal": "Server is running on port 8001", "cwd": os.path.join(VENDOR_DIR, "rag-mcp") },
+        "Ashra": { "cmd": [NODE_EXE, "build/index.js"], "signal": "Ashra MCP Server running on stdio", "cwd": os.path.join(VENDOR_DIR, "ashra-mcp") },
         "FeedbackServer": { "cmd": [sys.executable, "-u", "mcp_servers/mcp_feedback_server.py"], "signal": "MCP_FEEDBACK_READY" },
         "FileSystem": { "cmd": [sys.executable, "-u", "mcp_servers/mcp_file_server.py"], "signal": "MCP_FILE_SYSTEM_READY" },
-        "GitHub": { "cmd": [sys.executable, "-u", "mcp_servers/mcp_github_server.py"], "signal": "MCP_GITHUB_READY" },
-        "GitLab": { "cmd": [sys.executable, "-u", "mcp_servers/mcp_gitlab_server.py"], "signal": "MCP_GITLAB_READY" },
+        "Indexer": { "cmd": [sys.executable, "-u", "mcp_servers/mcp_indexer_server.py"], "signal": "MCP_INDEXER_READY" },
     }
     
     for name, config in servers_to_start.items():
+        if not os.path.exists(config["cmd"][0]):
+            print(f"[Launcher] [ERROR] Исполняемый файл для '{name}' не найден: {config['cmd'][0]}. Сервер пропускается.")
+            continue
         if config.get("cwd") and not os.path.isdir(config["cwd"]):
             print(f"[Launcher] [INFO] Директория для '{name}' не найдена: {config['cwd']}. Сервер пропускается.")
             continue
         port = get_port_from_command(config["cmd"])
         if port and is_port_in_use(port):
-            print(f"[Launcher] [WARNING] Порт {port} для сервера '{name}' уже занят. Пропускаю запуск, предполагая, что он уже работает.")
+            print(f"[Launcher] [WARNING] Порт {port} для сервера '{name}' уже занят. Пропускаю запуск.")
             continue
         print(f"[Launcher] Запускаю сервер '{name}'...")
-        start_tool_server(config["cmd"], name, config["signal"], cwd=config.get("cwd"))
+        start_tool_server(config["cmd"], name, config.get("signal"), cwd=config.get("cwd"))
 
+    print("[Launcher] Ожидание запуска серверов перед сборкой конфига...")
+    time.sleep(5)
     build_active_tools.generate_active_tools_config()
     
     engine = OrchestratorEngine(log_callback=lambda msg: print(f"[Engine Log] {msg}"))
@@ -78,12 +87,7 @@ def background_startup_tasks(app_ui: AppUI):
         voice_controller = VoiceController(engine)
         engine.set_voice_controller(voice_controller)
     except Exception as e:
-        print("\n" + "="*80)
-        print("!!! ПРЕДУПРЕЖДЕНИЕ: ОШИБКА VOICEENGINE !!!")
-        print(f"Не удалось запустить голосовой движок: {e}")
-        print("Проверьте, что модели Vosk и Silero скачаны, а также выбраны в настройках (кнопка ⚙️).")
-        print("Программа продолжит работу без голосового управления.")
-        print("="*80 + "\n")
+        print(f"\n[Launcher] [WARNING] Не удалось запустить голосовой движок: {e}")
         
     app_ui.set_engine(engine)
 
@@ -92,17 +96,24 @@ def start_tool_server(command, log_prefix, ready_signal, cwd=None):
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     if cwd: env["PYTHONPATH"] = os.path.abspath(cwd) + os.pathsep + env.get("PYTHONPATH", "")
+    
     creation_flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-    use_shell = sys.platform == "win32" and command[0] in ["node", "npx"]
+    use_shell = sys.platform == "win32"
+    
     process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding='utf-8', errors='ignore', creationflags=creation_flags, env=env, cwd=cwd, shell=use_shell)
     tool_processes.append(process)
-    output_thread = threading.Thread(target=lambda: [print(f"[{log_prefix}] {l.strip()}") for l in iter(process.stdout.readline, '') if l], daemon=True)
+    
+    def log_output():
+        for line in iter(process.stdout.readline, ''):
+            if line: print(f"[{log_prefix}] {line.strip()}")
+
+    output_thread = threading.Thread(target=log_output, daemon=True)
     output_thread.start()
     return True
 
 def stop_all_tool_servers():
     print("[Launcher] Остановка всех MCP-серверов...")
-    for process in tool_processes:
+    for process in reversed(tool_processes):
         if process.poll() is None:
             try:
                 if sys.platform == "win32":
@@ -125,6 +136,3 @@ if __name__ == "__main__":
     startup_thread = threading.Thread(target=background_startup_tasks, args=(app,), daemon=True)
     startup_thread.start()
     main_window.mainloop()
-
-
-    
