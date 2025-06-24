@@ -3,6 +3,10 @@
     "url": "http://127.0.0.1:7800/call",
     "description": "Выполняет одно действие в браузере через Playwright. Принимает JSON с call_path, args, kwargs."
   },
+  "local_ocr": {
+    "type": "internal",
+    "description": "Принимает изображение в формате base64 и возвращает распознанный текст и его координаты. Используй это, когда не можешь найти элемент по селектору."
+  },
   "web_search": {
     "url": "http://127.0.0.1:8080/search",
     "description": "Инструмент для поиска информации в интернете."
@@ -13,46 +17,16 @@
   },
   "code_indexer": {
     "url": "http://127.0.0.1:7788/index",
-    "description": "Запускает полную индексацию кода проекта в рабочей директории. Используй это перед началом работы с кодом, если контекст может быть устаревшим."
+    "description": "Запускает полную индексацию кода проекта в рабочей директории."
   },
-  "lsp_initialize": {
-    "url": "http://127.0.0.1:8009/initialize",
-    "description": "Инициализирует LSP-сервер для указанной директории проекта."
-  },
-  "lsp_get_diagnostics": {
-    "url": "http://127.0.0.1:8009/get_diagnostics",
-    "description": "Возвращает список ошибок и предупреждений для указанного файла."
-  },
-  "lsp_get_definition": {
-    "url": "http://127.0.0.1:8009/get_definition",
-    "description": "Находит определение символа."
-  },
-  "lsp_get_references": {
-    "url": "http://127.0.0.1:8009/get_references",
-    "description": "Находит все ссылки на символ."
-  },
-  "code_sandbox": {
-    "url": "http://127.0.0.1:8010/run",
-    "description": "Выполняет код в безопасной песочнице."
-  },
-  "chroma_query": {
-    "url": "http://127.0.0.1:8011/query",
-    "description": "Выполняет семантический поиск по коллекции ChromaDB."
-  },
-  "file_reader": {
-    "url": "http://127.0.0.1:7780/read_file",
-    "description": "Инструмент для чтения текстового файла."
-  },
-  "file_lister": {
-    "url": "http://127.0.0.1:7780/list_files",
-    "description": "Инструмент для получения списка файлов и папок в директории."
-  },
-  "ask_docs": {
-    "url": "http://127.0.0.1:8001/query",
-    "description": "Задает вопрос к локальной базе знаний (документации)."
-  },
-  "ask_human": {
-    "url": "http://127.0.0.1:7787/ask",
-    "description": "Задает уточняющий вопрос пользователю."
-  }
+  "lsp_initialize": { "url": "http://127.0.0.1:8009/initialize" },
+  "lsp_get_diagnostics": { "url": "http://127.0.0.1:8009/get_diagnostics" },
+  "lsp_get_definition": { "url": "http://127.0.0.1:8009/get_definition" },
+  "lsp_get_references": { "url": "http://127.0.0.1:8009/get_references" },
+  "code_sandbox": { "url": "http://127.0.0.1:8010/run" },
+  "chroma_query": { "url": "http://127.0.0.1:8011/query" },
+  "file_reader": { "url": "http://127.0.0.1:7780/read_file" },
+  "file_lister": { "url": "http://127.0.0.1:7780/list_files" },
+  "ask_docs": { "url": "http://127.0.0.1:8001/query" },
+  "ask_human": { "url": "http://127.0.0.1:7787/ask" }
 }

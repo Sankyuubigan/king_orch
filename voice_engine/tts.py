@@ -1,129 +1,106 @@
-# voice_engine/tts.py - ДОБАВЛЕНА САНАЦИЯ ТЕКСТА ДЛЯ ОБХОДА ФИЛЬТРОВ МОДЕЛИ
+# voice_engine/tts.py - УНИВЕРСАЛЬНЫЙ TTS-ДВИЖОК С ПОДДЕРЖКОЙ 3 МОДЕЛЕЙ
 
 import torch
 import sounddevice as sd
 import threading
 import os
 import time
-import traceback
 import re
-
-# Отключаем JIT-профайлер, чтобы убрать задержку первого запуска
-torch._C._jit_set_profiling_mode(False)
+from huggingface_hub import hf_hub_download
 
 class TextToSpeech:
-    def __init__(self, model_base_path: str, speaker: str, device: str):
-        print("[TTS] Инициализация движка синтеза речи...")
+    def __init__(self, engine_id: str = "silero", device: str = "cpu", settings: dict = {}):
+        print(f"[TTS Factory] Инициализация движка '{engine_id}' на устройстве '{device}'...")
+        self.engine_id = engine_id
+        self.settings = settings
+        self.engine = None
+        self.is_ready = False
         
         if device == 'cuda' and not torch.cuda.is_available():
-            print("[TTS] [WARNING] CUDA выбрана, но недоступна. Переключаюсь на CPU.")
+            print("[TTS Factory] [WARNING] CUDA не найдена, используется CPU.")
             self.device = torch.device('cpu')
         else:
             self.device = torch.device(device)
+            
+        self._load_engine()
 
-        print(f"[TTS] Используется устройство: {self.device}")
-        
-        torch.set_num_threads(8)
+    def _load_engine(self):
+        """Фабрика-загрузчик для выбора и инициализации TTS-модели."""
+        try:
+            if self.engine_id == "silero": self._load_silero()
+            elif self.engine_id == "xtts": self._load_xtts()
+            elif self.engine_id == "f5": self._load_f5()
+            else: print(f"[TTS Factory] [ERROR] Неизвестный движок TTS: {self.engine_id}")
+            self.is_ready = True
+        except Exception as e:
+            print(f"[TTS Factory] [FATAL] Не удалось загрузить движок '{self.engine_id}': {e}", exc_info=True)
+            self.is_ready = False
+
+    def speak(self, text: str, stop_event: threading.Event):
+        """Универсальный метод для синтеза речи."""
+        if not text or stop_event.is_set() or not self.is_ready: return
+        print(f"[{self.engine_id.upper()}]-TTS] Запрос на озвучку: '{text[:40]}...'")
         
         try:
-            model_file = os.path.join(model_base_path, 'silero', 'v4_ru.pt')
+            # Для каждого движка своя логика вызова
+            if self.engine_id == "silero":
+                audio = self.engine.apply_tts(text=text, speaker=self.settings.get("tts_silero_speaker", "aidar"), sample_rate=48000)
+                sd.play(audio, samplerate=48000)
             
-            if not os.path.isfile(model_file):
-                print(f"[TTS] Файл модели не найден. Загрузка в '{model_file}'...")
-                os.makedirs(os.path.dirname(model_file), exist_ok=True)
-                torch.hub.download_url_to_file('https://models.silero.ai/models/tts/ru/v4_ru.pt', model_file)
+            elif self.engine_id == "xtts":
+                # XTTS генерирует WAV, который мы проигрываем.
+                # TODO: Добавить опцию клонирования голоса speaker_wav='path/to/voice.wav'
+                wav = self.engine.tts(text=text, speaker=self.engine.speakers[0], language=self.engine.languages[0])
+                sd.play(wav, samplerate=24000)
             
-            print(f"[TTS] Загрузка модели из локального файла: {model_file}")
-            self.model = torch.package.PackageImporter(model_file).load_pickle("tts_models", "model")
-            self.model.to(self.device)
-            print("[TTS] Модель Silero успешно загружена.")
-
-        except Exception:
-             print(f"[TTS] [FATAL] КРИТИЧЕСКАЯ ОШИБКА ЗАГРУЗКИ МОДЕЛИ SILERO:")
-             traceback.print_exc()
-             raise
-
-        self.sample_rate = 48000
-        self.speaker = speaker
-        print(f"[TTS] Выбран диктор: {self.speaker}")
-        
-        # --- НОВЫЙ БЛОК: Словарь для обхода фильтров ---
-        self.sanitize_rules = {
-            "члену": "члeну", # Замена на латинскую 'e'
-            "членом": "члeном",
-            # Сюда можно добавлять другие проблемные слова по мере их обнаружения
-        }
-
-    def _sanitize_text(self, text: str) -> str:
-        """
-        Применяет правила санации к тексту, чтобы обойти внутренние фильтры модели.
-        """
-        for bad_word, good_word in self.sanitize_rules.items():
-            text = text.replace(bad_word, good_word)
-        return text
-
-    def speak(self, text: str, stop_event: threading.Event, is_warm_up: bool = False):
-        if not text or stop_event.is_set():
-            return
-        
-        if is_warm_up:
-            print(f"[TTS speak] Получена команда на прогрев.")
-        else:
-            print(f"[TTS speak] Поступил запрос на озвучку: '{text[:50]}...'")
-        
-        sentences = re.split(r'(?<=[.!?])\s+', text.strip())
-        
-        stream = None
-        
-        try:
-            if not is_warm_up:
-                stream = sd.OutputStream(samplerate=self.sample_rate, channels=1, dtype='float32')
-                stream.start()
-
-            for i, sentence in enumerate(sentences):
-                if stop_event.is_set():
-                    print("[TTS speak] Воспроизведение прервано (Barge-In).")
-                    break
-                
-                if not sentence.strip(): continue
-                
-                # --- ИЗМЕНЕНИЕ: Применяем санацию перед отправкой в модель ---
-                sanitized_sentence = self._sanitize_text(sentence)
-
-                if self.device.type == 'cuda':
-                    torch.cuda.synchronize()
-                
-                gen_start_time = time.time()
-                
-                audio_chunk = None
-                try:
-                    audio_chunk = self.model.apply_tts(text=sanitized_sentence,
-                                                       speaker=self.speaker,
-                                                       sample_rate=self.sample_rate)
-                except ValueError:
-                    print(f"[TTS speak] [WARNING] Модель не смогла обработать предложение (ValueError). Пропускаю его.")
-                    print(f"  [TTS speak] [DEBUG] Проблемное предложение (после санации): '{sanitized_sentence}'")
-                    continue
-
-                if self.device.type == 'cuda':
-                    torch.cuda.synchronize()
-                
-                gen_end_time = time.time()
-
-                print(f"  [TTS speak] <- Генерация на {self.device.type.upper()} заняла {gen_end_time - gen_start_time:.2f} сек.")
-                
-                if stop_event.is_set():
-                    break
-
-                if not is_warm_up and stream and audio_chunk is not None:
-                    stream.write(audio_chunk.numpy())
-
-            if not is_warm_up and stream:
-                stream.stop()
+            elif self.engine_id == "f5":
+                accent_engine, model = self.engine
+                text_with_stress = accent_engine.process_text(text)
+                inputs = self.tokenizer(text_with_stress, return_tensors="pt").to(self.device)
+                with torch.no_grad():
+                    output = model.generate(**inputs, max_length=len(text_with_stress)*10)
+                audio = output[0].cpu().numpy().squeeze()
+                sd.play(audio, samplerate=model.config.sampling_rate)
             
-        except Exception:
-            print(f"[TTS speak] [ERROR] Ошибка во время потокового синтеза или воспроизведения:")
-            traceback.print_exc()
-        finally:
-            if not is_warm_up and stream:
-                stream.close()
+            sd.wait() # Ждем окончания воспроизведения
+        except Exception as e:
+            print(f"[{self.engine_id.upper()}-TTS] [ERROR] Ошибка во время синтеза речи: {e}")
+
+    def _load_silero(self):
+        """Загрузка модели Silero."""
+        model_file = os.path.join("voice_engine", "tts", "silero_v4_ru.pt")
+        if not os.path.isfile(model_file):
+            torch.hub.download_url_to_file('https://models.silero.ai/models/tts/ru/v4_ru.pt', model_file)
+        self.engine = torch.package.PackageImporter(model_file).load_pickle("tts_models", "model")
+        self.engine.to(self.device)
+        torch.set_num_threads(4)
+        print("[TTS Factory] Silero загружен.")
+
+    def _load_xtts(self):
+        """Загрузка модели XTTSv2."""
+        from TTS.api import TTS
+        self.engine = TTS("tts_models/multilingual/multi-dataset/xtts_v2", progress_bar=True).to(self.device)
+        print("[TTS Factory] XTTS-v2 загружен.")
+    
+    def _load_f5(self):
+        """Загрузка модели F5-TTS."""
+        from transformers import F5ForSpeech, F5Tokenizer
+        from ruaccent import RuAccent
+        
+        repo_id = "Misha24-10/F5-TTS_RUSSIAN"
+        model_filename = "F5TTS_v1_Base/model_240000_inference.safetensors"
+        vocab_filename = "F5TTS_v1_Base/vocab.txt"
+        
+        # Скачиваем файлы, если их нет
+        model_path = hf_hub_download(repo_id=repo_id, filename=model_filename)
+        vocab_path = hf_hub_download(repo_id=repo_id, filename=vocab_filename)
+        
+        # Инициализация
+        tokenizer = F5Tokenizer(vocab_path)
+        model = F5ForSpeech.from_pretrained(model_path, low_cpu_mem_usage=True).to(self.device)
+        accent_engine = RuAccent()
+        accent_engine.load(omograph_model_size='big', use_dictionary=True)
+
+        self.tokenizer = tokenizer # Сохраняем токенайзер отдельно
+        self.engine = (accent_engine, model) # Сохраняем кортеж из двух компонентов
+        print("[TTS Factory] F5-TTS загружен.")
