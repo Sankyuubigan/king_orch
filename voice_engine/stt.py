@@ -1,4 +1,4 @@
-# voice_engine/stt.py - Модифицирован для потоковой передачи частичных результатов
+# voice_engine/stt.py - ИСПРАВЛЕНА ОТПРАВКА ФИНАЛЬНОГО РЕЗУЛЬТАТА
 
 import vosk
 import pyaudio
@@ -16,7 +16,7 @@ class SpeechToText:
             raise
             
         self.recognizer = vosk.KaldiRecognizer(self.model, 16000)
-        self.recognizer.SetWords(True) # Включаем режим для получения частичных результатов
+        self.recognizer.SetWords(True) 
         self.audio_interface = pyaudio.PyAudio()
         print("[STT] Модель Vosk и аудиоинтерфейс успешно загружены.")
 
@@ -32,18 +32,19 @@ class SpeechToText:
                 channels=1,
                 rate=16000,
                 input=True,
-                frames_per_buffer=4096 # Уменьшаем буфер для меньшей задержки
+                frames_per_buffer=4096
             )
             
             while True:
                 data = stream.read(2048, exception_on_overflow=False)
                 
                 if self.recognizer.AcceptWaveform(data):
-                    # Распознана финальная фраза
+                    # Распознана финальная фраза (или пауза).
                     result_json = json.loads(self.recognizer.Result())
                     final_text = result_json.get("text", "")
-                    if final_text:
-                        yield 'final', final_text
+                    # ИСПРАВЛЕНО: Отправляем финальный результат, даже если он пустой.
+                    # Пустая строка является важным сигналом для контроллера, что наступила пауза.
+                    yield 'final', final_text
                 else:
                     # Получаем промежуточный результат
                     partial_json = json.loads(self.recognizer.PartialResult())
@@ -54,7 +55,6 @@ class SpeechToText:
         except OSError as e:
             print(f"[STT] Ошибка аудиопотока: {e}. Поток будет перезапущен.")
             time.sleep(1)
-            # Рекурсивно перезапускаем генератор
             yield from self.listen()
         except Exception as e:
             print(f"[STT] Неожиданная ошибка в цикле прослушивания: {e}")
