@@ -1,4 +1,4 @@
-# main.py - ИСПОЛЬЗОВАНИЕ ПОРТАТИВНОЙ ВЕРСИИ NODE.JS
+# main.py - ЗАПУСК ИНСТРУМЕНТОВ ИЗ ИЗОЛИРОВАННЫХ ОКРУЖЕНИЙ
 
 import tkinter as tk
 import subprocess
@@ -17,12 +17,20 @@ import build_active_tools
 
 tool_processes = []
 VENDOR_DIR = "vendor"
-# --- НОВЫЙ БЛОК: Определение путей к портативному Node.js ---
+# --- Определение путей к портативным средам ---
 NODE_DIR = os.path.join(VENDOR_DIR, "nodejs")
 NODE_EXE = os.path.join(NODE_DIR, "node.exe")
 NPX_CMD = os.path.join(NODE_DIR, "npx.cmd")
 
+PYTHON_DIR = os.path.join(VENDOR_DIR, "python")
+PYTHON_EXE = os.path.join(PYTHON_DIR, "python.exe")
+
+def get_venv_python(tool_name: str) -> str:
+    """Возвращает путь к python.exe в виртуальном окружении инструмента."""
+    return os.path.join(VENDOR_DIR, tool_name, ".venv", "Scripts", "python.exe")
+
 def create_dirs():
+    # ... (код без изменений)
     os.makedirs("agents", exist_ok=True); os.makedirs("crews", exist_ok=True)
     os.makedirs("mcp_servers", exist_ok=True); os.makedirs("prompts", exist_ok=True)
     os.makedirs("utils", exist_ok=True); os.makedirs("tools", exist_ok=True)
@@ -49,18 +57,20 @@ def get_port_from_command(command: list) -> int | None:
     return None
 
 def background_startup_tasks(app_ui: AppUI):
-    # ИЗМЕНЕНО: Команды запуска используют портативный Node.js
+    # ИЗМЕНЕНО: Команды запуска используют изолированные окружения
     servers_to_start = {
-        "Playwright": { "cmd": [NPX_CMD, "--yes", "@playwright/mcp@latest", "--port", "7800"], "signal": "Listening on", "cwd": None },
+        "Playwright": { "cmd": [NPX_CMD, "--yes", "@playwright/mcp@latest", "--port", "7800"], "signal": "Listening on" },
         "WebSearch": { "cmd": [NODE_EXE, "dist/main.js"], "signal": "Server is running on port", "cwd": os.path.join(VENDOR_DIR, "mcp-searxng") },
-        "CodeSandbox": { "cmd": [sys.executable, "-u", "runner.py"], "signal": "Uvicorn running on http://127.0.0.1:8010", "cwd": os.path.join(VENDOR_DIR, "mcp-code-runner") },
-        "LSPServer": { "cmd": [sys.executable, "-u", "main.py"], "signal": "Uvicorn running on http://127.0.0.1:8009", "cwd": os.path.join(VENDOR_DIR, "mcp-language-server") },
-        "Chroma": { "cmd": [sys.executable, "-u", "-m", "chroma_mcp"], "signal": "Uvicorn running", "cwd": os.path.join(VENDOR_DIR, "chroma-mcp") },
         "RAG": { "cmd": [NODE_EXE, "dist/main.js"], "signal": "Server is running on port 8001", "cwd": os.path.join(VENDOR_DIR, "rag-mcp") },
-        "Ashra": { "cmd": [NODE_EXE, "build/index.js"], "signal": "Ashra MCP Server running on stdio", "cwd": os.path.join(VENDOR_DIR, "ashra-mcp") },
-        "FeedbackServer": { "cmd": [sys.executable, "-u", "mcp_servers/mcp_feedback_server.py"], "signal": "MCP_FEEDBACK_READY" },
-        "FileSystem": { "cmd": [sys.executable, "-u", "mcp_servers/mcp_file_server.py"], "signal": "MCP_FILE_SYSTEM_READY" },
-        "Indexer": { "cmd": [sys.executable, "-u", "mcp_servers/mcp_indexer_server.py"], "signal": "MCP_INDEXER_READY" },
+        
+        "Chroma": { "cmd": [get_venv_python("chroma-mcp"), "-u", "-m", "chroma_mcp"], "signal": "Uvicorn running" },
+        "CodeSandbox": { "cmd": [get_venv_python("mcp-code-runner"), "-u", "runner.py"], "signal": "Uvicorn running", "cwd": os.path.join(VENDOR_DIR, "mcp-code-runner") },
+        "LSPServer": { "cmd": [get_venv_python("mcp-language-server"), "-u", "main.py"], "signal": "Uvicorn running", "cwd": os.path.join(VENDOR_DIR, "mcp-language-server") },
+        "MarkItDown": { "cmd": [PYTHON_EXE, "-m", "markitdown_mcp", "--http", "--port", "7790"], "signal": "Serving MarkItDown" },
+
+        "FeedbackServer": { "cmd": [PYTHON_EXE, "-u", "mcp_servers/mcp_feedback_server.py"], "signal": "MCP_FEEDBACK_READY" },
+        "FileSystem": { "cmd": [PYTHON_EXE, "-u", "mcp_servers/mcp_file_server.py"], "signal": "MCP_FILE_SYSTEM_READY" },
+        "Indexer": { "cmd": [PYTHON_EXE, "-u", "mcp_servers/mcp_indexer_server.py"], "signal": "MCP_INDEXER_READY" },
     }
     
     for name, config in servers_to_start.items():
@@ -92,6 +102,7 @@ def background_startup_tasks(app_ui: AppUI):
     app_ui.set_engine(engine)
 
 def start_tool_server(command, log_prefix, ready_signal, cwd=None):
+    # ... (код без изменений)
     global tool_processes
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
@@ -112,6 +123,7 @@ def start_tool_server(command, log_prefix, ready_signal, cwd=None):
     return True
 
 def stop_all_tool_servers():
+    # ... (код без изменений)
     print("[Launcher] Остановка всех MCP-серверов...")
     for process in reversed(tool_processes):
         if process.poll() is None:
