@@ -10,30 +10,28 @@ import io
 VENDOR_DIR = "vendor"
 PYTHON_VERSION = "3.11.9"
 PYTHON_DIR = os.path.join(VENDOR_DIR, "python")
-PYTHON_EXE = os.path.join(PYTHON_DIR, "python.exe")
+# Путь к исполняемому файлу сделан абсолютным
+PYTHON_EXE = os.path.abspath(os.path.join(PYTHON_DIR, "python.exe"))
 PYTHON_URL = f"https://www.python.org/ftp/python/{PYTHON_VERSION}/python-{PYTHON_VERSION}-embed-amd64.zip"
 GET_PIP_URL = "https://bootstrap.pypa.io/get-pip.py"
 
 NODE_VERSION = "v20.14.0"
 NODE_DIR = os.path.join(VENDOR_DIR, "nodejs")
-NODE_EXE = os.path.join(NODE_DIR, "node.exe")
-NPM_CMD = os.path.join(NODE_DIR, "npm.cmd")
-NPX_CMD = os.path.join(NODE_DIR, "npx.cmd")
+# Пути к исполняемым файлам сделаны абсолютными
+NODE_EXE = os.path.abspath(os.path.join(NODE_DIR, "node.exe"))
+NPM_CMD = os.path.abspath(os.path.join(NODE_DIR, "npm.cmd"))
+NPX_CMD = os.path.abspath(os.path.join(NODE_DIR, "npx.cmd"))
 NODE_FILENAME = f"node-{NODE_VERSION}-win-x64"
 NODE_URL = f"https://nodejs.org/dist/{NODE_VERSION}/{NODE_FILENAME}.zip"
 
-# --- Зависимости, разделенные на этапы для надежной установки ---
-# Этап 1: Проблемный пакет, который нужно установить из wheel-файла
-PRE_BUILD_DEPS = ["docopt==0.6.2"]
-# Этап 2: Остальные зависимости для сборки
+# --- Зависимости ---
 BUILD_DEPS = ["Cython", "numpy", "torch", "torchaudio", "torchvision"]
-# Этап 3: Основные пакеты
 PYPI_PACKAGES = [
     "requests", "Pillow", "playwright", "fastapi", "uvicorn[standard]",
     "python-multipart", "tree-sitter", "sentence-transformers", "tree-sitter-languages",
     "vosk", "pyaudio", "sounddevice",
     "markitdown-mcp", "llama-cpp-python[server,llava]", "huggingface-hub",
-    "TTS", "transformers", "phonemizer", "scipy", "ruaccent"
+    "transformers", "phonemizer", "scipy", "ruaccent"
 ]
 
 GIT_APPS = [
@@ -44,7 +42,7 @@ GIT_APPS = [
     { "type": "python", "name": "mcp-language-server", "url": "https://github.com/isaacphi/mcp-language-server.git" },
 ]
 
-def run_command(command, cwd=None, env=None):
+def run_command(command, cwd=None, env=None, ignore_errors=False):
     print(f"\n>>> Running: {' '.join(command)} in '{cwd or '.'}'")
     try:
         local_env = env if env is not None else os.environ.copy()
@@ -59,7 +57,7 @@ def run_command(command, cwd=None, env=None):
         process.wait()
         if process.returncode != 0:
             print(f"!!! ПРЕДУПРЕЖДЕНИЕ: Команда завершилась с кодом {process.returncode}.")
-            return False
+            return False if not ignore_errors else True
         return True
     except Exception as e:
         print(f"!!! КРИТИЧЕСКАЯ ОШИБКА при выполнении '{' '.join(command)}': {e}")
@@ -136,16 +134,11 @@ def main():
 
     print("\n--- Шаг 1: Установка зависимостей в портативный Python ---")
     
-    print("\n--- Этап 1.1: Установка 'docopt' с запретом на использование исходного кода ---")
-    # --- ИЗМЕНЕНИЕ: Добавлен флаг --only-binary :all: ---
-    if not run_command([PYTHON_EXE, "-m", "pip", "install", "--only-binary", ":all:"] + PRE_BUILD_DEPS):
-        sys.exit("Не удалось установить 'docopt'.")
-
-    print("\n--- Этап 1.2: Установка зависимостей для сборки (Cython, numpy, torch) ---")
+    print("\n--- Этап 1.1: Установка зависимостей для сборки (Cython, numpy, torch) ---")
     if not run_command([PYTHON_EXE, "-m", "pip", "install", "--upgrade"] + BUILD_DEPS):
         sys.exit("Не удалось установить базовые зависимости для сборки.")
     
-    print("\n--- Этап 1.3: Установка основных пакетов ---")
+    print("\n--- Этап 1.2: Установка основных пакетов ---")
     if not run_command([PYTHON_EXE, "-m", "pip", "install", "--upgrade"] + PYPI_PACKAGES):
         sys.exit("Не удалось установить основные пакеты.")
 
@@ -164,7 +157,14 @@ def main():
             if os.path.exists(requirements_path):
                 run_command([PYTHON_EXE, "-m", "pip", "install", "-r", requirements_path], cwd=app_dir)
         elif app_type == "node":
-            run_command([NPM_CMD, "install"], cwd=app_dir)
+            if run_command([NPM_CMD, "install"], cwd=app_dir):
+                # ИСПРАВЛЕНО: Добавляем автоматическое исправление уязвимостей.
+                # Запускаем `npm audit fix`. Мы игнорируем ошибки (ignore_errors=True),
+                # так как иногда `audit fix` не может исправить всё, но это не должно
+                # останавливать весь процесс установки.
+                print(f"--- Запуск аудита и исправления уязвимостей для {app_name} ---")
+                run_command([NPM_CMD, "audit", "fix"], cwd=app_dir, ignore_errors=True)
+
             package_json_path = os.path.join(app_dir, 'package.json')
             if os.path.exists(package_json_path):
                 with open(package_json_path, 'r', encoding='utf-8') as f:

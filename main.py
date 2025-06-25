@@ -17,17 +17,18 @@ import build_active_tools
 
 tool_processes = []
 VENDOR_DIR = "vendor"
-# --- Определение путей к портативным средам ---
+# --- ИСПРАВЛЕНО: Пути к портативным средам сделаны абсолютными ---
 NODE_DIR = os.path.join(VENDOR_DIR, "nodejs")
-NODE_EXE = os.path.join(NODE_DIR, "node.exe")
-NPX_CMD = os.path.join(NODE_DIR, "npx.cmd")
+NODE_EXE = os.path.abspath(os.path.join(NODE_DIR, "node.exe"))
+NPX_CMD = os.path.abspath(os.path.join(NODE_DIR, "npx.cmd"))
 
 PYTHON_DIR = os.path.join(VENDOR_DIR, "python")
-PYTHON_EXE = os.path.join(PYTHON_DIR, "python.exe")
+PYTHON_EXE = os.path.abspath(os.path.join(PYTHON_DIR, "python.exe"))
 
 def get_venv_python(tool_name: str) -> str:
-    """Возвращает путь к python.exe в виртуальном окружении инструмента."""
-    return os.path.join(VENDOR_DIR, tool_name, ".venv", "Scripts", "python.exe")
+    """Возвращает АБСОЛЮТНЫЙ путь к python.exe в виртуальном окружении инструмента."""
+    # ИСПРАВЛЕНО: Путь сделан абсолютным
+    return os.path.abspath(os.path.join(VENDOR_DIR, tool_name, ".venv", "Scripts", "python.exe"))
 
 def create_dirs():
     # ... (код без изменений)
@@ -57,7 +58,7 @@ def get_port_from_command(command: list) -> int | None:
     return None
 
 def background_startup_tasks(app_ui: AppUI):
-    # ИЗМЕНЕНО: Команды запуска используют изолированные окружения
+    # Команды запуска теперь используют абсолютные пути, что делает их надежными
     servers_to_start = {
         "Playwright": { "cmd": [NPX_CMD, "--yes", "@playwright/mcp@latest", "--port", "7800"], "signal": "Listening on" },
         "WebSearch": { "cmd": [NODE_EXE, "dist/main.js"], "signal": "Server is running on port", "cwd": os.path.join(VENDOR_DIR, "mcp-searxng") },

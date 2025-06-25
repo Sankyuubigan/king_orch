@@ -5,10 +5,9 @@ import json
 
 SETTINGS_FILE = "settings.json"
 STT_MODELS_PATH = "voice_engine/stt"
-# ИЗМЕНЕНО: Добавляем словарь с моделями для выбора
+# --- ИЗМЕНЕНИЕ: Удален движок XTTS из словаря ---
 TTS_ENGINES = {
     "silero": "Silero (Быстрый, базовый)",
-    "xtts": "XTTS-v2 (Клонирование голоса)",
     "f5": "F5-TTS (Качественный русский)"
 }
 SILERO_SPEAKERS = ["aidar", "baya", "kseniya", "xenia", "eugene", "random"]
@@ -84,7 +83,11 @@ class SettingsWindow(tk.Toplevel):
         """Скрывает/показывает выбор голоса Silero."""
         selected_engine_display = self.selected_tts_engine.get()
         # Находим ключ по значению
-        selected_key = [k for k, v in TTS_ENGINES.items() if v == selected_engine_display][0]
+        selected_key = ""
+        for k, v in TTS_ENGINES.items():
+            if v == selected_engine_display:
+                selected_key = k
+                break
         
         if selected_key == "silero":
             self.silero_speaker_label.grid()
@@ -106,7 +109,10 @@ class SettingsWindow(tk.Toplevel):
                 self.selected_stt.set(settings.get("stt_model", ""))
                 # Загрузка движка TTS
                 engine_key = settings.get("tts_model_engine", "silero")
-                self.selected_tts_engine.set(TTS_ENGINES.get(engine_key, TTS_ENGINES["silero"]))
+                # Убедимся, что сохраненный движок все еще доступен
+                if engine_key not in TTS_ENGINES:
+                    engine_key = "silero" # Откат на дефолтный, если сохраненный был удален
+                self.selected_tts_engine.set(TTS_ENGINES.get(engine_key))
                 
                 self.selected_silero_speaker.set(settings.get("tts_silero_speaker", "aidar"))
                 self.activation_word.set(settings.get("activation_word", "джарвис"))
@@ -124,7 +130,11 @@ class SettingsWindow(tk.Toplevel):
 
     def _save_and_apply(self):
         selected_engine_display = self.selected_tts_engine.get()
-        engine_key = [k for k, v in TTS_ENGINES.items() if v == selected_engine_display][0]
+        engine_key = ""
+        for k, v in TTS_ENGINES.items():
+            if v == selected_engine_display:
+                engine_key = k
+                break
         
         settings = {
             "stt_model": self.selected_stt.get(),
@@ -139,6 +149,6 @@ class SettingsWindow(tk.Toplevel):
                 json.dump(settings, f, indent=2, ensure_ascii=False)
             
             if self.engine: self.engine.reload_settings()
-            messagebox.showinfo("Успешно", "Настройки сохранены. Перезапустите голосовой движок (кнопка 🎤) для применения.", parent=self)
+            messagebox.showinfo("Успешно", "Настройки сохранены. Изменения вступят в силу немедленно или после перезапуска голосового движка.", parent=self)
             self.destroy()
         except Exception as e: messagebox.showerror("Ошибка", f"Не удалось сохранить настройки: {e}", parent=self)

@@ -2,5 +2,22 @@
   "browser_action": {
     "url": "http://127.0.0.1:7800/call",
     "description": "Выполняет одно действие в браузере через Playwright. Принимает JSON с call_path, args, kwargs."
+  },
+  "convert_to_markdown": {
+    "url": "http://127.0.0.1:7790/convert_to_markdown",
+    "description": "Преобразует HTML-код в чистый Markdown. Принимает 'uri' с URL или data URI."
+  },
+  "code_indexer": {
+    "url": "http://127.0.0.1:7788/index",
+    "description": "Запускает полную индексацию кода проекта в рабочей директории."
+  },
+  "file_reader": {
+    "url": "http://127.0.0.1:7780/read_file"
+  },
+  "file_lister": {
+    "url": "http://127.0.0.1:7780/list_files"
+  },
+  "ask_human": {
+    "url": "http://127.0.0.1:7787/ask"
   }
 }

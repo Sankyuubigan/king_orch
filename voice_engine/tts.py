@@ -28,9 +28,10 @@ class TextToSpeech:
         """Фабрика-загрузчик для выбора и инициализации TTS-модели."""
         try:
             if self.engine_id == "silero": self._load_silero()
-            elif self.engine_id == "xtts": self._load_xtts()
+            # --- ИЗМЕНЕНИЕ: Загрузчик XTTS отключен ---
+            # elif self.engine_id == "xtts": self._load_xtts()
             elif self.engine_id == "f5": self._load_f5()
-            else: print(f"[TTS Factory] [ERROR] Неизвестный движок TTS: {self.engine_id}")
+            else: print(f"[TTS Factory] [ERROR] Неизвестный или отключенный движок TTS: {self.engine_id}")
             self.is_ready = True
         except Exception as e:
             print(f"[TTS Factory] [FATAL] Не удалось загрузить движок '{self.engine_id}': {e}", exc_info=True)
@@ -47,11 +48,11 @@ class TextToSpeech:
                 audio = self.engine.apply_tts(text=text, speaker=self.settings.get("tts_silero_speaker", "aidar"), sample_rate=48000)
                 sd.play(audio, samplerate=48000)
             
-            elif self.engine_id == "xtts":
-                # XTTS генерирует WAV, который мы проигрываем.
-                # TODO: Добавить опцию клонирования голоса speaker_wav='path/to/voice.wav'
-                wav = self.engine.tts(text=text, speaker=self.engine.speakers[0], language=self.engine.languages[0])
-                sd.play(wav, samplerate=24000)
+            # --- ИЗМЕНЕНИЕ: Логика вызова XTTS отключена ---
+            # elif self.engine_id == "xtts":
+            #     # XTTS генерирует WAV, который мы проигрываем.
+            #     wav = self.engine.tts(text=text, speaker=self.engine.speakers[0], language=self.engine.languages[0])
+            #     sd.play(wav, samplerate=24000)
             
             elif self.engine_id == "f5":
                 accent_engine, model = self.engine
@@ -76,11 +77,12 @@ class TextToSpeech:
         torch.set_num_threads(4)
         print("[TTS Factory] Silero загружен.")
 
-    def _load_xtts(self):
-        """Загрузка модели XTTSv2."""
-        from TTS.api import TTS
-        self.engine = TTS("tts_models/multilingual/multi-dataset/xtts_v2", progress_bar=True).to(self.device)
-        print("[TTS Factory] XTTS-v2 загружен.")
+    # --- ИЗМЕНЕНИЕ: Метод загрузки XTTS отключен ---
+    # def _load_xtts(self):
+    #     """Загрузка модели XTTSv2."""
+    #     from TTS.api import TTS
+    #     self.engine = TTS("tts_models/multilingual/multi-dataset/xtts_v2", progress_bar=True).to(self.device)
+    #     print("[TTS Factory] XTTS-v2 загружен.")
     
     def _load_f5(self):
         """Загрузка модели F5-TTS."""
