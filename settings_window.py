@@ -5,7 +5,8 @@ import json
 
 SETTINGS_FILE = "settings.json"
 STT_MODELS_PATH = "voice_engine/stt"
-# --- ИЗМЕНЕНИЕ: Удален движок XTTS из словаря ---
+# ИЗМЕНЕНИЕ: Путь к моделям LLM теперь глобальный
+LLM_MODELS_PATH = r"D:\nn\models" 
 TTS_ENGINES = {
     "silero": "Silero (Быстрый, базовый)",
     "f5": "F5-TTS (Качественный русский)"
@@ -16,19 +17,24 @@ class SettingsWindow(tk.Toplevel):
     def __init__(self, parent, engine):
         super().__init__(parent)
         self.engine = engine
-        self.title("Настройки голосового движка")
-        self.geometry("500x450")
+        self.title("Настройки")
+        self.geometry("550x600")
         
         self.selected_stt = tk.StringVar()
-        self.selected_tts_engine = tk.StringVar() # Для выбора движка
-        self.selected_silero_speaker = tk.StringVar() # Для выбора голоса Silero
+        self.selected_tts_engine = tk.StringVar()
+        self.selected_silero_speaker = tk.StringVar()
         self.activation_word = tk.StringVar()
         self.assistant_name = tk.StringVar()
         self.tts_device = tk.StringVar()
+        # ИЗМЕНЕНИЕ: Новая переменная для LLM
+        self.selected_llm_model = tk.StringVar()
+        
+        # Сохраняем исходные настройки для сравнения
+        self.initial_settings = self._load_settings_data()
 
         self._create_widgets()
         self._load_models()
-        self._load_settings()
+        self._populate_settings()
         
         self.grab_set()
 
@@ -36,7 +42,13 @@ class SettingsWindow(tk.Toplevel):
         main_frame = ttk.Frame(self, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # ... (код активации без изменений) ...
+        # --- НОВЫЙ БЛОК: Настройки LLM ---
+        llm_frame = ttk.LabelFrame(main_frame, text="Основная модель (LLM)", padding="10")
+        llm_frame.pack(fill=tk.X, pady=5)
+        self.llm_combobox = ttk.Combobox(llm_frame, textvariable=self.selected_llm_model, state="readonly")
+        self.llm_combobox.pack(fill=tk.X, expand=True)
+        ttk.Label(llm_frame, text="Изменение модели требует перезапуска приложения.", font=("TkDefaultFont", 8)).pack(anchor=tk.W, pady=(5,0))
+
         activation_frame = ttk.LabelFrame(main_frame, text="Обращение и активация", padding="10")
         activation_frame.pack(fill=tk.X, pady=5)
         ttk.Label(activation_frame, text="Имя ассистента:").grid(row=0, column=0, sticky=tk.W, pady=2)
@@ -80,14 +92,9 @@ class SettingsWindow(tk.Toplevel):
         self.tts_engine_combobox.bind("<<ComboboxSelected>>", self._on_engine_change)
 
     def _on_engine_change(self, event=None):
-        """Скрывает/показывает выбор голоса Silero."""
+        # ... (код без изменений)
         selected_engine_display = self.selected_tts_engine.get()
-        # Находим ключ по значению
-        selected_key = ""
-        for k, v in TTS_ENGINES.items():
-            if v == selected_engine_display:
-                selected_key = k
-                break
+        selected_key = next((k for k, v in TTS_ENGINES.items() if v == selected_engine_display), None)
         
         if selected_key == "silero":
             self.silero_speaker_label.grid()
@@ -97,46 +104,48 @@ class SettingsWindow(tk.Toplevel):
             self.silero_speaker_combobox.grid_remove()
 
     def _load_models(self):
+        """Загружает списки всех доступных моделей (STT и LLM)."""
         try:
             stt_models = [d for d in os.listdir(STT_MODELS_PATH) if os.path.isdir(os.path.join(STT_MODELS_PATH, d))] if os.path.isdir(STT_MODELS_PATH) else ["Папка не найдена"]
             self.stt_combobox['values'] = stt_models
         except Exception as e: self.stt_combobox['values'] = [f"Ошибка: {e}"]
+        
+        try:
+            llm_models = [f for f in os.listdir(LLM_MODELS_PATH) if f.lower().endswith(".gguf")] if os.path.isdir(LLM_MODELS_PATH) else ["Папка не найдена"]
+            self.llm_combobox['values'] = llm_models
+        except Exception as e: self.llm_combobox['values'] = [f"Ошибка: {e}"]
 
-    def _load_settings(self):
+    def _load_settings_data(self):
+        """Просто читает данные из файла."""
         try:
             if os.path.exists(SETTINGS_FILE):
-                with open(SETTINGS_FILE, "r", encoding="utf-8") as f: settings = json.load(f)
-                self.selected_stt.set(settings.get("stt_model", ""))
-                # Загрузка движка TTS
-                engine_key = settings.get("tts_model_engine", "silero")
-                # Убедимся, что сохраненный движок все еще доступен
-                if engine_key not in TTS_ENGINES:
-                    engine_key = "silero" # Откат на дефолтный, если сохраненный был удален
-                self.selected_tts_engine.set(TTS_ENGINES.get(engine_key))
-                
-                self.selected_silero_speaker.set(settings.get("tts_silero_speaker", "aidar"))
-                self.activation_word.set(settings.get("activation_word", "джарвис"))
-                self.assistant_name.set(settings.get("assistant_name", "Ассистент"))
-                self.tts_device.set(settings.get("tts_device", "cuda"))
-            else: # Дефолтные значения
-                if self.stt_combobox['values']: self.selected_stt.set(self.stt_combobox['values'][0])
-                self.selected_tts_engine.set(TTS_ENGINES["silero"])
-                self.selected_silero_speaker.set("aidar")
-                self.activation_word.set("джарвис")
-                self.assistant_name.set("Ассистент")
-                self.tts_device.set("cuda")
-        except Exception as e: messagebox.showerror("Ошибка", f"Не удалось загрузить настройки: {e}", parent=self)
-        self._on_engine_change() # Обновляем UI
+                with open(SETTINGS_FILE, "r", encoding="utf-8") as f: return json.load(f)
+        except Exception:
+            return {}
+        return {}
+
+    def _populate_settings(self):
+        """Заполняет поля UI на основе загруженных настроек."""
+        settings = self.initial_settings
+        try:
+            self.selected_llm_model.set(settings.get("llm_model_file", ""))
+            self.selected_stt.set(settings.get("stt_model", ""))
+            engine_key = settings.get("tts_model_engine", "silero")
+            self.selected_tts_engine.set(TTS_ENGINES.get(engine_key, TTS_ENGINES["silero"]))
+            self.selected_silero_speaker.set(settings.get("tts_silero_speaker", "aidar"))
+            self.activation_word.set(settings.get("activation_word", "джарвис"))
+            self.assistant_name.set(settings.get("assistant_name", "Ассистент"))
+            self.tts_device.set(settings.get("tts_device", "cuda"))
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось применить настройки: {e}", parent=self)
+        self._on_engine_change()
 
     def _save_and_apply(self):
         selected_engine_display = self.selected_tts_engine.get()
-        engine_key = ""
-        for k, v in TTS_ENGINES.items():
-            if v == selected_engine_display:
-                engine_key = k
-                break
+        engine_key = next((k for k, v in TTS_ENGINES.items() if v == selected_engine_display), "silero")
         
-        settings = {
+        new_settings = {
+            "llm_model_file": self.selected_llm_model.get(),
             "stt_model": self.selected_stt.get(),
             "tts_model_engine": engine_key,
             "tts_silero_speaker": self.selected_silero_speaker.get(),
@@ -144,11 +153,23 @@ class SettingsWindow(tk.Toplevel):
             "assistant_name": self.assistant_name.get().strip(),
             "tts_device": self.tts_device.get()
         }
+        
         try:
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-                json.dump(settings, f, indent=2, ensure_ascii=False)
+                json.dump(new_settings, f, indent=4, ensure_ascii=False)
             
-            if self.engine: self.engine.reload_settings()
-            messagebox.showinfo("Успешно", "Настройки сохранены. Изменения вступят в силу немедленно или после перезапуска голосового движка.", parent=self)
+            # Проверяем, изменились ли настройки, требующие перезапуска
+            llm_changed = self.initial_settings.get("llm_model_file") != new_settings.get("llm_model_file")
+            
+            # Перезагружаем только голосовой движок, если это возможно
+            if self.engine:
+                self.engine.reload()
+            
+            if llm_changed:
+                messagebox.showinfo("Перезапуск необходим", "Настройки LLM сохранены. Пожалуйста, перезапустите приложение, чтобы они вступили в силу.", parent=self)
+            else:
+                messagebox.showinfo("Успешно", "Настройки сохранены. Голосовой движок перезагружен.", parent=self)
+            
             self.destroy()
-        except Exception as e: messagebox.showerror("Ошибка", f"Не удалось сохранить настройки: {e}", parent=self)
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить настройки: {e}", parent=self)

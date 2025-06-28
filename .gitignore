@@ -6,6 +6,7 @@ node_modules
 /.conda
 /vector_db
 /sandbox
+/vendor/
 
 # Игнорируем большие файлы моделей
 voice_engine/stt/*
@@ -15,10 +16,10 @@ voice_engine/silero_cache/*
 !voice_engine/tts/README.md
 
 # Игнорируем папку с внешними библиотеками
-/vendor/
 /modules
 
 # Игнорируем автоматически генерируемые файлы
 tools_config.json
 settings.json
 /voice_engine/snakers4_silero-models_master
+/logs

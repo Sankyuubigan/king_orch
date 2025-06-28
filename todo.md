@@ -14,7 +14,7 @@ https://github.com/danny-avila/LibreChat
 8. https://glama.ai/mcp/servers/@scenic-contrib/scenic_mcp_experimental/tools/inspect_viewport
 9. 
 10. кодер - архитектура, а потом фикс багов. норм ли архитектура для фикса бага?
-
+11. битбакет мцп
 
 
 # проверить

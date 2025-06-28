@@ -1,0 +1,20 @@
+# environment.yml
+name: universal_orchestrator_env  # Имя для окружения (можно любое)
+
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+
+dependencies:
+  # 1. Основные зависимости, которые нужно ставить через Conda
+  - python=3.11        # Указываем версию Python
+  - pytorch            # Сам PyTorch
+  - torchvision        # Для работы с изображениями в PyTorch
+  - torchaudio         # Для работы с аудио в PyTorch
+  - pytorch-cuda=11.8  # Версия CUDA (если используете GPU)
+
+  # 2. Все остальные Python-пакеты, которые ставятся через pip
+  - pip:
+    - -r requirements.txt

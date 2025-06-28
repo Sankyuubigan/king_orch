@@ -1,19 +1,33 @@
-# --- СОКРАЩЕННЫЙ СПИСОК ---
-# Оставляем только стабильные, проверенные пакеты с PyPI
-requests
+# Основные зависимости LangChain/LangGraph
+langchain
+langgraph
+langchain-community
+
+# Основной клиент для инструментов
+mcp-use
+
+# LLM
 llama-cpp-python
+
+# Веб-инструменты и серверы
+requests
 Pillow
-playwright
-fastapi
-uvicorn[standard]
-python-multipart
-tree-sitter
-sentence-transformers
-tree-sitter-languages
+
+# uvicorn
+# python-multipart
+
+# Инструменты для анализа кода
+# tree-sitter
+# sentence-transformers
+# tree-sitter-languages
+
+# Голосовой движок
 vosk
-torch
-silero
 pyaudio
 sounddevice
-# Все проблемные MCP-серверы удалены. Мы будем использовать только наши собственные.
-# websocket-client больше не нужен
+phonemizer
+scipy
+ruaccent
+huggingface-hub
+# ИСПРАВЛЕНИЕ: Указываем минимальную версию для поддержки F5-TTS
+transformers>=4.36.0

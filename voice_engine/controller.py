@@ -1,19 +1,19 @@
-
-# voice_engine/controller.py - ОБНОВЛЕН ДЛЯ РАБОТЫ С РАЗНЫМИ TTS ДВИЖКАМИ
-
 import threading
 import os
 import json
 from queue import Queue
 import time
+import traceback
+import logging
 from .stt import SpeechToText
 from .tts import TextToSpeech
 
 SETTINGS_FILE = "settings.json"
+logger = logging.getLogger(__name__)
 
 class VoiceController:
-    def __init__(self, orchestrator_engine):
-        self.engine = orchestrator_engine
+    def __init__(self, task_queue: Queue):
+        self.task_queue = task_queue
         self.ui_linker = None
         self.stt = None
         self.tts = None
@@ -34,40 +34,43 @@ class VoiceController:
         except Exception: return {}
 
     def reload(self):
-        print("[VoiceController] Перезагрузка настроек голосового движка...")
+        logger.info("[VoiceController] Перезагрузка настроек голосового движка...")
         self.stop_listening()
         if self.tts_thread and self.tts_thread.is_alive():
-            self.tts_queue.put(None); self.tts_thread.join(timeout=2)
+            self.tts_queue.put(None)
+            self.tts_thread.join(timeout=2)
 
         settings = self._load_settings()
         self.activation_word = settings.get("activation_word", "джарвис").lower().strip()
 
         try:
-            # Инициализация STT
-            stt_model = settings.get("stt_model")
-            if stt_model: self.stt = SpeechToText(os.path.join("voice_engine", "stt", stt_model))
+            stt_model_path = os.path.join("voice_engine", "stt", settings.get("stt_model", ""))
+            if settings.get("stt_model") and os.path.isdir(stt_model_path):
+                self.stt = SpeechToText(stt_model_path)
+            else:
+                self.stt = None
+                logger.warning("[VoiceController] Модель STT не настроена или не найдена.")
 
-            # ИНИЦИАЛИЗАЦИЯ TTS (главное изменение)
-            tts_engine = settings.get("tts_model_engine", "silero")
+            tts_engine_id = settings.get("tts_model_engine", "silero")
             tts_device = settings.get("tts_device", "cuda")
-            self.tts = TextToSpeech(engine_id=tts_engine, device=tts_device, settings=settings)
+            self.tts = TextToSpeech(engine_id=tts_engine_id, device=tts_device, settings=settings)
             
-            # Запускаем рабочие потоки
             self.tts_queue = Queue()
             self.tts_stop_event.clear()
-            self.tts_thread = threading.Thread(target=self._tts_worker, daemon=True); self.tts_thread.start()
+            self.tts_thread = threading.Thread(target=self._tts_worker, daemon=True)
+            self.tts_thread.start()
             
             if self.tts.is_ready: self.warm_up()
             self.start_listening()
-            print("[VoiceController] Перезагрузка завершена.")
+            logger.info("[VoiceController] Перезагрузка завершена.")
         except Exception as e:
-            print(f"[VoiceController] [FATAL] Ошибка при перезагрузке компонентов: {e}", exc_info=True)
+            logger.critical(f"[VoiceController] КРИТИЧЕСКАЯ ОШИБКА при перезагрузке: {e}\n{traceback.format_exc()}")
 
     def warm_up(self):
         if self.tts and self.tts.is_ready:
-            print("[VoiceController] Выполняю прогрев TTS...")
+            logger.info("[VoiceController] Выполняю прогрев TTS...")
             self.tts.speak("прогрев системы", self.tts_stop_event)
-            print("[VoiceController] Прогрев TTS завершен.")
+            logger.info("[VoiceController] Прогрев TTS завершен.")
     
     def _tts_worker(self):
         while True:
@@ -81,7 +84,7 @@ class VoiceController:
 
     def _listen_loop(self):
         if not self.stt or not self.activation_word: return
-        print(f"[VoiceController] Прослушивание активно. Слово активации: '{self.activation_word}'")
+        logger.info(f"[VoiceController] Прослушивание активно. Слово активации: '{self.activation_word}'")
         is_activated, command_parts, utterance_buffer = False, [], ""
 
         for event_type, text in self.stt.listen():
@@ -92,7 +95,7 @@ class VoiceController:
                     self.tts_stop_event.set()
                     with self.tts_queue.mutex: self.tts_queue.queue.clear()
                     if self.ui_linker: self.ui_linker.set_listening_status(True)
-                    utterance_buffer = text.split(self.activation_word, 1)[1].strip()
+                    utterance_buffer = text.split(self.activation_word, 1).strip()
                     if self.ui_linker: self.ui_linker.show_partial_transcription(utterance_buffer)
             else:
                 if event_type == 'partial':
@@ -104,10 +107,10 @@ class VoiceController:
                     if not text:
                         if self.ui_linker: self.ui_linker.set_listening_status(False)
                         final_command = " ".join(command_parts).strip()
-                        if final_command and self.engine:
-                            print(f"[VoiceController] Распознана команда: '{final_command}'")
+                        if final_command:
+                            logger.info(f"[VoiceController] Распознана команда: '{final_command}'")
                             if self.ui_linker: self.ui_linker.last_input_was_voice = True
-                            self.engine.submit_task(final_command)
+                            self.task_queue.put(final_command) # <-- ИЗМЕНЕНО: Отправка в очередь
                         is_activated, command_parts = False, []
     
     def start_listening(self):

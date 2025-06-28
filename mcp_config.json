@@ -1,0 +1,48 @@
+{
+    "mcpServers": {
+        "browser": {
+            "source": "@playwright/mcp",
+            "version": "latest",
+            "args": ["--vision"]
+        },
+        "web-search": {
+            "source": "mcp-searxng",
+            "version": "latest"
+        },
+        "code-sandbox": {
+            "source": "mcp-code-runner",
+            "version": "latest"
+        },
+        "lsp": {
+            "source": "mcp-lsp",
+            "version": "latest"
+        },
+        "chroma": {
+            "source": "chroma-mcp",
+            "version": "latest"
+        },
+        "markdown": {
+            "source": "markitdown-mcp",
+            "version": "latest"
+        },
+        "rag-docs": {
+            "source": "@qpd-v/mcp-server-ragdocs",
+            "version": "latest"
+        },
+        "feedback": {
+            "source": {
+                "cmd": ["python", "-u", "mcp_servers/mcp_feedback_server.py"]
+            }
+        },
+        "file-system": {
+            "source": {
+                "cmd": ["python", "-u", "mcp_servers/mcp_file_server.py"]
+            }
+        },
+        "indexer": {
+             "source": {
+                "cmd": ["python", "-u", "mcp_servers/mcp_indexer_server.py"]
+            }
+        }
+    }
+}
