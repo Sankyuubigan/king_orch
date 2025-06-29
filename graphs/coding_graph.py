@@ -1,5 +1,7 @@
 import logging
 from typing import TypedDict
+# ИЗМЕНЕНИЕ: Добавляем необходимый импорт
+import asyncio
 from langchain_community.chat_models import ChatLlamaCpp
 from mcp_use import MCPClient, MCPAgent
 from langgraph.graph import StateGraph, END
@@ -20,17 +22,16 @@ def run_agent_node(state: GraphState, llm: ChatLlamaCpp, mcp_client: MCPClient):
     """
     logger.info("--- CODING_GRAPH: Запуск агента для кодирования ---")
     
-    # Создаем агента с нужным системным промптом
     agent = MCPAgent(
         llm=llm,
         client=mcp_client,
         system_prompt=CODING_SYSTEM_PROMPT,
         use_server_manager=True,
-        max_steps=15 # Даем агенту достаточно шагов для выполнения задачи
+        max_steps=15
     )
     
-    # Запускаем агент с задачей пользователя
-    final_result = agent.run(state["task"])
+    # ИСПРАВЛЕНИЕ: Оборачиваем асинхронный вызов в asyncio.run()
+    final_result = asyncio.run(agent.run(state["task"]))
     logger.info(f"--- CODING_GRAPH: Агент завершил работу с результатом: {final_result} ---")
     
     return {"result": final_result}

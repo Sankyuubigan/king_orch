@@ -1,5 +1,7 @@
 import logging
 from typing import TypedDict
+# ИЗМЕНЕНИЕ: Добавляем необходимый импорт
+import asyncio
 from langchain_community.chat_models import ChatLlamaCpp
 from mcp_use import MCPClient, MCPAgent
 from langgraph.graph import StateGraph, END
@@ -28,7 +30,8 @@ def run_agent_node(state: GraphState, llm: ChatLlamaCpp, mcp_client: MCPClient):
         max_steps=20
     )
     
-    final_result = agent.run(state["task"])
+    # ИСПРАВЛЕНИЕ: Оборачиваем асинхронный вызов в asyncio.run()
+    final_result = asyncio.run(agent.run(state["task"]))
     logger.info(f"--- RESEARCH_GRAPH: Агент завершил работу с результатом: {final_result} ---")
     
     return {"result": final_result}

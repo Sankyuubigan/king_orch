@@ -1,6 +1,6 @@
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox, simpledialog
-from queue import Queue
+from queue import Queue, Empty
 import sys
 import os
 import base64
@@ -11,21 +11,19 @@ from PIL import Image, ImageTk
 from utils.clipboard_fortress import handle_keypress_event
 from settings_window import SettingsWindow
 
-FEEDBACK_URL_GET = "http://127.0.0.1:7787/get_question"
-FEEDBACK_URL_POST = "http://127.0.0.1:7787/provide_answer"
-LISTENING_BG_COLOR = "#E0F7FF"
-
 class AppUI:
-    def __init__(self, root_window, task_queue: Queue):
+    def __init__(self, root_window, task_queue: Queue, ui_update_queue: Queue):
         self.root = root_window
         self.task_queue = task_queue
+        self.ui_update_queue = ui_update_queue # ИЗМЕНЕНИЕ: Сохраняем очередь UI
         self.is_processing = False
         self.voice_controller = None
+        self.core_worker = None
         self.browser_photo_image = None
         self.last_input_was_voice = False
         self.default_bg_color = None
 
-        self.root.title("Universal Orchestrator (v4.1 - Resilient)")
+        self.root.title("Universal Orchestrator (v5.1 - Architected)")
         self.root.geometry("1700x800")
         
         if sys.platform == "win32" and os.path.exists("logo.ico"):
@@ -34,22 +32,51 @@ class AppUI:
         
         self.create_widgets()
         self.default_bg_color = self.chat_input.cget("background")
+        
+        # ИЗМЕНЕНИЕ: Запускаем цикл обработки UI-сообщений
+        self.root.after(100, self._process_ui_updates)
         self.root.after(3000, self._feedback_poll_loop)
 
+    def _process_ui_updates(self):
+        """Обрабатывает все сообщения в очереди UI."""
+        while not self.ui_update_queue.empty():
+            try:
+                message_type, args = self.ui_update_queue.get_nowait()
+                
+                # Ищем метод с таким же именем и вызываем его
+                if hasattr(self, message_type):
+                    method = getattr(self, message_type)
+                    method(*args)
+                else:
+                    self.log_to_widget(f"[UI] [ERROR] Получена неизвестная команда: {message_type}")
+                    
+            except Empty:
+                break # Очередь пуста
+            except Exception as e:
+                self.log_to_widget(f"[UI] [ERROR] Ошибка обработки UI-команды: {e}")
+        
+        # Перезапускаем цикл
+        self.root.after(100, self._process_ui_updates)
+
     def _open_settings_window(self):
-        # ИСПРАВЛЕНИЕ: Теперь можно открыть настройки, даже если движок не готов,
-        # но он будет передан как None, и окно настроек это обработает.
-        SettingsWindow(self.root, self.voice_controller)
+        SettingsWindow(self.root, self)
+
+    def set_core_worker(self, worker):
+        self.core_worker = worker
+
+    def request_core_reload(self):
+        if self.core_worker:
+            self.core_worker.trigger_reload()
+        else:
+            self.log_to_widget("[UI] Ошибка: CoreWorker не инициализирован.")
 
     def _insert_chat_message(self, message, author_prefix):
-        # ... (код без изменений)
         self.chat_area.config(state=tk.NORMAL)
         self.chat_area.insert(tk.END, f"{author_prefix}: {message}\n\n")
         self.chat_area.see(tk.END)
         self.chat_area.config(state=tk.DISABLED)
 
     def submit_task_from_input(self, event=None):
-        # ... (код без изменений)
         if self.is_processing: return
         prompt = self.chat_input.get()
         if not prompt: return
@@ -122,24 +149,20 @@ class AppUI:
         # ... (код без изменений)
         if not self.root.winfo_exists(): return
         if is_listening:
-            self.root.after(0, self.info_label.config, {"text": "Слушаю вашу команду..."})
-            self.root.after(0, self.chat_input.config, {"background": LISTENING_BG_COLOR})
+            self.info_label.config(text="Слушаю вашу команду...")
+            self.chat_input.config(background="#E0F7FF")
         else:
-            self.root.after(0, self.info_label.config, {"text": "Готов к работе. Ожидание задач..."})
-            self.root.after(0, self.chat_input.config, {"background": self.default_bg_color})
+            self.info_label.config(text="Готов к работе. Ожидание задач...")
+            self.chat_input.config(background=self.default_bg_color)
 
     def show_partial_transcription(self, text: str):
-        # ... (код без изменений)
-        if not self.root.winfo_exists(): return
-        self.root.after(0, self._update_input_text, text)
+        self._update_input_text(text)
 
     def _update_input_text(self, text):
-        # ... (код без изменений)
         self.chat_input.delete(0, tk.END)
         self.chat_input.insert(0, text)
 
     def set_ui_busy(self, is_busy, status_text=None):
-        if not self.root.winfo_exists(): return
         self.is_processing = is_busy
         
         if status_text: self.set_info_label(status_text)
@@ -153,27 +176,18 @@ class AppUI:
         else: self.progress_bar.stop()
 
     def unlock_settings_button(self):
-        """Принудительно разблокирует кнопку настроек в случае критической ошибки."""
-        if self.root.winfo_exists():
-            self.root.after(0, self.settings_button.config, {"state": tk.NORMAL})
+        self.settings_button.config(state=tk.NORMAL)
 
     def set_info_label(self, text: str):
-        # ... (код без изменений)
-        if self.root.winfo_exists():
-            self.root.after(0, self.info_label.config, {"text": text})
+        self.info_label.config(text=text)
 
     def update_chat_with_final_result(self, final_result_text: str):
-        # ... (код без изменений)
-        if self.root.winfo_exists():
-            self.root.after(0, lambda: self._insert_chat_message(final_result_text, author_prefix="Ассистент"))
+        self._insert_chat_message(final_result_text, author_prefix="Ассистент")
 
     def log_to_widget(self, message):
-        # ... (код без изменений)
-        if self.root.winfo_exists():
-            self.root.after(0, self._insert_log_message, message)
+        self._insert_log_message(message)
 
     def _insert_log_message(self, message):
-        # ... (код без изменений)
         self.log_area.config(state=tk.NORMAL)
         self.log_area.insert(tk.END, str(message) + "\n")
         self.log_area.see(tk.END)
@@ -182,7 +196,7 @@ class AppUI:
     def _feedback_poll_loop(self):
         # ... (код без изменений)
         try:
-            response = requests.get(FEEDBACK_URL_GET, timeout=0.5)
+            response = requests.get("http://127.0.0.1:7787/get_question", timeout=0.5)
             if response.status_code == 200 and (question := response.json().get("question")):
                 self.log_to_widget(f"[Feedback] Получен вопрос для пользователя: {question}")
                 self.root.after(0, self._ask_user_for_feedback, question)
@@ -195,7 +209,7 @@ class AppUI:
         answer = simpledialog.askstring("Вопрос от Агента", question, parent=self.root)
         if answer is None: answer = "Пользователь отменил ввод."
         try:
-            requests.post(FEEDBACK_URL_POST, json={"answer": answer}, timeout=5)
+            requests.post("http://127.0.0.1:7787/provide_answer", json={"answer": answer}, timeout=5)
             self.log_to_widget(f"[Feedback] Ответ '{answer}' отправлен агенту.")
         except requests.exceptions.RequestException as e: self.log_to_widget(f"[Feedback] [ERROR] Не удалось отправить ответ: {e}")
         

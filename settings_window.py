@@ -5,7 +5,6 @@ import json
 
 SETTINGS_FILE = "settings.json"
 STT_MODELS_PATH = "voice_engine/stt"
-# ИЗМЕНЕНИЕ: Путь к моделям LLM теперь глобальный
 LLM_MODELS_PATH = r"D:\nn\models" 
 TTS_ENGINES = {
     "silero": "Silero (Быстрый, базовый)",
@@ -14,9 +13,11 @@ TTS_ENGINES = {
 SILERO_SPEAKERS = ["aidar", "baya", "kseniya", "xenia", "eugene", "random"]
 
 class SettingsWindow(tk.Toplevel):
-    def __init__(self, parent, engine):
+    def __init__(self, parent, app_ui):
         super().__init__(parent)
-        self.engine = engine
+        # ИЗМЕНЕНИЕ: Сохраняем экземпляр AppUI для вызова перезагрузки
+        self.app_ui = app_ui
+        self.engine = app_ui.voice_controller
         self.title("Настройки")
         self.geometry("550x600")
         
@@ -26,10 +27,8 @@ class SettingsWindow(tk.Toplevel):
         self.activation_word = tk.StringVar()
         self.assistant_name = tk.StringVar()
         self.tts_device = tk.StringVar()
-        # ИЗМЕНЕНИЕ: Новая переменная для LLM
         self.selected_llm_model = tk.StringVar()
         
-        # Сохраняем исходные настройки для сравнения
         self.initial_settings = self._load_settings_data()
 
         self._create_widgets()
@@ -42,12 +41,12 @@ class SettingsWindow(tk.Toplevel):
         main_frame = ttk.Frame(self, padding="10")
         main_frame.pack(fill=tk.BOTH, expand=True)
         
-        # --- НОВЫЙ БЛОК: Настройки LLM ---
         llm_frame = ttk.LabelFrame(main_frame, text="Основная модель (LLM)", padding="10")
         llm_frame.pack(fill=tk.X, pady=5)
         self.llm_combobox = ttk.Combobox(llm_frame, textvariable=self.selected_llm_model, state="readonly")
         self.llm_combobox.pack(fill=tk.X, expand=True)
-        ttk.Label(llm_frame, text="Изменение модели требует перезапуска приложения.", font=("TkDefaultFont", 8)).pack(anchor=tk.W, pady=(5,0))
+        # ИЗМЕНЕНИЕ: Текст изменен, так как перезапуск больше не нужен
+        ttk.Label(llm_frame, text="Изменение модели приведет к её перезагрузке.", font=("TkDefaultFont", 8)).pack(anchor=tk.W, pady=(5,0))
 
         activation_frame = ttk.LabelFrame(main_frame, text="Обращение и активация", padding="10")
         activation_frame.pack(fill=tk.X, pady=5)
@@ -92,7 +91,6 @@ class SettingsWindow(tk.Toplevel):
         self.tts_engine_combobox.bind("<<ComboboxSelected>>", self._on_engine_change)
 
     def _on_engine_change(self, event=None):
-        # ... (код без изменений)
         selected_engine_display = self.selected_tts_engine.get()
         selected_key = next((k for k, v in TTS_ENGINES.items() if v == selected_engine_display), None)
         
@@ -104,7 +102,6 @@ class SettingsWindow(tk.Toplevel):
             self.silero_speaker_combobox.grid_remove()
 
     def _load_models(self):
-        """Загружает списки всех доступных моделей (STT и LLM)."""
         try:
             stt_models = [d for d in os.listdir(STT_MODELS_PATH) if os.path.isdir(os.path.join(STT_MODELS_PATH, d))] if os.path.isdir(STT_MODELS_PATH) else ["Папка не найдена"]
             self.stt_combobox['values'] = stt_models
@@ -116,7 +113,6 @@ class SettingsWindow(tk.Toplevel):
         except Exception as e: self.llm_combobox['values'] = [f"Ошибка: {e}"]
 
     def _load_settings_data(self):
-        """Просто читает данные из файла."""
         try:
             if os.path.exists(SETTINGS_FILE):
                 with open(SETTINGS_FILE, "r", encoding="utf-8") as f: return json.load(f)
@@ -125,7 +121,6 @@ class SettingsWindow(tk.Toplevel):
         return {}
 
     def _populate_settings(self):
-        """Заполняет поля UI на основе загруженных настроек."""
         settings = self.initial_settings
         try:
             self.selected_llm_model.set(settings.get("llm_model_file", ""))
@@ -158,17 +153,14 @@ class SettingsWindow(tk.Toplevel):
             with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
                 json.dump(new_settings, f, indent=4, ensure_ascii=False)
             
-            # Проверяем, изменились ли настройки, требующие перезапуска
             llm_changed = self.initial_settings.get("llm_model_file") != new_settings.get("llm_model_file")
             
-            # Перезагружаем только голосовой движок, если это возможно
             if self.engine:
                 self.engine.reload()
             
+            # ИЗМЕНЕНИЕ: Вызываем "горячую" перезагрузку вместо сообщения
             if llm_changed:
-                messagebox.showinfo("Перезапуск необходим", "Настройки LLM сохранены. Пожалуйста, перезапустите приложение, чтобы они вступили в силу.", parent=self)
-            else:
-                messagebox.showinfo("Успешно", "Настройки сохранены. Голосовой движок перезагружен.", parent=self)
+                self.app_ui.request_core_reload()
             
             self.destroy()
         except Exception as e:
