@@ -11,11 +11,50 @@ from PIL import Image, ImageTk
 from utils.clipboard_fortress import handle_keypress_event
 from settings_window import SettingsWindow
 
+# ИЗМЕНЕНИЕ: Новый класс для сворачиваемой панели
+class CollapsiblePane(ttk.Frame):
+    """Виджет, который можно сворачивать и разворачивать."""
+    def __init__(self, parent, text="", body=""):
+        super().__init__(parent, style="Card.TFrame", padding=5)
+        self.parent = parent
+        
+        # Рамка для заголовка (стрелка + текст)
+        self.header_frame = ttk.Frame(self, style="Card.TFrame")
+        self.header_frame.pack(fill="x", expand=True)
+
+        self.arrow_label = ttk.Label(self.header_frame, text="▶ ", style="Card.TLabel")
+        self.arrow_label.pack(side="left")
+        
+        title_label = ttk.Label(self.header_frame, text=text, style="Card.TLabel", font=("TkDefaultFont", 9, "bold"))
+        title_label.pack(side="left")
+
+        # Рамка для тела (содержимого)
+        self.body_frame = ttk.Frame(self, padding=(15, 5, 5, 5))
+        
+        body_label = ttk.Label(self.body_frame, text=body, wraplength=550, justify="left")
+        body_label.pack(fill="both", expand=True)
+
+        # Привязка событий для сворачивания/разворачивания
+        self.header_frame.bind("<Button-1>", self._toggle)
+        self.arrow_label.bind("<Button-1>", self._toggle)
+        title_label.bind("<Button-1>", self._toggle)
+        
+        self.expanded = False
+
+    def _toggle(self, event=None):
+        if self.expanded:
+            self.body_frame.pack_forget()
+            self.arrow_label.configure(text="▶ ")
+        else:
+            self.body_frame.pack(fill="x", expand=True, before=self.header_frame, anchor="w")
+            self.arrow_label.configure(text="▼ ")
+        self.expanded = not self.expanded
+
 class AppUI:
     def __init__(self, root_window, task_queue: Queue, ui_update_queue: Queue):
         self.root = root_window
         self.task_queue = task_queue
-        self.ui_update_queue = ui_update_queue # ИЗМЕНЕНИЕ: Сохраняем очередь UI
+        self.ui_update_queue = ui_update_queue
         self.is_processing = False
         self.voice_controller = None
         self.core_worker = None
@@ -23,17 +62,20 @@ class AppUI:
         self.last_input_was_voice = False
         self.default_bg_color = None
 
-        self.root.title("Universal Orchestrator (v5.1 - Architected)")
+        self.root.title("Universal Orchestrator (v6.1 - Final Fix)")
         self.root.geometry("1700x800")
         
         if sys.platform == "win32" and os.path.exists("logo.ico"):
             try: self.root.iconbitmap("logo.ico")
             except tk.TclError: print("[UI] [WARNING] Не удалось загрузить иконку 'logo.ico'.")
         
+        style = ttk.Style(self.root)
+        style.configure("Card.TFrame", background="#2E2E2E", borderwidth=1, relief="solid")
+        style.configure("Card.TLabel", background="#2E2E2E", foreground="white")
+
         self.create_widgets()
         self.default_bg_color = self.chat_input.cget("background")
         
-        # ИЗМЕНЕНИЕ: Запускаем цикл обработки UI-сообщений
         self.root.after(100, self._process_ui_updates)
         self.root.after(3000, self._feedback_poll_loop)
 
@@ -42,20 +84,15 @@ class AppUI:
         while not self.ui_update_queue.empty():
             try:
                 message_type, args = self.ui_update_queue.get_nowait()
-                
-                # Ищем метод с таким же именем и вызываем его
                 if hasattr(self, message_type):
                     method = getattr(self, message_type)
                     method(*args)
                 else:
                     self.log_to_widget(f"[UI] [ERROR] Получена неизвестная команда: {message_type}")
-                    
             except Empty:
-                break # Очередь пуста
+                break
             except Exception as e:
                 self.log_to_widget(f"[UI] [ERROR] Ошибка обработки UI-команды: {e}")
-        
-        # Перезапускаем цикл
         self.root.after(100, self._process_ui_updates)
 
     def _open_settings_window(self):
@@ -70,9 +107,33 @@ class AppUI:
         else:
             self.log_to_widget("[UI] Ошибка: CoreWorker не инициализирован.")
 
-    def _insert_chat_message(self, message, author_prefix):
+    def _insert_user_message(self, message, author_prefix):
         self.chat_area.config(state=tk.NORMAL)
         self.chat_area.insert(tk.END, f"{author_prefix}: {message}\n\n")
+        self.chat_area.see(tk.END)
+        self.chat_area.config(state=tk.DISABLED)
+
+    def _insert_assistant_message(self, answer, thoughts):
+        self.chat_area.config(state=tk.NORMAL)
+        
+        msg_frame = ttk.Frame(self.chat_area, padding=(0, 5, 0, 5))
+        
+        author_label = ttk.Label(msg_frame, text="Ассистент:", font=("TkDefaultFont", 9, "bold"))
+        author_label.pack(anchor=tk.W, pady=(0, 2))
+
+        # Убедимся, что ответ не пустой, прежде чем его показывать
+        if answer:
+            answer_label = ttk.Label(msg_frame, text=answer, wraplength=600, justify=tk.LEFT)
+            answer_label.pack(anchor=tk.W, fill=tk.X, expand=True, pady=(0, 5))
+
+        if thoughts:
+            # ИЗМЕНЕНИЕ: Убрано слово "(экспериментально)"
+            collapsible = CollapsiblePane(msg_frame, text="Мысли", body=thoughts)
+            collapsible.pack(fill=tk.X, expand=True, pady=(5, 5), padx=5)
+
+        self.chat_area.window_create(tk.END, window=msg_frame)
+        self.chat_area.insert(tk.END, '\n\n')
+        
         self.chat_area.see(tk.END)
         self.chat_area.config(state=tk.DISABLED)
 
@@ -83,12 +144,11 @@ class AppUI:
         
         self.chat_input.delete(0, tk.END)
         author = "Вы (🎤)" if self.last_input_was_voice else "Вы"
-        self._insert_chat_message(prompt, author_prefix=author)
+        self._insert_user_message(prompt, author_prefix=author)
         self.task_queue.put(prompt)
         self.last_input_was_voice = False
 
     def create_widgets(self):
-        # ... (код без изменений)
         self.main_pane = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
         self.main_pane.pack(fill=tk.BOTH, expand=True)
         
@@ -146,7 +206,6 @@ class AppUI:
         self.voice_controller = controller
 
     def set_listening_status(self, is_listening: bool):
-        # ... (код без изменений)
         if not self.root.winfo_exists(): return
         if is_listening:
             self.info_label.config(text="Слушаю вашу команду...")
@@ -164,14 +223,11 @@ class AppUI:
 
     def set_ui_busy(self, is_busy, status_text=None):
         self.is_processing = is_busy
-        
         if status_text: self.set_info_label(status_text)
         elif not is_busy: self.set_info_label("Готов к работе. Ожидание задач...")
-
         new_state = tk.DISABLED if is_busy else tk.NORMAL
         self.send_button.config(state=new_state)
         self.chat_input.config(state=new_state)
-        
         if is_busy: self.progress_bar.start(10)
         else: self.progress_bar.stop()
 
@@ -181,8 +237,13 @@ class AppUI:
     def set_info_label(self, text: str):
         self.info_label.config(text=text)
 
-    def update_chat_with_final_result(self, final_result_text: str):
-        self._insert_chat_message(final_result_text, author_prefix="Ассистент")
+    def update_chat_with_final_result(self, final_result):
+        if isinstance(final_result, dict) and 'answer' in final_result:
+            self._insert_assistant_message(final_result['answer'], final_result.get('thoughts'))
+        elif isinstance(final_result, str):
+            self._insert_assistant_message(final_result, None)
+        else:
+            self._insert_assistant_message("Получен неструктурированный ответ.", str(final_result))
 
     def log_to_widget(self, message):
         self._insert_log_message(message)
@@ -194,7 +255,6 @@ class AppUI:
         self.log_area.config(state=tk.DISABLED)
 
     def _feedback_poll_loop(self):
-        # ... (код без изменений)
         try:
             response = requests.get("http://127.0.0.1:7787/get_question", timeout=0.5)
             if response.status_code == 200 and (question := response.json().get("question")):
@@ -205,7 +265,6 @@ class AppUI:
             if self.root.winfo_exists(): self.root.after(3000, self._feedback_poll_loop)
 
     def _ask_user_for_feedback(self, question: str):
-        # ... (код без изменений)
         answer = simpledialog.askstring("Вопрос от Агента", question, parent=self.root)
         if answer is None: answer = "Пользователь отменил ввод."
         try:
@@ -216,7 +275,6 @@ class AppUI:
     def _pass_to_fortress(self, event): return handle_keypress_event(event, self.log_to_widget, self.chat_input)
         
     def _update_browser_view(self, b64_string: str):
-        # ... (код без изменений)
         if not b64_string: return
         try:
             image_bytes = base64.b64decode(b64_string)

@@ -1,32 +1,30 @@
 import logging
-from typing import TypedDict
+from typing import TypedDict, Dict, Any
 import asyncio
+import time
 from langchain_community.chat_models import ChatLlamaCpp
 from mcp_use import MCPClient, MCPAgent
 from langgraph.graph import StateGraph, END
 
 from prompts.dispatcher_prompts import dispatcher_prompt_template
+# ИЗМЕНЕНИЕ: Импортируем новую утилиту
+from utils.text_utils import extract_thoughts
 
 logger = logging.getLogger(__name__)
 
-# --- 1. Определение состояния графа ---
 class DispatcherState(TypedDict):
     task: str
     route: str
-    result: str
+    # ИЗМЕНЕНИЕ: result теперь может быть словарем
+    result: Dict[str, Any] | str
 
-# --- 2. Определение узлов графа ---
 def router_node(state: DispatcherState, llm: ChatLlamaCpp):
     """
-    Определяет, какой граф должен обработать задачу, используя безопасный вызов через MCPAgent.
+    Определяет, какой граф должен обработать задачу. Возвращает ТОЛЬКО ключевое слово.
     """
-    logger.info("--- ВХОД В УЗЕЛ: МАРШРУТИЗАТОР ---")
+    logger.info("--- ВХОД В УЗЕЛ: МАРШРУТИЗАТОР (БЕЗОПАСНЫЙ РЕЖИМ) ---")
     
-    # Создаем новый, ПУСТОЙ клиент. Он не знает о серверах из mcp_config.json.
     lightweight_client = MCPClient()
-    
-    # Создаем агента с этим пустым клиентом. Агент не будет пытаться инициализировать инструменты.
-    # Он получит уже исправленный экземпляр llm.
     dispatcher_agent = MCPAgent(
         llm=llm,
         client=lightweight_client,
@@ -35,35 +33,46 @@ def router_node(state: DispatcherState, llm: ChatLlamaCpp):
         max_steps=1
     )
     
-    # Корректно запускаем асинхронный метод agent.run()
-    route = asyncio.run(dispatcher_agent.run(state["task"])).strip().lower()
+    start_time = time.perf_counter()
+    raw_route_output = asyncio.run(dispatcher_agent.run(state["task"])).strip().lower()
+    end_time = time.perf_counter()
+    logger.info(f"[TIMER] Routing decision took: {end_time - start_time:.2f}s")
     
-    logger.info(f"Принято решение о маршрутизации задачи в граф: '{route}'")
-    return {"route": route}
+    route_keywords = ["coding", "research", "browser", "general_conversation"]
+    final_route = "general_conversation"
 
-def general_node(state: DispatcherState, llm: ChatLlamaCpp):
-    """
-    Обрабатывает общие вопросы, не требующие инструментов.
-    """
-    logger.info("--- ВХОД В УЗЕЛ: ОБЩЕНИЕ ---")
-    
-    # Применяем тот же безопасный подход и здесь
-    lightweight_client = MCPClient()
-    general_agent = MCPAgent(
-        llm=llm,
-        client=lightweight_client,
-        system_prompt="Ты — полезный AI-ассистент. Ответь на вопрос пользователя кратко и по делу.",
-        use_server_manager=False,
-        max_steps=1
-    )
-    
-    response = asyncio.run(general_agent.run(state["task"]))
-    logger.info("Ответ на общий вопрос сгенерирован.")
-    return {"result": response}
+    if raw_route_output in route_keywords:
+        final_route = raw_route_output
+    else:
+        logger.warning(f"Ответ маршрутизатора не прошел строгую проверку. Используется маршрут по умолчанию. (Сырой ответ: '{raw_route_output}')")
 
-# --- 3. Определение условных ребер ---
+    logger.info(f"Принято решение о маршрутизации задачи в граф: '{final_route}'")
+    return {"route": final_route}
+
+def llm_node(state: DispatcherState, llm: ChatLlamaCpp):
+    """
+    Вызывает LLM и разделяет ее ответ на "чистый ответ" и "мысли".
+    """
+    logger.info("--- ВХОД В УЗЕЛ: ОБЩЕНИЕ (ПРЯМОЙ ВЫЗОВ) ---")
+    
+    prompt = f"Ты — полезный AI-ассистент. Ответь на вопрос пользователя кратко и по делу.\n\nВопрос: {state['task']}"
+    
+    start_time = time.perf_counter()
+    response = llm.invoke(prompt)
+    end_time = time.perf_counter()
+    logger.info(f"[TIMER] Final response generation took: {end_time - start_time:.2f}s")
+
+    # ИЗМЕНЕНИЕ: Используем экстрактор для разделения ответа
+    structured_result = extract_thoughts(response.content)
+    
+    logger.info("Ответ на общий вопрос сгенерирован и разделен на ответ/мысли.")
+    # Возвращаем структурированный словарь
+    return {"result": structured_result}
+
 def route_logic(state: DispatcherState):
-    """Возвращает имя следующего узла на основе решения маршрутизатора."""
+    """
+    Возвращает имя следующего узла на основе решения маршрутизатора.
+    """
     logger.info(f"--- ВЫБОР МАРШРУТА: {state['route']} ---")
     route = state['route']
     if "coding" in route:
@@ -75,13 +84,14 @@ def route_logic(state: DispatcherState):
     else:
         return "general_conversation"
 
-# --- 4. Сборка графа ---
 def create_dispatcher_graph(llm: ChatLlamaCpp, coding_graph, research_graph, browser_graph):
-    """Создает и компилирует главный граф-диспетчер."""
+    """
+    Создает и компилирует главный граф-диспетчер с безопасной архитектурой.
+    """
     workflow = StateGraph(DispatcherState)
 
     workflow.add_node("router", lambda state: router_node(state, llm))
-    workflow.add_node("general_conversation", lambda state: general_node(state, llm))
+    workflow.add_node("general_conversation", lambda state: llm_node(state, llm))
     
     workflow.add_node("coding_graph", coding_graph)
     workflow.add_node("research_graph", research_graph)
@@ -105,5 +115,5 @@ def create_dispatcher_graph(llm: ChatLlamaCpp, coding_graph, research_graph, bro
     workflow.add_edge("general_conversation", END)
 
     app = workflow.compile()
-    logger.info("Главный граф-диспетчер (архитектура 'исправленный LLM') успешно скомпилирован.")
+    logger.info("Главный граф-диспетчер (архитектура 'Безопасный маршрутизатор') успешно скомпилирован.")
     return app

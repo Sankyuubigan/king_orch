@@ -8,20 +8,19 @@ import asyncio
 
 # --- 1. Настройка окружения и логирования ---
 os.environ['MCP_USE_ANONYMIZED_TELEMETRY'] = 'false'
-from utils.logging_utils import setup_logging
-setup_logging()
+# ИЗМЕНЕНИЕ: Отключаем кастомный логгер, чтобы избежать дублирования с mcp_use.
+# from utils.logging_utils import setup_logging
+# setup_logging()
 
 # --- 2. Импорт основных компонентов ---
 from mcp_use import MCPClient
 from ui import AppUI
 from voice_engine.controller import VoiceController
 from core_worker import CoreWorker
-# ИЗМЕНЕНИЕ: Импортируем адаптер
 from ui_adapter import UiAdapter
 
 # --- 3. Глобальные переменные ---
 task_queue = Queue()
-# ИЗМЕНЕНИЕ: Новая очередь для команд UI
 ui_update_queue = Queue() 
 app_ui = None
 mcp_client = None

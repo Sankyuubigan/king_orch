@@ -1,7 +1,8 @@
 import logging
 from typing import TypedDict
-# ИЗМЕНЕНИЕ: Добавляем необходимый импорт
 import asyncio
+# ИЗМЕНЕНИЕ: Импортируем time для замеров
+import time
 from langchain_community.chat_models import ChatLlamaCpp
 from mcp_use import MCPClient, MCPAgent
 from langgraph.graph import StateGraph, END
@@ -10,12 +11,10 @@ from prompts.research_prompts import RESEARCH_SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
-# --- 1. Определение состояния графа ---
 class GraphState(TypedDict):
     task: str
     result: str
 
-# --- 2. Определение узла графа ---
 def run_agent_node(state: GraphState, llm: ChatLlamaCpp, mcp_client: MCPClient):
     """
     Единственный узел, который создает и запускает специализированного агента.
@@ -30,13 +29,14 @@ def run_agent_node(state: GraphState, llm: ChatLlamaCpp, mcp_client: MCPClient):
         max_steps=20
     )
     
-    # ИСПРАВЛЕНИЕ: Оборачиваем асинхронный вызов в asyncio.run()
+    # ИЗМЕНЕНИЕ: Добавляем таймер
+    start_time = time.perf_counter()
     final_result = asyncio.run(agent.run(state["task"]))
-    logger.info(f"--- RESEARCH_GRAPH: Агент завершил работу с результатом: {final_result} ---")
+    end_time = time.perf_counter()
+    logger.info(f"[TIMER] Research agent execution took: {end_time - start_time:.2f}s")
     
     return {"result": final_result}
 
-# --- 3. Сборка графа ---
 def create_research_graph(llm: ChatLlamaCpp, mcp_client: MCPClient):
     workflow = StateGraph(GraphState)
     

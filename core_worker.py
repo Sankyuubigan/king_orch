@@ -5,6 +5,8 @@ import json
 import gc
 from queue import Queue, Empty
 from typing import List
+# ИЗМЕНЕНИЕ: Импортируем time для замеров
+import time
 
 from langchain_community.chat_models import ChatLlamaCpp
 from graphs.coding_graph import create_coding_graph
@@ -25,7 +27,7 @@ class CoreWorker:
     def __init__(self, task_queue: Queue, mcp_client: MCPClient, listener: UiAdapter):
         self.task_queue = task_queue
         self.mcp_client = mcp_client
-        self.listener = listener # ИЗМЕНЕНИЕ: Храним ссылку на адаптер, а не на UI
+        self.listener = listener
         self.reload_event = threading.Event()
         self.stop_event = threading.Event()
 
@@ -46,7 +48,12 @@ class CoreWorker:
                 if task is None:
                     break
                 
+                # ИЗМЕНЕНИЕ: Добавляем замер общего времени выполнения задачи
+                task_start_time = time.perf_counter()
                 self._process_task(task)
+                task_end_time = time.perf_counter()
+                logger.info(f"[TIMER] Total task execution took: {task_end_time - task_start_time:.2f}s")
+
                 self.task_queue.task_done()
 
             except Empty:
