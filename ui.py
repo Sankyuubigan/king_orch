@@ -10,15 +10,13 @@ from PIL import Image, ImageTk
 
 from utils.clipboard_fortress import handle_keypress_event
 from settings_window import SettingsWindow
+from utils.text_utils import extract_thoughts
 
-# ИЗМЕНЕНИЕ: Новый класс для сворачиваемой панели
 class CollapsiblePane(ttk.Frame):
-    """Виджет, который можно сворачивать и разворачивать."""
     def __init__(self, parent, text="", body=""):
         super().__init__(parent, style="Card.TFrame", padding=5)
         self.parent = parent
         
-        # Рамка для заголовка (стрелка + текст)
         self.header_frame = ttk.Frame(self, style="Card.TFrame")
         self.header_frame.pack(fill="x", expand=True)
 
@@ -28,27 +26,22 @@ class CollapsiblePane(ttk.Frame):
         title_label = ttk.Label(self.header_frame, text=text, style="Card.TLabel", font=("TkDefaultFont", 9, "bold"))
         title_label.pack(side="left")
 
-        # Рамка для тела (содержимого)
         self.body_frame = ttk.Frame(self, padding=(15, 5, 5, 5))
         
         body_label = ttk.Label(self.body_frame, text=body, wraplength=550, justify="left")
         body_label.pack(fill="both", expand=True)
 
-        # Привязка событий для сворачивания/разворачивания
         self.header_frame.bind("<Button-1>", self._toggle)
         self.arrow_label.bind("<Button-1>", self._toggle)
         title_label.bind("<Button-1>", self._toggle)
-        
-        self.expanded = False
 
     def _toggle(self, event=None):
-        if self.expanded:
+        if self.body_frame.winfo_ismapped():
+            self.arrow_label.config(text="▶ ")
             self.body_frame.pack_forget()
-            self.arrow_label.configure(text="▶ ")
         else:
-            self.body_frame.pack(fill="x", expand=True, before=self.header_frame, anchor="w")
-            self.arrow_label.configure(text="▼ ")
-        self.expanded = not self.expanded
+            self.arrow_label.config(text="▼ ")
+            self.body_frame.pack(fill="x", expand=True)
 
 class AppUI:
     def __init__(self, root_window, task_queue: Queue, ui_update_queue: Queue):
@@ -80,7 +73,6 @@ class AppUI:
         self.root.after(3000, self._feedback_poll_loop)
 
     def _process_ui_updates(self):
-        """Обрабатывает все сообщения в очереди UI."""
         while not self.ui_update_queue.empty():
             try:
                 message_type, args = self.ui_update_queue.get_nowait()
@@ -121,13 +113,11 @@ class AppUI:
         author_label = ttk.Label(msg_frame, text="Ассистент:", font=("TkDefaultFont", 9, "bold"))
         author_label.pack(anchor=tk.W, pady=(0, 2))
 
-        # Убедимся, что ответ не пустой, прежде чем его показывать
         if answer:
             answer_label = ttk.Label(msg_frame, text=answer, wraplength=600, justify=tk.LEFT)
             answer_label.pack(anchor=tk.W, fill=tk.X, expand=True, pady=(0, 5))
 
         if thoughts:
-            # ИЗМЕНЕНИЕ: Убрано слово "(экспериментально)"
             collapsible = CollapsiblePane(msg_frame, text="Мысли", body=thoughts)
             collapsible.pack(fill=tk.X, expand=True, pady=(5, 5), padx=5)
 
@@ -238,10 +228,11 @@ class AppUI:
         self.info_label.config(text=text)
 
     def update_chat_with_final_result(self, final_result):
-        if isinstance(final_result, dict) and 'answer' in final_result:
+        if isinstance(final_result, str):
+            structured_result = extract_thoughts(final_result)
+            self._insert_assistant_message(structured_result['answer'], structured_result['thoughts'])
+        elif isinstance(final_result, dict) and 'answer' in final_result:
             self._insert_assistant_message(final_result['answer'], final_result.get('thoughts'))
-        elif isinstance(final_result, str):
-            self._insert_assistant_message(final_result, None)
         else:
             self._insert_assistant_message("Получен неструктурированный ответ.", str(final_result))
 

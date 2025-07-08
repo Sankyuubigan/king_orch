@@ -5,7 +5,6 @@ import json
 import gc
 from queue import Queue, Empty
 from typing import List
-# ИЗМЕНЕНИЕ: Импортируем time для замеров
 import time
 
 from langchain_community.chat_models import ChatLlamaCpp
@@ -21,9 +20,6 @@ SETTINGS_FILE = "settings.json"
 logger = logging.getLogger(__name__)
 
 class CoreWorker:
-    """
-    Управляет жизненным циклом LLM. Полностью отделен от UI.
-    """
     def __init__(self, task_queue: Queue, mcp_client: MCPClient, listener: UiAdapter):
         self.task_queue = task_queue
         self.mcp_client = mcp_client
@@ -35,7 +31,6 @@ class CoreWorker:
         self.dispatcher = None
 
     def run(self):
-        """Основной цикл работы воркера."""
         self._initialize_components()
 
         while not self.stop_event.is_set():
@@ -48,7 +43,6 @@ class CoreWorker:
                 if task is None:
                     break
                 
-                # ИЗМЕНЕНИЕ: Добавляем замер общего времени выполнения задачи
                 task_start_time = time.perf_counter()
                 self._process_task(task)
                 task_end_time = time.perf_counter()
@@ -60,7 +54,6 @@ class CoreWorker:
                 continue
 
     def _process_task(self, task):
-        """Обработка одной задачи из очереди."""
         if not self.dispatcher:
             logger.error("[CoreWorker] Диспетчер не инициализирован, задача не может быть обработана.")
             self.listener.on_final_result("Ошибка: Основные компоненты не загружены.")
@@ -73,6 +66,9 @@ class CoreWorker:
             final_state = self.dispatcher.invoke({"task": task})
             final_result = final_state.get("result", "Задача выполнена, но финальный результат отсутствует.")
             
+            # Добавляем логирование для отладки
+            logger.info(f"[CoreWorker] Тип final_result: {type(final_result)}, содержимое: {final_result}")
+            
             self.listener.on_log_message(f"[Dispatcher] Финальный результат: {final_result}")
             self.listener.on_final_result(final_result)
         except Exception as e:
@@ -82,7 +78,6 @@ class CoreWorker:
             self.listener.on_busy_changed(False)
 
     def _initialize_components(self):
-        """Загружает LLM и пересобирает графы."""
         self.listener.on_busy_changed(True, "Загрузка LLM и графов...")
         try:
             settings = self._load_settings()
@@ -120,7 +115,6 @@ class CoreWorker:
             self.listener.on_critical_error(f"ОШИБКА: {e}")
 
     def _shutdown_components(self):
-        """Выгружает компоненты и очищает память."""
         self.listener.on_log_message("[CoreWorker] Выгрузка LLM и графов...")
         del self.llm
         del self.dispatcher
@@ -130,19 +124,16 @@ class CoreWorker:
         self.listener.on_log_message("[CoreWorker] Компоненты выгружены, память освобождена.")
 
     def _perform_reload(self):
-        """Полный цикл перезагрузки."""
         self.listener.on_busy_changed(True, "Перезагрузка LLM...")
         self._shutdown_components()
         self._initialize_components()
         self.reload_event.clear()
 
     def trigger_reload(self):
-        """Сигнал для начала перезагрузки из внешнего потока."""
         logger.info("[CoreWorker] Получен сигнал на 'горячую' перезагрузку.")
         self.reload_event.set()
 
     def trigger_stop(self):
-        """Сигнал для полной остановки воркера."""
         self.stop_event.set()
         self.task_queue.put(None)
 
