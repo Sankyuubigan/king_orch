@@ -1,0 +1,21 @@
+[package]
+name = "king_orch"
+version = "26.5.27"
+description = "Local LLM Multi-Agent Studio"
+authors = ["You"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2.0.0", features = [] }
+
+[dependencies]
+tauri = { version = "2.0.0", features = [] }
+tauri-plugin-dialog = "2.0.0"
+tauri-plugin-shell = "2.0.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.37", features = ["full"] }
+llama-cpp-2 = { version = "0.1.146", features = ["cuda"] }
+regex = "1.10"
+lazy_static = "1.4"
+reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }

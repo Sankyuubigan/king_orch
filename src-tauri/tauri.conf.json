@@ -1,0 +1,31 @@
+{
+  "productName": "King Orch",
+  "version": "26.5.27",
+  "identifier": "com.kingorch.app",
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows":[
+      {
+        "title": "King Orch - Multi-Agent Studio",
+        "width": 1100,
+        "height": 850,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "externalBin":[
+      "bin/yt-dlp",
+      "bin/node"
+    ]
+  }
+}
