@@ -1,6 +1,6 @@
 [package]
 name = "king_orch"
-version = "26.5.31"
+version = "26.5.32"
 description = "Local LLM Multi-Agent Studio"
 authors = ["You"]
 edition = "2021"
@@ -19,3 +19,4 @@ llama-cpp-2 = { version = "0.1.146", features = ["cuda"] }
 regex = "1.10"
 lazy_static = "1.4"
 reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+minijinja = "1.0"

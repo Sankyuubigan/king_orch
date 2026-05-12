@@ -102,6 +102,102 @@ impl PromptFormat {
     }
 }
 
+// --- НОВЫЙ БЛОК: Чтение GGUF и рендеринг Jinja ---
+fn skip_gguf_value(data: &[u8], mut offset: usize, val_type: u32) -> Option<usize> {
+    match val_type {
+        0 | 1 | 7 => Some(offset + 1), // UINT8, INT8, BOOL
+        2 | 3 => Some(offset + 2), // UINT16, INT16
+        4 | 5 | 6 => Some(offset + 4), // UINT32, INT32, FLOAT32
+        10 | 11 | 12 => Some(offset + 8), // UINT64, INT64, FLOAT64
+        8 => { // STRING
+            if offset + 8 > data.len() { return None; }
+            let len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
+            Some(offset + 8 + len)
+        },
+        9 => { // ARRAY
+            if offset + 4 > data.len() { return None; }
+            let arr_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
+            offset += 4;
+            if offset + 8 > data.len() { return None; }
+            let arr_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
+            offset += 8;
+            for _ in 0..arr_len {
+                offset = skip_gguf_value(data, offset, arr_type)?;
+            }
+            Some(offset)
+        },
+        _ => None
+    }
+}
+
+fn extract_string_from_gguf(path: &str, target_key: &str) -> Option<String> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buffer = vec![0; 5 * 1024 * 1024]; // Читаем первые 5 МБ
+    let bytes_read = file.read(&mut buffer).ok()?;
+    let data = &buffer[..bytes_read];
+
+    if data.len() < 24 || &data[0..4] != b"GGUF" { return None; }
+    
+    let kv_count = u64::from_le_bytes(data[16..24].try_into().unwrap());
+    let mut offset = 24;
+    
+    for _ in 0..kv_count {
+        if offset + 8 > data.len() { break; }
+        let key_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
+        offset += 8;
+        
+        if offset + key_len > data.len() { break; }
+        let key = String::from_utf8_lossy(&data[offset..offset+key_len]);
+        offset += key_len;
+        
+        if offset + 4 > data.len() { break; }
+        let val_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
+        offset += 4;
+        
+        if key == target_key && val_type == 8 {
+            if offset + 8 > data.len() { break; }
+            let val_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
+            offset += 8;
+            
+            if offset + val_len > data.len() { break; }
+            return String::from_utf8(data[offset..offset+val_len].to_vec()).ok();
+        } else {
+            offset = skip_gguf_value(data, offset, val_type)?;
+        }
+    }
+    None
+}
+
+fn render_jinja_template(template_str: &str, messages: &[ChatMessage]) -> Result<String, String> {
+    use minijinja::{Environment, context};
+    let mut env = Environment::new();
+    
+    env.add_function("raise_exception", |msg: String| -> Result<String, minijinja::Error> {
+        Err(minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, msg))
+    });
+    
+    let safe_template = template_str
+        .replace(".strip()", "|trim")
+        .replace(".upper()", "|upper")
+        .replace(".lower()", "|lower");
+        
+    env.add_template("chat", &safe_template).map_err(|e| e.to_string())?;
+    let tmpl = env.get_template("chat").map_err(|e| e.to_string())?;
+    
+    let messages_val: Vec<serde_json::Value> = messages.iter().map(|m| {
+        serde_json::json!({ "role": m.role, "content": m.content })
+    }).collect();
+
+    tmpl.render(context! {
+        messages => messages_val,
+        add_generation_prompt => true,
+        bos_token => "<s>",
+        eos_token => "</s>",
+    }).map_err(|e| e.to_string())
+}
+// --------------------------------------------------------
+
 pub struct LlamaEngine {
     backend: LlamaBackend,
     model: LlamaModel,
@@ -200,7 +296,7 @@ impl LlamaEngine {
         let mut stop_words = vec![
             "<|im_end|>", "<end_of_turn>", "</s>", "<|eot_id|>", 
             "<turn>", "<|eot|>", "User:", "System:", "<eos>", "<|endoftext|>",
-            "<turn|>", "/end_of_turn>", "<step>"
+            "<turn|>", "/end_of_turn>", "<step>", "<|end_of_text|>", "<｜end of sentence｜>"
         ];
         stop_words.extend_from_slice(custom_stop_words);
 
@@ -255,11 +351,11 @@ impl LlamaEngine {
         progress_cb: F,
     ) -> Result<String, String>
     where F: FnMut(f32, &str) {
-        let full_prompt = format!(
-            "<|im_start|>system\n{}<|im_end|>\n<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-            system_prompt, user_prompt
-        );
-        self.run_generation(&full_prompt, max_tokens, &["<|im_end|>"], cancel_flag, progress_cb)
+        let messages = vec![
+            ChatMessage { role: "system".to_string(), content: system_prompt.to_string(), sub_calls: None },
+            ChatMessage { role: "user".to_string(), content: user_prompt.to_string(), sub_calls: None },
+        ];
+        self.generate_chat(&messages, max_tokens, "Auto", cancel_flag, progress_cb)
     }
 
     pub fn generate_chat<F>(
@@ -273,13 +369,29 @@ impl LlamaEngine {
     where F: FnMut(f32, &str) {
         let mut pf = PromptFormat::from_str(format_type);
         
+        let mut full_prompt = String::new();
+        let mut stop_words: Vec<String> = Vec::new();
+
+        // Попытка достать Jinja шаблон из GGUF
         if pf == PromptFormat::Auto {
-            pf = PromptFormat::detect_from_path(&self.model_path);
+            if let Some(template_str) = extract_string_from_gguf(&self.model_path, "tokenizer.chat_template") {
+                if let Ok(rendered) = render_jinja_template(&template_str, messages) {
+                    full_prompt = rendered;
+                }
+            }
+        }
+
+        // Если шаблон не найден или сломан, используем старый fallback
+        if full_prompt.is_empty() {
+            if pf == PromptFormat::Auto {
+                pf = PromptFormat::detect_from_path(&self.model_path);
+            }
+            full_prompt = pf.format_messages(messages);
+            let words = pf.get_stop_words();
+            stop_words = words.into_iter().map(|s| s.to_string()).collect();
         }
         
-        let full_prompt = pf.format_messages(messages);
-        let stop_words = pf.get_stop_words();
-        
-        self.run_generation(&full_prompt, max_tokens, &stop_words, cancel_flag, progress_cb)
+        let stop_words_refs: Vec<&str> = stop_words.iter().map(|s| s.as_str()).collect();
+        self.run_generation(&full_prompt, max_tokens, &stop_words_refs, cancel_flag, progress_cb)
     }
 }
