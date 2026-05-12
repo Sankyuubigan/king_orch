@@ -152,7 +152,7 @@ fn load_session(app: tauri::AppHandle, id: String) -> Result<session_manager::Ch
 }
 
 #[tauri::command]
-fn save_session(app: tauri::AppHandle, id: String, messages: Vec<ChatMessage>) -> Result<(), String> {
+fn save_session(app: tauri::AppHandle, id: String, messages: Vec<ChatMessage>, state_markdown: String) -> Result<(), String> {
     let title = messages.iter().find(|m| m.role == "user").map(|m| {
         let text = m.content.replace('\n', " ");
         if text.chars().count() > 35 {
@@ -162,7 +162,7 @@ fn save_session(app: tauri::AppHandle, id: String, messages: Vec<ChatMessage>) -
         }
     }).unwrap_or_else(|| "Новая сессия".to_string());
     
-    session_manager::save_session(&app, &id, &title, messages)
+    session_manager::save_session(&app, &id, &title, messages, state_markdown)
 }
 
 #[tauri::command]
@@ -228,6 +228,7 @@ async fn start_processing(
 struct ChatResponse {
     text: String,
     sub_calls: Vec<SubCall>,
+    new_state: String,
 }
 
 #[tauri::command]
@@ -240,6 +241,7 @@ async fn chat_request(
     history: Vec<ChatMessage>,
     context_size: u32,
     kv_quantization: bool,
+    current_state: String,
 ) -> Result<ChatResponse, String> {
     let mut config = load_config(&app);
     config.context_size = context_size;
@@ -264,13 +266,14 @@ async fn chat_request(
             config.temperature,
             format_type,
             conf_threshold,
-            cancel_flag
+            cancel_flag,
+            current_state
         )
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    Ok(ChatResponse { text: result.0, sub_calls: result.1 })
+    Ok(ChatResponse { text: result.0, sub_calls: result.1, new_state: result.2 })
 }
 
 #[tauri::command]

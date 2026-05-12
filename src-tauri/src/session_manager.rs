@@ -17,10 +17,11 @@ pub struct ChatSession {
     pub id: String,
     pub title: String,
     pub updated_at: u64,
+    #[serde(default)]
+    pub state_markdown: String, // Внешняя память сессии (State)
     pub messages: Vec<ChatMessage>,
 }
 
-// Сессии храним в системной папке данных приложения (AppData), чтобы избежать проблем с правами доступа в Program Files.
 fn get_sessions_dir(app: &AppHandle) -> PathBuf {
     let base = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
     let path = base.join("sessions");
@@ -51,7 +52,6 @@ pub fn get_sessions(app: &AppHandle) -> Vec<SessionMeta> {
         }
     }
     
-    // Сортировка по убыванию времени (новые сверху)
     sessions.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
     sessions
 }
@@ -62,12 +62,13 @@ pub fn get_session(app: &AppHandle, id: &str) -> Result<ChatSession, String> {
     serde_json::from_str(&content).map_err(|e| format!("Ошибка парсинга сессии: {}", e))
 }
 
-pub fn save_session(app: &AppHandle, id: &str, title: &str, messages: Vec<ChatMessage>) -> Result<(), String> {
+pub fn save_session(app: &AppHandle, id: &str, title: &str, messages: Vec<ChatMessage>, state_markdown: String) -> Result<(), String> {
     let updated_at = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     let session = ChatSession {
         id: id.to_string(),
         title: title.to_string(),
         updated_at,
+        state_markdown,
         messages,
     };
     

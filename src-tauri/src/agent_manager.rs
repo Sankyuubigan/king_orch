@@ -14,6 +14,8 @@ pub struct AgentProfile {
     pub is_hidden: bool,
     pub mode: String, // "primary" или "subagent"
     #[serde(default)]
+    pub can_update_state: bool, // Право перезаписывать глобальное состояние сессии
+    #[serde(default)]
     pub mcp_servers: Vec<String>,
     #[serde(default)]
     pub subagents: Vec<String>, // Список разрешенных сабагентов
@@ -66,10 +68,8 @@ pub fn load_agents(app: &AppHandle) -> Vec<AgentProfile> {
     }
 
     let mut md_files = Vec::new();
-    // Сканируем папку agents
     collect_md_files(&agents_dir, &mut md_files);
 
-    // Дополнительно сканируем папку categories (из внешнего репозитория)
     let categories_dir = exe_dir.join("categories");
     if categories_dir.exists() {
         collect_md_files(&categories_dir, &mut md_files);
@@ -117,6 +117,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             let mut name = String::new();
             let mut description = String::new();
             let mut mode = String::from("subagent");
+            let mut can_update_state = false;
             let mut mcp_servers = Vec::new();
             let mut subagents = Vec::new();
             
@@ -128,6 +129,8 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                     description = line["description:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string();
                 } else if line.starts_with("mode:") {
                     mode = line["mode:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string();
+                } else if line.starts_with("can_update_state:") {
+                    can_update_state = line["can_update_state:".len()..].trim().parse().unwrap_or(false);
                 } else if line.starts_with("mcp_servers:") {
                     let list_str = line["mcp_servers:".len()..].trim();
                     if let Ok(parsed) = serde_json::from_str::<Vec<String>>(list_str) {
@@ -139,7 +142,6 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                         subagents = parsed;
                     }
                 } else if line.starts_with("tools:") {
-                    // Умный маппинг инструментов из скачанных файлов в наши MCP серверы
                     let tools_str = line["tools:".len()..].trim();
                     let tools_list: Vec<&str> = tools_str.split(',').map(|s| s.trim()).collect();
                     for t in tools_list {
@@ -149,7 +151,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                             "read" | "write" | "grep" | "glob" | "ls" | "edit" => {
                                 if !mcp_servers.contains(&"filesystem".to_string()) { mcp_servers.push("filesystem".to_string()); }
                             },
-                            _ => {} // Игнорируем Bash и другие опасные/неподдерживаемые инструменты
+                            _ => {} 
                         }
                     }
                 }
@@ -161,8 +163,9 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                     name,
                     description,
                     system_prompt,
-                    is_hidden: false, // Переопределится в parse_agent_file
+                    is_hidden: false,
                     mode,
+                    can_update_state,
                     mcp_servers,
                     subagents,
                 });
@@ -174,13 +177,13 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
 
 pub fn build_l0_manifest(agents: &[AgentProfile]) -> String {
     if agents.is_empty() {
-        return String::from("У тебя нет доступных сабагентов. Всегда отвечай пользователю напрямую (target: \"user\").");
+        return String::from("У тебя нет доступных сабагентов. Всегда отвечай пользователю напрямую.");
     }
     
     let mut manifest = String::from("ДОСТУПНЫЕ САБАГЕНТЫ (Твоя команда):\n");
     for agent in agents {
         manifest.push_str(&format!("- ID: \"{}\" | Имя: {} | Роль: {}\n", agent.id, agent.name, agent.description));
     }
-    manifest.push_str("\nЕсли задача требует специфических навыков, вызови нужного сабагента по его ID. Иначе отвечай пользователю (target: \"user\").");
+    manifest.push_str("\nЕсли задача требует специфических навыков, вызови нужного сабагента по его ID.");
     manifest
 }

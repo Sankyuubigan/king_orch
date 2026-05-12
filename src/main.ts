@@ -58,6 +58,7 @@ const sessionList = document.getElementById("session-list") as HTMLDivElement;
 let isProcessing = false;
 let globalChatHistory: {role: string, content: string, sub_calls?: any[]}[] =[];
 let currentSessionId: string | null = null;
+let globalStateMarkdown: string = ""; // Глобальное состояние сессии
 
 export function logToGUI(msg: string) {
   if (logView) {
@@ -88,7 +89,7 @@ function showSubchat(subCall: any) {
   subchatTitle.innerText = `Сабагент: ${subCall.agent_name}`;
   subchatHistory.innerHTML = '';
   
-  appendMessageToContainer(subchatHistory, 'user', subCall.prompt, 'Лид-Агент');
+  appendMessageToContainer(subchatHistory, 'user', subCall.prompt, 'Вызов');
   
   if (subCall.tool_calls && subCall.tool_calls.length > 0) {
     subCall.tool_calls.forEach((tc: any) => {
@@ -165,7 +166,7 @@ async function loadAgents() {
       }
     }
     
-    const orchOption = Array.from(agentSelect.options).find(opt => opt.value === 'agent_orchestrator');
+    const orchOption = Array.from(agentSelect.options).find(opt => opt.value === 'agent_therapist_communicator');
     if (orchOption) {
       agentSelect.value = orchOption.value;
     }
@@ -193,6 +194,8 @@ async function openSessionUI(id: string) {
     const session = await loadSession(id);
     currentSessionId = id;
     globalChatHistory = session.messages;
+    globalStateMarkdown = session.state_markdown || ""; // Загружаем состояние
+    
     chatHistory.innerHTML = '';
     appendMessage('system', 'Сессия загружена.');
     for (const msg of globalChatHistory) {
@@ -217,6 +220,7 @@ function startNewSession() {
   if (isProcessing) return;
   currentSessionId = null;
   globalChatHistory =[];
+  globalStateMarkdown = ""; // Сбрасываем состояние
   chatHistory.innerHTML = '';
   appendMessage('system', 'Новая сессия начата. Выберите агента и напишите запрос.');
   loadSessionsListUI();
@@ -270,7 +274,7 @@ async function handleSend() {
 
   if (!currentSessionId) currentSessionId = Date.now().toString();
   globalChatHistory.push({ role: "user", content: text });
-  await saveSession(currentSessionId, globalChatHistory);
+  await saveSession(currentSessionId, globalChatHistory, globalStateMarkdown);
   loadSessionsListUI();
 
   const startTime = performance.now();
@@ -288,13 +292,26 @@ async function handleSend() {
       globalChatHistory.push({ role: "assistant", content: result as string });
     } else {
       let displayName = agentSelect.options[agentSelect.selectedIndex].text.replace('📁 ', '');
-      const response: any = await invoke("chat_request", { modelPath, agentId: activeAgent, message: text, history: globalChatHistory.slice(0, -1), contextSize: parseInt(contextSlider.value, 10), kvQuantization: chkKvQuant.checked });
+      
+      // Передаем текущее состояние в бэкенд
+      const response: any = await invoke("chat_request", { 
+        modelPath, 
+        agentId: activeAgent, 
+        message: text, 
+        history: globalChatHistory.slice(0, -1), 
+        contextSize: parseInt(contextSlider.value, 10), 
+        kvQuantization: chkKvQuant.checked,
+        currentState: globalStateMarkdown
+      });
       const durationSec = ((performance.now() - startTime) / 1000).toFixed(1);
       
+      // Обновляем глобальное состояние на основе ответа бэкенда
+      globalStateMarkdown = response.new_state;
+
       globalChatHistory.push({ role: "assistant", content: response.text, sub_calls: response.sub_calls });
       appendMessage('agent', response.text, displayName, `⏱ Время: ${durationSec} сек.`);
     }
-    await saveSession(currentSessionId, globalChatHistory);
+    await saveSession(currentSessionId, globalChatHistory, globalStateMarkdown);
   } catch (error) {
     appendMessage('system', String(error).includes("Отменено") ? '⚠️ Обработка прервана.' : `❌ Ошибка: ${error}`);
   } finally { setProcessingState(false); }

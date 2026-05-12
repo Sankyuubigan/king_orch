@@ -18,6 +18,7 @@ pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value)> {
     None
 }
 
+// Парсит JSON вызова сабагента. Если текст не является валидным JSON, возвращает None.
 pub fn parse_orchestrator_response(text: &str) -> Option<(f32, String, String)> {
     if let Some(start) = text.find('{') {
         if let Some(end) = text.rfind('}') {
@@ -41,31 +42,24 @@ pub fn parse_orchestrator_response(text: &str) -> Option<(f32, String, String)> 
             }
         }
     }
+    None
+}
 
-    // Резервный парсер
-    let re_conf = regex::Regex::new(r#""confidence_score"\s*:\s*([0-9.]+)"#).unwrap();
-    let conf = re_conf.captures(text).and_then(|c| c[1].parse::<f32>().ok()).unwrap_or(1.0);
-
-    let re_target = regex::Regex::new(r#""target"\s*:\s*"([^"]+)""#).unwrap();
-    let target = re_target.captures(text).map(|c| c[1].to_string()).unwrap_or_else(|| "user".to_string());
-
-    let keys = ["\"task_or_response\"", "\"response\"", "\"task\""];
-    for key in keys {
-        if let Some(start_idx) = text.find(key) {
-            let after_key = &text[start_idx + key.len()..];
-            if let Some(colon_idx) = after_key.find(':') {
-                let after_colon = &after_key[colon_idx + 1..];
-                if let Some(quote_start) = after_colon.find('"') {
-                    let val_str = &after_colon[quote_start + 1..];
-                    if let Some(last_quote) = val_str.rfind('"') {
-                        let content = val_str[..last_quote].to_string();
-                        let final_content = content.replace("\\n", "\n").replace("\\\"", "\"");
-                        return Some((conf, target, final_content));
-                    }
-                }
-            }
+// Извлекает содержимое из тега <update_state> и возвращает (Новое_Состояние, Текст_Без_Тега)
+pub fn extract_state_update(text: &str) -> (Option<String>, String) {
+    let start_tag = "<update_state>";
+    let end_tag = "</update_state>";
+    
+    if let Some(start_idx) = text.find(start_tag) {
+        if let Some(end_idx) = text.find(end_tag) {
+            let state_content = text[start_idx + start_tag.len()..end_idx].trim().to_string();
+            
+            let mut clean_text = String::new();
+            clean_text.push_str(&text[..start_idx]);
+            clean_text.push_str(&text[end_idx + end_tag.len()..]);
+            
+            return (Some(state_content), clean_text.trim().to_string());
         }
     }
-
-    None
+    (None, text.to_string())
 }
