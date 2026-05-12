@@ -11,7 +11,7 @@ src-tauri/target
 src-tauri/Cargo.lock
 package-lock.json
 /src-tauri/gen
-/categories
-/tools
 /sessions
 app_config.json
+/categories
+/tools/subagent-catalog

@@ -13,6 +13,10 @@ pub struct AgentProfile {
     pub system_prompt: String,
     pub is_hidden: bool,
     pub mode: String, // "primary" или "subagent"
+    #[serde(default)]
+    pub mcp_servers: Vec<String>,
+    #[serde(default)]
+    pub subagents: Vec<String>, // Список разрешенных сабагентов
 }
 
 fn collect_md_files(dir: &Path, files: &mut Vec<PathBuf>) {
@@ -28,8 +32,6 @@ fn collect_md_files(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-/// Умный инжектор файлов. Ищет <<INCLUDE: path/to/file.md>> и заменяет содержимым.
-/// Использует индустриальный стандарт XML-тегов для разграничения контекста.
 fn process_includes(base_path: &Path, content: &str) -> String {
     let re = Regex::new(r"<<INCLUDE:\s*(.+?)\s*>>").unwrap();
     re.replace_all(content, |caps: &regex::Captures| {
@@ -52,44 +54,30 @@ pub fn load_agents(app: &AppHandle) -> Vec<AgentProfile> {
     
     emit_log(app, "🔍 Начинаю сканирование агентов...");
 
-    // 1. Загрузка видимых агентов (пользовательских)
     let agents_dir = exe_dir.join("agents");
     if !agents_dir.exists() {
         let _ = fs::create_dir_all(&agents_dir);
     }
 
-    // Создаем дефолтного Оркестратора (теперь это обычный md-файл)
     let orch_path = agents_dir.join("orchestrator.md");
     if !orch_path.exists() {
         let default_orch = "---\nname: Orchestrator\ndescription: Главный маршрутизатор задач\nmode: primary\n---\nТы — Главный Оркестратор. Твоя задача — решить запрос пользователя, делегируя задачи профильным сабагентам, если это необходимо.";
         let _ = fs::write(orch_path, default_orch);
     }
 
-    // Создаем демо-кодера
-    let coder_path = agents_dir.join("coder.md");
-    if !coder_path.exists() {
-        let demo_agent = "---\nname: Coder\ndescription: Вызывай меня для написания кода, скриптов или исправления багов.\nmode: subagent\n---\nТы — Senior Software Engineer. Твоя задача писать чистый, оптимизированный и рабочий код.\nОтвечай только кодом с краткими комментариями. Не пиши лишних рассуждений.";
-        let _ = fs::write(coder_path, demo_agent);
-    }
-
     let mut md_files = Vec::new();
+    // Сканируем папку agents
     collect_md_files(&agents_dir, &mut md_files);
 
-    for path in md_files {
-        if let Some(agent) = parse_agent_file(app, &path, false) {
-            agents.push(agent);
-        }
-    }
-
-    // 2. Загрузка теневых агентов (категорий / клаудовских сабагентов)
+    // Дополнительно сканируем папку categories (из внешнего репозитория)
     let categories_dir = exe_dir.join("categories");
     if categories_dir.exists() {
-        let mut cat_files = Vec::new();
-        collect_md_files(&categories_dir, &mut cat_files);
-        for path in cat_files {
-            if let Some(agent) = parse_agent_file(app, &path, true) {
-                agents.push(agent);
-            }
+        collect_md_files(&categories_dir, &mut md_files);
+    }
+
+    for path in md_files {
+        if let Some(agent) = parse_agent_file(app, &path) {
+            agents.push(agent);
         }
     }
     
@@ -97,7 +85,7 @@ pub fn load_agents(app: &AppHandle) -> Vec<AgentProfile> {
     agents
 }
 
-fn parse_agent_file(app: &AppHandle, path: &Path, is_hidden: bool) -> Option<AgentProfile> {
+fn parse_agent_file(app: &AppHandle, path: &Path) -> Option<AgentProfile> {
     let file_name = path.file_name().unwrap_or_default().to_string_lossy();
     
     if let Ok(content) = fs::read_to_string(path) {
@@ -106,10 +94,11 @@ fn parse_agent_file(app: &AppHandle, path: &Path, is_hidden: bool) -> Option<Age
 
         if let Some(mut agent) = parse_agent_markdown(&processed_content) {
             agent.id = path.file_stem().unwrap().to_string_lossy().to_string();
-            agent.is_hidden = is_hidden;
+            // Автоматически скрываем из UI выпадающего списка всех сабагентов
+            agent.is_hidden = agent.mode == "subagent";
             return Some(agent);
         } else {
-            emit_log(app, &format!("⚠️ Пропущен файл {}: Не найден или некорректен блок Frontmatter (--- name: ... description: ... ---)", file_name));
+            emit_log(app, &format!("⚠️ Пропущен файл {}: Не найден или некорректен блок Frontmatter", file_name));
         }
     } else {
         emit_log(app, &format!("❌ Ошибка чтения файла {}", file_name));
@@ -127,7 +116,9 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             
             let mut name = String::new();
             let mut description = String::new();
-            let mut mode = String::from("subagent"); // По умолчанию
+            let mut mode = String::from("subagent");
+            let mut mcp_servers = Vec::new();
+            let mut subagents = Vec::new();
             
             for line in frontmatter.lines() {
                 let line = line.trim();
@@ -137,6 +128,30 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                     description = line["description:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string();
                 } else if line.starts_with("mode:") {
                     mode = line["mode:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string();
+                } else if line.starts_with("mcp_servers:") {
+                    let list_str = line["mcp_servers:".len()..].trim();
+                    if let Ok(parsed) = serde_json::from_str::<Vec<String>>(list_str) {
+                        mcp_servers = parsed;
+                    }
+                } else if line.starts_with("subagents:") {
+                    let list_str = line["subagents:".len()..].trim();
+                    if let Ok(parsed) = serde_json::from_str::<Vec<String>>(list_str) {
+                        subagents = parsed;
+                    }
+                } else if line.starts_with("tools:") {
+                    // Умный маппинг инструментов из скачанных файлов в наши MCP серверы
+                    let tools_str = line["tools:".len()..].trim();
+                    let tools_list: Vec<&str> = tools_str.split(',').map(|s| s.trim()).collect();
+                    for t in tools_list {
+                        match t.to_lowercase().as_str() {
+                            "websearch" => if !mcp_servers.contains(&"ddg_search".to_string()) { mcp_servers.push("ddg_search".to_string()); },
+                            "webfetch" => if !mcp_servers.contains(&"docs_fetcher".to_string()) { mcp_servers.push("docs_fetcher".to_string()); },
+                            "read" | "write" | "grep" | "glob" | "ls" | "edit" => {
+                                if !mcp_servers.contains(&"filesystem".to_string()) { mcp_servers.push("filesystem".to_string()); }
+                            },
+                            _ => {} // Игнорируем Bash и другие опасные/неподдерживаемые инструменты
+                        }
+                    }
                 }
             }
             
@@ -146,8 +161,10 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                     name,
                     description,
                     system_prompt,
-                    is_hidden: false,
+                    is_hidden: false, // Переопределится в parse_agent_file
                     mode,
+                    mcp_servers,
+                    subagents,
                 });
             }
         }

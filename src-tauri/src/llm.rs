@@ -15,16 +15,24 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCallInfo {
+    pub tool_name: String,
+    pub arguments: String,
+    pub result: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SubCall {
     pub agent_name: String,
     pub prompt: String,
     pub response: String,
     pub time_sec: f32,
+    pub tool_calls: Vec<ToolCallInfo>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
-    pub role: String, // "system", "user", "assistant"
+    pub role: String,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub_calls: Option<Vec<SubCall>>,

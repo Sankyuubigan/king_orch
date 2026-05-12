@@ -1,8 +1,23 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { createMessageElement, createSubcallElement, Role } from "./ui/render";
+import { createMessageElement, createSubcallElement, createToolCallElement, Role } from "./ui/render";
 import { fetchSessions, loadSession, deleteSession, saveSession } from "./api/sessions";
+import mermaid from "mermaid";
+
+mermaid.initialize({
+  startOnLoad: false,
+  theme: "dark",
+  securityLevel: "loose",
+});
+
+async function renderMermaidDiagrams() {
+  try {
+    await mermaid.run();
+  } catch (e) {
+    console.error("Mermaid render error:", e);
+  }
+}
 
 const modelSelect = document.getElementById("model-select") as HTMLSelectElement;
 const agentSelect = document.getElementById("agent-select") as HTMLSelectElement;
@@ -55,6 +70,7 @@ function appendMessageToContainer(container: HTMLDivElement, role: Role, content
   const msgEl = createMessageElement(role, content, agentName, timeText);
   container.appendChild(msgEl);
   container.scrollTop = container.scrollHeight;
+  renderMermaidDiagrams();
 }
 
 function appendMessage(role: Role, content: string, agentName?: string, timeText?: string, subCalls?: any[]) {
@@ -73,6 +89,13 @@ function showSubchat(subCall: any) {
   subchatHistory.innerHTML = '';
   
   appendMessageToContainer(subchatHistory, 'user', subCall.prompt, 'Лид-Агент');
+  
+  if (subCall.tool_calls && subCall.tool_calls.length > 0) {
+    subCall.tool_calls.forEach((tc: any) => {
+      subchatHistory.appendChild(createToolCallElement(tc.tool_name, tc.arguments, tc.result));
+    });
+  }
+
   appendMessageToContainer(subchatHistory, 'agent', subCall.response, subCall.agent_name, `${subCall.time_sec.toFixed(1)} сек`);
 }
 
@@ -132,6 +155,7 @@ async function loadConfig() {
 async function loadAgents() {
   try {
     const agents: any[] = await invoke("get_agents");
+    agentSelect.innerHTML = '<option value="YouTube_Summary_Agent">YouTube_Summary_Agent</option>';
     for (const agent of agents) {
       if (!agent.is_hidden) {
         const option = document.createElement("option");
@@ -215,7 +239,7 @@ modelSelect?.addEventListener("change", async () => { await invoke("set_last_mod
 
 btnAddModel?.addEventListener("click", async () => {
   try {
-    const selected = await open({ filters:[{ name: "Model", extensions:["gguf"] }] });
+    const selected = await open({ filters: [{ name: "Model", extensions:["gguf"] }] });
     if (selected) updateModelSelect(await invoke("add_model", { path: selected as string }));
   } catch (error) {}
 });
@@ -268,8 +292,6 @@ async function handleSend() {
       const durationSec = ((performance.now() - startTime) / 1000).toFixed(1);
       
       globalChatHistory.push({ role: "assistant", content: response.text, sub_calls: response.sub_calls });
-      
-      // Мы НЕ передаем sub_calls в appendMessage здесь, так как они уже отрисовались через событие subcall_done
       appendMessage('agent', response.text, displayName, `⏱ Время: ${durationSec} сек.`);
     }
     await saveSession(currentSessionId, globalChatHistory);
@@ -293,7 +315,6 @@ listen("progress", (e) => { progressBar.style.width = `${e.payload}%`; });
 listen("status", (e) => { statusLabel.innerText = e.payload as string; });
 listen("log", (e) => { logToGUI(e.payload as string); });
 
-// Рендерим сабагентов в реальном времени, как только они закончили работу
 listen("subcall_done", (e) => {
   const call = e.payload as any;
   chatHistory.appendChild(createSubcallElement(call, showSubchat));

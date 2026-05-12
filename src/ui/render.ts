@@ -44,3 +44,26 @@ export function createSubcallElement(call: any, onSubcallClick: (call: any) => v
   callDiv.appendChild(btn);
   return callDiv;
 }
+
+export function createToolCallElement(toolName: string, args: string, result: string): HTMLDivElement {
+  const div = document.createElement("div");
+  div.className = "tool-call-block message";
+  
+  const header = document.createElement("div");
+  header.className = "tool-call-header";
+  header.innerText = `🔧 Использован инструмент: ${toolName}`;
+  
+  const argsDiv = document.createElement("div");
+  argsDiv.className = "tool-call-args";
+  argsDiv.innerText = `Аргументы: ${args}`;
+  
+  const resultDiv = document.createElement("div");
+  resultDiv.className = "tool-call-result";
+  resultDiv.innerText = result;
+  
+  div.appendChild(header);
+  div.appendChild(argsDiv);
+  div.appendChild(resultDiv);
+  
+  return div;
+}

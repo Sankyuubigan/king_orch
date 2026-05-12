@@ -1,6 +1,6 @@
 {
   "productName": "King Orch",
-  "version": "26.5.27",
+  "version": "26.5.31",
   "identifier": "com.kingorch.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -9,7 +9,7 @@
     "frontendDist": "../dist"
   },
   "app": {
-    "windows":[
+    "windows": [
       {
         "title": "King Orch - Multi-Agent Studio",
         "width": 1100,
@@ -23,7 +23,10 @@
     }
   },
   "bundle": {
-    "externalBin":[
+    "resources": [
+      "mcp_servers/*"
+    ],
+    "externalBin": [
       "bin/yt-dlp",
       "bin/node"
     ]

@@ -9,6 +9,7 @@ mod agent_manager;
 mod orchestrator;
 mod session_manager;
 mod tool_executor;
+mod mcp_client;
 
 use serde::{Deserialize, Serialize};
 use std::fs;
