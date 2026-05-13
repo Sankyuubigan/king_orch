@@ -1,5 +1,5 @@
 ---
-name: enneagram_profiler
+name: pattern_finder_by_double_bind
 description: Специалист по Эннеаграмме
 mode: subagent
 ---

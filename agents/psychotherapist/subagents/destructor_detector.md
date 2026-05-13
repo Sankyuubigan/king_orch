@@ -1,5 +1,5 @@
 ---
-name: fear_detector
+name: destructor_detector
 description: Аналитик корневых страхов и глубинных убеждений.
 mode: subagent
 ---

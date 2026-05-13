@@ -1,5 +1,5 @@
 ---
-name: enneagram_profiler
+name: pattern_finder_by_decontext_vector
 description: Специалист по Эннеаграмме
 mode: subagent
 ---
