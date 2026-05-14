@@ -1,9 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-mod domain;
 mod llm;
-mod media_fetcher;
-mod processor;
 mod parsers;
 mod agent_manager;
 mod orchestrator;
@@ -15,9 +12,19 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, State, Manager};
+use tauri::{AppHandle, State, Manager, Emitter}; // <-- Добавили Emitter сюда
 use agent_manager::AgentProfile;
 use llm::{ChatMessage, SubCall};
+
+// Функция для логирования, которую раньше брали из процессора
+pub fn emit_log(app: &AppHandle, msg: &str) {
+    let _ = app.emit("log", msg);
+}
+
+pub fn emit_status(app: &AppHandle, msg: &str, progress: u8) {
+    let _ = app.emit("status", msg);
+    let _ = app.emit("progress", progress);
+}
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AppConfig {
@@ -170,60 +177,6 @@ fn delete_session(app: tauri::AppHandle, id: String) -> Result<(), String> {
     session_manager::delete_session(&app, &id)
 }
 
-#[tauri::command]
-async fn start_processing(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    model_path: String,
-    url: String,
-    include_timestamps: bool,
-    context_size: u32,
-    kv_quantization: bool,
-) -> Result<String, String> {
-    processor::emit_log(&app, &format!("Используемая модель: {}", model_path));
-    
-    let mut config = load_config(&app);
-    config.context_size = context_size;
-    config.kv_quantization = kv_quantization;
-    save_config(&app, &config);
-
-    state.cancel_flag.store(false, Ordering::SeqCst);
-    let cancel_flag = state.cancel_flag.clone();
-    
-    let sponsor_segments = media_fetcher::fetch_sponsorblock(&url).await;
-    let sponsor_segments = match sponsor_segments {
-        Ok(segs) => {
-            processor::emit_log(&app, &format!("✅ SponsorBlock: Найдено {} рекламных интеграций", segs.len()));
-            segs
-        },
-        Err(e) => {
-            processor::emit_log(&app, &format!("⚠️ SponsorBlock: Запрос не удался ({})", e));
-            Vec::new()
-        }
-    };
-
-    let (sub_path, info_path) = media_fetcher::fetch_media_data(&app, &url, cancel_flag.clone()).await?;
-
-    let result = tokio::task::spawn_blocking(move || {
-        processor::run_smart_summary(
-            app, 
-            model_path, 
-            sub_path, 
-            info_path, 
-            include_timestamps, 
-            config.temperature,
-            context_size,
-            kv_quantization,
-            sponsor_segments,
-            cancel_flag
-        )
-    })
-    .await
-    .map_err(|e| e.to_string())??;
-
-    Ok(result)
-}
-
 #[derive(Serialize)]
 struct ChatResponse {
     text: String,
@@ -301,7 +254,6 @@ fn main() {
             load_session,
             save_session,
             delete_session,
-            start_processing,
             chat_request,
             stop_processing
         ])

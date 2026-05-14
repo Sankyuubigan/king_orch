@@ -3,7 +3,7 @@ use std::io::{BufReader, BufRead, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use serde_json::{Value, json};
-use crate::processor::emit_log;
+use crate::emit_log;
 use tauri::AppHandle;
 
 pub struct McpClient {
@@ -35,7 +35,6 @@ impl McpClient {
         let stdout = child.stdout.take().ok_or("Не удалось получить stdout")?;
         let stderr = child.stderr.take().ok_or("Не удалось получить stderr")?;
 
-        // Читаем stderr в фоновом потоке и пишем в логи
         let app_clone = app.clone();
         thread::spawn(move || {
             let reader = BufReader::new(stderr);

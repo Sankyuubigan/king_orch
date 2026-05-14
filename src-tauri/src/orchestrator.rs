@@ -1,7 +1,7 @@
 use crate::agent_manager::{build_l0_manifest, load_agents, AgentProfile};
 use crate::llm::{ChatMessage, LlamaEngine, SubCall, ToolCallInfo};
 use crate::parsers::{extract_state_update, parse_orchestrator_response, parse_tool_call};
-use crate::processor::{emit_log, emit_status};
+use crate::{emit_log, emit_status};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -130,7 +130,22 @@ fn run_agent_node(
     let mut all_tools = Vec::new();
     for mcp_name in &agent.mcp_servers {
         if let Ok(script_path) = get_mcp_server_path(app, mcp_name) {
-            let node_path = crate::media_fetcher::find_portable_node();
+            let target = env!("TARGET");
+            let dev_name = format!("node-{}.exe", target);
+            let mut node_path = std::path::PathBuf::from("node");
+            if let Ok(mut exe) = std::env::current_exe() {
+                exe.pop();
+                let possible_paths = vec![
+                    exe.join("node.exe"),
+                    exe.join(&dev_name),
+                    exe.join("bin").join(&dev_name),
+                    std::path::PathBuf::from("bin").join(&dev_name),
+                ];
+                for p in possible_paths {
+                    if p.exists() { node_path = p; break; }
+                }
+            }
+
             if let Ok(mut client) = crate::mcp_client::McpClient::spawn(
                 app,
                 &node_path.to_string_lossy(),
@@ -183,7 +198,8 @@ fn run_agent_node(
 
     let mut final_response = String::new();
     let mut tool_calls = Vec::new();
-    let max_iterations = 8;
+    // Увеличено до 30, чтобы агент мог обработать длинные видео (многократный вызов сабагента)
+    let max_iterations = 30;
 
     let start_time = Instant::now();
 
@@ -242,14 +258,9 @@ fn run_agent_node(
             }
             let output_str = tool_output
                 .unwrap_or_else(|| format!("Ошибка: Инструмент '{}' не найден.", tool_name));
-            let truncated_output = if output_str.chars().count() > 15000 {
-                format!(
-                    "{}...\n[ОБРЕЗАНО]",
-                    output_str.chars().take(15000).collect::<String>()
-                )
-            } else {
-                output_str
-            };
+            
+            // Убрали жесткий лимит в 15000 символов. Контекст контролируется размером чанков в MCP.
+            let truncated_output = output_str;
 
             tool_calls.push(ToolCallInfo {
                 tool_name: tool_name.clone(),
@@ -335,14 +346,16 @@ fn run_agent_node(
     }
 
     if depth > 0 {
-        // Если это был сабагент, записываем его работу в UI Отчет
-        all_sub_calls.push(SubCall {
+        let sub_call = SubCall {
             agent_name: agent.name.clone(),
             prompt: user_text,
             response: final_response.clone(),
             time_sec: start_time.elapsed().as_secs_f32(),
             tool_calls,
-        });
+        };
+        
+        let _ = app.emit("subcall_done", &sub_call);
+        all_sub_calls.push(sub_call);
     }
 
     Ok((final_response, current_state))

@@ -30,7 +30,6 @@ const chatFeedback = document.getElementById("chat-feedback") as HTMLDivElement;
 const progressBar = document.getElementById("progress-bar") as HTMLDivElement;
 const statusLabel = document.getElementById("status-label") as HTMLDivElement;
 
-const chkTimestamps = document.getElementById("chk-timestamps") as HTMLInputElement;
 const contextSlider = document.getElementById("context-slider") as HTMLInputElement;
 const contextValue = document.getElementById("context-value") as HTMLElement;
 const confSlider = document.getElementById("conf-slider") as HTMLInputElement;
@@ -156,7 +155,7 @@ async function loadConfig() {
 async function loadAgents() {
   try {
     const agents: any[] = await invoke("get_agents");
-    agentSelect.innerHTML = '<option value="YouTube_Summary_Agent">YouTube_Summary_Agent</option>';
+    agentSelect.innerHTML = '';
     for (const agent of agents) {
       if (!agent.is_hidden) {
         const option = document.createElement("option");
@@ -280,37 +279,26 @@ async function handleSend() {
   const startTime = performance.now();
 
   try {
-    if (activeAgent === "YouTube_Summary_Agent") {
-      const urlMatch = text.match(/(https?:\/\/[^\s]+)/);
-      if (!urlMatch) { appendMessage('agent', 'Пожалуйста, отправьте мне ссылку на видео.', 'YouTube_Summary_Agent'); setProcessingState(false); return; }
-      
-      appendMessage('system', '⚙️ Запускаю инструмент: Скачивание субтитров и анализ видео...');
-      const result = await invoke("start_processing", { modelPath, url: urlMatch[1], includeTimestamps: chkTimestamps.checked, contextSize: parseInt(contextSlider.value, 10), kvQuantization: chkKvQuant.checked });
-      const durationSec = ((performance.now() - startTime) / 1000).toFixed(1);
-      
-      appendMessage('agent', result as string, 'YouTube_Summary_Agent', `⏱ Время: ${durationSec} сек.`);
-      globalChatHistory.push({ role: "assistant", content: result as string });
-    } else {
-      let displayName = agentSelect.options[agentSelect.selectedIndex].text.replace('📁 ', '');
-      
-      // Передаем текущее состояние в бэкенд
-      const response: any = await invoke("chat_request", { 
-        modelPath, 
-        agentId: activeAgent, 
-        message: text, 
-        history: globalChatHistory.slice(0, -1), 
-        contextSize: parseInt(contextSlider.value, 10), 
-        kvQuantization: chkKvQuant.checked,
-        currentState: globalStateMarkdown
-      });
-      const durationSec = ((performance.now() - startTime) / 1000).toFixed(1);
-      
-      // Обновляем глобальное состояние на основе ответа бэкенда
-      globalStateMarkdown = response.new_state;
+    let displayName = agentSelect.options[agentSelect.selectedIndex].text.replace('📁 ', '');
+    
+    // Передаем текущее состояние в бэкенд
+    const response: any = await invoke("chat_request", { 
+      modelPath, 
+      agentId: activeAgent, 
+      message: text, 
+      history: globalChatHistory.slice(0, -1), 
+      contextSize: parseInt(contextSlider.value, 10), 
+      kvQuantization: chkKvQuant.checked,
+      currentState: globalStateMarkdown
+    });
+    const durationSec = ((performance.now() - startTime) / 1000).toFixed(1);
+    
+    // Обновляем глобальное состояние на основе ответа бэкенда
+    globalStateMarkdown = response.new_state;
 
-      globalChatHistory.push({ role: "assistant", content: response.text, sub_calls: response.sub_calls });
-      appendMessage('agent', response.text, displayName, `⏱ Время: ${durationSec} сек.`);
-    }
+    globalChatHistory.push({ role: "assistant", content: response.text, sub_calls: response.sub_calls });
+    appendMessage('agent', response.text, displayName, `⏱ Время: ${durationSec} сек.`);
+    
     await saveSession(currentSessionId, globalChatHistory, globalStateMarkdown);
   } catch (error) {
     appendMessage('system', String(error).includes("Отменено") ? '⚠️ Обработка прервана.' : `❌ Ошибка: ${error}`);

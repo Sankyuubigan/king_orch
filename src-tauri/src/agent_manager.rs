@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 use regex::Regex;
-use crate::processor::emit_log;
+use crate::emit_log; // <-- Исправлен импорт (убрали processor)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProfile {
