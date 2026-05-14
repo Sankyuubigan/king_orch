@@ -19,7 +19,8 @@ export function createMessageElement(
   }
 
   const contentDiv = document.createElement("div");
-  contentDiv.innerHTML = role === 'system' ? content : renderMarkdown(content);
+  // Теперь все сообщения (включая системные отчеты) проходят через Markdown
+  contentDiv.innerHTML = renderMarkdown(content);
   msgDiv.appendChild(contentDiv);
 
   if (timeText && role === 'agent') {
@@ -30,6 +31,13 @@ export function createMessageElement(
   }
 
   return msgDiv;
+}
+
+export function createThoughtElement(agentName: string, thought: string): HTMLDivElement {
+  const div = document.createElement("div");
+  div.className = "message message-thought";
+  div.innerHTML = `🧠 <strong>${agentName}</strong>: <em>${thought}</em>`;
+  return div;
 }
 
 export function createSubcallElement(call: any, onSubcallClick: (call: any) => void): HTMLDivElement {

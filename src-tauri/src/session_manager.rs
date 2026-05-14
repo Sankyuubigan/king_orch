@@ -84,3 +84,30 @@ pub fn delete_session(app: &AppHandle, id: &str) -> Result<(), String> {
     }
     Ok(())
 }
+
+pub fn rename_session(app: &AppHandle, id: &str, new_title: &str) -> Result<(), String> {
+    let path = get_sessions_dir(app).join(format!("{}.json", id));
+    if !path.exists() {
+        return Err("Сессия не найдена".to_string());
+    }
+    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let mut session: ChatSession = serde_json::from_str(&content).map_err(|e| e.to_string())?;
+    
+    session.title = new_title.to_string();
+    
+    let new_content = serde_json::to_string_pretty(&session).map_err(|e| e.to_string())?;
+    fs::write(path, new_content).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+pub fn open_session_folder(app: &AppHandle, _id: &str) -> Result<(), String> {
+    let dir = get_sessions_dir(app);
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}

@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
-import { createMessageElement, createSubcallElement, createToolCallElement, Role } from "./ui/render";
-import { fetchSessions, loadSession, deleteSession, saveSession } from "./api/sessions";
+import { createMessageElement, createSubcallElement, createToolCallElement, createThoughtElement, Role } from "./ui/render";
+import { fetchSessions, loadSession, deleteSession, saveSession, renameSession, openSessionFolder } from "./api/sessions";
 import mermaid from "mermaid";
 
 mermaid.initialize({
@@ -55,7 +55,7 @@ const btnNewSession = document.getElementById("btn-new-session") as HTMLButtonEl
 const sessionList = document.getElementById("session-list") as HTMLDivElement;
 
 let isProcessing = false;
-let globalChatHistory: {role: string, content: string, sub_calls?: any[]}[] =[];
+let globalChatHistory: {role: string, content: string, sub_calls?: any[], agent_name?: string}[] =[];
 let currentSessionId: string | null = null;
 let globalStateMarkdown: string = ""; // Глобальное состояние сессии
 
@@ -88,7 +88,7 @@ function showSubchat(subCall: any) {
   subchatTitle.innerText = `Сабагент: ${subCall.agent_name}`;
   subchatHistory.innerHTML = '';
   
-  appendMessageToContainer(subchatHistory, 'user', subCall.prompt, 'Вызов');
+  appendMessageToContainer(subchatHistory, 'system', subCall.prompt, 'Отчет контекста сабагента');
   
   if (subCall.tool_calls && subCall.tool_calls.length > 0) {
     subCall.tool_calls.forEach((tc: any) => {
@@ -172,6 +172,16 @@ async function loadAgents() {
   } catch (e) {}
 }
 
+// Закрытие дропдаунов при клике вне их
+document.addEventListener("click", (e) => {
+  const dropdowns = document.querySelectorAll('.session-menu-dropdown.show');
+  dropdowns.forEach(dd => {
+    if (!dd.parentElement?.contains(e.target as Node)) {
+      dd.classList.remove('show');
+    }
+  });
+});
+
 async function loadSessionsListUI() {
   try {
     const sessions = await fetchSessions();
@@ -179,9 +189,56 @@ async function loadSessionsListUI() {
     for (const s of sessions) {
       const div = document.createElement("div");
       div.className = `session-item ${s.id === currentSessionId ? 'active' : ''}`;
-      div.innerHTML = `<span class="session-title" title="${s.title}">${s.title}</span><button class="btn-del-session" data-id="${s.id}">✕</button>`;
+      
+      div.innerHTML = `
+        <span class="session-title" title="${s.title}">${s.title}</span>
+        <div class="session-item-actions">
+          <button class="btn-session-menu">⋮</button>
+          <div class="session-menu-dropdown">
+            <button class="session-menu-item btn-rename" data-id="${s.id}" data-title="${s.title}">✏️ Переименовать</button>
+            <button class="session-menu-item btn-explore" data-id="${s.id}">📁 Открыть в проводнике</button>
+            <button class="session-menu-item danger btn-delete" data-id="${s.id}">🗑️ Удалить</button>
+          </div>
+        </div>
+      `;
+      
       div.querySelector('.session-title')?.addEventListener("click", () => openSessionUI(s.id));
-      div.querySelector('.btn-del-session')?.addEventListener("click", (e) => { e.stopPropagation(); deleteSessionUI(s.id); });
+      
+      const menuBtn = div.querySelector('.btn-session-menu');
+      const dropdown = div.querySelector('.session-menu-dropdown');
+      
+      menuBtn?.addEventListener("click", (e) => {
+        e.stopPropagation();
+        // Скрываем все остальные
+        document.querySelectorAll('.session-menu-dropdown.show').forEach(dd => {
+          if (dd !== dropdown) dd.classList.remove('show');
+        });
+        dropdown?.classList.toggle('show');
+      });
+
+      div.querySelector('.btn-rename')?.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        dropdown?.classList.remove('show');
+        const currentTitle = (e.target as HTMLElement).getAttribute('data-title') || '';
+        const newTitle = prompt("Введите новое название сессии:", currentTitle);
+        if (newTitle && newTitle.trim() !== "" && newTitle !== currentTitle) {
+          await renameSession(s.id, newTitle.trim());
+          loadSessionsListUI();
+        }
+      });
+
+      div.querySelector('.btn-explore')?.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        dropdown?.classList.remove('show');
+        await openSessionFolder(s.id);
+      });
+
+      div.querySelector('.btn-delete')?.addEventListener("click", async (e) => {
+        e.stopPropagation();
+        dropdown?.classList.remove('show');
+        deleteSessionUI(s.id);
+      });
+      
       sessionList.appendChild(div);
     }
   } catch (e) {}
@@ -198,8 +255,12 @@ async function openSessionUI(id: string) {
     chatHistory.innerHTML = '';
     appendMessage('system', 'Сессия загружена.');
     for (const msg of globalChatHistory) {
-      const role = msg.role === 'assistant' ? 'agent' : msg.role;
-      appendMessage(role as Role, msg.content, msg.role === 'assistant' ? 'Агент' : undefined, undefined, msg.sub_calls);
+      if (msg.role === 'thought') {
+        chatHistory.appendChild(createThoughtElement(msg.agent_name || 'Агент', msg.content));
+      } else {
+        const role = msg.role === 'assistant' ? 'agent' : msg.role;
+        appendMessage(role as Role, msg.content, msg.role === 'assistant' ? 'Агент' : undefined, undefined, msg.sub_calls);
+      }
     }
     loadSessionsListUI();
     switchTab('chat');
@@ -207,7 +268,7 @@ async function openSessionUI(id: string) {
 }
 
 async function deleteSessionUI(id: string) {
-  if (confirm("Вы уверены, что хотите удалить эту сессию?")) {
+  if (confirm("Вы уверены, что хотите безвозвратно удалить эту сессию?")) {
     try {
       await deleteSession(id);
       if (currentSessionId === id) startNewSession(); else loadSessionsListUI();
@@ -281,19 +342,22 @@ async function handleSend() {
   try {
     let displayName = agentSelect.options[agentSelect.selectedIndex].text.replace('📁 ', '');
     
-    // Передаем текущее состояние в бэкенд
+    // Мы фильтруем "мысли" из истории перед отправкой в LLM, чтобы не засорять контекст
+    const historyToSend = globalChatHistory
+      .filter(m => m.role !== 'thought')
+      .slice(0, -1);
+
     const response: any = await invoke("chat_request", { 
       modelPath, 
       agentId: activeAgent, 
       message: text, 
-      history: globalChatHistory.slice(0, -1), 
+      history: historyToSend, 
       contextSize: parseInt(contextSlider.value, 10), 
       kvQuantization: chkKvQuant.checked,
       currentState: globalStateMarkdown
     });
     const durationSec = ((performance.now() - startTime) / 1000).toFixed(1);
     
-    // Обновляем глобальное состояние на основе ответа бэкенда
     globalStateMarkdown = response.new_state;
 
     globalChatHistory.push({ role: "assistant", content: response.text, sub_calls: response.sub_calls });
@@ -324,6 +388,23 @@ listen("subcall_done", (e) => {
   const call = e.payload as any;
   chatHistory.appendChild(createSubcallElement(call, showSubchat));
   chatHistory.scrollTop = chatHistory.scrollHeight;
+});
+
+listen("agent_thought", (e) => {
+  const payload = e.payload as {agent_name: string, thought: string};
+  const el = createThoughtElement(payload.agent_name, payload.thought);
+  chatHistory.appendChild(el);
+  chatHistory.scrollTop = chatHistory.scrollHeight;
+  
+  // Сохраняем мысль в историю, чтобы она осталась при перезагрузке сессии
+  globalChatHistory.push({ 
+    role: "thought", 
+    content: payload.thought, 
+    agent_name: payload.agent_name 
+  });
+  if (currentSessionId) {
+    saveSession(currentSessionId, globalChatHistory, globalStateMarkdown);
+  }
 });
 
 document.addEventListener("DOMContentLoaded", loadConfig);

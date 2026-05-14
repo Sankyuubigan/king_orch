@@ -101,17 +101,58 @@ body {
 .session-item.active { background: var(--session-active); border-color: var(--primary); }
 .session-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-right: 10px; }
 
-.btn-del-session {
+/* Стили для меню 3 точки */
+.session-item-actions {
+  position: relative;
+}
+
+.btn-session-menu {
   background: none;
   border: none;
-  color: var(--danger);
+  color: var(--text);
   cursor: pointer;
   padding: 2px 6px;
   border-radius: 4px;
-  font-size: 14px;
+  font-size: 16px;
+  font-weight: bold;
   opacity: 0.6;
 }
-.btn-del-session:hover { opacity: 1; background: rgba(255,0,0,0.1); }
+.btn-session-menu:hover { opacity: 1; background: var(--border); }
+
+.session-menu-dropdown {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+  z-index: 100;
+  display: none;
+  flex-direction: column;
+  min-width: 170px;
+  padding: 5px 0;
+}
+
+.session-menu-dropdown.show {
+  display: flex;
+}
+
+.session-menu-item {
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  background: none;
+  border: none;
+  color: var(--text);
+  width: 100%;
+  justify-content: flex-start;
+  border-radius: 0;
+}
+.session-menu-item:hover { background: var(--session-hover); }
+.session-menu-item.danger { color: var(--danger); }
+.session-menu-item.danger:hover { background: rgba(255,0,0,0.1); }
 
 .main-content {
   flex: 1;
@@ -211,11 +252,24 @@ body {
   align-self: center;
   background-color: var(--msg-system);
   color: #888;
-  font-size: 12px;
-  font-style: italic;
-  text-align: center;
+  font-size: 13px;
   border-radius: 12px;
-  padding: 5px 15px;
+  padding: 10px 15px;
+  text-align: left; /* Изменили на левый край для красивого Markdown */
+}
+
+/* Стили для мыслей агента */
+.message-thought {
+  align-self: center;
+  background-color: transparent;
+  color: #888;
+  font-size: 13px;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 8px 15px;
+  margin: 5px 0;
+  box-shadow: none;
 }
 
 .agent-name {

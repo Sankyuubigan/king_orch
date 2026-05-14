@@ -1,13 +1,11 @@
-pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value)> {
+// Возвращает: Имя инструмента, Аргументы, Мысль (thought)
+pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)> {
     if let Some(start) = text.find('{') {
         if let Some(end) = text.rfind('}') {
             let json_str = &text[start..=end];
             
-            // Сначала пробуем распарсить как есть
             let parsed = serde_json::from_str::<serde_json::Value>(json_str)
                 .or_else(|_| {
-                    // Если не вышло (например, из-за неэкранированных переносов строк в значениях),
-                    // заменяем переносы на пробелы, чтобы не ломать синтаксис JSON
                     let cleaned = json_str.replace('\n', " ").replace('\r', "");
                     serde_json::from_str::<serde_json::Value>(&cleaned)
                 });
@@ -19,7 +17,8 @@ pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value)> {
                         .unwrap_or_else(|| {
                             val.get("arg").cloned().unwrap_or(serde_json::Value::Null)
                         });
-                    return Some((tool.to_string(), args));
+                    let thought = val.get("thought").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                    return Some((tool.to_string(), args, thought));
                 }
             }
         }
@@ -27,8 +26,8 @@ pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value)> {
     None
 }
 
-// Парсит JSON вызова сабагента. Если текст не является валидным JSON, возвращает None.
-pub fn parse_orchestrator_response(text: &str) -> Option<(f32, String, String)> {
+// Возвращает: Confidence, Target, Content, Мысль (thought)
+pub fn parse_orchestrator_response(text: &str) -> Option<(f32, String, String, String)> {
     if let Some(start) = text.find('{') {
         if let Some(end) = text.rfind('}') {
             let json_str = &text[start..=end];
@@ -53,14 +52,15 @@ pub fn parse_orchestrator_response(text: &str) -> Option<(f32, String, String)> 
                     .unwrap_or("")
                     .to_string();
                 
-                return Some((conf, target, content));
+                let thought = val.get("thought").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+                return Some((conf, target, content, thought));
             }
         }
     }
     None
 }
 
-// Извлекает содержимое из тега <update_state> и возвращает (Новое_Состояние, Текст_Без_Тега)
 pub fn extract_state_update(text: &str) -> (Option<String>, String) {
     let start_tag = "<update_state>";
     let end_tag = "</update_state>";

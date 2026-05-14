@@ -36,6 +36,9 @@ pub struct ChatMessage {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub_calls: Option<Vec<SubCall>>,
+    // Добавили поле для сохранения имени агента в "мыслях"
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
 }
 
 #[derive(Clone, PartialEq)]
@@ -352,8 +355,8 @@ impl LlamaEngine {
     ) -> Result<String, String>
     where F: FnMut(f32, &str) {
         let messages = vec![
-            ChatMessage { role: "system".to_string(), content: system_prompt.to_string(), sub_calls: None },
-            ChatMessage { role: "user".to_string(), content: user_prompt.to_string(), sub_calls: None },
+            ChatMessage { role: "system".to_string(), content: system_prompt.to_string(), sub_calls: None, agent_name: None },
+            ChatMessage { role: "user".to_string(), content: user_prompt.to_string(), sub_calls: None, agent_name: None },
         ];
         self.generate_chat(&messages, max_tokens, "Auto", cancel_flag, progress_cb)
     }

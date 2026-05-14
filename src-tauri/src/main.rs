@@ -12,11 +12,10 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, State, Manager, Emitter}; // <-- Добавили Emitter сюда
+use tauri::{AppHandle, State, Manager, Emitter};
 use agent_manager::AgentProfile;
 use llm::{ChatMessage, SubCall};
 
-// Функция для логирования, которую раньше брали из процессора
 pub fn emit_log(app: &AppHandle, msg: &str) {
     let _ = app.emit("log", msg);
 }
@@ -177,6 +176,16 @@ fn delete_session(app: tauri::AppHandle, id: String) -> Result<(), String> {
     session_manager::delete_session(&app, &id)
 }
 
+#[tauri::command]
+fn rename_session(app: tauri::AppHandle, id: String, new_title: String) -> Result<(), String> {
+    session_manager::rename_session(&app, &id, &new_title)
+}
+
+#[tauri::command]
+fn open_session_folder(app: tauri::AppHandle, id: String) -> Result<(), String> {
+    session_manager::open_session_folder(&app, &id)
+}
+
 #[derive(Serialize)]
 struct ChatResponse {
     text: String,
@@ -254,6 +263,8 @@ fn main() {
             load_session,
             save_session,
             delete_session,
+            rename_session,
+            open_session_folder,
             chat_request,
             stop_processing
         ])

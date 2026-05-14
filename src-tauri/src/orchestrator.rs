@@ -9,6 +9,12 @@ use tauri::{AppHandle, Emitter, Manager};
 
 const TRUTH_PROTOCOL: &str = "YOU SHOULD: Tell the truth; never guess or speculate. Say 'I don't know' or 'I cannot confirm this' when something cannot be verified. Prioritize accuracy over speed. YOU MUST AVOID: Fabricating facts, making confident statements without proof, answering if unsure without disclosing uncertainty.";
 
+#[derive(serde::Serialize, Clone)]
+struct AgentThoughtPayload {
+    agent_name: String,
+    thought: String,
+}
+
 fn get_mcp_server_path(app: &AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
     let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
     let path = resource_dir
@@ -29,7 +35,7 @@ pub fn run_chat(
     history: Vec<ChatMessage>,
     context_size: u32,
     kv_quantization: bool,
-    _temperature: f32, // Заглушка, LLM engine использует свой дефолт или можно пробросить
+    _temperature: f32,
     format_type: String,
     _conf_threshold: f32,
     cancel_flag: Arc<AtomicBool>,
@@ -50,7 +56,6 @@ pub fn run_chat(
         if let Some(primary_agent) = agents.iter().find(|a| a.id == id) {
             let mut all_sub_calls = Vec::new();
 
-            // Запускаем рекурсивный узел вычислений (Node)
             let (final_res, final_state) = run_agent_node(
                 &app,
                 &engine,
@@ -75,7 +80,6 @@ pub fn run_chat(
     }
 }
 
-// РЕКУРСИВНЫЙ ДВИЖОК АГЕНТОВ
 fn run_agent_node(
     app: &AppHandle,
     engine: &LlamaEngine,
@@ -102,7 +106,6 @@ fn run_agent_node(
     system_prompt.push_str("\n\n[ПРОТОКОЛ ЧЕСТНОСТИ]\n");
     system_prompt.push_str(TRUTH_PROTOCOL);
 
-    // Вклеиваем Глобальное Состояние Сессии (State)
     system_prompt.push_str(&format!(
         "\n\n[ТЕКУЩЕЕ СОСТОЯНИЕ СЕССИИ]:\n{}\n",
         if current_state.is_empty() {
@@ -112,22 +115,18 @@ fn run_agent_node(
         }
     ));
 
-    // Фильтруем доступных сабагентов
+    let allows_all = agent.subagents.iter().any(|s| s == "*");
     let filtered_agents: Vec<AgentProfile> = agents
         .iter()
         .filter(|a| a.id != agent.id && a.mode != "primary")
-        .filter(|a| agent.subagents.is_empty() || agent.subagents.contains(&a.id))
+        .filter(|a| allows_all || agent.subagents.contains(&a.id))
         .cloned()
         .collect();
 
-    if !filtered_agents.is_empty() {
-        system_prompt.push_str("\n\n");
-        system_prompt.push_str(&build_l0_manifest(&filtered_agents));
-    }
-
-    // Подключаем инструменты (MCP)
     let mut mcp_clients = std::collections::HashMap::new();
     let mut all_tools = Vec::new();
+    let mut tools_desc = String::new();
+    
     for mcp_name in &agent.mcp_servers {
         if let Ok(script_path) = get_mcp_server_path(app, mcp_name) {
             let target = env!("TARGET");
@@ -163,8 +162,22 @@ fn run_agent_node(
         }
     }
 
-    if !all_tools.is_empty() {
-        let mut tools_desc = String::from("\n\n[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]\nДля вызова верни СТРОГО один JSON-блок {\"tool\": \"имя\", \"arguments\": {...}}\n");
+    let has_subagents = !filtered_agents.is_empty();
+    let has_tools = !all_tools.is_empty();
+
+    // ИСПРАВЛЕНИЕ: Добавляем правило про JSON и thought ТОЛЬКО тем агентам, у которых реально есть инструменты или сабагенты.
+    // Автономные специалисты (у которых subagents: [] и tools: []) больше не сбиваются с толку.
+    if has_subagents || has_tools {
+        system_prompt.push_str("\n\n[КРИТИЧЕСКОЕ ПРАВИЛО ВЫЗОВА JSON]\nЕсли ты возвращаешь JSON для вызова сабагента (target) или инструмента (tool), твой JSON СТРОГО ОБЯЗАН содержать поле \"thought\" с кратким объяснением твоих действий.\nПример: {\"thought\": \"вижу проблему X, вызываю специалиста Y\", \"target\": \"...\", \"task_or_response\": \"...\"}\nЭТО ПРАВИЛО ПРИОРИТЕТНЕЕ ЛЮБЫХ ДРУГИХ ФОРМАТОВ В ТВОЕМ ПРОМПТЕ!");
+    }
+
+    if has_subagents {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&build_l0_manifest(&filtered_agents));
+    }
+
+    if has_tools {
+        tools_desc.push_str("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]\nДля вызова верни СТРОГО один JSON-блок {\"thought\": \"краткое объяснение\", \"tool\": \"имя\", \"arguments\": {...}}\n");
         for (_, name, tool) in &all_tools {
             let desc = tool
                 .get("description")
@@ -181,6 +194,7 @@ fn run_agent_node(
                 serde_json::to_string(&schema).unwrap_or_default()
             ));
         }
+        system_prompt.push_str("\n\n");
         system_prompt.push_str(&tools_desc);
     }
 
@@ -188,17 +202,42 @@ fn run_agent_node(
         role: "system".to_string(),
         content: system_prompt,
         sub_calls: None,
+        agent_name: None,
     }];
     messages.extend(history);
     messages.push(ChatMessage {
         role: "user".to_string(),
         content: user_text.clone(),
         sub_calls: None,
+        agent_name: None,
     });
+
+    let mut initial_context_dump = String::new();
+    
+    initial_context_dump.push_str("### [ПРОТОКОЛ ЧЕСТНОСТИ]\n");
+    initial_context_dump.push_str(TRUTH_PROTOCOL);
+    
+    initial_context_dump.push_str("\n\n### [ТЕКУЩЕЕ СОСТОЯНИЕ СЕССИИ]\n");
+    initial_context_dump.push_str(if current_state.is_empty() { "Пусто" } else { &current_state });
+    
+    if has_subagents {
+        initial_context_dump.push_str("\n\n### [МАНИФЕСТ САБАГЕНТОВ]\n");
+        initial_context_dump.push_str(&build_l0_manifest(&filtered_agents));
+    }
+    
+    if has_tools {
+        initial_context_dump.push_str("\n\n### ");
+        initial_context_dump.push_str(tools_desc.trim());
+    }
+
+    for msg in &messages {
+        if msg.role != "system" {
+            initial_context_dump.push_str(&format!("\n\n### [{}]\n{}", msg.role.to_uppercase(), msg.content));
+        }
+    }
 
     let mut final_response = String::new();
     let mut tool_calls = Vec::new();
-    // Увеличено до 30, чтобы агент мог обработать длинные видео (многократный вызов сабагента)
     let max_iterations = 30;
 
     let start_time = Instant::now();
@@ -224,7 +263,6 @@ fn run_agent_node(
             },
         )?;
 
-        // 1. ИЗВЛЕЧЕНИЕ ОБНОВЛЕНИЯ СОСТОЯНИЯ
         let (new_state_opt, clean_response) = extract_state_update(&response);
         if let Some(new_state) = new_state_opt {
             if agent.can_update_state {
@@ -236,13 +274,18 @@ fn run_agent_node(
                         agent.name
                     ),
                 );
-            } else {
-                emit_log(app, &format!("⚠️ Агент {} пытался обновить состояние, но у него нет прав (can_update_state=false).", agent.name));
             }
         }
 
-        // 2. ПРОВЕРКА ВЫЗОВА ИНСТРУМЕНТА
-        if let Some((tool_name, arguments)) = parse_tool_call(&clean_response) {
+        if let Some((tool_name, arguments, thought)) = parse_tool_call(&clean_response) {
+            if !thought.is_empty() {
+                emit_log(app, &format!("💭 Мысль агента {} (инструмент {}): {}", agent.name, tool_name, thought));
+                let _ = app.emit("agent_thought", AgentThoughtPayload {
+                    agent_name: agent.name.clone(),
+                    thought: thought.clone(),
+                });
+            }
+
             emit_status(app, &format!("Выполнение {}...", tool_name), 60);
             let args_str = arguments.to_string();
             let mut tool_output = None;
@@ -256,11 +299,8 @@ fn run_agent_node(
                     );
                 }
             }
-            let output_str = tool_output
+            let truncated_output = tool_output
                 .unwrap_or_else(|| format!("Ошибка: Инструмент '{}' не найден.", tool_name));
-            
-            // Убрали жесткий лимит в 15000 символов. Контекст контролируется размером чанков в MCP.
-            let truncated_output = output_str;
 
             tool_calls.push(ToolCallInfo {
                 tool_name: tool_name.clone(),
@@ -271,6 +311,7 @@ fn run_agent_node(
                 role: "assistant".to_string(),
                 content: response.clone(),
                 sub_calls: None,
+                agent_name: None,
             });
             messages.push(ChatMessage {
                 role: "user".to_string(),
@@ -279,19 +320,24 @@ fn run_agent_node(
                     tool_name, truncated_output
                 ),
                 sub_calls: None,
+                agent_name: None,
             });
             continue;
-        } else if clean_response.contains("\"tool\"") && clean_response.contains('{') {
-            emit_log(app, "⚠️ Внимание: Агент попытался вызвать инструмент, но JSON оказался невалидным.");
         }
 
-        // 3. ПРОВЕРКА ВЛОЖЕННОЙ МАРШРУТИЗАЦИИ (ВЫЗОВ ДРУГОГО АГЕНТА)
-        if let Some((_conf, target, content)) = parse_orchestrator_response(&clean_response) {
+        if let Some((_conf, target, content, thought)) = parse_orchestrator_response(&clean_response) {
+            if !thought.is_empty() {
+                emit_log(app, &format!("💭 Мысль агента {} (вызов {}): {}", agent.name, target, thought));
+                let _ = app.emit("agent_thought", AgentThoughtPayload {
+                    agent_name: agent.name.clone(),
+                    thought: thought.clone(),
+                });
+            }
+
             if target == "reply" || target == "user" {
                 final_response = content;
                 break;
             } else if let Some(subagent) = agents.iter().find(|a| a.id == target) {
-                // РЕКУРСИВНЫЙ ВЫЗОВ САБАГЕНТА
                 let (sub_result, updated_state) = run_agent_node(
                     app,
                     engine,
@@ -307,12 +353,13 @@ fn run_agent_node(
                     all_sub_calls,
                 )?;
 
-                current_state = updated_state; // Синхронизируем состояние, если сабагент его изменил
+                current_state = updated_state;
 
                 messages.push(ChatMessage {
                     role: "assistant".to_string(),
                     content: response.clone(),
                     sub_calls: None,
+                    agent_name: None,
                 });
                 messages.push(ChatMessage {
                     role: "user".to_string(),
@@ -321,6 +368,7 @@ fn run_agent_node(
                         subagent.name, sub_result
                     ),
                     sub_calls: None,
+                    agent_name: None,
                 });
                 continue;
             } else {
@@ -328,19 +376,18 @@ fn run_agent_node(
                     role: "assistant".to_string(),
                     content: response.clone(),
                     sub_calls: None,
+                    agent_name: None,
                 });
                 messages.push(ChatMessage {
                     role: "user".to_string(),
                     content: format!("Ошибка: Агент '{}' не найден.", target),
                     sub_calls: None,
+                    agent_name: None,
                 });
                 continue;
             }
-        } else if clean_response.contains("\"target\"") && clean_response.contains('{') {
-            emit_log(app, "⚠️ Внимание: Агент попытался вызвать сабагента, но JSON оказался невалидным.");
         }
 
-        // 4. ЕСЛИ ЭТО ПРОСТОЙ ТЕКСТ (НЕТ JSON И НЕТ TOOLS)
         final_response = clean_response;
         break;
     }
@@ -348,7 +395,7 @@ fn run_agent_node(
     if depth > 0 {
         let sub_call = SubCall {
             agent_name: agent.name.clone(),
-            prompt: user_text,
+            prompt: initial_context_dump.trim().to_string(),
             response: final_response.clone(),
             time_sec: start_time.elapsed().as_secs_f32(),
             tool_calls,

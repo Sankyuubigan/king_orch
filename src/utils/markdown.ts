@@ -9,6 +9,9 @@ export function renderMarkdown(text: string): string {
     return `__MERMAID_BLOCK_${mermaidBlocks.length - 1}__`;
   });
 
+  // Фикс для стрелок из синтаксиса LaTeX
+  html = html.replace(/\$?\\rightarrow\$?/gi, '→');
+
   html = html.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
   html = html.replace(/^### (.*$)/gim, '<h3>$1</h3>');
