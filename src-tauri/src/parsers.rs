@@ -2,8 +2,17 @@ pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value)> {
     if let Some(start) = text.find('{') {
         if let Some(end) = text.rfind('}') {
             let json_str = &text[start..=end];
-            let cleaned = json_str.replace('\n', "\\n").replace('\r', "");
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&cleaned) {
+            
+            // Сначала пробуем распарсить как есть
+            let parsed = serde_json::from_str::<serde_json::Value>(json_str)
+                .or_else(|_| {
+                    // Если не вышло (например, из-за неэкранированных переносов строк в значениях),
+                    // заменяем переносы на пробелы, чтобы не ломать синтаксис JSON
+                    let cleaned = json_str.replace('\n', " ").replace('\r', "");
+                    serde_json::from_str::<serde_json::Value>(&cleaned)
+                });
+
+            if let Ok(val) = parsed {
                 if let Some(tool) = val.get("tool").and_then(|v| v.as_str()) {
                     let args = val.get("arguments")
                         .cloned()
@@ -23,8 +32,14 @@ pub fn parse_orchestrator_response(text: &str) -> Option<(f32, String, String)> 
     if let Some(start) = text.find('{') {
         if let Some(end) = text.rfind('}') {
             let json_str = &text[start..=end];
-            let cleaned = json_str.replace('\n', "\\n").replace('\r', "");
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&cleaned) {
+            
+            let parsed = serde_json::from_str::<serde_json::Value>(json_str)
+                .or_else(|_| {
+                    let cleaned = json_str.replace('\n', " ").replace('\r', "");
+                    serde_json::from_str::<serde_json::Value>(&cleaned)
+                });
+
+            if let Ok(val) = parsed {
                 let conf = val.get("confidence_score")
                     .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
                     .unwrap_or(1.0) as f32;

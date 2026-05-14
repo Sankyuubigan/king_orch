@@ -270,6 +270,8 @@ fn run_agent_node(
                 sub_calls: None,
             });
             continue;
+        } else if clean_response.contains("\"tool\"") && clean_response.contains('{') {
+            emit_log(app, "⚠️ Внимание: Агент попытался вызвать инструмент, но JSON оказался невалидным.");
         }
 
         // 3. ПРОВЕРКА ВЛОЖЕННОЙ МАРШРУТИЗАЦИИ (ВЫЗОВ ДРУГОГО АГЕНТА)
@@ -323,6 +325,8 @@ fn run_agent_node(
                 });
                 continue;
             }
+        } else if clean_response.contains("\"target\"") && clean_response.contains('{') {
+            emit_log(app, "⚠️ Внимание: Агент попытался вызвать сабагента, но JSON оказался невалидным.");
         }
 
         // 4. ЕСЛИ ЭТО ПРОСТОЙ ТЕКСТ (НЕТ JSON И НЕТ TOOLS)
