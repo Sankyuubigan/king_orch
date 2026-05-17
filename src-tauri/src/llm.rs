@@ -14,6 +14,8 @@ use llama_cpp_2::token::data_array::LlamaTokenDataArray;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use serde::{Deserialize, Serialize};
 
+use crate::config::ModelParams;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallInfo {
     pub tool_name: String,
@@ -36,7 +38,6 @@ pub struct ChatMessage {
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub_calls: Option<Vec<SubCall>>,
-    // Добавили поле для сохранения имени агента в "мыслях"
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
 }
@@ -105,19 +106,29 @@ impl PromptFormat {
     }
 }
 
-// --- НОВЫЙ БЛОК: Чтение GGUF и рендеринг Jinja ---
+// --- Чтение заголовков GGUF ---
+fn read_gguf_header(path: &str) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path).ok()?;
+    let mut buffer = vec![0; 5 * 1024 * 1024]; // Читаем первые 5 МБ
+    let bytes_read = file.read(&mut buffer).ok()?;
+    let data = &buffer[..bytes_read];
+    if data.len() < 24 || &data[0..4] != b"GGUF" { return None; }
+    Some(data.to_vec())
+}
+
 fn skip_gguf_value(data: &[u8], mut offset: usize, val_type: u32) -> Option<usize> {
     match val_type {
-        0 | 1 | 7 => Some(offset + 1), // UINT8, INT8, BOOL
-        2 | 3 => Some(offset + 2), // UINT16, INT16
-        4 | 5 | 6 => Some(offset + 4), // UINT32, INT32, FLOAT32
-        10 | 11 | 12 => Some(offset + 8), // UINT64, INT64, FLOAT64
-        8 => { // STRING
+        0 | 1 | 7 => Some(offset + 1), 
+        2 | 3 => Some(offset + 2), 
+        4 | 5 | 6 => Some(offset + 4), 
+        10 | 11 | 12 => Some(offset + 8), 
+        8 => { 
             if offset + 8 > data.len() { return None; }
             let len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
             Some(offset + 8 + len)
         },
-        9 => { // ARRAY
+        9 => { 
             if offset + 4 > data.len() { return None; }
             let arr_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
             offset += 4;
@@ -133,15 +144,8 @@ fn skip_gguf_value(data: &[u8], mut offset: usize, val_type: u32) -> Option<usiz
     }
 }
 
-fn extract_string_from_gguf(path: &str, target_key: &str) -> Option<String> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut buffer = vec![0; 5 * 1024 * 1024]; // Читаем первые 5 МБ
-    let bytes_read = file.read(&mut buffer).ok()?;
-    let data = &buffer[..bytes_read];
-
-    if data.len() < 24 || &data[0..4] != b"GGUF" { return None; }
-    
+pub fn extract_string_from_gguf(path: &str, target_key: &str) -> Option<String> {
+    let data = read_gguf_header(path)?;
     let kv_count = u64::from_le_bytes(data[16..24].try_into().unwrap());
     let mut offset = 24;
     
@@ -149,11 +153,9 @@ fn extract_string_from_gguf(path: &str, target_key: &str) -> Option<String> {
         if offset + 8 > data.len() { break; }
         let key_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
         offset += 8;
-        
         if offset + key_len > data.len() { break; }
         let key = String::from_utf8_lossy(&data[offset..offset+key_len]);
         offset += key_len;
-        
         if offset + 4 > data.len() { break; }
         let val_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
         offset += 4;
@@ -162,11 +164,60 @@ fn extract_string_from_gguf(path: &str, target_key: &str) -> Option<String> {
             if offset + 8 > data.len() { break; }
             let val_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
             offset += 8;
-            
             if offset + val_len > data.len() { break; }
             return String::from_utf8(data[offset..offset+val_len].to_vec()).ok();
         } else {
-            offset = skip_gguf_value(data, offset, val_type)?;
+            offset = skip_gguf_value(&data, offset, val_type)?;
+        }
+    }
+    None
+}
+
+pub fn extract_f32_from_gguf(path: &str, target_key: &str) -> Option<f32> {
+    let data = read_gguf_header(path)?;
+    let kv_count = u64::from_le_bytes(data[16..24].try_into().unwrap());
+    let mut offset = 24;
+    for _ in 0..kv_count {
+        if offset + 8 > data.len() { break; }
+        let key_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
+        offset += 8;
+        if offset + key_len > data.len() { break; }
+        let key = String::from_utf8_lossy(&data[offset..offset+key_len]);
+        offset += key_len;
+        if offset + 4 > data.len() { break; }
+        let val_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
+        offset += 4;
+        
+        if key == target_key && val_type == 6 { // FLOAT32
+            if offset + 4 > data.len() { break; }
+            return Some(f32::from_le_bytes(data[offset..offset+4].try_into().unwrap()));
+        } else {
+            offset = skip_gguf_value(&data, offset, val_type)?;
+        }
+    }
+    None
+}
+
+pub fn extract_u32_from_gguf(path: &str, target_key: &str) -> Option<u32> {
+    let data = read_gguf_header(path)?;
+    let kv_count = u64::from_le_bytes(data[16..24].try_into().unwrap());
+    let mut offset = 24;
+    for _ in 0..kv_count {
+        if offset + 8 > data.len() { break; }
+        let key_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
+        offset += 8;
+        if offset + key_len > data.len() { break; }
+        let key = String::from_utf8_lossy(&data[offset..offset+key_len]);
+        offset += key_len;
+        if offset + 4 > data.len() { break; }
+        let val_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
+        offset += 4;
+        
+        if key == target_key && val_type == 4 { // UINT32
+            if offset + 4 > data.len() { break; }
+            return Some(u32::from_le_bytes(data[offset..offset+4].try_into().unwrap()));
+        } else {
+            offset = skip_gguf_value(&data, offset, val_type)?;
         }
     }
     None
@@ -228,16 +279,11 @@ impl LlamaEngine {
         })
     }
 
-    pub fn count_tokens(&self, text: &str) -> Result<usize, String> {
-        let tokens = self.model.str_to_token(text, AddBos::Always)
-            .map_err(|e| format!("Ошибка токенизации: {}", e))?;
-        Ok(tokens.len())
-    }
-
     fn run_generation<F>(
         &self,
         full_prompt: &str,
         max_tokens: usize,
+        params: &ModelParams, // ПАРАМЕТРЫ СЭМПЛИРОВАНИЯ
         custom_stop_words: &[&str],
         cancel_flag: Arc<AtomicBool>,
         mut progress_cb: F,
@@ -273,6 +319,8 @@ impl LlamaEngine {
             return Err(format!("Текст слишком большой ({} токенов) для контекста ({}).", tokens.len(), self.n_ctx));
         }
 
+        let mut past_tokens = tokens.clone();
+
         let mut batch = LlamaBatch::new(batch_size, 1);
         let last_index = tokens.len() - 1;
         let mut n_past = 0;
@@ -306,13 +354,110 @@ impl LlamaEngine {
         while n_cur < self.n_ctx as i32 && generated_tokens < max_tokens {
             if cancel_flag.load(Ordering::SeqCst) { return Err("Прервано пользователем".to_string()); }
 
-            let candidates = LlamaTokenDataArray::from_iter(ctx.candidates_ith(batch.n_tokens() - 1), false);
-            let new_token = candidates.data.iter()
-                .max_by(|a, b| a.logit().partial_cmp(&b.logit()).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|d| d.id())
-                .unwrap_or_else(|| self.model.token_eos());
+            let candidates_array = ctx.candidates_ith(batch.n_tokens() - 1);
+            let candidates = LlamaTokenDataArray::from_iter(candidates_array, false);
+
+            // МАНУАЛЬНОЕ СЭМПЛИРОВАНИЕ ДЛЯ НЕЗАВИСИМОСТИ ОТ API LLAMA-CPP
+            let mut candidates_vec: Vec<(llama_cpp_2::token::LlamaToken, f32)> = candidates.data.iter().map(|d| (d.id(), d.logit())).collect();
+
+            // 1. Штрафы за повторения и присутствие
+            let penalty_last_n = 256.min(past_tokens.len());
+            let last_tokens_slice = if past_tokens.len() > penalty_last_n {
+                &past_tokens[past_tokens.len() - penalty_last_n..]
+            } else {
+                &past_tokens
+            };
+
+            let mut penalty_tokens = last_tokens_slice.to_vec();
+            penalty_tokens.sort();
+            penalty_tokens.dedup();
+
+            for (id, logit) in candidates_vec.iter_mut() {
+                if penalty_tokens.binary_search(id).is_ok() {
+                    *logit -= params.presence_penalty;
+                    if *logit <= 0.0 {
+                        *logit *= params.repetition_penalty;
+                    } else {
+                        *logit /= params.repetition_penalty;
+                    }
+                }
+            }
+
+            // 2. Температура
+            let temp = params.temperature.max(0.01);
+            for (_, logit) in candidates_vec.iter_mut() {
+                *logit /= temp;
+            }
+
+            // 3. Softmax
+            let max_logit = candidates_vec.iter().map(|(_, l)| *l).fold(f32::NEG_INFINITY, f32::max);
+            let mut sum_exp = 0.0;
+            let mut probs: Vec<(llama_cpp_2::token::LlamaToken, f32)> = candidates_vec.into_iter().map(|(id, logit)| {
+                let p = (logit - max_logit).exp();
+                sum_exp += p;
+                (id, p)
+            }).collect();
+
+            for (_, p) in probs.iter_mut() {
+                *p /= sum_exp;
+            }
+
+            // 4. Сортировка по вероятности (по убыванию)
+            probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            // 5. Top-K
+            let k = (params.top_k as usize).min(probs.len()).max(1);
+            probs.truncate(k);
+
+            // 6. Min-P
+            let max_prob = probs.first().map(|(_, p)| *p).unwrap_or(1.0);
+            let min_p_thresh = max_prob * params.min_p;
+            probs.retain(|(_, p)| *p >= min_p_thresh);
+
+            // 7. Top-P
+            let mut cumulative_prob = 0.0;
+            let mut top_p_idx = probs.len();
+            for (i, (_, p)) in probs.iter().enumerate() {
+                cumulative_prob += *p;
+                if cumulative_prob >= params.top_p {
+                    top_p_idx = i + 1;
+                    break;
+                }
+            }
+            probs.truncate(top_p_idx);
+
+            // 8. Нормализация вероятностей после обрезки
+            let sum_prob: f32 = probs.iter().map(|(_, p)| *p).sum();
+            for (_, p) in probs.iter_mut() {
+                *p /= sum_prob;
+            }
+
+            // 9. Случайный выбор (Рулетка)
+            static SEED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1337);
+            let mut seed = SEED.load(Ordering::SeqCst);
+            if seed == 1337 {
+                seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos().max(1);
+            }
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            SEED.store(seed, Ordering::SeqCst);
+            let r = (seed as f32) / (u32::MAX as f32);
+
+            let mut cumulative = 0.0;
+            let mut new_token = probs.last().map(|(id, _)| *id).unwrap_or_else(|| self.model.token_eos());
+            for (id, p) in probs.iter() {
+                cumulative += *p;
+                if r <= cumulative {
+                    new_token = *id;
+                    break;
+                }
+            }
+            // КОНЕЦ МАНУАЛЬНОГО СЭМПЛИРОВАНИЯ
 
             if new_token == self.model.token_eos() { break; }
+
+            past_tokens.push(new_token);
 
             if let Ok(bytes) = self.model.token_to_bytes(new_token, Special::Tokenize) {
                 result_text.push_str(&String::from_utf8_lossy(&bytes));
@@ -344,27 +489,11 @@ impl LlamaEngine {
         Ok(result_text)
     }
 
-    pub fn generate<F>(
-        &self,
-        system_prompt: &str,
-        user_prompt: &str,
-        max_tokens: usize,
-        _temperature: f32,
-        cancel_flag: Arc<AtomicBool>,
-        progress_cb: F,
-    ) -> Result<String, String>
-    where F: FnMut(f32, &str) {
-        let messages = vec![
-            ChatMessage { role: "system".to_string(), content: system_prompt.to_string(), sub_calls: None, agent_name: None },
-            ChatMessage { role: "user".to_string(), content: user_prompt.to_string(), sub_calls: None, agent_name: None },
-        ];
-        self.generate_chat(&messages, max_tokens, "Auto", cancel_flag, progress_cb)
-    }
-
     pub fn generate_chat<F>(
         &self,
         messages: &[ChatMessage],
         max_tokens: usize,
+        model_params: &ModelParams,
         format_type: &str,
         cancel_flag: Arc<AtomicBool>,
         progress_cb: F,
@@ -375,7 +504,6 @@ impl LlamaEngine {
         let mut full_prompt = String::new();
         let mut stop_words: Vec<String> = Vec::new();
 
-        // Попытка достать Jinja шаблон из GGUF
         if pf == PromptFormat::Auto {
             if let Some(template_str) = extract_string_from_gguf(&self.model_path, "tokenizer.chat_template") {
                 if let Ok(rendered) = render_jinja_template(&template_str, messages) {
@@ -384,7 +512,6 @@ impl LlamaEngine {
             }
         }
 
-        // Если шаблон не найден или сломан, используем старый fallback
         if full_prompt.is_empty() {
             if pf == PromptFormat::Auto {
                 pf = PromptFormat::detect_from_path(&self.model_path);
@@ -395,6 +522,6 @@ impl LlamaEngine {
         }
         
         let stop_words_refs: Vec<&str> = stop_words.iter().map(|s| s.as_str()).collect();
-        self.run_generation(&full_prompt, max_tokens, &stop_words_refs, cancel_flag, progress_cb)
+        self.run_generation(&full_prompt, max_tokens, model_params, &stop_words_refs, cancel_flag, progress_cb)
     }
 }

@@ -7,14 +7,16 @@ mod orchestrator;
 mod session_manager;
 mod tool_executor;
 mod mcp_client;
+mod config;
+mod downloader;
 
-use serde::{Deserialize, Serialize};
-use std::fs;
+use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, State, Manager, Emitter};
+use tauri::{AppHandle, State, Emitter};
 use agent_manager::AgentProfile;
 use llm::{ChatMessage, SubCall};
+use config::{AppConfig, ModelParams};
 
 pub fn emit_log(app: &AppHandle, msg: &str) {
     let _ = app.emit("log", msg);
@@ -25,89 +27,27 @@ pub fn emit_status(app: &AppHandle, msg: &str, progress: u8) {
     let _ = app.emit("progress", progress);
 }
 
-#[derive(Serialize, Deserialize, Clone)]
-pub struct AppConfig {
-    models: Vec<String>,
-    last_model: Option<String>,
-    #[serde(default = "default_temperature")]
-    temperature: f32,
-    #[serde(default = "default_context_size")]
-    pub context_size: u32,
-    #[serde(default = "default_kv_quantization")]
-    pub kv_quantization: bool,
-    #[serde(default = "default_theme")]
-    pub theme: String,
-    #[serde(default = "default_prompt_format")]
-    pub prompt_format: String,
-    #[serde(default = "default_confidence_threshold")]
-    pub confidence_threshold: f32,
-}
-
-fn default_temperature() -> f32 { 0.2 }
-fn default_context_size() -> u32 { 24576 }
-fn default_kv_quantization() -> bool { false }
-fn default_theme() -> String { "dark".to_string() }
-fn default_prompt_format() -> String { "Auto".to_string() }
-fn default_confidence_threshold() -> f32 { 0.8 }
-
-impl Default for AppConfig {
-    fn default() -> Self {
-        Self {
-            models: Vec::new(),
-            last_model: None,
-            temperature: default_temperature(),
-            context_size: default_context_size(),
-            kv_quantization: default_kv_quantization(),
-            theme: default_theme(),
-            prompt_format: default_prompt_format(),
-            confidence_threshold: default_confidence_threshold(),
-        }
-    }
-}
-
 pub struct AppState {
     pub cancel_flag: Arc<AtomicBool>,
 }
 
-fn get_config_path(app: &AppHandle) -> std::path::PathBuf {
-    let base = app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    if !base.exists() {
-        let _ = fs::create_dir_all(&base);
-    }
-    base.join("app_config.json")
-}
-
-fn load_config(app: &AppHandle) -> AppConfig {
-    if let Ok(data) = fs::read_to_string(get_config_path(app)) {
-        serde_json::from_str(&data).unwrap_or_default()
-    } else {
-        AppConfig::default()
-    }
-}
-
-fn save_config(app: &AppHandle, config: &AppConfig) {
-    if let Ok(data) = serde_json::to_string_pretty(config) {
-        let _ = fs::write(get_config_path(app), data);
-    }
-}
-
 #[tauri::command]
 fn get_config(app: tauri::AppHandle) -> AppConfig {
-    load_config(&app)
+    config::load_config(&app)
 }
 
 #[tauri::command]
 fn set_config_value(app: tauri::AppHandle, key: String, value: serde_json::Value) {
-    let mut config = load_config(&app);
+    let mut cfg = config::load_config(&app);
     match key.as_str() {
         "confidence_threshold" => {
             if let Some(v) = value.as_f64() {
-                config.confidence_threshold = v as f32;
+                cfg.confidence_threshold = v as f32;
             }
         },
         _ => {}
     }
-    save_config(&app, &config);
+    config::save_config(&app, &cfg);
 }
 
 #[tauri::command]
@@ -117,34 +57,34 @@ fn get_agents(app: tauri::AppHandle) -> Vec<AgentProfile> {
 
 #[tauri::command]
 fn add_model(app: tauri::AppHandle, path: String) -> AppConfig {
-    let mut config = load_config(&app);
-    if !config.models.contains(&path) {
-        config.models.push(path.clone());
+    let mut cfg = config::load_config(&app);
+    if !cfg.models.contains(&path) {
+        cfg.models.push(path.clone());
     }
-    config.last_model = Some(path);
-    save_config(&app, &config);
-    config
+    cfg.last_model = Some(path);
+    config::save_config(&app, &cfg);
+    cfg
 }
 
 #[tauri::command]
 fn set_last_model(app: tauri::AppHandle, path: String) {
-    let mut config = load_config(&app);
-    config.last_model = Some(path);
-    save_config(&app, &config);
+    let mut cfg = config::load_config(&app);
+    cfg.last_model = Some(path);
+    config::save_config(&app, &cfg);
 }
 
 #[tauri::command]
 fn set_theme(app: tauri::AppHandle, theme: String) {
-    let mut config = load_config(&app);
-    config.theme = theme;
-    save_config(&app, &config);
+    let mut cfg = config::load_config(&app);
+    cfg.theme = theme;
+    config::save_config(&app, &cfg);
 }
 
 #[tauri::command]
 fn set_prompt_format(app: tauri::AppHandle, format: String) {
-    let mut config = load_config(&app);
-    config.prompt_format = format;
-    save_config(&app, &config);
+    let mut cfg = config::load_config(&app);
+    cfg.prompt_format = format;
+    config::save_config(&app, &cfg);
 }
 
 #[tauri::command]
@@ -158,7 +98,7 @@ fn load_session(app: tauri::AppHandle, id: String) -> Result<session_manager::Ch
 }
 
 #[tauri::command]
-fn save_session(app: tauri::AppHandle, id: String, messages: Vec<ChatMessage>, state_markdown: String) -> Result<(), String> {
+fn save_session(app: tauri::AppHandle, id: String, messages: Vec<ChatMessage>, state_markdown: String, draft: String) -> Result<(), String> {
     let title = messages.iter().find(|m| m.role == "user").map(|m| {
         let text = m.content.replace('\n', " ");
         if text.chars().count() > 35 {
@@ -168,7 +108,7 @@ fn save_session(app: tauri::AppHandle, id: String, messages: Vec<ChatMessage>, s
         }
     }).unwrap_or_else(|| "Новая сессия".to_string());
     
-    session_manager::save_session(&app, &id, &title, messages, state_markdown)
+    session_manager::save_session(&app, &id, &title, messages, state_markdown, draft)
 }
 
 #[tauri::command]
@@ -184,6 +124,63 @@ fn rename_session(app: tauri::AppHandle, id: String, new_title: String) -> Resul
 #[tauri::command]
 fn open_session_folder(app: tauri::AppHandle, id: String) -> Result<(), String> {
     session_manager::open_session_folder(&app, &id)
+}
+
+// --- НОВЫЕ КОМАНДЫ ДЛЯ ПАРАМЕТРОВ И КАТАЛОГА ---
+
+#[tauri::command]
+fn get_models_catalog(app: tauri::AppHandle) -> Vec<config::CatalogEntry> {
+    config::load_catalog(&app)
+}
+
+#[tauri::command]
+fn get_model_params(app: tauri::AppHandle, model_path: String) -> ModelParams {
+    let mut cfg = config::load_config(&app);
+    if let Some(params) = cfg.model_params.get(&model_path) {
+        return params.clone();
+    }
+
+    // Фоллбэк: ищем в JSON каталоге по имени файла
+    let catalog = config::load_catalog(&app);
+    let file_name = std::path::Path::new(&model_path).file_name().unwrap_or_default().to_string_lossy();
+    
+    let mut params = ModelParams::default();
+    let mut found = false;
+
+    for entry in catalog {
+        if file_name.contains(&entry.name) || entry.download_url.contains(&file_name.to_string()) {
+            params = entry.default_params.clone();
+            found = true;
+            break;
+        }
+    }
+
+    // Если не нашли в JSON, вытаскиваем из GGUF метаданных
+    if !found {
+        if let Some(temp) = llm::extract_f32_from_gguf(&model_path, "tokenizer.ggml.temp") { params.temperature = temp; }
+        if let Some(top_k) = llm::extract_u32_from_gguf(&model_path, "tokenizer.ggml.top_k") { params.top_k = top_k; }
+        if let Some(top_p) = llm::extract_f32_from_gguf(&model_path, "tokenizer.ggml.top_p") { params.top_p = top_p; }
+        if let Some(min_p) = llm::extract_f32_from_gguf(&model_path, "tokenizer.ggml.min_p") { params.min_p = min_p; }
+    }
+
+    cfg.model_params.insert(model_path.clone(), params.clone());
+    config::save_config(&app, &cfg);
+    params
+}
+
+#[tauri::command]
+fn set_model_params(app: tauri::AppHandle, model_path: String, params: ModelParams) {
+    let mut cfg = config::load_config(&app);
+    cfg.model_params.insert(model_path, params);
+    config::save_config(&app, &cfg);
+}
+
+#[tauri::command]
+fn reset_model_params(app: tauri::AppHandle, model_path: String) -> ModelParams {
+    let mut cfg = config::load_config(&app);
+    cfg.model_params.remove(&model_path);
+    config::save_config(&app, &cfg);
+    get_model_params(app, model_path) // Перезапустит фоллбэк
 }
 
 #[derive(Serialize)]
@@ -204,14 +201,15 @@ async fn chat_request(
     context_size: u32,
     kv_quantization: bool,
     current_state: String,
+    model_params: ModelParams, // Получаем параметры из UI
 ) -> Result<ChatResponse, String> {
-    let mut config = load_config(&app);
-    config.context_size = context_size;
-    config.kv_quantization = kv_quantization;
-    save_config(&app, &config);
+    let mut cfg = config::load_config(&app);
+    cfg.context_size = context_size;
+    cfg.kv_quantization = kv_quantization;
+    config::save_config(&app, &cfg);
     
-    let format_type = config.prompt_format.clone();
-    let conf_threshold = config.confidence_threshold;
+    let format_type = cfg.prompt_format.clone();
+    let conf_threshold = cfg.confidence_threshold;
 
     state.cancel_flag.store(false, Ordering::SeqCst);
     let cancel_flag = state.cancel_flag.clone();
@@ -225,7 +223,7 @@ async fn chat_request(
             history,
             context_size,
             kv_quantization,
-            config.temperature,
+            model_params,
             format_type,
             conf_threshold,
             cancel_flag,
@@ -265,6 +263,11 @@ fn main() {
             delete_session,
             rename_session,
             open_session_folder,
+            get_models_catalog,
+            get_model_params,
+            set_model_params,
+            reset_model_params,
+            downloader::download_model,
             chat_request,
             stop_processing
         ])

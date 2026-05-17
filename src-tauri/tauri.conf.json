@@ -1,6 +1,6 @@
 {
   "productName": "King Orch",
-  "version": "26.5.47",
+  "version": "26.5.54",
   "identifier": "com.kingorch.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -23,6 +23,7 @@
     }
   },
   "bundle": {
+    "targets": ["nsis", "msi"],
     "resources": [
       "mcp_servers/*"
     ],

@@ -1,0 +1,26 @@
+[
+  {
+    "name": "gemma-4-8b",
+    "download_url": "https://huggingface.co/mradermacher/gemma-4-E4B-it-heretic-i1-GGUF/resolve/main/gemma-4-E4B-it-heretic.i1-Q4_K_M.gguf?download=true",
+    "default_params": {
+      "temperature": 1.0,
+      "top_k": 64,
+      "top_p": 0.95,
+      "min_p": 0.05,
+      "repetition_penalty": 1.1,
+      "presence_penalty": 0.0
+    }
+  },
+  {
+    "name": "granite-4.1-8b",
+    "download_url": "https://huggingface.co/mradermacher/granite-4.1-8b-heretic-i1-GGUF/resolve/main/granite-4.1-8b-heretic.i1-Q4_K_M.gguf?download=true",
+    "default_params": {
+      "temperature": 0.7,
+      "top_k": 40,
+      "top_p": 0.9,
+      "min_p": 0.05,
+      "repetition_penalty": 1.15,
+      "presence_penalty": 0.1
+    }
+  }
+]

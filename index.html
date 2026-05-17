@@ -9,16 +9,12 @@
 <body>
   <div class="app-container">
     
-    <!-- БОКОВАЯ ПАНЕЛЬ С СЕССИЯМИ -->
     <aside class="sidebar">
       <button id="btn-new-session" class="btn-primary">📝 Новая сессия</button>
       <div class="session-list-title">История чатов</div>
-      <div id="session-list" class="session-list">
-        <!-- Сюда подгружаются сессии -->
-      </div>
+      <div id="session-list" class="session-list"></div>
     </aside>
 
-    <!-- ОСНОВНОЙ КОНТЕНТ -->
     <main class="main-content">
       <div class="tabs">
         <button id="tab-chat" class="tab-btn active">💬 Чат</button>
@@ -26,17 +22,11 @@
         <button id="tab-logs" class="tab-btn">📝 Логи</button>
       </div>
 
-      <!-- ВКЛАДКА ЧАТА -->
       <div id="view-chat" class="view active chat-layout">
-        
-        <!-- Окно истории сообщений -->
         <div id="chat-history" class="chat-history">
-          <div class="message message-system">
-            Система готова. Выберите агента и напишите запрос.
-          </div>
+          <div class="message message-system">Система готова. Выберите агента и напишите запрос.</div>
         </div>
 
-        <!-- Панель статуса -->
         <div class="feedback" id="chat-feedback" style="display: none;">
           <div class="result-toolbar">
             <div id="status-label" class="status-label">Обработка...</div>
@@ -46,20 +36,15 @@
           </div>
         </div>
 
-        <!-- Ввод сообщения и выбор агента/модели -->
         <div class="chat-input-area group-box">
           <textarea id="chat-input" placeholder="Спросите что угодно (Shift+Enter для переноса)..."></textarea>
           
           <div class="chat-input-controls">
             <div class="chat-input-controls-left">
-              <select id="agent-select" title="Выбор агента">
-                <!-- Сюда подгружаются видимые агенты из папки agents/ -->
-              </select>
-              
+              <select id="agent-select" title="Выбор агента"></select>
               <select id="model-select" title="Выбор модели GGUF"></select>
-              <button id="btn-add-model" class="btn-secondary" title="Добавить новую модель">+</button>
+              <button id="btn-add-model" class="btn-secondary" title="Добавить новую модель (локально)">+</button>
             </div>
-            
             <div class="chat-input-controls-right">
               <button id="btn-stop" class="btn-danger" disabled>⏹ Стоп</button>
               <button id="btn-send" class="btn-primary">Отправить</button>
@@ -68,22 +53,67 @@
         </div>
       </div>
 
-      <!-- СКРЫТЫЙ VIEW ДЛЯ САБЧАТА -->
       <div id="view-subchat" class="view chat-layout">
         <div class="subchat-header">
           <button id="btn-back-chat" class="btn-secondary">⬅ Назад к чату</button>
           <span id="subchat-title">Отчет сабагента</span>
         </div>
-        <div id="subchat-history" class="chat-history">
-          <!-- Сюда подгружается переписка с сабагентом -->
-        </div>
+        <div id="subchat-history" class="chat-history"></div>
       </div>
 
-      <!-- ВКЛАДКА НАСТРОЕК -->
-      <div id="view-settings" class="view">
+      <div id="view-settings" class="view" style="overflow-y: auto;">
         
         <div class="group-box">
-          <div class="group-title">1. Оформление</div>
+          <div class="group-title">1. Скачать новую модель</div>
+          <div class="input-row">
+            <select id="download-model-select" style="flex: 1;">
+              <option value="">Загрузка каталога...</option>
+            </select>
+            <button id="btn-download-model" class="btn-primary">Скачать</button>
+          </div>
+          <div id="download-progress-container" style="display: none; margin-top: 10px;">
+            <div class="status-label" id="download-status-label" style="margin-bottom: 5px;">0 MB / 0 MB</div>
+            <div class="progress-bar-container">
+              <div id="download-progress-bar" class="progress-bar"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="group-box">
+          <div class="group-title">2. Параметры генерации (для выбранной модели)</div>
+          
+          <div class="input-row" style="margin-top: 10px;" title="Температура (Temperature). Регулирует общий градус фантазии: при низких значениях ИИ отвечает максимально логично и сухо (идеально для кода), а при высоких — начинает креативить и рисковать. Значение 0.0 отключает случайность (жадное декодирование).">
+            <label for="temp-slider" style="min-width: 180px;">Температура: <strong id="temp-value">0.8</strong></label>
+            <input type="range" id="temp-slider" min="0.0" max="2.0" step="0.05" value="0.8" style="flex: 1;" />
+          </div>
+          <div class="input-row" style="margin-top: 10px;" title="Строгий количественный фильтр: заставляет ИИ выбирать следующее слово только из заданного числа самых вероятных вариантов, сразу отбрасывая остальной мусор. Значение 0 отключает этот фильтр.">
+            <label for="topk-slider" style="min-width: 180px;">top_k: <strong id="topk-value">40</strong></label>
+            <input type="range" id="topk-slider" min="0" max="100" step="1" value="40" style="flex: 1;" />
+          </div>
+          <div class="input-row" style="margin-top: 10px;" title="Гибкий процентный фильтр: отбирает группу самых популярных слов, пока их суммарная вероятность не достигнет заданного порога, отсекая маловероятные глупости. Значение 1.0 отключает этот фильтр.">
+            <label for="topp-slider" style="min-width: 180px;">top_p: <strong id="topp-value">0.95</strong></label>
+            <input type="range" id="topp-slider" min="0.05" max="1.0" step="0.05" value="0.95" style="flex: 1;" />
+          </div>
+          <div class="input-row" style="margin-top: 10px;" title="Фильтр относительно лидера: сравнивает все варианты с самым идеальным словом и отсеивает те, которые слишком сильно от него отстают. Значение 0.0 отключает этот фильтр.">
+            <label for="minp-slider" style="min-width: 180px;">min_p: <strong id="minp-value">0.05</strong></label>
+            <input type="range" id="minp-slider" min="0.0" max="0.5" step="0.01" value="0.05" style="flex: 1;" />
+          </div>
+          <div class="input-row" style="margin-top: 10px;" title="Штраф за повторения. Наказывает ИИ за использование одних и тех же слов подряд, спасая текст от заикания и превращения в заезженную пластинку. Значение 1.0 отключает штраф.">
+            <label for="reppen-slider" style="min-width: 180px;">repetition_penalty: <strong id="reppen-value">1.1</strong></label>
+            <input type="range" id="reppen-slider" min="1.0" max="2.0" step="0.05" value="1.1" style="flex: 1;" />
+          </div>
+          <div class="input-row" style="margin-top: 10px;" title="Штраф за топтание на месте. Заставляет ИИ переключаться на новые темы и вводить новые слова, если он начинает слишком долго обмусоливать одну и ту же мысль. Значение 0.0 отключает штраф.">
+            <label for="prespen-slider" style="min-width: 180px;">presence_penalty: <strong id="prespen-value">0.0</strong></label>
+            <input type="range" id="prespen-slider" min="0.0" max="2.0" step="0.1" value="0.0" style="flex: 1;" />
+          </div>
+          
+          <div style="margin-top: 15px; text-align: right;">
+            <button id="btn-reset-params" class="btn-secondary">Сбросить по умолчанию</button>
+          </div>
+        </div>
+
+        <div class="group-box">
+          <div class="group-title">3. Общие системные настройки</div>
           <div class="input-row">
             <label>Тема интерфейса:</label>
             <select id="theme-select">
@@ -91,14 +121,10 @@
               <option value="dark">Темная</option>
             </select>
           </div>
-        </div>
-
-        <div class="group-box">
-          <div class="group-title">2. Продвинутые настройки LLM и Агентов</div>
-          <div class="input-row">
+          <div class="input-row" style="margin-top: 10px;">
             <label>Формат промпта:</label>
             <select id="prompt-format-select" style="flex: 1;">
-              <option value="Auto">Автоопределение (по имени файла)</option>
+              <option value="Auto">Автоопределение</option>
               <option value="ChatML">ChatML (Qwen, Mistral)</option>
               <option value="Gemma">Gemma</option>
               <option value="Llama3">Llama 3</option>
@@ -109,17 +135,12 @@
             <input type="range" id="context-slider" min="4096" max="131072" step="1024" value="24576" style="flex: 1;" />
           </div>
           <div class="input-row" style="margin-top: 10px;">
-            <label for="conf-slider" style="min-width: 180px;">Порог уверенности: <strong id="conf-value">0.8</strong></label>
-            <input type="range" id="conf-slider" min="0.1" max="1.0" step="0.05" value="0.8" style="flex: 1;" title="Если уверенность агента ниже порога, он прервется и задаст вопрос пользователю." />
-          </div>
-          <div class="input-row" style="margin-top: 10px;">
             <input type="checkbox" id="chk-kv-quant" />
             <label for="chk-kv-quant">Квантизация KV кэша (Q8_0)</label>
           </div>
         </div>
       </div>
 
-      <!-- ВКЛАДКА ЛОГОВ -->
       <div id="view-logs" class="view">
         <div class="group-box" style="flex: 1; display: flex; flex-direction: column; height: 100%;">
           <div class="group-title" style="display: flex; justify-content: space-between;">

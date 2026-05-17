@@ -1,22 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { createMessageElement, createSubcallElement, createToolCallElement, createThoughtElement, Role } from "./ui/render";
 import { fetchSessions, loadSession, deleteSession, saveSession, renameSession, openSessionFolder } from "./api/sessions";
 import mermaid from "mermaid";
 
-mermaid.initialize({
-  startOnLoad: false,
-  theme: "dark",
-  securityLevel: "loose",
-});
+mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
 
 async function renderMermaidDiagrams() {
-  try {
-    await mermaid.run();
-  } catch (e) {
-    console.error("Mermaid render error:", e);
-  }
+  try { await mermaid.run(); } catch (e) { console.error("Mermaid error:", e); }
 }
 
 const modelSelect = document.getElementById("model-select") as HTMLSelectElement;
@@ -32,12 +24,32 @@ const statusLabel = document.getElementById("status-label") as HTMLDivElement;
 
 const contextSlider = document.getElementById("context-slider") as HTMLInputElement;
 const contextValue = document.getElementById("context-value") as HTMLElement;
-const confSlider = document.getElementById("conf-slider") as HTMLInputElement;
-const confValue = document.getElementById("conf-value") as HTMLElement;
 const chkKvQuant = document.getElementById("chk-kv-quant") as HTMLInputElement;
 const btnAddModel = document.getElementById("btn-add-model") as HTMLButtonElement;
 const themeSelect = document.getElementById("theme-select") as HTMLSelectElement;
 const promptFormatSelect = document.getElementById("prompt-format-select") as HTMLSelectElement;
+
+// UI Параметров модели
+const tempSlider = document.getElementById("temp-slider") as HTMLInputElement;
+const tempValue = document.getElementById("temp-value") as HTMLElement;
+const topkSlider = document.getElementById("topk-slider") as HTMLInputElement;
+const topkValue = document.getElementById("topk-value") as HTMLElement;
+const toppSlider = document.getElementById("topp-slider") as HTMLInputElement;
+const toppValue = document.getElementById("topp-value") as HTMLElement;
+const minpSlider = document.getElementById("minp-slider") as HTMLInputElement;
+const minpValue = document.getElementById("minp-value") as HTMLElement;
+const reppenSlider = document.getElementById("reppen-slider") as HTMLInputElement;
+const reppenValue = document.getElementById("reppen-value") as HTMLElement;
+const prespenSlider = document.getElementById("prespen-slider") as HTMLInputElement;
+const prespenValue = document.getElementById("prespen-value") as HTMLElement;
+const btnResetParams = document.getElementById("btn-reset-params") as HTMLButtonElement;
+
+// UI Скачивания
+const downloadModelSelect = document.getElementById("download-model-select") as HTMLSelectElement;
+const btnDownloadModel = document.getElementById("btn-download-model") as HTMLButtonElement;
+const downloadProgressContainer = document.getElementById("download-progress-container") as HTMLDivElement;
+const downloadProgressBar = document.getElementById("download-progress-bar") as HTMLDivElement;
+const downloadStatusLabel = document.getElementById("download-status-label") as HTMLDivElement;
 
 const tabChat = document.getElementById("tab-chat") as HTMLButtonElement;
 const tabSettings = document.getElementById("tab-settings") as HTMLButtonElement;
@@ -57,7 +69,9 @@ const sessionList = document.getElementById("session-list") as HTMLDivElement;
 let isProcessing = false;
 let globalChatHistory: {role: string, content: string, sub_calls?: any[], agent_name?: string}[] =[];
 let currentSessionId: string | null = null;
-let globalStateMarkdown: string = ""; // Глобальное состояние сессии
+let globalStateMarkdown: string = ""; 
+let modelsCatalog: any[] = [];
+let draftTimeout: number | undefined;
 
 export function logToGUI(msg: string) {
   if (logView) {
@@ -75,9 +89,7 @@ function appendMessageToContainer(container: HTMLDivElement, role: Role, content
 
 function appendMessage(role: Role, content: string, agentName?: string, timeText?: string, subCalls?: any[]) {
   if (subCalls && subCalls.length > 0) {
-    subCalls.forEach(call => {
-      chatHistory.appendChild(createSubcallElement(call, showSubchat));
-    });
+    subCalls.forEach(call => { chatHistory.appendChild(createSubcallElement(call, showSubchat)); });
   }
   appendMessageToContainer(chatHistory, role, content, agentName, timeText);
 }
@@ -87,22 +99,14 @@ function showSubchat(subCall: any) {
   viewSubchat.classList.add('active');
   subchatTitle.innerText = `Сабагент: ${subCall.agent_name}`;
   subchatHistory.innerHTML = '';
-  
   appendMessageToContainer(subchatHistory, 'system', subCall.prompt, 'Отчет контекста сабагента');
-  
-  if (subCall.tool_calls && subCall.tool_calls.length > 0) {
-    subCall.tool_calls.forEach((tc: any) => {
-      subchatHistory.appendChild(createToolCallElement(tc.tool_name, tc.arguments, tc.result));
-    });
+  if (subCall.tool_calls) {
+    subCall.tool_calls.forEach((tc: any) => { subchatHistory.appendChild(createToolCallElement(tc.tool_name, tc.arguments, tc.result)); });
   }
-
   appendMessageToContainer(subchatHistory, 'agent', subCall.response, subCall.agent_name, `${subCall.time_sec.toFixed(1)} сек`);
 }
 
-btnBackChat?.addEventListener("click", () => {
-  viewSubchat.classList.remove('active');
-  viewChat.classList.add('active');
-});
+btnBackChat?.addEventListener("click", () => { viewSubchat.classList.remove('active'); viewChat.classList.add('active'); });
 
 function switchTab(tab: 'chat' | 'settings' | 'logs') {
   tabChat.classList.toggle('active', tab === 'chat');
@@ -121,10 +125,6 @@ tabLogs?.addEventListener("click", () => switchTab('logs'));
 btnClearLogs?.addEventListener("click", () => { logView.value = ""; });
 
 contextSlider?.addEventListener("input", () => { contextValue.innerText = contextSlider.value; });
-confSlider?.addEventListener("input", async () => {
-  confValue.innerText = confSlider.value;
-  await invoke("set_config_value", { key: "confidence_threshold", value: parseFloat(confSlider.value) });
-});
 
 themeSelect?.addEventListener("change", async () => {
   document.documentElement.setAttribute('data-theme', themeSelect.value);
@@ -135,6 +135,111 @@ promptFormatSelect?.addEventListener("change", async () => {
   await invoke("set_prompt_format", { format: promptFormatSelect.value });
 });
 
+// -- ПАРАМЕТРЫ МОДЕЛИ --
+async function loadModelParams() {
+  const modelPath = modelSelect.value;
+  if (!modelPath) return;
+  const params: any = await invoke("get_model_params", { modelPath });
+  
+  tempSlider.value = params.temperature; tempValue.innerText = params.temperature;
+  topkSlider.value = params.top_k; topkValue.innerText = params.top_k;
+  toppSlider.value = params.top_p; toppValue.innerText = params.top_p;
+  minpSlider.value = params.min_p; minpValue.innerText = params.min_p;
+  reppenSlider.value = params.repetition_penalty; reppenValue.innerText = params.repetition_penalty;
+  prespenSlider.value = params.presence_penalty; prespenValue.innerText = params.presence_penalty;
+}
+
+async function saveModelParams() {
+  const modelPath = modelSelect.value;
+  if (!modelPath) return;
+  const params = {
+    temperature: parseFloat(tempSlider.value),
+    top_k: parseInt(topkSlider.value, 10),
+    top_p: parseFloat(toppSlider.value),
+    min_p: parseFloat(minpSlider.value),
+    repetition_penalty: parseFloat(reppenSlider.value),
+    presence_penalty: parseFloat(prespenSlider.value)
+  };
+  await invoke("set_model_params", { modelPath, params });
+}
+
+[
+  { slider: tempSlider, label: tempValue },
+  { slider: topkSlider, label: topkValue },
+  { slider: toppSlider, label: toppValue },
+  { slider: minpSlider, label: minpValue },
+  { slider: reppenSlider, label: reppenValue },
+  { slider: prespenSlider, label: prespenValue }
+].forEach(item => {
+  item.slider.addEventListener("input", () => {
+    item.label.innerText = item.slider.value;
+    saveModelParams();
+  });
+});
+
+btnResetParams?.addEventListener("click", async () => {
+  const modelPath = modelSelect.value;
+  if (!modelPath) return;
+  await invoke("reset_model_params", { modelPath });
+  await loadModelParams();
+  logToGUI("Параметры сброшены на значения по умолчанию.");
+});
+
+// -- СКАЧИВАНИЕ МОДЕЛЕЙ --
+async function loadCatalog() {
+  try {
+    modelsCatalog = await invoke("get_models_catalog");
+    downloadModelSelect.innerHTML = '<option value="">-- Выберите модель --</option>';
+    modelsCatalog.forEach(m => {
+      const opt = document.createElement("option");
+      opt.value = m.name;
+      opt.text = m.name;
+      downloadModelSelect.appendChild(opt);
+    });
+  } catch (e) {
+    downloadModelSelect.innerHTML = '<option value="">Ошибка загрузки каталога</option>';
+  }
+}
+
+btnDownloadModel?.addEventListener("click", async () => {
+  const selectedName = downloadModelSelect.value;
+  if (!selectedName) return;
+  const model = modelsCatalog.find(m => m.name === selectedName);
+  if (!model) return;
+
+  try {
+    const savePath = await save({ defaultPath: `${model.name}.gguf`, filters: [{ name: "GGUF", extensions: ["gguf"] }] });
+    if (!savePath) return;
+
+    btnDownloadModel.disabled = true;
+    downloadProgressContainer.style.display = "block";
+    
+    await invoke("download_model", { url: model.download_url, savePath });
+    
+    await invoke("add_model", { path: savePath });
+    await loadConfig(); // Обновляем список моделей
+    logToGUI(`Модель ${model.name} успешно скачана!`);
+    alert(`Загрузка ${model.name} завершена.`);
+  } catch (e) {
+    logToGUI(`Ошибка скачивания: ${e}`);
+    alert(`Ошибка: ${e}`);
+  } finally {
+    btnDownloadModel.disabled = false;
+    downloadProgressContainer.style.display = "none";
+  }
+});
+
+listen("download_progress", (e: any) => {
+  const { downloaded, total } = e.payload;
+  const mbDown = (downloaded / 1024 / 1024).toFixed(1);
+  const mbTotal = (total / 1024 / 1024).toFixed(1);
+  const percent = total > 0 ? (downloaded / total) * 100 : 0;
+  
+  downloadProgressBar.style.width = `${percent}%`;
+  downloadStatusLabel.innerText = `${mbDown} MB / ${mbTotal} MB (${percent.toFixed(1)}%)`;
+});
+
+// -- ЗАГРУЗКА КОНФИГА --
 async function loadConfig() {
   logToGUI("Загрузка конфигурации...");
   try {
@@ -142,13 +247,14 @@ async function loadConfig() {
     updateModelSelect(config);
     
     if (config.context_size) { contextSlider.value = config.context_size.toString(); contextValue.innerText = config.context_size.toString(); }
-    if (config.confidence_threshold !== undefined) { confSlider.value = config.confidence_threshold.toString(); confValue.innerText = config.confidence_threshold.toString(); }
     if (config.kv_quantization !== undefined) chkKvQuant.checked = config.kv_quantization;
     if (config.theme) { themeSelect.value = config.theme; document.documentElement.setAttribute('data-theme', config.theme); }
     if (config.prompt_format) promptFormatSelect.value = config.prompt_format;
     
     await loadAgents();
     await loadSessionsListUI();
+    await loadCatalog();
+    await loadModelParams(); // Загружаем параметры для активной модели
   } catch (e) { logToGUI(`Ошибка загрузки конфига: ${e}`); }
 }
 
@@ -164,21 +270,15 @@ async function loadAgents() {
         agentSelect.appendChild(option);
       }
     }
-    
     const orchOption = Array.from(agentSelect.options).find(opt => opt.value === 'agent_therapist_communicator');
-    if (orchOption) {
-      agentSelect.value = orchOption.value;
-    }
+    if (orchOption) agentSelect.value = orchOption.value;
   } catch (e) {}
 }
 
-// Закрытие дропдаунов при клике вне их
 document.addEventListener("click", (e) => {
   const dropdowns = document.querySelectorAll('.session-menu-dropdown.show');
   dropdowns.forEach(dd => {
-    if (!dd.parentElement?.contains(e.target as Node)) {
-      dd.classList.remove('show');
-    }
+    if (!dd.parentElement?.contains(e.target as Node)) dd.classList.remove('show');
   });
 });
 
@@ -201,7 +301,6 @@ async function loadSessionsListUI() {
           </div>
         </div>
       `;
-      
       div.querySelector('.session-title')?.addEventListener("click", () => openSessionUI(s.id));
       
       const menuBtn = div.querySelector('.btn-session-menu');
@@ -209,16 +308,12 @@ async function loadSessionsListUI() {
       
       menuBtn?.addEventListener("click", (e) => {
         e.stopPropagation();
-        // Скрываем все остальные
-        document.querySelectorAll('.session-menu-dropdown.show').forEach(dd => {
-          if (dd !== dropdown) dd.classList.remove('show');
-        });
+        document.querySelectorAll('.session-menu-dropdown.show').forEach(dd => { if (dd !== dropdown) dd.classList.remove('show'); });
         dropdown?.classList.toggle('show');
       });
 
       div.querySelector('.btn-rename')?.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        dropdown?.classList.remove('show');
+        e.stopPropagation(); dropdown?.classList.remove('show');
         const currentTitle = (e.target as HTMLElement).getAttribute('data-title') || '';
         const newTitle = prompt("Введите новое название сессии:", currentTitle);
         if (newTitle && newTitle.trim() !== "" && newTitle !== currentTitle) {
@@ -228,17 +323,12 @@ async function loadSessionsListUI() {
       });
 
       div.querySelector('.btn-explore')?.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        dropdown?.classList.remove('show');
-        await openSessionFolder(s.id);
+        e.stopPropagation(); dropdown?.classList.remove('show'); await openSessionFolder(s.id);
       });
 
       div.querySelector('.btn-delete')?.addEventListener("click", async (e) => {
-        e.stopPropagation();
-        dropdown?.classList.remove('show');
-        deleteSessionUI(s.id);
+        e.stopPropagation(); dropdown?.classList.remove('show'); deleteSessionUI(s.id);
       });
-      
       sessionList.appendChild(div);
     }
   } catch (e) {}
@@ -250,7 +340,8 @@ async function openSessionUI(id: string) {
     const session = await loadSession(id);
     currentSessionId = id;
     globalChatHistory = session.messages;
-    globalStateMarkdown = session.state_markdown || ""; // Загружаем состояние
+    globalStateMarkdown = session.state_markdown || ""; 
+    chatInput.value = session.draft || ""; // Подгружаем черновик
     
     chatHistory.innerHTML = '';
     appendMessage('system', 'Сессия загружена.');
@@ -280,8 +371,9 @@ function startNewSession() {
   if (isProcessing) return;
   currentSessionId = null;
   globalChatHistory =[];
-  globalStateMarkdown = ""; // Сбрасываем состояние
+  globalStateMarkdown = "";
   chatHistory.innerHTML = '';
+  chatInput.value = ''; // Очищаем черновик для новой сессии
   appendMessage('system', 'Новая сессия начата. Выберите агента и напишите запрос.');
   loadSessionsListUI();
   switchTab('chat');
@@ -299,12 +391,19 @@ function updateModelSelect(config: any) {
   if (config.last_model && config.models.includes(config.last_model)) modelSelect.value = config.last_model;
 }
 
-modelSelect?.addEventListener("change", async () => { await invoke("set_last_model", { path: modelSelect.value }); });
+modelSelect?.addEventListener("change", async () => { 
+  await invoke("set_last_model", { path: modelSelect.value }); 
+  await loadModelParams(); // При смене модели загружаем ее параметры!
+});
 
 btnAddModel?.addEventListener("click", async () => {
   try {
     const selected = await open({ filters: [{ name: "Model", extensions:["gguf"] }] });
-    if (selected) updateModelSelect(await invoke("add_model", { path: selected as string }));
+    if (selected) {
+      const config: any = await invoke("add_model", { path: selected as string });
+      updateModelSelect(config);
+      await loadModelParams();
+    }
   } catch (error) {}
 });
 
@@ -317,8 +416,31 @@ function setProcessingState(state: boolean) {
   } else { chatFeedback.style.display = "none"; }
 }
 
-agentSelect?.addEventListener("change", () => {
-  appendMessage('system', `Вы переключились на: ${agentSelect.options[agentSelect.selectedIndex].text}.`);
+// -- СОХРАНЕНИЕ ЧЕРНОВИКОВ --
+chatInput.addEventListener("input", () => {
+  if (isProcessing) return;
+  
+  // Если сессии еще нет, но пользователь начал печатать - мгновенно создаем её
+  if (!currentSessionId && chatInput.value.trim() !== "") {
+    currentSessionId = Date.now().toString();
+    globalChatHistory = [];
+    globalStateMarkdown = "";
+    saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, chatInput.value).then(() => {
+      loadSessionsListUI();
+    });
+  } else if (currentSessionId) {
+    clearTimeout(draftTimeout);
+    draftTimeout = window.setTimeout(() => {
+      saveSession(currentSessionId!, globalChatHistory, globalStateMarkdown, chatInput.value);
+    }, 500); // 500 мс задержки (debounce)
+  }
+});
+
+chatInput.addEventListener("blur", () => {
+  if (currentSessionId && !isProcessing) {
+    clearTimeout(draftTimeout);
+    saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, chatInput.value);
+  }
 });
 
 async function handleSend() {
@@ -329,23 +451,30 @@ async function handleSend() {
   if (!modelPath) return appendMessage('system', 'Ошибка: Выберите модель GGUF!');
 
   appendMessage('user', text);
-  chatInput.value = "";
+  chatInput.value = ""; // Очищаем поле
+  clearTimeout(draftTimeout); // Отменяем отложенное сохранение старого текста
   setProcessingState(true);
 
   if (!currentSessionId) currentSessionId = Date.now().toString();
   globalChatHistory.push({ role: "user", content: text });
-  await saveSession(currentSessionId, globalChatHistory, globalStateMarkdown);
+  // Сохраняем сессию с уже пустым черновиком
+  await saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, "");
   loadSessionsListUI();
 
   const startTime = performance.now();
 
   try {
     let displayName = agentSelect.options[agentSelect.selectedIndex].text.replace('📁 ', '');
-    
-    // Мы фильтруем "мысли" из истории перед отправкой в LLM, чтобы не засорять контекст
-    const historyToSend = globalChatHistory
-      .filter(m => m.role !== 'thought')
-      .slice(0, -1);
+    const historyToSend = globalChatHistory.filter(m => m.role !== 'thought').slice(0, -1);
+
+    const params = {
+      temperature: parseFloat(tempSlider.value),
+      top_k: parseInt(topkSlider.value, 10),
+      top_p: parseFloat(toppSlider.value),
+      min_p: parseFloat(minpSlider.value),
+      repetition_penalty: parseFloat(reppenSlider.value),
+      presence_penalty: parseFloat(prespenSlider.value)
+    };
 
     const response: any = await invoke("chat_request", { 
       modelPath, 
@@ -354,16 +483,17 @@ async function handleSend() {
       history: historyToSend, 
       contextSize: parseInt(contextSlider.value, 10), 
       kvQuantization: chkKvQuant.checked,
-      currentState: globalStateMarkdown
+      currentState: globalStateMarkdown,
+      modelParams: params
     });
     const durationSec = ((performance.now() - startTime) / 1000).toFixed(1);
     
     globalStateMarkdown = response.new_state;
-
     globalChatHistory.push({ role: "assistant", content: response.text, sub_calls: response.sub_calls });
     appendMessage('agent', response.text, displayName, `⏱ Время: ${durationSec} сек.`);
     
-    await saveSession(currentSessionId, globalChatHistory, globalStateMarkdown);
+    // Сохраняем финальный ответ, черновик по прежнему пустой (или равен тому что юзер успел написать, хотя поле заблокировано)
+    await saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, chatInput.value);
   } catch (error) {
     appendMessage('system', String(error).includes("Отменено") ? '⚠️ Обработка прервана.' : `❌ Ошибка: ${error}`);
   } finally { setProcessingState(false); }
@@ -383,28 +513,18 @@ btnStop?.addEventListener("click", async () => {
 listen("progress", (e) => { progressBar.style.width = `${e.payload}%`; });
 listen("status", (e) => { statusLabel.innerText = e.payload as string; });
 listen("log", (e) => { logToGUI(e.payload as string); });
-
 listen("subcall_done", (e) => {
   const call = e.payload as any;
   chatHistory.appendChild(createSubcallElement(call, showSubchat));
   chatHistory.scrollTop = chatHistory.scrollHeight;
 });
-
 listen("agent_thought", (e) => {
   const payload = e.payload as {agent_name: string, thought: string};
   const el = createThoughtElement(payload.agent_name, payload.thought);
   chatHistory.appendChild(el);
   chatHistory.scrollTop = chatHistory.scrollHeight;
-  
-  // Сохраняем мысль в историю, чтобы она осталась при перезагрузке сессии
-  globalChatHistory.push({ 
-    role: "thought", 
-    content: payload.thought, 
-    agent_name: payload.agent_name 
-  });
-  if (currentSessionId) {
-    saveSession(currentSessionId, globalChatHistory, globalStateMarkdown);
-  }
+  globalChatHistory.push({ role: "thought", content: payload.thought, agent_name: payload.agent_name });
+  if (currentSessionId) saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, chatInput.value);
 });
 
 document.addEventListener("DOMContentLoaded", loadConfig);
