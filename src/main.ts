@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open, save, ask } from "@tauri-apps/plugin-dialog";
 import { createMessageElement, createSubcallElement, createToolCallElement, createThoughtElement, Role } from "./ui/render";
 import { fetchSessions, loadSession, deleteSession, saveSession, renameSession, openSessionFolder } from "./api/sessions";
 import mermaid from "mermaid";
@@ -341,7 +341,13 @@ async function openSessionUI(id: string) {
     currentSessionId = id;
     globalChatHistory = session.messages;
     globalStateMarkdown = session.state_markdown || ""; 
-    chatInput.value = session.draft || ""; // Подгружаем черновик
+    chatInput.value = session.draft || ""; 
+    
+    // Восстанавливаем высоту после загрузки черновика
+    setTimeout(() => {
+      chatInput.style.height = "auto";
+      chatInput.style.height = `${chatInput.scrollHeight}px`;
+    }, 0);
     
     chatHistory.innerHTML = '';
     appendMessage('system', 'Сессия загружена.');
@@ -359,7 +365,11 @@ async function openSessionUI(id: string) {
 }
 
 async function deleteSessionUI(id: string) {
-  if (confirm("Вы уверены, что хотите безвозвратно удалить эту сессию?")) {
+  const yes = await ask("Вы уверены, что хотите безвозвратно удалить эту сессию?", {
+    title: "Удаление сессии",
+    kind: "warning",
+  });
+  if (yes) {
     try {
       await deleteSession(id);
       if (currentSessionId === id) startNewSession(); else loadSessionsListUI();
@@ -373,7 +383,8 @@ function startNewSession() {
   globalChatHistory =[];
   globalStateMarkdown = "";
   chatHistory.innerHTML = '';
-  chatInput.value = ''; // Очищаем черновик для новой сессии
+  chatInput.value = ''; 
+  chatInput.style.height = "auto"; // Сбрасываем высоту
   appendMessage('system', 'Новая сессия начата. Выберите агента и напишите запрос.');
   loadSessionsListUI();
   switchTab('chat');
@@ -416,8 +427,12 @@ function setProcessingState(state: boolean) {
   } else { chatFeedback.style.display = "none"; }
 }
 
-// -- СОХРАНЕНИЕ ЧЕРНОВИКОВ --
+// -- ДИНАМИЧЕСКАЯ ВЫСОТА И СОХРАНЕНИЕ ЧЕРНОВИКОВ --
 chatInput.addEventListener("input", () => {
+  // Динамически меняем высоту
+  chatInput.style.height = "auto";
+  chatInput.style.height = `${chatInput.scrollHeight}px`;
+
   if (isProcessing) return;
   
   // Если сессии еще нет, но пользователь начал печатать - мгновенно создаем её
@@ -452,6 +467,7 @@ async function handleSend() {
 
   appendMessage('user', text);
   chatInput.value = ""; // Очищаем поле
+  chatInput.style.height = "auto"; // Сбрасываем высоту
   clearTimeout(draftTimeout); // Отменяем отложенное сохранение старого текста
   setProcessingState(true);
 
@@ -492,7 +508,7 @@ async function handleSend() {
     globalChatHistory.push({ role: "assistant", content: response.text, sub_calls: response.sub_calls });
     appendMessage('agent', response.text, displayName, `⏱ Время: ${durationSec} сек.`);
     
-    // Сохраняем финальный ответ, черновик по прежнему пустой (или равен тому что юзер успел написать, хотя поле заблокировано)
+    // Сохраняем финальный ответ, черновик по прежнему пустой
     await saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, chatInput.value);
   } catch (error) {
     appendMessage('system', String(error).includes("Отменено") ? '⚠️ Обработка прервана.' : `❌ Ошибка: ${error}`);

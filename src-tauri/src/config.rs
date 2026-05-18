@@ -97,10 +97,13 @@ pub struct CatalogEntry {
 
 pub fn load_catalog(app: &AppHandle) -> Vec<CatalogEntry> {
     let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
+    
     let possible_paths = vec![
         exe_dir.join("models_catalog.json"),
-        exe_dir.join("..").join("models_catalog.json"),
+        resource_dir.join("models_catalog.json"),
         PathBuf::from("models_catalog.json"),
+        exe_dir.join("..").join("..").join("models_catalog.json"),
     ];
 
     for path in possible_paths {

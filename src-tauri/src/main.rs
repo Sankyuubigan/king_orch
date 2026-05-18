@@ -5,7 +5,6 @@ mod parsers;
 mod agent_manager;
 mod orchestrator;
 mod session_manager;
-mod tool_executor;
 mod mcp_client;
 mod config;
 mod downloader;
@@ -125,8 +124,6 @@ fn rename_session(app: tauri::AppHandle, id: String, new_title: String) -> Resul
 fn open_session_folder(app: tauri::AppHandle, id: String) -> Result<(), String> {
     session_manager::open_session_folder(&app, &id)
 }
-
-// --- НОВЫЕ КОМАНДЫ ДЛЯ ПАРАМЕТРОВ И КАТАЛОГА ---
 
 #[tauri::command]
 fn get_models_catalog(app: tauri::AppHandle) -> Vec<config::CatalogEntry> {

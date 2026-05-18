@@ -3,7 +3,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 use regex::Regex;
-use crate::emit_log; // <-- Исправлен импорт (убрали processor)
+use crate::emit_log;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProfile {
@@ -12,13 +12,13 @@ pub struct AgentProfile {
     pub description: String,
     pub system_prompt: String,
     pub is_hidden: bool,
-    pub mode: String, // "primary" или "subagent"
+    pub mode: String,
     #[serde(default)]
-    pub can_update_state: bool, // Право перезаписывать глобальное состояние сессии
+    pub can_update_state: bool,
     #[serde(default)]
     pub mcp_servers: Vec<String>,
     #[serde(default)]
-    pub subagents: Vec<String>, // Список разрешенных сабагентов
+    pub subagents: Vec<String>,
 }
 
 fn collect_md_files(dir: &Path, files: &mut Vec<PathBuf>) {
@@ -53,10 +53,20 @@ fn process_includes(base_path: &Path, content: &str) -> String {
 pub fn load_agents(app: &AppHandle) -> Vec<AgentProfile> {
     let mut agents = Vec::new();
     let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
     
     emit_log(app, "🔍 Начинаю сканирование агентов...");
 
-    let agents_dir = exe_dir.join("agents");
+    let possible_agents_dirs = vec![
+        exe_dir.join("agents"),
+        resource_dir.join("agents"),
+        PathBuf::from("agents"), // Текущая рабочая директория
+        exe_dir.join("..").join("..").join("agents"), // Корень проекта при запуске из target/release
+    ];
+    
+    let default_agents_dir = exe_dir.join("agents");
+    let agents_dir = possible_agents_dirs.into_iter().find(|p| p.exists()).unwrap_or(default_agents_dir);
+
     if !agents_dir.exists() {
         let _ = fs::create_dir_all(&agents_dir);
     }
@@ -70,9 +80,15 @@ pub fn load_agents(app: &AppHandle) -> Vec<AgentProfile> {
     let mut md_files = Vec::new();
     collect_md_files(&agents_dir, &mut md_files);
 
-    let categories_dir = exe_dir.join("categories");
-    if categories_dir.exists() {
-        collect_md_files(&categories_dir, &mut md_files);
+    let possible_categories_dirs = vec![
+        exe_dir.join("categories"),
+        resource_dir.join("categories"),
+        PathBuf::from("categories"),
+        exe_dir.join("..").join("..").join("categories"),
+    ];
+    
+    if let Some(cat_dir) = possible_categories_dirs.into_iter().find(|p| p.exists()) {
+        collect_md_files(&cat_dir, &mut md_files);
     }
 
     for path in md_files {
@@ -94,7 +110,6 @@ fn parse_agent_file(app: &AppHandle, path: &Path) -> Option<AgentProfile> {
 
         if let Some(mut agent) = parse_agent_markdown(&processed_content) {
             agent.id = path.file_stem().unwrap().to_string_lossy().to_string();
-            // Автоматически скрываем из UI выпадающего списка всех сабагентов
             agent.is_hidden = agent.mode == "subagent";
             return Some(agent);
         } else {

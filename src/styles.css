@@ -255,10 +255,9 @@ body {
   font-size: 13px;
   border-radius: 12px;
   padding: 10px 15px;
-  text-align: left; /* Изменили на левый край для красивого Markdown */
+  text-align: left;
 }
 
-/* Стили для мыслей агента */
 .message-thought {
   align-self: center;
   background-color: transparent;
@@ -415,7 +414,8 @@ body {
   font-family: inherit;
   font-size: 14px;
   min-height: 80px;
-  max-height: 300px;
+  max-height: 600px;
+  overflow-y: auto;
   box-sizing: border-box;
   background: var(--input-bg);
   color: var(--text);

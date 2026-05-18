@@ -123,7 +123,7 @@ function indexDirectory(dirPath) {
     return indexedFiles.length;
 }
 
-fn searchCode(query) {
+function searchCode(query) {
     const queryTerms = query.toLowerCase().split(/\s+/).filter(t => t.length > 1);
     if (queryTerms.length === 0) return [];
     const results = [];

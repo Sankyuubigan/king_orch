@@ -36,6 +36,21 @@ pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)
                 let thought = val.get("thought").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 return Some((tool.to_string(), args, thought));
             }
+        } else {
+            // Fallback для невалидного JSON (напр. LLM забыла экранировать кавычки)
+            let tool_re = regex::Regex::new(r#""tool"\s*:\s*"([^"]+)""#).ok()?;
+            if let Some(tool_cap) = tool_re.captures(&json_str) {
+                let tool = tool_cap.get(1)?.as_str().to_string();
+                
+                let args_re = regex::Regex::new(r#"(?s)"arguments"\s*:\s*(\{.*?\})"#).ok()?;
+                let args_str = args_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or("{}".to_string());
+                let args = serde_json::from_str(&args_str).unwrap_or(serde_json::Value::Null);
+                
+                let thought_re = regex::Regex::new(r#"(?s)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok()?;
+                let thought = thought_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
+
+                return Some((tool, args, thought));
+            }
         }
     }
     None
@@ -69,6 +84,23 @@ pub fn parse_orchestrator_response(text: &str) -> Option<(f32, String, String, S
             // Проверяем, что это действительно вызов сабагента (есть target)
             if val.get("target").is_some() {
                 return Some((conf, target, content, thought));
+            }
+        } else {
+            // Fallback для невалидного JSON (LLM часто забывает экранировать кавычки, например: достижение "покоя")
+            let target_re = regex::Regex::new(r#""target"\s*:\s*"([^"]+)""#).ok()?;
+            
+            if let Some(target_cap) = target_re.captures(&json_str) {
+                let target = target_cap.get(1)?.as_str().to_string();
+                
+                // Жадный поиск (greedy) task_or_response до конца объекта или запятой
+                let task_re = regex::Regex::new(r#"(?s)"task_or_response"\s*:\s*"(.*)"\s*(?:\}|,)"#).ok()?;
+                let content = task_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
+                
+                // Ленивый поиск (lazy) для thought
+                let thought_re = regex::Regex::new(r#"(?s)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok()?;
+                let thought = thought_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
+
+                return Some((1.0, target, content, thought));
             }
         }
     }

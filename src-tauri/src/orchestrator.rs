@@ -3,6 +3,7 @@ use crate::llm::{ChatMessage, LlamaEngine, SubCall, ToolCallInfo};
 use crate::parsers::{extract_state_update, parse_orchestrator_response, parse_tool_call};
 use crate::{emit_log, emit_status};
 use crate::config::ModelParams;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -17,15 +18,22 @@ struct AgentThoughtPayload {
 }
 
 fn get_mcp_server_path(app: &AppHandle, name: &str) -> Result<std::path::PathBuf, String> {
-    let resource_dir = app.path().resource_dir().map_err(|e| e.to_string())?;
-    let path = resource_dir
-        .join("mcp_servers")
-        .join(format!("{}.js", name));
-    if path.exists() {
-        Ok(path)
-    } else {
-        Err(format!("MCP-сервер {} не найден", name))
+    let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
+    
+    let possible_paths = vec![
+        resource_dir.join("mcp_servers").join(format!("{}.js", name)),
+        exe_dir.join("mcp_servers").join(format!("{}.js", name)),
+        PathBuf::from("src-tauri").join("mcp_servers").join(format!("{}.js", name)),
+        exe_dir.join("..").join("..").join("src-tauri").join("mcp_servers").join(format!("{}.js", name)),
+    ];
+
+    for path in possible_paths {
+        if path.exists() {
+            return Ok(path);
+        }
     }
+    Err(format!("MCP-сервер {} не найден", name))
 }
 
 pub fn run_chat(
@@ -130,14 +138,14 @@ fn run_agent_node(
         if let Ok(script_path) = get_mcp_server_path(app, mcp_name) {
             let target = env!("TARGET");
             let dev_name = format!("node-{}.exe", target);
-            let mut node_path = std::path::PathBuf::from("node");
+            let mut node_path = PathBuf::from("node");
             if let Ok(mut exe) = std::env::current_exe() {
                 exe.pop();
                 let possible_paths = vec![
                     exe.join("node.exe"),
                     exe.join(&dev_name),
                     exe.join("bin").join(&dev_name),
-                    std::path::PathBuf::from("bin").join(&dev_name),
+                    PathBuf::from("bin").join(&dev_name),
                 ];
                 for p in possible_paths {
                     if p.exists() { node_path = p; break; }
@@ -164,7 +172,6 @@ fn run_agent_node(
     let has_subagents = !filtered_agents.is_empty();
     let has_tools = !all_tools.is_empty();
 
-    // ЖЕСТКИЙ ЦЕНТРАЛИЗОВАННЫЙ ПРОМПТ ДЛЯ ФОРМАТА JSON
     if has_subagents || has_tools {
         system_prompt.push_str("\n\n[КРИТИЧЕСКОЕ ПРАВИЛО ВЫЗОВА JSON]\n");
         system_prompt.push_str("Если ты хочешь делегировать задачу сабагенту или использовать инструмент, ты ДОЛЖЕН вернуть СТРОГО ОДИН валидный JSON-блок (внутри тегов ```json ... ```).\n");
