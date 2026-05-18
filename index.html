@@ -82,27 +82,27 @@
         <div class="group-box">
           <div class="group-title">2. Параметры генерации (для выбранной модели)</div>
           
-          <div class="input-row" style="margin-top: 10px;" title="Температура (Temperature). Регулирует общий градус фантазии: при низких значениях ИИ отвечает максимально логично и сухо (идеально для кода), а при высоких — начинает креативить и рисковать. Значение 0.0 отключает случайность (жадное декодирование).">
+          <div class="input-row" style="margin-top: 10px;" title="Температура (Temperature).">
             <label for="temp-slider" style="min-width: 180px;">Температура: <strong id="temp-value">0.8</strong></label>
             <input type="range" id="temp-slider" min="0.0" max="2.0" step="0.05" value="0.8" style="flex: 1;" />
           </div>
-          <div class="input-row" style="margin-top: 10px;" title="Строгий количественный фильтр: заставляет ИИ выбирать следующее слово только из заданного числа самых вероятных вариантов, сразу отбрасывая остальной мусор. Значение 0 отключает этот фильтр.">
+          <div class="input-row" style="margin-top: 10px;" title="top_k">
             <label for="topk-slider" style="min-width: 180px;">top_k: <strong id="topk-value">40</strong></label>
             <input type="range" id="topk-slider" min="0" max="100" step="1" value="40" style="flex: 1;" />
           </div>
-          <div class="input-row" style="margin-top: 10px;" title="Гибкий процентный фильтр: отбирает группу самых популярных слов, пока их суммарная вероятность не достигнет заданного порога, отсекая маловероятные глупости. Значение 1.0 отключает этот фильтр.">
+          <div class="input-row" style="margin-top: 10px;" title="top_p">
             <label for="topp-slider" style="min-width: 180px;">top_p: <strong id="topp-value">0.95</strong></label>
             <input type="range" id="topp-slider" min="0.05" max="1.0" step="0.05" value="0.95" style="flex: 1;" />
           </div>
-          <div class="input-row" style="margin-top: 10px;" title="Фильтр относительно лидера: сравнивает все варианты с самым идеальным словом и отсеивает те, которые слишком сильно от него отстают. Значение 0.0 отключает этот фильтр.">
+          <div class="input-row" style="margin-top: 10px;" title="min_p">
             <label for="minp-slider" style="min-width: 180px;">min_p: <strong id="minp-value">0.05</strong></label>
             <input type="range" id="minp-slider" min="0.0" max="0.5" step="0.01" value="0.05" style="flex: 1;" />
           </div>
-          <div class="input-row" style="margin-top: 10px;" title="Штраф за повторения. Наказывает ИИ за использование одних и тех же слов подряд, спасая текст от заикания и превращения в заезженную пластинку. Значение 1.0 отключает штраф.">
+          <div class="input-row" style="margin-top: 10px;" title="repetition_penalty">
             <label for="reppen-slider" style="min-width: 180px;">repetition_penalty: <strong id="reppen-value">1.1</strong></label>
             <input type="range" id="reppen-slider" min="1.0" max="2.0" step="0.05" value="1.1" style="flex: 1;" />
           </div>
-          <div class="input-row" style="margin-top: 10px;" title="Штраф за топтание на месте. Заставляет ИИ переключаться на новые темы и вводить новые слова, если он начинает слишком долго обмусоливать одну и ту же мысль. Значение 0.0 отключает штраф.">
+          <div class="input-row" style="margin-top: 10px;" title="presence_penalty">
             <label for="prespen-slider" style="min-width: 180px;">presence_penalty: <strong id="prespen-value">0.0</strong></label>
             <input type="range" id="prespen-slider" min="0.0" max="2.0" step="0.1" value="0.0" style="flex: 1;" />
           </div>
@@ -153,6 +153,23 @@
 
     </main>
   </div>
+
+  <!-- Модальное окно подтверждения -->
+  <div id="confirm-overlay" class="confirm-overlay">
+    <div class="confirm-dialog">
+      <div class="confirm-icon">⚠️</div>
+      <h3 id="confirm-title" class="confirm-title">Подтверждение</h3>
+      <p id="confirm-message" class="confirm-message">Вы уверены?</p>
+      <div class="confirm-buttons">
+        <button id="confirm-btn-no" class="btn-secondary confirm-btn">Отмена</button>
+        <button id="confirm-btn-yes" class="btn-danger confirm-btn">Удалить</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Контейнер для всплывающих уведомлений -->
+  <div id="toast-container"></div>
+
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

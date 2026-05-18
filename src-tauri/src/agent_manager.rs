@@ -71,11 +71,7 @@ pub fn load_agents(app: &AppHandle) -> Vec<AgentProfile> {
         let _ = fs::create_dir_all(&agents_dir);
     }
 
-    let orch_path = agents_dir.join("orchestrator.md");
-    if !orch_path.exists() {
-        let default_orch = "---\nname: Orchestrator\ndescription: Главный маршрутизатор задач\nmode: primary\n---\nТы — Главный Оркестратор. Твоя задача — решить запрос пользователя, делегируя задачи профильным сабагентам, если это необходимо.";
-        let _ = fs::write(orch_path, default_orch);
-    }
+    // БЛОК АВТОСОЗДАНИЯ ОРКЕСТРАТОРА УБРАН ПО ПРОСЬБЕ ПОЛЬЗОВАТЕЛЯ
 
     let mut md_files = Vec::new();
     collect_md_files(&agents_dir, &mut md_files);

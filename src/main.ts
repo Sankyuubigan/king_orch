@@ -1,8 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { open, save, ask } from "@tauri-apps/plugin-dialog";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { createMessageElement, createSubcallElement, createToolCallElement, createThoughtElement, Role } from "./ui/render";
 import { fetchSessions, loadSession, deleteSession, saveSession, renameSession, openSessionFolder } from "./api/sessions";
+import { showToast } from "./ui/toast";
+import { initConfirmDialog, confirmDialog } from "./ui/confirm";
 import mermaid from "mermaid";
 
 mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
@@ -29,7 +31,6 @@ const btnAddModel = document.getElementById("btn-add-model") as HTMLButtonElemen
 const themeSelect = document.getElementById("theme-select") as HTMLSelectElement;
 const promptFormatSelect = document.getElementById("prompt-format-select") as HTMLSelectElement;
 
-// UI Параметров модели
 const tempSlider = document.getElementById("temp-slider") as HTMLInputElement;
 const tempValue = document.getElementById("temp-value") as HTMLElement;
 const topkSlider = document.getElementById("topk-slider") as HTMLInputElement;
@@ -44,7 +45,6 @@ const prespenSlider = document.getElementById("prespen-slider") as HTMLInputElem
 const prespenValue = document.getElementById("prespen-value") as HTMLElement;
 const btnResetParams = document.getElementById("btn-reset-params") as HTMLButtonElement;
 
-// UI Скачивания
 const downloadModelSelect = document.getElementById("download-model-select") as HTMLSelectElement;
 const btnDownloadModel = document.getElementById("btn-download-model") as HTMLButtonElement;
 const downloadProgressContainer = document.getElementById("download-progress-container") as HTMLDivElement;
@@ -112,7 +112,6 @@ function switchTab(tab: 'chat' | 'settings' | 'logs') {
   tabChat.classList.toggle('active', tab === 'chat');
   tabSettings.classList.toggle('active', tab === 'settings');
   tabLogs.classList.toggle('active', tab === 'logs');
-
   viewChat.classList.toggle('active', tab === 'chat');
   viewSubchat.classList.remove('active');
   viewSettings.classList.toggle('active', tab === 'settings');
@@ -135,12 +134,10 @@ promptFormatSelect?.addEventListener("change", async () => {
   await invoke("set_prompt_format", { format: promptFormatSelect.value });
 });
 
-// -- ПАРАМЕТРЫ МОДЕЛИ --
 async function loadModelParams() {
   const modelPath = modelSelect.value;
   if (!modelPath) return;
   const params: any = await invoke("get_model_params", { modelPath });
-  
   tempSlider.value = params.temperature; tempValue.innerText = params.temperature;
   topkSlider.value = params.top_k; topkValue.innerText = params.top_k;
   toppSlider.value = params.top_p; toppValue.innerText = params.top_p;
@@ -182,18 +179,16 @@ btnResetParams?.addEventListener("click", async () => {
   if (!modelPath) return;
   await invoke("reset_model_params", { modelPath });
   await loadModelParams();
-  logToGUI("Параметры сброшены на значения по умолчанию.");
+  showToast("Параметры сброшены на значения по умолчанию.", "success");
 });
 
-// -- СКАЧИВАНИЕ МОДЕЛЕЙ --
 async function loadCatalog() {
   try {
     modelsCatalog = await invoke("get_models_catalog");
     downloadModelSelect.innerHTML = '<option value="">-- Выберите модель --</option>';
     modelsCatalog.forEach(m => {
       const opt = document.createElement("option");
-      opt.value = m.name;
-      opt.text = m.name;
+      opt.value = m.name; opt.text = m.name;
       downloadModelSelect.appendChild(opt);
     });
   } catch (e) {
@@ -206,23 +201,19 @@ btnDownloadModel?.addEventListener("click", async () => {
   if (!selectedName) return;
   const model = modelsCatalog.find(m => m.name === selectedName);
   if (!model) return;
-
   try {
     const savePath = await save({ defaultPath: `${model.name}.gguf`, filters: [{ name: "GGUF", extensions: ["gguf"] }] });
     if (!savePath) return;
-
     btnDownloadModel.disabled = true;
     downloadProgressContainer.style.display = "block";
-    
     await invoke("download_model", { url: model.download_url, savePath });
-    
     await invoke("add_model", { path: savePath });
-    await loadConfig(); // Обновляем список моделей
-    logToGUI(`Модель ${model.name} успешно скачана!`);
-    alert(`Загрузка ${model.name} завершена.`);
+    await loadConfig();
+    showToast(`Модель ${model.name} успешно скачана!`, "success");
   } catch (e) {
-    logToGUI(`Ошибка скачивания: ${e}`);
-    alert(`Ошибка: ${e}`);
+    const errMsg = `Ошибка скачивания: ${e}`;
+    showToast(errMsg, "error");
+    logToGUI(errMsg);
   } finally {
     btnDownloadModel.disabled = false;
     downloadProgressContainer.style.display = "none";
@@ -234,28 +225,28 @@ listen("download_progress", (e: any) => {
   const mbDown = (downloaded / 1024 / 1024).toFixed(1);
   const mbTotal = (total / 1024 / 1024).toFixed(1);
   const percent = total > 0 ? (downloaded / total) * 100 : 0;
-  
   downloadProgressBar.style.width = `${percent}%`;
   downloadStatusLabel.innerText = `${mbDown} MB / ${mbTotal} MB (${percent.toFixed(1)}%)`;
 });
 
-// -- ЗАГРУЗКА КОНФИГА --
 async function loadConfig() {
   logToGUI("Загрузка конфигурации...");
   try {
     const config: any = await invoke("get_config");
     updateModelSelect(config);
-    
     if (config.context_size) { contextSlider.value = config.context_size.toString(); contextValue.innerText = config.context_size.toString(); }
     if (config.kv_quantization !== undefined) chkKvQuant.checked = config.kv_quantization;
     if (config.theme) { themeSelect.value = config.theme; document.documentElement.setAttribute('data-theme', config.theme); }
     if (config.prompt_format) promptFormatSelect.value = config.prompt_format;
-    
     await loadAgents();
     await loadSessionsListUI();
     await loadCatalog();
-    await loadModelParams(); // Загружаем параметры для активной модели
-  } catch (e) { logToGUI(`Ошибка загрузки конфига: ${e}`); }
+    await loadModelParams();
+  } catch (e) {
+    const errMsg = `Ошибка загрузки конфига: ${e}`;
+    showToast(errMsg, "error");
+    logToGUI(errMsg);
+  }
 }
 
 async function loadAgents() {
@@ -313,22 +304,40 @@ async function loadSessionsListUI() {
       });
 
       div.querySelector('.btn-rename')?.addEventListener("click", async (e) => {
-        e.stopPropagation(); dropdown?.classList.remove('show');
+        e.stopPropagation(); e.preventDefault();
+        dropdown?.classList.remove('show');
         const currentTitle = (e.target as HTMLElement).getAttribute('data-title') || '';
         const newTitle = prompt("Введите новое название сессии:", currentTitle);
         if (newTitle && newTitle.trim() !== "" && newTitle !== currentTitle) {
-          await renameSession(s.id, newTitle.trim());
-          loadSessionsListUI();
+          try {
+            await renameSession(s.id, newTitle.trim());
+            loadSessionsListUI();
+          } catch(err) {
+            const msg = `Ошибка переименования: ${err}`;
+            showToast(msg, "error");
+            logToGUI(msg);
+          }
         }
       });
 
       div.querySelector('.btn-explore')?.addEventListener("click", async (e) => {
-        e.stopPropagation(); dropdown?.classList.remove('show'); await openSessionFolder(s.id);
+        e.stopPropagation(); e.preventDefault();
+        dropdown?.classList.remove('show');
+        try {
+          await openSessionFolder(s.id);
+        } catch(err) {
+          const msg = `Ошибка открытия папки: ${err}`;
+          showToast(msg, "error");
+          logToGUI(msg);
+        }
       });
 
       div.querySelector('.btn-delete')?.addEventListener("click", async (e) => {
-        e.stopPropagation(); dropdown?.classList.remove('show'); deleteSessionUI(s.id);
+        e.stopPropagation(); e.preventDefault();
+        dropdown?.classList.remove('show');
+        await deleteSessionUI(s.id);
       });
+
       sessionList.appendChild(div);
     }
   } catch (e) {}
@@ -342,13 +351,10 @@ async function openSessionUI(id: string) {
     globalChatHistory = session.messages;
     globalStateMarkdown = session.state_markdown || ""; 
     chatInput.value = session.draft || ""; 
-    
-    // Восстанавливаем высоту после загрузки черновика
     setTimeout(() => {
       chatInput.style.height = "auto";
       chatInput.style.height = `${chatInput.scrollHeight}px`;
     }, 0);
-    
     chatHistory.innerHTML = '';
     appendMessage('system', 'Сессия загружена.');
     for (const msg of globalChatHistory) {
@@ -361,19 +367,30 @@ async function openSessionUI(id: string) {
     }
     loadSessionsListUI();
     switchTab('chat');
-  } catch(e) {}
+  } catch(e) {
+    const msg = `Ошибка загрузки сессии: ${e}`;
+    showToast(msg, "error");
+    logToGUI(msg);
+  }
 }
 
 async function deleteSessionUI(id: string) {
-  const yes = await ask("Вы уверены, что хотите безвозвратно удалить эту сессию?", {
-    title: "Удаление сессии",
-    kind: "warning",
-  });
-  if (yes) {
-    try {
-      await deleteSession(id);
-      if (currentSessionId === id) startNewSession(); else loadSessionsListUI();
-    } catch(e) {}
+  // Используем собственное модальное окно вместо Tauri dialog (нет проблем с ACL)
+  const yes = await confirmDialog(
+    "Удаление сессии",
+    "Вы уверены, что хотите безвозвратно удалить эту сессию?"
+  );
+
+  if (!yes) return; // Нажали "Отмена" или закрыли окно
+
+  try {
+    await deleteSession(id);
+    if (currentSessionId === id) startNewSession(); else loadSessionsListUI();
+    showToast("Сессия удалена.", "success");
+  } catch(e) {
+    const msg = `Ошибка при удалении: ${e}`;
+    showToast(msg, "error");
+    logToGUI(msg);
   }
 }
 
@@ -384,7 +401,7 @@ function startNewSession() {
   globalStateMarkdown = "";
   chatHistory.innerHTML = '';
   chatInput.value = ''; 
-  chatInput.style.height = "auto"; // Сбрасываем высоту
+  chatInput.style.height = "auto";
   appendMessage('system', 'Новая сессия начата. Выберите агента и напишите запрос.');
   loadSessionsListUI();
   switchTab('chat');
@@ -404,7 +421,7 @@ function updateModelSelect(config: any) {
 
 modelSelect?.addEventListener("change", async () => { 
   await invoke("set_last_model", { path: modelSelect.value }); 
-  await loadModelParams(); // При смене модели загружаем ее параметры!
+  await loadModelParams();
 });
 
 btnAddModel?.addEventListener("click", async () => {
@@ -427,15 +444,10 @@ function setProcessingState(state: boolean) {
   } else { chatFeedback.style.display = "none"; }
 }
 
-// -- ДИНАМИЧЕСКАЯ ВЫСОТА И СОХРАНЕНИЕ ЧЕРНОВИКОВ --
 chatInput.addEventListener("input", () => {
-  // Динамически меняем высоту
   chatInput.style.height = "auto";
   chatInput.style.height = `${chatInput.scrollHeight}px`;
-
   if (isProcessing) return;
-  
-  // Если сессии еще нет, но пользователь начал печатать - мгновенно создаем её
   if (!currentSessionId && chatInput.value.trim() !== "") {
     currentSessionId = Date.now().toString();
     globalChatHistory = [];
@@ -447,7 +459,7 @@ chatInput.addEventListener("input", () => {
     clearTimeout(draftTimeout);
     draftTimeout = window.setTimeout(() => {
       saveSession(currentSessionId!, globalChatHistory, globalStateMarkdown, chatInput.value);
-    }, 500); // 500 мс задержки (debounce)
+    }, 500);
   }
 });
 
@@ -463,17 +475,19 @@ async function handleSend() {
   if (!text || isProcessing) return;
   const activeAgent = agentSelect.value;
   const modelPath = modelSelect.value;
-  if (!modelPath) return appendMessage('system', 'Ошибка: Выберите модель GGUF!');
+  if (!modelPath) {
+    showToast("Выберите модель GGUF в выпадающем списке!", "error");
+    return;
+  }
 
   appendMessage('user', text);
-  chatInput.value = ""; // Очищаем поле
-  chatInput.style.height = "auto"; // Сбрасываем высоту
-  clearTimeout(draftTimeout); // Отменяем отложенное сохранение старого текста
+  chatInput.value = "";
+  chatInput.style.height = "auto";
+  clearTimeout(draftTimeout);
   setProcessingState(true);
 
   if (!currentSessionId) currentSessionId = Date.now().toString();
   globalChatHistory.push({ role: "user", content: text });
-  // Сохраняем сессию с уже пустым черновиком
   await saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, "");
   loadSessionsListUI();
 
@@ -482,7 +496,6 @@ async function handleSend() {
   try {
     let displayName = agentSelect.options[agentSelect.selectedIndex].text.replace('📁 ', '');
     const historyToSend = globalChatHistory.filter(m => m.role !== 'thought').slice(0, -1);
-
     const params = {
       temperature: parseFloat(tempSlider.value),
       top_k: parseInt(topkSlider.value, 10),
@@ -493,25 +506,24 @@ async function handleSend() {
     };
 
     const response: any = await invoke("chat_request", { 
-      modelPath, 
-      agentId: activeAgent, 
-      message: text, 
-      history: historyToSend, 
-      contextSize: parseInt(contextSlider.value, 10), 
-      kvQuantization: chkKvQuant.checked,
-      currentState: globalStateMarkdown,
-      modelParams: params
+      modelPath, agentId: activeAgent, message: text, history: historyToSend, 
+      contextSize: parseInt(contextSlider.value, 10), kvQuantization: chkKvQuant.checked,
+      currentState: globalStateMarkdown, modelParams: params
     });
     const durationSec = ((performance.now() - startTime) / 1000).toFixed(1);
     
     globalStateMarkdown = response.new_state;
     globalChatHistory.push({ role: "assistant", content: response.text, sub_calls: response.sub_calls });
     appendMessage('agent', response.text, displayName, `⏱ Время: ${durationSec} сек.`);
-    
-    // Сохраняем финальный ответ, черновик по прежнему пустой
     await saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, chatInput.value);
   } catch (error) {
-    appendMessage('system', String(error).includes("Отменено") ? '⚠️ Обработка прервана.' : `❌ Ошибка: ${error}`);
+    if (String(error).includes("Отменено") || String(error).includes("Прервано")) {
+      appendMessage('system', '⚠️ Обработка прервана.');
+    } else {
+      const errMsg = `Ошибка: ${error}`;
+      showToast(errMsg, "error");
+      logToGUI(errMsg);
+    }
   } finally { setProcessingState(false); }
 }
 
@@ -542,5 +554,8 @@ listen("agent_thought", (e) => {
   globalChatHistory.push({ role: "thought", content: payload.thought, agent_name: payload.agent_name });
   if (currentSessionId) saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, chatInput.value);
 });
+
+// Инициализация модального окна подтверждения
+initConfirmDialog();
 
 document.addEventListener("DOMContentLoaded", loadConfig);

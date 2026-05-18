@@ -79,6 +79,7 @@ pub fn run_chat(
                 cancel_flag,
                 0,
                 &mut all_sub_calls,
+                None, // Начальный вызов — от пользователя
             )?;
 
             Ok((final_res, all_sub_calls, final_state))
@@ -104,6 +105,7 @@ fn run_agent_node(
     cancel_flag: Arc<AtomicBool>,
     depth: usize,
     all_sub_calls: &mut Vec<SubCall>,
+    caller_name: Option<String>,
 ) -> Result<(String, String), String> {
     if depth > 5 {
         return Err("Превышена максимальная глубина вложенности сабагентов (Зацикливание)".into());
@@ -206,8 +208,9 @@ fn run_agent_node(
         role: "system".to_string(), content: system_prompt, sub_calls: None, agent_name: None,
     }];
     messages.extend(history);
+    // Имя вызывающего агента вместо [USER] в отчёте сабагента
     messages.push(ChatMessage {
-        role: "user".to_string(), content: user_text.clone(), sub_calls: None, agent_name: None,
+        role: "user".to_string(), content: user_text.clone(), sub_calls: None, agent_name: caller_name.clone(),
     });
 
     let mut initial_context_dump = String::new();
@@ -225,7 +228,12 @@ fn run_agent_node(
     }
     for msg in &messages {
         if msg.role != "system" {
-            initial_context_dump.push_str(&format!("\n\n### [{}]\n{}", msg.role.to_uppercase(), msg.content));
+            // Используем имя агента вместо роли [USER]
+            let role_label = match &msg.agent_name {
+                Some(name) => name.clone(),
+                None => msg.role.to_uppercase(),
+            };
+            initial_context_dump.push_str(&format!("\n\n### [{}]\n{}", role_label, msg.content));
         }
     }
 
@@ -293,11 +301,13 @@ fn run_agent_node(
                 let (sub_result, updated_state) = run_agent_node(
                     app, engine, subagent, agents, content.clone(), vec![], current_state.clone(),
                     max_gen_tokens, model_params, format_type, cancel_flag.clone(), depth + 1, all_sub_calls,
+                    Some(agent.name.clone()), // Передаём имя вызывающего агента
                 )?;
 
                 current_state = updated_state;
                 messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone(), sub_calls: None, agent_name: None });
-                messages.push(ChatMessage { role: "user".to_string(), content: format!("Отчет от {}:\n{}\n\nАнализируй и продолжай.", subagent.name, sub_result), sub_calls: None, agent_name: None });
+                // Результат от сабагента помечаем именем сабагента
+                messages.push(ChatMessage { role: "user".to_string(), content: format!("Отчет от {}:\n{}\n\nАнализируй и продолжай.", subagent.name, sub_result), sub_calls: None, agent_name: Some(subagent.name.clone()) });
                 continue;
             } else {
                 messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone(), sub_calls: None, agent_name: None });

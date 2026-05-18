@@ -1,4 +1,4 @@
 @echo off
 cd /d "%~dp0"
 node build.cjs
-pause
+if %ERRORLEVEL% NEQ 0 pause
