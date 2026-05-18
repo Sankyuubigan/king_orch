@@ -137,7 +137,6 @@ fn get_model_params(app: tauri::AppHandle, model_path: String) -> ModelParams {
         return params.clone();
     }
 
-    // Фоллбэк: ищем в JSON каталоге по имени файла
     let catalog = config::load_catalog(&app);
     let file_name = std::path::Path::new(&model_path).file_name().unwrap_or_default().to_string_lossy();
     
@@ -152,7 +151,6 @@ fn get_model_params(app: tauri::AppHandle, model_path: String) -> ModelParams {
         }
     }
 
-    // Если не нашли в JSON, вытаскиваем из GGUF метаданных
     if !found {
         if let Some(temp) = llm::extract_f32_from_gguf(&model_path, "tokenizer.ggml.temp") { params.temperature = temp; }
         if let Some(top_k) = llm::extract_u32_from_gguf(&model_path, "tokenizer.ggml.top_k") { params.top_k = top_k; }
@@ -177,7 +175,7 @@ fn reset_model_params(app: tauri::AppHandle, model_path: String) -> ModelParams 
     let mut cfg = config::load_config(&app);
     cfg.model_params.remove(&model_path);
     config::save_config(&app, &cfg);
-    get_model_params(app, model_path) // Перезапустит фоллбэк
+    get_model_params(app, model_path)
 }
 
 #[derive(Serialize)]
@@ -198,7 +196,7 @@ async fn chat_request(
     context_size: u32,
     kv_quantization: bool,
     current_state: String,
-    model_params: ModelParams, // Получаем параметры из UI
+    model_params: ModelParams,
 ) -> Result<ChatResponse, String> {
     let mut cfg = config::load_config(&app);
     cfg.context_size = context_size;
@@ -243,6 +241,7 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(AppState {
             cancel_flag: Arc::new(AtomicBool::new(false)),
         })
