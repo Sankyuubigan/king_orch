@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -21,9 +22,11 @@ pub struct ChatSession {
     #[serde(default)]
     pub created_at: Option<u64>,
     #[serde(default)]
-    pub state_markdown: String,
+    pub dossier: HashMap<String, String>,
+    #[serde(default, skip_serializing)]
+    pub state_markdown: String, // Legacy: только для чтения старых сессий
     #[serde(default)]
-    pub draft: String, // Поле для хранения черновика
+    pub draft: String,
     pub messages: Vec<ChatMessage>,
 }
 
@@ -46,9 +49,7 @@ pub fn get_sessions(app: &AppHandle) -> Vec<SessionMeta> {
             if path.is_file() && path.extension().map_or(false, |e| e == "json") {
                 if let Ok(content) = fs::read_to_string(&path) {
                     if let Ok(session) = serde_json::from_str::<ChatSession>(&content) {
-                        // Фолбэк для старых сессий: если created_at нет, используем updated_at
                         let created_at = session.created_at.unwrap_or(session.updated_at);
-                        
                         sessions.push(SessionMeta {
                             id: session.id,
                             title: session.title,
@@ -61,7 +62,6 @@ pub fn get_sessions(app: &AppHandle) -> Vec<SessionMeta> {
         }
     }
     
-    // Сортируем строго по дате создания (новые сверху)
     sessions.sort_by(|a, b| b.created_at.cmp(&a.created_at));
     sessions
 }
@@ -69,16 +69,30 @@ pub fn get_sessions(app: &AppHandle) -> Vec<SessionMeta> {
 pub fn get_session(app: &AppHandle, id: &str) -> Result<ChatSession, String> {
     let path = get_sessions_dir(app).join(format!("{}.json", id));
     let content = fs::read_to_string(path).map_err(|e| format!("Ошибка чтения сессии: {}", e))?;
-    serde_json::from_str(&content).map_err(|e| format!("Ошибка парсинга сессии: {}", e))
+    let mut session: ChatSession = serde_json::from_str(&content).map_err(|e| format!("Ошибка парсинга сессии: {}", e))?;
+    
+    // Миграция: старое state_markdown -> новое dossier
+    if !session.state_markdown.is_empty() && session.dossier.is_empty() {
+        session.dossier.insert("legacy_state".to_string(), session.state_markdown.clone());
+        session.state_markdown = String::new();
+    }
+    
+    Ok(session)
 }
 
-pub fn save_session(app: &AppHandle, id: &str, title: &str, messages: Vec<ChatMessage>, state_markdown: String, draft: String) -> Result<(), String> {
+pub fn save_session(
+    app: &AppHandle,
+    id: &str,
+    title: &str,
+    messages: Vec<ChatMessage>,
+    dossier: HashMap<String, String>,
+    draft: String,
+) -> Result<(), String> {
     let path = get_sessions_dir(app).join(format!("{}.json", id));
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     
     let mut session_created_at = now;
     
-    // Читаем старый файл, если он есть, чтобы сохранить оригинальную дату создания
     if path.exists() {
         if let Ok(content) = fs::read_to_string(&path) {
             if let Ok(old_session) = serde_json::from_str::<ChatSession>(&content) {
@@ -92,7 +106,8 @@ pub fn save_session(app: &AppHandle, id: &str, title: &str, messages: Vec<ChatMe
         title: title.to_string(),
         updated_at: now,
         created_at: Some(session_created_at),
-        state_markdown,
+        dossier,
+        state_markdown: String::new(),
         draft,
         messages,
     };

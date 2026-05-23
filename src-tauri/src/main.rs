@@ -10,6 +10,7 @@ mod config;
 mod downloader;
 
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, State, Emitter};
@@ -97,7 +98,13 @@ fn load_session(app: tauri::AppHandle, id: String) -> Result<session_manager::Ch
 }
 
 #[tauri::command]
-fn save_session(app: tauri::AppHandle, id: String, messages: Vec<ChatMessage>, state_markdown: String, draft: String) -> Result<(), String> {
+fn save_session(
+    app: tauri::AppHandle,
+    id: String,
+    messages: Vec<ChatMessage>,
+    dossier: HashMap<String, String>,
+    draft: String,
+) -> Result<(), String> {
     let title = messages.iter().find(|m| m.role == "user").map(|m| {
         let text = m.content.replace('\n', " ");
         if text.chars().count() > 35 {
@@ -107,7 +114,7 @@ fn save_session(app: tauri::AppHandle, id: String, messages: Vec<ChatMessage>, s
         }
     }).unwrap_or_else(|| "Новая сессия".to_string());
     
-    session_manager::save_session(&app, &id, &title, messages, state_markdown, draft)
+    session_manager::save_session(&app, &id, &title, messages, dossier, draft)
 }
 
 #[tauri::command]
@@ -182,7 +189,7 @@ fn reset_model_params(app: tauri::AppHandle, model_path: String) -> ModelParams 
 struct ChatResponse {
     text: String,
     sub_calls: Vec<SubCall>,
-    new_state: String,
+    dossier: HashMap<String, String>,
 }
 
 #[tauri::command]
@@ -195,7 +202,7 @@ async fn chat_request(
     history: Vec<ChatMessage>,
     context_size: u32,
     kv_quantization: bool,
-    current_state: String,
+    dossier: HashMap<String, String>,
     model_params: ModelParams,
 ) -> Result<ChatResponse, String> {
     let mut cfg = config::load_config(&app);
@@ -222,13 +229,13 @@ async fn chat_request(
             format_type,
             conf_threshold,
             cancel_flag,
-            current_state
+            dossier
         )
     })
     .await
     .map_err(|e| e.to_string())??;
 
-    Ok(ChatResponse { text: result.0, sub_calls: result.1, new_state: result.2 })
+    Ok(ChatResponse { text: result.0, sub_calls: result.1, dossier: result.2 })
 }
 
 #[tauri::command]

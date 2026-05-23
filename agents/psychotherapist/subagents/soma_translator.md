@@ -1,7 +1,7 @@
 ---
 name: soma_translator
 description: Расшифровщик психосоматики (переводит симптомы на ментальный язык)
-mode: subagent
+mode: worker
 tools:
   write: false
   bash: false

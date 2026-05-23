@@ -14,8 +14,6 @@ pub struct AgentProfile {
     pub is_hidden: bool,
     pub mode: String,
     #[serde(default)]
-    pub can_update_state: bool,
-    #[serde(default)]
     pub mcp_servers: Vec<String>,
     #[serde(default)]
     pub subagents: Vec<String>,
@@ -60,8 +58,8 @@ pub fn load_agents(app: &AppHandle) -> Vec<AgentProfile> {
     let possible_agents_dirs = vec![
         exe_dir.join("agents"),
         resource_dir.join("agents"),
-        PathBuf::from("agents"), // Текущая рабочая директория
-        exe_dir.join("..").join("..").join("agents"), // Корень проекта при запуске из target/release
+        PathBuf::from("agents"),
+        exe_dir.join("..").join("..").join("agents"),
     ];
     
     let default_agents_dir = exe_dir.join("agents");
@@ -70,8 +68,6 @@ pub fn load_agents(app: &AppHandle) -> Vec<AgentProfile> {
     if !agents_dir.exists() {
         let _ = fs::create_dir_all(&agents_dir);
     }
-
-    // БЛОК АВТОСОЗДАНИЯ ОРКЕСТРАТОРА УБРАН ПО ПРОСЬБЕ ПОЛЬЗОВАТЕЛЯ
 
     let mut md_files = Vec::new();
     collect_md_files(&agents_dir, &mut md_files);
@@ -106,7 +102,8 @@ fn parse_agent_file(app: &AppHandle, path: &Path) -> Option<AgentProfile> {
 
         if let Some(mut agent) = parse_agent_markdown(&processed_content) {
             agent.id = path.file_stem().unwrap().to_string_lossy().to_string();
-            agent.is_hidden = agent.mode == "subagent";
+            // Скрыты все агенты, КРОМЕ primary (только primary показывается в UI)
+            agent.is_hidden = agent.mode != "primary";
             return Some(agent);
         } else {
             emit_log(app, &format!("⚠️ Пропущен файл {}: Не найден или некорректен блок Frontmatter", file_name));
@@ -127,8 +124,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             
             let mut name = String::new();
             let mut description = String::new();
-            let mut mode = String::from("subagent");
-            let mut can_update_state = false;
+            let mut mode = String::from("worker"); // По умолчанию worker вместо subagent
             let mut mcp_servers = Vec::new();
             let mut subagents = Vec::new();
             
@@ -140,8 +136,12 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                     description = line["description:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string();
                 } else if line.starts_with("mode:") {
                     mode = line["mode:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string();
+                    // Обратная совместимость: subagent -> worker
+                    if mode == "subagent" {
+                        mode = "worker".to_string();
+                    }
                 } else if line.starts_with("can_update_state:") {
-                    can_update_state = line["can_update_state:".len()..].trim().parse().unwrap_or(false);
+                    // Устаревшее поле — игнорируется
                 } else if line.starts_with("mcp_servers:") {
                     let list_str = line["mcp_servers:".len()..].trim();
                     if let Ok(parsed) = serde_json::from_str::<Vec<String>>(list_str) {
@@ -176,7 +176,6 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                     system_prompt,
                     is_hidden: false,
                     mode,
-                    can_update_state,
                     mcp_servers,
                     subagents,
                 });

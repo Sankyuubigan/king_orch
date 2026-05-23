@@ -110,7 +110,7 @@ impl PromptFormat {
 fn read_gguf_header(path: &str) -> Option<Vec<u8>> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).ok()?;
-    let mut buffer = vec![0; 5 * 1024 * 1024]; // Читаем первые 5 МБ
+    let mut buffer = vec![0; 5 * 1024 * 1024];
     let bytes_read = file.read(&mut buffer).ok()?;
     let data = &buffer[..bytes_read];
     if data.len() < 24 || &data[0..4] != b"GGUF" { return None; }
@@ -188,7 +188,7 @@ pub fn extract_f32_from_gguf(path: &str, target_key: &str) -> Option<f32> {
         let val_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
         offset += 4;
         
-        if key == target_key && val_type == 6 { // FLOAT32
+        if key == target_key && val_type == 6 {
             if offset + 4 > data.len() { break; }
             return Some(f32::from_le_bytes(data[offset..offset+4].try_into().unwrap()));
         } else {
@@ -213,7 +213,7 @@ pub fn extract_u32_from_gguf(path: &str, target_key: &str) -> Option<u32> {
         let val_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
         offset += 4;
         
-        if key == target_key && val_type == 4 { // UINT32
+        if key == target_key && val_type == 4 {
             if offset + 4 > data.len() { break; }
             return Some(u32::from_le_bytes(data[offset..offset+4].try_into().unwrap()));
         } else {
@@ -250,7 +250,6 @@ fn render_jinja_template(template_str: &str, messages: &[ChatMessage]) -> Result
         eos_token => "</s>",
     }).map_err(|e| e.to_string())
 }
-// --------------------------------------------------------
 
 pub struct LlamaEngine {
     backend: LlamaBackend,
@@ -283,7 +282,7 @@ impl LlamaEngine {
         &self,
         full_prompt: &str,
         max_tokens: usize,
-        params: &ModelParams, // ПАРАМЕТРЫ СЭМПЛИРОВАНИЯ
+        params: &ModelParams,
         custom_stop_words: &[&str],
         cancel_flag: Arc<AtomicBool>,
         mut progress_cb: F,
@@ -346,7 +345,7 @@ impl LlamaEngine {
 
         let mut stop_words = vec![
             "<|im_end|>", "<end_of_turn>", "</s>", "<|eot_id|>", 
-            "<turn>", "<|eot|>", "User:", "System:", "<eos>", "<|endoftext|>",
+            "<turn>", "<|eot|>", "User:", "System:", "<eos>", "Yes",
             "<turn|>", "/end_of_turn>", "<step>", "<|end_of_text|>", "<｜end of sentence｜>"
         ];
         stop_words.extend_from_slice(custom_stop_words);
@@ -357,7 +356,7 @@ impl LlamaEngine {
             let candidates_array = ctx.candidates_ith(batch.n_tokens() - 1);
             let candidates = LlamaTokenDataArray::from_iter(candidates_array, false);
 
-            // МАНУАЛЬНОЕ СЭМПЛИРОВАНИЕ ДЛЯ НЕЗАВИСИМОСТИ ОТ API LLAMA-CPP
+            // МАНУАЛЬНОЕ СЭМПЛИРОВАНИЕ (проверенный порядок: Temp -> Softmax -> Sort -> TopK -> MinP -> TopP)
             let mut candidates_vec: Vec<(llama_cpp_2::token::LlamaToken, f32)> = candidates.data.iter().map(|d| (d.id(), d.logit())).collect();
 
             // 1. Штрафы за повторения и присутствие
@@ -453,7 +452,6 @@ impl LlamaEngine {
                     break;
                 }
             }
-            // КОНЕЦ МАНУАЛЬНОГО СЭМПЛИРОВАНИЯ
 
             if new_token == self.model.token_eos() { break; }
 

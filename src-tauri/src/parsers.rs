@@ -1,5 +1,6 @@
 fn extract_json_block(text: &str) -> Option<String> {
-    // 1. Сначала ищем четко выделенный блок ```json ... ```
+    let text = clean_thought_tags(text);
+    
     if let Some(start) = text.find("```json") {
         let content_start = start + 7;
         if let Some(end) = text[content_start..].find("```") {
@@ -7,7 +8,6 @@ fn extract_json_block(text: &str) -> Option<String> {
         }
     }
     
-    // 2. Если блока с тегами нет, пытаемся найти просто первую { и последнюю }
     if let Some(start) = text.find('{') {
         if let Some(end) = text.rfind('}') {
             return Some(text[start..=end].trim().to_string());
@@ -17,7 +17,25 @@ fn extract_json_block(text: &str) -> Option<String> {
     None
 }
 
-// Возвращает: Имя инструмента, Аргументы, Мысль (thought)
+/// Очистка от технической разметки LLM (<|channel>thought...<channel|>, <think...>...</think...>)
+pub fn clean_thought_tags(text: &str) -> String {
+    let mut result = text.to_string();
+    
+    if let Ok(re) = regex::Regex::new(r"(?s)<\|channel\>thought.*?<channel\|>") {
+        result = re.replace_all(&result, "").to_string();
+    }
+    
+    if let Ok(re) = regex::Regex::new(r"(?s)<think[^>]*>.*?</think\s*>") {
+        result = re.replace_all(&result, "").to_string();
+    }
+    
+    if let Ok(re) = regex::Regex::new(r"<think\s*/>") {
+        result = re.replace_all(&result, "").to_string();
+    }
+    
+    result.trim().to_string()
+}
+
 pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)> {
     if let Some(json_str) = extract_json_block(text) {
         let parsed = serde_json::from_str::<serde_json::Value>(&json_str)
@@ -37,17 +55,17 @@ pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)
                 return Some((tool.to_string(), args, thought));
             }
         } else {
-            // Fallback для невалидного JSON (напр. LLM забыла экранировать кавычки)
-            let tool_re = regex::Regex::new(r#""tool"\s*:\s*"([^"]+)""#).ok()?;
+            let tool_re = regex::Regex::new(r#"(?is)"tool"\s*:\s*"([^"]+)""#).ok()?;
             if let Some(tool_cap) = tool_re.captures(&json_str) {
                 let tool = tool_cap.get(1)?.as_str().to_string();
                 
-                let args_re = regex::Regex::new(r#"(?s)"arguments"\s*:\s*(\{.*?\})"#).ok()?;
+                let args_re = regex::Regex::new(r#"(?is)"arguments"\s*:\s*(\{.*?\})"#).ok()?;
                 let args_str = args_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or("{}".to_string());
                 let args = serde_json::from_str(&args_str).unwrap_or(serde_json::Value::Null);
                 
-                let thought_re = regex::Regex::new(r#"(?s)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok()?;
-                let thought = thought_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
+                let thought_re = regex::Regex::new(r#"(?is)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok()?;
+                let thought_raw = thought_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
+                let thought = decode_json_escapes(&thought_raw);
 
                 return Some((tool, args, thought));
             }
@@ -56,7 +74,6 @@ pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)
     None
 }
 
-// Возвращает: Confidence, Target, Content, Мысль (thought)
 pub fn parse_orchestrator_response(text: &str) -> Option<(f32, String, String, String)> {
     if let Some(json_str) = extract_json_block(text) {
         let parsed = serde_json::from_str::<serde_json::Value>(&json_str)
@@ -81,24 +98,22 @@ pub fn parse_orchestrator_response(text: &str) -> Option<(f32, String, String, S
             
             let thought = val.get("thought").and_then(|v| v.as_str()).unwrap_or("").to_string();
 
-            // Проверяем, что это действительно вызов сабагента (есть target)
             if val.get("target").is_some() {
                 return Some((conf, target, content, thought));
             }
         } else {
-            // Fallback для невалидного JSON (LLM часто забывает экранировать кавычки, например: достижение "покоя")
-            let target_re = regex::Regex::new(r#""target"\s*:\s*"([^"]+)""#).ok()?;
+            let target_re = regex::Regex::new(r#"(?is)"target"\s*:\s*"([^"]+)""#).ok()?;
             
             if let Some(target_cap) = target_re.captures(&json_str) {
                 let target = target_cap.get(1)?.as_str().to_string();
                 
-                // Жадный поиск (greedy) task_or_response до конца объекта или запятой
                 let task_re = regex::Regex::new(r#"(?s)"task_or_response"\s*:\s*"(.*)"\s*(?:\}|,)"#).ok()?;
-                let content = task_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
+                let content_raw = task_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
+                let content = decode_json_escapes(&content_raw);
                 
-                // Ленивый поиск (lazy) для thought
-                let thought_re = regex::Regex::new(r#"(?s)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok()?;
-                let thought = thought_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
+                let thought_re = regex::Regex::new(r#"(?is)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok()?;
+                let thought_raw = thought_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
+                let thought = decode_json_escapes(&thought_raw);
 
                 return Some((1.0, target, content, thought));
             }
@@ -107,20 +122,9 @@ pub fn parse_orchestrator_response(text: &str) -> Option<(f32, String, String, S
     None
 }
 
-pub fn extract_state_update(text: &str) -> (Option<String>, String) {
-    let start_tag = "<update_state>";
-    let end_tag = "</update_state>";
-    
-    if let Some(start_idx) = text.find(start_tag) {
-        if let Some(end_idx) = text.find(end_tag) {
-            let state_content = text[start_idx + start_tag.len()..end_idx].trim().to_string();
-            
-            let mut clean_text = String::new();
-            clean_text.push_str(&text[..start_idx]);
-            clean_text.push_str(&text[end_idx + end_tag.len()..]);
-            
-            return (Some(state_content), clean_text.trim().to_string());
-        }
-    }
-    (None, text.to_string())
+fn decode_json_escapes(s: &str) -> String {
+    s.replace("\\n", "\n")
+     .replace("\\\"", "\"")
+     .replace("\\t", "\t")
+     .replace("\\\\", "\\")
 }

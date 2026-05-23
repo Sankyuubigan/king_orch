@@ -135,10 +135,7 @@ async function main() {
 
         console.log('\n========================================');
         console.log('[4/5] Сборка приложения (release)...');
-        console.log('Используется RELEASE режим — артефакты кэшируются Cargo.');
-        console.log('Повторная сборка без изменений займёт секунды.\n');
 
-        // Подпись (опционально для локального тестирования)
         let privKeyPath = process.env.TAURI_PRIVATE_KEY_ORIGINAL || 'D:\\Projects\\docusaurus-starter\\docs\\Sega Mega Note\\Моя картотека\\software\\настройки\\tauri_signed_keys\\tauri.key';
         let hasKey = fs.existsSync(privKeyPath);
 
@@ -150,7 +147,6 @@ async function main() {
             process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = '123';
         } else {
             console.log('⚠️ Ключ подписи не найден — сборка без подписи (для локального тестирования это нормально).');
-            // Устанавливаем пустой ключ чтобы tauri build не падал
             process.env.TAURI_SIGNING_PRIVATE_KEY = '';
             process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = '';
         }
@@ -158,13 +154,17 @@ async function main() {
         delete process.env.TAURI_PRIVATE_KEY;
         delete process.env.TAURI_KEY_PASSWORD;
 
+        // КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Если сборка падает — НЕ продолжать, НЕ запускать старый экзешник
         try {
             await runCommand('npx', ['tauri', 'build']);
-        } catch (e) {
-            console.log('\n⚠️ Сборка завершилась с ошибкой (возможно проблема подписи). Проверяю exe...');
+        } catch (buildError) {
+            console.error('\n❌ СБОРКА ЗАВЕРШИЛАСЬ С ОШИБКОЙ!');
+            console.error('Старый экзешник НЕ будет запущен.');
+            console.error('Исправьте ошибки компиляции и запустите build.bat снова.');
+            throw buildError;
         }
 
-        // Копируем сайдкары рядом с exe чтобы они работали при запуске из target/release/
+        // Копируем сайдкары рядом с exe
         const releaseDir = path.join(scriptDir, 'src-tauri', 'target', 'release');
         const releaseBinDir = path.join(releaseDir, 'bin');
         if (fs.existsSync(binDir) && fs.existsSync(releaseDir)) {
@@ -179,25 +179,36 @@ async function main() {
             console.log('  📋 Сайдкары скопированы.');
         }
 
-        console.log('\n========================================');
-        console.log('[5/5] Запуск приложения...');
+        // Проверяем что экзешник реально свежий (собрался только что)
         const exePath = path.join(releaseDir, 'king_orch.exe');
-        if (fs.existsSync(exePath)) {
-            console.log('🚀 Запуск King Orch (без консоли)...');
-            const child = spawn(exePath, [], {
-                detached: true,
-                stdio: 'ignore',
-                windowsHide: true
-            });
-            child.unref();
-            console.log('✅ Приложение запущено! Эта консоль закроется автоматически.');
-            setTimeout(() => process.exit(0), 1500);
-        } else {
+        if (!fs.existsSync(exePath)) {
             throw new Error('king_orch.exe не найден! Сборка не удалась.');
         }
+        
+        const exeStat = fs.statSync(exePath);
+        const exeAgeSec = (Date.now() - exeStat.mtimeMs) / 1000;
+        if (exeAgeSec > 120) {
+            throw new Error(`king_orch.exe устарел (${Math.round(exeAgeSec)} сек назад). Сборка не удалась — это старый экзешник!`);
+        }
+
+        console.log('\n========================================');
+        console.log('[5/5] Запуск приложения...');
+        console.log('🚀 Запуск King Orch (без консоли)...');
+        const child = spawn(exePath, [], {
+            detached: true,
+            stdio: 'ignore',
+            windowsHide: true
+        });
+        child.unref();
+        console.log('✅ Приложение запущено! Эта консоль закроется автоматически.');
+        setTimeout(() => process.exit(0), 1500);
 
     } catch (e) {
-        console.error('\n[ОШИБКА]', e.message);
+        console.error('\n========================================');
+        console.error('❌ ОШИБКА:', e.message);
+        console.error('========================================');
+        console.error('Консоль НЕ закроется. Скопируйте ошибки и исправьте.');
+        // НЕ закрываем консоль — даём пользователю прочитать ошибки
         process.exit(1);
     }
 }

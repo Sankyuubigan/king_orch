@@ -67,9 +67,9 @@ const btnNewSession = document.getElementById("btn-new-session") as HTMLButtonEl
 const sessionList = document.getElementById("session-list") as HTMLDivElement;
 
 let isProcessing = false;
-let globalChatHistory: {role: string, content: string, sub_calls?: any[], agent_name?: string}[] =[];
+let globalChatHistory: {role: string, content: string, sub_calls?: any[], agent_name?: string}[] = [];
 let currentSessionId: string | null = null;
-let globalStateMarkdown: string = ""; 
+let globalDossier: Record<string, string> = {};
 let modelsCatalog: any[] = [];
 let draftTimeout: number | undefined;
 
@@ -292,7 +292,11 @@ async function loadSessionsListUI() {
           </div>
         </div>
       `;
-      div.querySelector('.session-title')?.addEventListener("click", () => openSessionUI(s.id));
+
+      div.addEventListener("click", (e) => {
+        if ((e.target as HTMLElement).closest('.session-item-actions')) return;
+        openSessionUI(s.id);
+      });
       
       const menuBtn = div.querySelector('.btn-session-menu');
       const dropdown = div.querySelector('.session-menu-dropdown');
@@ -349,7 +353,11 @@ async function openSessionUI(id: string) {
     const session = await loadSession(id);
     currentSessionId = id;
     globalChatHistory = session.messages;
-    globalStateMarkdown = session.state_markdown || ""; 
+    // Загрузка dossier (Record<string, string>), с фоллбэком для старых сессий
+    globalDossier = session.dossier || {};
+    if (!globalDossier && session.state_markdown) {
+      globalDossier = { legacy_state: session.state_markdown };
+    }
     chatInput.value = session.draft || ""; 
     setTimeout(() => {
       chatInput.style.height = "auto";
@@ -375,14 +383,11 @@ async function openSessionUI(id: string) {
 }
 
 async function deleteSessionUI(id: string) {
-  // Используем собственное модальное окно вместо Tauri dialog (нет проблем с ACL)
   const yes = await confirmDialog(
     "Удаление сессии",
     "Вы уверены, что хотите безвозвратно удалить эту сессию?"
   );
-
-  if (!yes) return; // Нажали "Отмена" или закрыли окно
-
+  if (!yes) return;
   try {
     await deleteSession(id);
     if (currentSessionId === id) startNewSession(); else loadSessionsListUI();
@@ -397,8 +402,8 @@ async function deleteSessionUI(id: string) {
 function startNewSession() {
   if (isProcessing) return;
   currentSessionId = null;
-  globalChatHistory =[];
-  globalStateMarkdown = "";
+  globalChatHistory = [];
+  globalDossier = {};
   chatHistory.innerHTML = '';
   chatInput.value = ''; 
   chatInput.style.height = "auto";
@@ -451,14 +456,14 @@ chatInput.addEventListener("input", () => {
   if (!currentSessionId && chatInput.value.trim() !== "") {
     currentSessionId = Date.now().toString();
     globalChatHistory = [];
-    globalStateMarkdown = "";
-    saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, chatInput.value).then(() => {
+    globalDossier = {};
+    saveSession(currentSessionId, globalChatHistory, globalDossier, chatInput.value).then(() => {
       loadSessionsListUI();
     });
   } else if (currentSessionId) {
     clearTimeout(draftTimeout);
     draftTimeout = window.setTimeout(() => {
-      saveSession(currentSessionId!, globalChatHistory, globalStateMarkdown, chatInput.value);
+      saveSession(currentSessionId!, globalChatHistory, globalDossier, chatInput.value);
     }, 500);
   }
 });
@@ -466,7 +471,7 @@ chatInput.addEventListener("input", () => {
 chatInput.addEventListener("blur", () => {
   if (currentSessionId && !isProcessing) {
     clearTimeout(draftTimeout);
-    saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, chatInput.value);
+    saveSession(currentSessionId, globalChatHistory, globalDossier, chatInput.value);
   }
 });
 
@@ -488,7 +493,7 @@ async function handleSend() {
 
   if (!currentSessionId) currentSessionId = Date.now().toString();
   globalChatHistory.push({ role: "user", content: text });
-  await saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, "");
+  await saveSession(currentSessionId, globalChatHistory, globalDossier, "");
   loadSessionsListUI();
 
   const startTime = performance.now();
@@ -508,14 +513,14 @@ async function handleSend() {
     const response: any = await invoke("chat_request", { 
       modelPath, agentId: activeAgent, message: text, history: historyToSend, 
       contextSize: parseInt(contextSlider.value, 10), kvQuantization: chkKvQuant.checked,
-      currentState: globalStateMarkdown, modelParams: params
+      dossier: globalDossier, modelParams: params
     });
     const durationSec = ((performance.now() - startTime) / 1000).toFixed(1);
     
-    globalStateMarkdown = response.new_state;
+    globalDossier = response.dossier || {};
     globalChatHistory.push({ role: "assistant", content: response.text, sub_calls: response.sub_calls });
     appendMessage('agent', response.text, displayName, `⏱ Время: ${durationSec} сек.`);
-    await saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, chatInput.value);
+    await saveSession(currentSessionId, globalChatHistory, globalDossier, chatInput.value);
   } catch (error) {
     if (String(error).includes("Отменено") || String(error).includes("Прервано")) {
       appendMessage('system', '⚠️ Обработка прервана.');
@@ -552,10 +557,8 @@ listen("agent_thought", (e) => {
   chatHistory.appendChild(el);
   chatHistory.scrollTop = chatHistory.scrollHeight;
   globalChatHistory.push({ role: "thought", content: payload.thought, agent_name: payload.agent_name });
-  if (currentSessionId) saveSession(currentSessionId, globalChatHistory, globalStateMarkdown, chatInput.value);
+  if (currentSessionId) saveSession(currentSessionId, globalChatHistory, globalDossier, chatInput.value);
 });
 
-// Инициализация модального окна подтверждения
 initConfirmDialog();
-
 document.addEventListener("DOMContentLoaded", loadConfig);
