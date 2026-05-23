@@ -75,7 +75,7 @@ async function main() {
     try {
         console.log('========================================');
         console.log('[1/5] Установка зависимостей Node.js...');
-        await runCommand('npm', ['install']);
+        await runCommand('npm', ['install', '--legacy-peer-deps']);
 
         console.log('\n========================================');
         console.log('[2/5] Подготовка сайдкаров...');

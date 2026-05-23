@@ -23,7 +23,7 @@ function sendResponse(id, result) {
     }));
 }
 
-let indexedFiles = []; // { path, chunks: [{ text, lineStart }] }
+let indexedFiles = [];
 
 function handleRequest(req) {
     const { id, method, params } = req;

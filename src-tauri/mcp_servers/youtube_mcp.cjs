@@ -4,7 +4,6 @@ const { execSync } = require('child_process');
 const os = require('os');
 const readline = require('readline');
 
-// Кэш для хранения нарезанных видео в памяти на время сессии
 const videoCache = {};
 
 const rl = readline.createInterface({

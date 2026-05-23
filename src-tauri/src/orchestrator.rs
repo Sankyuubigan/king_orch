@@ -67,19 +67,19 @@ fn build_system_prompt(
     }
 
     if has_subagents || has_tools {
-        sp.push_str("\n\n[КРИТИЧЕСКОЕ ПРАВИЛО ВЫЗОВА JSON]\n");
-        sp.push_str("Если ты хочешь делегировать задачу сабагенту или использовать инструмент, ты ДОЛЖЕН вернуть СТРОГО ОДИН валидный JSON-блок (внутри тегов ```json ... ```).\n");
-        sp.push_str("В JSON обязательно должно быть поле \"thought\" с кратким объяснением твоих действий.\n");
+        sp.push_str("\n\n[ПРАВИЛА ВЫЗОВА]\n");
+        sp.push_str("Если тебе нужно вызвать сабагента или инструмент — верни ОДИН JSON-блок (внутри ```json ... ```).\n");
+        sp.push_str("В JSON обязательно должно быть поле \"thought\" с кратким объяснением.\n");
+        sp.push_str("\n⚠️ ВАЖНО: Если задача ВЫПОЛНЕНА и ты хочешь просто ответить пользователю — пиши ОБЫЧНЫЙ ТЕКСТ без JSON! НЕ используй JSON с \"tool\": \"none\" — это вызовет ошибку!\n");
         
         if has_subagents {
             sp.push_str("\nДля вызова сабагента:\n```json\n{\"thought\": \"...\", \"target\": \"ID_САБАГЕНТА\", \"task_or_response\": \"ЗАДАЧА\"}\n```\n");
-            sp.push_str("Для ответа напрямую — используй JSON с target: \"reply\":\n```json\n{\"thought\": \"...\", \"target\": \"reply\", \"task_or_response\": \"ТВОЙ ОТВЕТ\"}\n```\n");
+            sp.push_str("Для прямого ответа пользователю:\n```json\n{\"thought\": \"...\", \"target\": \"reply\", \"task_or_response\": \"ТВОЙ ОТВЕТ\"}\n```\n");
         }
         
         if agent.mode == "router" {
             sp.push_str("\n\n[АБСОЛЮТНОЕ ПРАВИЛО ДЛЯ МАРШРУТИЗАТОРА]\n");
-            sp.push_str("Ты ВСЕГДА отвечаешь в формате JSON. НИКОГДА не пиши обычный текст вне JSON.\n");
-            sp.push_str("ДАЖЕ для финального ответа используй JSON с target: \"reply\".\n");
+            sp.push_str("Ты ВСЕГДА отвечаешь в формате JSON.\n");
             sp.push_str("НЕ используй форматы вроде <|channel>thought или <think/> — ТОЛЬКО JSON!\n");
         }
     }
@@ -90,7 +90,7 @@ fn build_system_prompt(
     }
 
     if has_tools {
-        let mut td = String::from("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]\n```json\n{\"thought\": \"...\", \"tool\": \"ИМЯ\", \"arguments\": {\"ключ\": \"значение\"}}\n```\n");
+        let mut td = String::from("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]\nДля вызова инструмента:\n```json\n{\"thought\": \"...\", \"tool\": \"ИМЯ\", \"arguments\": {\"ключ\": \"значение\"}}\n```\n\n");
         for (_, name, tool) in all_tools {
             let desc = tool.get("description").and_then(|d| d.as_str()).unwrap_or("");
             let schema = tool.get("inputSchema").cloned().unwrap_or(serde_json::Value::Null);
@@ -107,6 +107,10 @@ fn get_mcp_server_path(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
     let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
     let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
     let possible_paths = vec![
+        resource_dir.join("mcp_servers").join(format!("{}.cjs", name)),
+        exe_dir.join("mcp_servers").join(format!("{}.cjs", name)),
+        PathBuf::from("src-tauri").join("mcp_servers").join(format!("{}.cjs", name)),
+        exe_dir.join("..").join("..").join("src-tauri").join("mcp_servers").join(format!("{}.cjs", name)),
         resource_dir.join("mcp_servers").join(format!("{}.js", name)),
         exe_dir.join("mcp_servers").join(format!("{}.js", name)),
         PathBuf::from("src-tauri").join("mcp_servers").join(format!("{}.js", name)),
@@ -115,7 +119,7 @@ fn get_mcp_server_path(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
     for path in possible_paths {
         if path.exists() { return Ok(path); }
     }
-    Err(format!("MCP-сервер {} не найден", name))
+    Err(format!("MCP-сервер {}.cjs (и {}.js) не найден ни в одной директории", name, name))
 }
 
 pub fn run_chat(
@@ -196,25 +200,47 @@ fn run_agent_node(
     let mut all_tools: Vec<(String, String, serde_json::Value)> = Vec::new();
     
     for mcp_name in &agent.mcp_servers {
-        if let Ok(script_path) = get_mcp_server_path(app, mcp_name) {
-            let target = env!("TARGET");
-            let dev_name = format!("node-{}.exe", target);
-            let mut node_path = PathBuf::from("node");
-            if let Ok(mut exe) = std::env::current_exe() {
-                exe.pop();
-                for p in vec![exe.join("node.exe"), exe.join(&dev_name), exe.join("bin").join(&dev_name), PathBuf::from("bin").join(&dev_name)] {
-                    if p.exists() { node_path = p; break; }
+        emit_log(app, &format!("⏳ Инициализация MCP сервера: {}", mcp_name));
+        match get_mcp_server_path(app, mcp_name) {
+            Ok(script_path) => {
+                let target = env!("TARGET");
+                let dev_name = format!("node-{}.exe", target);
+                let mut node_path = PathBuf::from("node");
+                if let Ok(mut exe) = std::env::current_exe() {
+                    exe.pop();
+                    for p in vec![exe.join("node.exe"), exe.join(&dev_name), exe.join("bin").join(&dev_name), PathBuf::from("bin").join(&dev_name)] {
+                        if p.exists() { node_path = p; break; }
+                    }
                 }
-            }
-            if let Ok(mut client) = crate::mcp_client::McpClient::spawn(app, &node_path.to_string_lossy(), &[&script_path.to_string_lossy()]) {
-                if let Ok(tools) = client.list_tools() {
-                    for tool in &tools {
-                        if let Some(name) = tool.get("name").and_then(|n| n.as_str()) {
-                            all_tools.push((mcp_name.clone(), name.to_string(), tool.clone()));
+                
+                emit_log(app, &format!("   Путь к скрипту: {}", script_path.display()));
+                
+                match crate::mcp_client::McpClient::spawn(app, &node_path.to_string_lossy(), &[&script_path.to_string_lossy()]) {
+                    Ok(mut client) => {
+                        match client.list_tools() {
+                            Ok(tools) => {
+                                let mut loaded_tools = 0;
+                                for tool in &tools {
+                                    if let Some(name) = tool.get("name").and_then(|n| n.as_str()) {
+                                        all_tools.push((mcp_name.clone(), name.to_string(), tool.clone()));
+                                        loaded_tools += 1;
+                                    }
+                                }
+                                mcp_clients.insert(mcp_name.clone(), client);
+                                emit_log(app, &format!("✅ MCP сервер '{}' запущен. Инструментов загружено: {}", mcp_name, loaded_tools));
+                            }
+                            Err(e) => {
+                                emit_log(app, &format!("❌ Ошибка запроса списка инструментов у '{}': {}", mcp_name, e));
+                            }
                         }
                     }
-                    mcp_clients.insert(mcp_name.clone(), client);
+                    Err(e) => {
+                        emit_log(app, &format!("❌ Критическая ошибка запуска MCP сервера '{}': {}", mcp_name, e));
+                    }
                 }
+            }
+            Err(e) => {
+                emit_log(app, &format!("❌ Ошибка поиска файла сервера: {}", e));
             }
         }
     }
@@ -236,11 +262,12 @@ fn run_agent_node(
         }
     }
 
+    // Добавляем инструкцию о JSON только к ПЕРВОМУ запросу (не после результатов инструментов)
     let needs_json_instruction = (agent.mode == "router" || agent.mode == "primary") && (has_subagents || has_tools);
     if needs_json_instruction {
         if let Some(last_msg) = messages.last_mut() {
             if last_msg.role == "user" {
-                last_msg.content.push_str("\n\n[ВАЖНО]: Ответь СТРОГО одним валидным JSON-блоком. Не пиши текста вне JSON. Обязательно укажи поля \"thought\" и \"target\".");
+                last_msg.content.push_str("\n\n[ВАЖНО]: Если нужно вызвать инструмент — ответь JSON. Если задача ясна — вызови инструмент сразу.");
             }
         }
     }
@@ -256,6 +283,8 @@ fn run_agent_node(
     let mut tool_calls = Vec::new();
     let max_iterations = 30;
     let start_time = Instant::now();
+    let mut consecutive_failed_tools = 0;
+    const MAX_CONSECUTIVE_FAILED_TOOLS: usize = 3;
 
     for iter in 1..=max_iterations {
         if cancel_flag.load(Ordering::SeqCst) { return Err("Прервано пользователем".to_string()); }
@@ -269,6 +298,7 @@ fn run_agent_node(
 
         let response = clean_thought_tags(&raw_response);
 
+        // 1. Проверяем вызов инструмента
         if let Some((tool_name, arguments, thought)) = parse_tool_call(&response) {
             if !thought.is_empty() {
                 emit_log(app, &format!("💭 Мысль {} (инструмент {}): {}", agent.name, tool_name, thought));
@@ -277,18 +307,62 @@ fn run_agent_node(
             emit_status(app, &format!("Выполнение {}...", tool_name), 60);
             let args_str = arguments.to_string();
             let mut tool_output = None;
+            let mut tool_found = false;
+            
             if let Some((mcp_name, _, _)) = all_tools.iter().find(|(_, name, _)| name == &tool_name) {
                 if let Some(client) = mcp_clients.get_mut(mcp_name) {
-                    tool_output = Some(client.call_tool(&tool_name, arguments).unwrap_or_else(|e| format!("Ошибка: {}", e)));
+                    tool_found = true;
+                    emit_log(app, &format!("🔧 Передача параметров инструменту '{}'...", tool_name));
+                    match client.call_tool(&tool_name, arguments) {
+                        Ok(res) => {
+                            emit_log(app, &format!("✅ Инструмент '{}' успешно отработал.", tool_name));
+                            tool_output = Some(res);
+                            consecutive_failed_tools = 0;
+                        }
+                        Err(e) => {
+                            let err_msg = format!("Ошибка выполнения '{}': {}", tool_name, e);
+                            emit_log(app, &format!("❌ {}", err_msg));
+                            tool_output = Some(err_msg);
+                            consecutive_failed_tools += 1;
+                        }
+                    }
                 }
             }
-            let output = tool_output.unwrap_or_else(|| format!("Ошибка: Инструмент '{}' не найден.", tool_name));
+            
+            if !tool_found {
+                consecutive_failed_tools += 1;
+            }
+            
+            // Защита от бесконечного цикла неудачных вызовов
+            if consecutive_failed_tools >= MAX_CONSECUTIVE_FAILED_TOOLS {
+                let err = format!("⚠️ Превышен лимит неудачных вызовов инструментов ({}). Прекращаю попытки.", consecutive_failed_tools);
+                emit_log(app, &err);
+                final_response = err;
+                break;
+            }
+            
+            let output = tool_output.unwrap_or_else(|| {
+                let err = format!("Ошибка: Инструмент '{}' не найден в загруженных MCP серверах.", tool_name);
+                emit_log(app, &format!("❌ {}", err));
+                err
+            });
+            
             tool_calls.push(ToolCallInfo { tool_name: tool_name.clone(), arguments: args_str, result: output.clone() });
             messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone(), sub_calls: None, agent_name: None });
-            messages.push(ChatMessage { role: "user".to_string(), content: format!("[РЕЗУЛЬТАТ {}]:\n{}\nПродолжай работу.", tool_name, output), sub_calls: None, agent_name: None });
+            
+            // КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: После результата инструмента чётко говорим агенту что делать
+            let tool_result_msg = format!(
+                "[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\n{}\n{}", 
+                tool_name, 
+                output,
+                if tool_found { "✅ Инструмент отработал." } else { "❌ Инструмент не найден или вызвал ошибку." },
+                "Если задача выполнена — просто ответь ОБЫЧНЫМ ТЕКСТОМ без JSON. Если нужен другой инструмент — вызови его через JSON."
+            );
+            messages.push(ChatMessage { role: "user".to_string(), content: tool_result_msg, sub_calls: None, agent_name: None });
             continue;
         }
 
+        // 2. Проверяем вызов сабагента / ответ reply
         if let Some((_conf, target, content, thought)) = parse_orchestrator_response(&response) {
             if !thought.is_empty() {
                 emit_log(app, &format!("💭 Мысль {} (вызов {}): {}", agent.name, target, thought));
@@ -299,17 +373,13 @@ fn run_agent_node(
                 final_response = content;
                 break;
             } else if let Some(subagent) = agents.iter().find(|a| a.id == target) {
-                // === GUARD: Запрет повторного вызова worker-сабагента, чьи данные уже в досье ===
                 if subagent.mode == "worker" && current_dossier.contains_key(&subagent.id) && !current_dossier[&subagent.id].is_empty() {
                     emit_log(app, &format!("🚫 Повторный вызов {} отклонён: данные уже в досье (✅).", subagent.id));
                     messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone(), sub_calls: None, agent_name: None });
                     messages.push(ChatMessage {
                         role: "user".to_string(),
                         content: format!(
-                            "ОШИБКА МАРШРУТИЗАЦИИ: Сабагент '{}' уже был вызван, и его данные (✅) уже сохранены в досье. \
-                            ПОВТОРНЫЙ ВЫЗОВ ЗАПРЕЩЁН — это трата ресурсов и бессмысленная задержка. \
-                            Проверь [СТАТУС ДОСЬЕ] выше: у кого статус ❌? Вызови следующего сабагента со статусом ❌, \
-                            либо если у всех статус ✅ — верни финальный ответ через {{\"target\": \"reply\", ...}}.",
+                            "ОШИБКА: Сабагент '{}' уже был вызван (✅). Вызови другого или верни ответ через {{\"target\": \"reply\"}}.",
                             subagent.id
                         ),
                         sub_calls: None,
@@ -344,7 +414,7 @@ fn run_agent_node(
                     messages.push(ChatMessage { 
                         role: "user".to_string(), 
                         content: format!(
-                            "Сабагент {} завершил работу пайплайна. Все данные специалистов сохранены в [ТЕКУЩЕЕ ДОСЬЕ].\n\nПрочитай [ТЕКУЩЕЕ ДОСЬЕ] и ответь клиенту простым языком (как для 15-летнего). Не пересказывай технические детали. Дай 2-3 бытовых сценария.", 
+                            "Сабагент {} завершил работу. Прочитай досье и ответь клиенту простым языком. ОБЫЧНЫЙ ТЕКСТ без JSON.", 
                             subagent.name
                         ), 
                         sub_calls: None, 
@@ -356,36 +426,31 @@ fn run_agent_node(
                         ChatMessage { role: "system".to_string(), content: new_system, sub_calls: None, agent_name: None },
                         ChatMessage {
                             role: "user".to_string(),
-                            content: "Текущий статус обновлен. Анализируй [СТАТУС ДОСЬЕ] и реши, кого вызвать следующим.\n\nВАЖНО: НЕ вызывай сабагентов со статусом ✅ — их данные уже собраны. Вызови того, у кого ❌, или верни ответ через target: \"reply\".".to_string(),
+                            content: "Статус обновлен. Кого вызвать следующим? Или верни ответ через target: \"reply\".".to_string(),
                             sub_calls: None, agent_name: None,
                         },
                     ];
-                    if has_subagents || has_tools {
-                        if let Some(last_msg) = messages.last_mut() {
-                            if last_msg.role == "user" {
-                                last_msg.content.push_str("\n\n[ВАЖНО]: Ответь СТРОГО одним валидным JSON-блоком. Не пиши текста вне JSON. Обязательно укажи поля \"thought\" и \"target\".");
-                            }
-                        }
-                    }
                 } else {
                     messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone(), sub_calls: None, agent_name: None });
-                    messages.push(ChatMessage { role: "user".to_string(), content: format!("Отчет от {}:\n{}\n\nАнализируй и продолжай.", subagent.name, sub_result), sub_calls: None, agent_name: Some(subagent.name.clone()) });
+                    messages.push(ChatMessage { role: "user".to_string(), content: format!("Отчет от {}:\n{}\n\nЕсли этого достаточно — ответь ОБЫЧНЫМ ТЕКСТОМ без JSON.", subagent.name, sub_result), sub_calls: None, agent_name: Some(subagent.name.clone()) });
                 }
                 continue;
             } else {
                 messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone(), sub_calls: None, agent_name: None });
-                messages.push(ChatMessage { role: "user".to_string(), content: format!("Ошибка: Агент '{}' не найден.", target), sub_calls: None, agent_name: None });
+                messages.push(ChatMessage { role: "user".to_string(), content: format!("Ошибка: Агент '{}' не найден. Ответь обычным текстом.", target), sub_calls: None, agent_name: None });
                 continue;
             }
         }
 
+        // 3. Пустой ответ
         if (has_subagents || has_tools) && response.trim().is_empty() {
             emit_log(app, &format!("⚠️ Агент {} выдал пустой ответ. Повторный запрос...", agent.name));
             messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone(), sub_calls: None, agent_name: None });
-            messages.push(ChatMessage { role: "user".to_string(), content: "Ты не выдал ответ. Сформулируй ответ или вызови сабагента/инструмент.".to_string(), sub_calls: None, agent_name: None });
+            messages.push(ChatMessage { role: "user".to_string(), content: "Ты не выдал ответ. Ответь обычным текстом или вызови инструмент.".to_string(), sub_calls: None, agent_name: None });
             continue;
         }
 
+        // 4. Обычный текстовый ответ — ЗАВЕРШАЕМ ЦИКЛ
         final_response = response;
         break;
     }

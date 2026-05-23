@@ -17,6 +17,15 @@ fn extract_json_block(text: &str) -> Option<String> {
     None
 }
 
+/// Проверка, что имя инструмента валидное (не "none", "null" и т.д.)
+fn is_valid_tool_name(name: &str) -> bool {
+    let lower = name.trim().to_lowercase();
+    if lower.is_empty() { return false; }
+    // Агенты часто генерируют "none"/"null" чтобы сигнализировать "инструмент не нужен"
+    let invalid_names = ["none", "null", "n/a", "reply", "нет", "no", "nobody", "nothing", "undefined"];
+    !invalid_names.contains(&lower.as_str())
+}
+
 /// Очистка от технической разметки LLM (<|channel>thought...<channel|>, <think...>...</think...>)
 pub fn clean_thought_tags(text: &str) -> String {
     let mut result = text.to_string();
@@ -46,6 +55,10 @@ pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)
 
         if let Ok(val) = parsed {
             if let Some(tool) = val.get("tool").and_then(|v| v.as_str()) {
+                // ФИЛЬТР: отклоняем невалидные имена инструментов ("none", "null" и т.д.)
+                if !is_valid_tool_name(tool) {
+                    return None;
+                }
                 let args = val.get("arguments")
                     .cloned()
                     .unwrap_or_else(|| {
@@ -58,6 +71,10 @@ pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)
             let tool_re = regex::Regex::new(r#"(?is)"tool"\s*:\s*"([^"]+)""#).ok()?;
             if let Some(tool_cap) = tool_re.captures(&json_str) {
                 let tool = tool_cap.get(1)?.as_str().to_string();
+                // ФИЛЬТР: отклоняем невалидные имена инструментов
+                if !is_valid_tool_name(&tool) {
+                    return None;
+                }
                 
                 let args_re = regex::Regex::new(r#"(?is)"arguments"\s*:\s*(\{.*?\})"#).ok()?;
                 let args_str = args_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or("{}".to_string());
@@ -92,6 +109,8 @@ pub fn parse_orchestrator_response(text: &str) -> Option<(f32, String, String, S
             let content = val.get("task_or_response")
                 .or_else(|| val.get("response"))
                 .or_else(|| val.get("task"))
+                .or_else(|| val.get("message"))
+                .or_else(|| val.get("content"))
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();

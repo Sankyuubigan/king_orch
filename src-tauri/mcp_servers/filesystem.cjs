@@ -144,7 +144,6 @@ function handleRequest(req) {
 
 function globDir(dir, pattern) {
     let results =[];
-    // Превращаем *.ext в регулярку
     const regexPattern = '^' + pattern.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$';
     const regex = new RegExp(regexPattern, 'i');
     
@@ -158,8 +157,6 @@ function globDir(dir, pattern) {
                 results.push(fullPath);
             }
         }
-    } catch (e) {
-        // Игнорируем папки, к которым нет доступа
-    }
+    } catch (e) {}
     return results;
 }

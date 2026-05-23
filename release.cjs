@@ -95,7 +95,7 @@ async function main() {
         // 2. npm install
         console.log('\n========================================');
         console.log('[2/8] Установка зависимостей Node.js...');
-        await runCommand('npm', ['install']);
+        await runCommand('npm', ['install', '--legacy-peer-deps']);
 
         // 3. Подготовка директорий
         console.log('\n========================================');
