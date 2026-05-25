@@ -106,7 +106,6 @@ impl PromptFormat {
     }
 }
 
-// --- Чтение заголовков GGUF ---
 fn read_gguf_header(path: &str) -> Option<Vec<u8>> {
     use std::io::Read;
     let mut file = std::fs::File::open(path).ok()?;
@@ -343,10 +342,12 @@ impl LlamaEngine {
         let mut result_text = String::new();
         let mut generated_tokens = 0;
 
+        // Стоп-слова: стандартные + артефакты формата Gemma (</start_of_turn>)
         let mut stop_words = vec![
             "<|im_end|>", "<end_of_turn>", "</s>", "<|eot_id|>", 
             "<turn>", "<|eot|>", "User:", "System:", "<eos>", "Yes",
-            "<turn|>", "/end_of_turn>", "<step>", "<|end_of_text|>", "<｜end of sentence｜>"
+            "<turn|>", "/end_of_turn>", "<step>", "<|end_of_text|>", "<｜end of sentence｜>",
+            "</start_of_turn>"
         ];
         stop_words.extend_from_slice(custom_stop_words);
 
@@ -356,10 +357,8 @@ impl LlamaEngine {
             let candidates_array = ctx.candidates_ith(batch.n_tokens() - 1);
             let candidates = LlamaTokenDataArray::from_iter(candidates_array, false);
 
-            // МАНУАЛЬНОЕ СЭМПЛИРОВАНИЕ (проверенный порядок: Temp -> Softmax -> Sort -> TopK -> MinP -> TopP)
             let mut candidates_vec: Vec<(llama_cpp_2::token::LlamaToken, f32)> = candidates.data.iter().map(|d| (d.id(), d.logit())).collect();
 
-            // 1. Штрафы за повторения и присутствие
             let penalty_last_n = 256.min(past_tokens.len());
             let last_tokens_slice = if past_tokens.len() > penalty_last_n {
                 &past_tokens[past_tokens.len() - penalty_last_n..]
@@ -382,13 +381,11 @@ impl LlamaEngine {
                 }
             }
 
-            // 2. Температура
             let temp = params.temperature.max(0.01);
             for (_, logit) in candidates_vec.iter_mut() {
                 *logit /= temp;
             }
 
-            // 3. Softmax
             let max_logit = candidates_vec.iter().map(|(_, l)| *l).fold(f32::NEG_INFINITY, f32::max);
             let mut sum_exp = 0.0;
             let mut probs: Vec<(llama_cpp_2::token::LlamaToken, f32)> = candidates_vec.into_iter().map(|(id, logit)| {
@@ -401,19 +398,15 @@ impl LlamaEngine {
                 *p /= sum_exp;
             }
 
-            // 4. Сортировка по вероятности (по убыванию)
             probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-            // 5. Top-K
             let k = (params.top_k as usize).min(probs.len()).max(1);
             probs.truncate(k);
 
-            // 6. Min-P
             let max_prob = probs.first().map(|(_, p)| *p).unwrap_or(1.0);
             let min_p_thresh = max_prob * params.min_p;
             probs.retain(|(_, p)| *p >= min_p_thresh);
 
-            // 7. Top-P
             let mut cumulative_prob = 0.0;
             let mut top_p_idx = probs.len();
             for (i, (_, p)) in probs.iter().enumerate() {
@@ -425,13 +418,11 @@ impl LlamaEngine {
             }
             probs.truncate(top_p_idx);
 
-            // 8. Нормализация вероятностей после обрезки
             let sum_prob: f32 = probs.iter().map(|(_, p)| *p).sum();
             for (_, p) in probs.iter_mut() {
                 *p /= sum_prob;
             }
 
-            // 9. Случайный выбор (Рулетка)
             static SEED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1337);
             let mut seed = SEED.load(Ordering::SeqCst);
             if seed == 1337 {

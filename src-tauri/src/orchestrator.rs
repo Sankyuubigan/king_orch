@@ -18,11 +18,11 @@ struct AgentThoughtPayload {
     thought: String,
 }
 
-fn render_status_dossier(dossier: &HashMap<String, String>) -> String {
+fn render_session_state_status(dossier: &HashMap<String, String>) -> String {
     if dossier.is_empty() {
-        return "[СТАТУС ДОСЬЕ]: Пусто — данные ещё не собраны.".to_string();
+        return "[СТАТУС СОСТОЯНИЯ СЕССИИ]: Пусто — данные ещё не собраны.".to_string();
     }
-    let mut lines = vec!["[СТАТУС ДОСЬЕ]:".to_string()];
+    let mut lines = vec!["[СТАТУС СОСТОЯНИЯ СЕССИИ]:".to_string()];
     for (key, value) in dossier {
         if value.is_empty() {
             lines.push(format!("- {}: ❌ Нет данных", key));
@@ -33,11 +33,11 @@ fn render_status_dossier(dossier: &HashMap<String, String>) -> String {
     lines.join("\n")
 }
 
-fn render_full_dossier(dossier: &HashMap<String, String>) -> String {
+fn render_session_state_full(dossier: &HashMap<String, String>) -> String {
     if dossier.is_empty() {
-        return "[ТЕКУЩЕЕ ДОСЬЕ]: Пусто.".to_string();
+        return "[СОСТОЯНИЕ СЕССИИ]: Пусто.".to_string();
     }
-    let mut lines = vec!["[ТЕКУЩЕЕ ДОСЬЕ]:".to_string()];
+    let mut lines = vec!["[СОСТОЯНИЕ СЕССИИ]:".to_string()];
     for (key, value) in dossier {
         if value.is_empty() {
             lines.push(format!("--- {} ---\n(Нет данных)", key));
@@ -61,9 +61,14 @@ fn build_system_prompt(
     sp.push_str(TRUTH_PROTOCOL);
 
     match agent.mode.as_str() {
-        "router" => sp.push_str(&format!("\n\n{}\n", render_status_dossier(dossier))),
-        "worker" => sp.push_str(&format!("\n\n{}\n", render_full_dossier(dossier))),
-        _ => sp.push_str(&format!("\n\n{}\n", render_full_dossier(dossier))),
+        "router" => sp.push_str(&format!("\n\n{}\n", render_session_state_status(dossier))),
+        "worker" => sp.push_str(&format!("\n\n{}\n", render_session_state_full(dossier))),
+        _ => sp.push_str(&format!("\n\n{}\n", render_session_state_full(dossier))),
+    }
+
+    // Для worker-агентов: явная инструкция читать user_query из состояния сессии
+    if agent.mode == "worker" && dossier.contains_key("user_query") && !dossier["user_query"].is_empty() {
+        sp.push_str("\n[ИНСТРУКЦИЯ]: Данные пользователя (его запрос/жалоба) находятся в записи `user_query` выше, в блоке [СОСТОЯНИЕ СЕССИИ]. Используй их для своей работы. НЕ запрашивай данные повторно — они уже предоставлены в состоянии сессии.\n");
     }
 
     if has_subagents || has_tools {
@@ -146,11 +151,18 @@ pub fn run_chat(
         recent_history = recent_history[recent_history.len() - 8..].to_vec();
     }
 
+    // КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Всегда сохраняем оригинальный запрос пользователя
+    // в состояние сессии, чтобы ВСЕ агенты в цепочке имели к нему доступ
+    let mut initial_session_state = dossier.clone();
+    if !initial_session_state.contains_key("user_query") {
+        initial_session_state.insert("user_query".to_string(), user_text.clone());
+    }
+
     if let Some(id) = agent_id.strip_prefix("agent_") {
         if let Some(primary_agent) = agents.iter().find(|a| a.id == id) {
             let mut all_sub_calls = Vec::new();
             let (final_res, final_dossier) = run_agent_node(
-                &app, &engine, primary_agent, &agents, user_text, recent_history, dossier,
+                &app, &engine, primary_agent, &agents, user_text, recent_history, initial_session_state,
                 max_gen_tokens, &model_params, &format_type, cancel_flag, 0, &mut all_sub_calls, None,
             )?;
             Ok((final_res, all_sub_calls, final_dossier))
@@ -184,6 +196,7 @@ fn run_agent_node(
     }
     emit_log(app, &format!("▶ Запуск агента: {} (mode: {}, глубина: {})", agent.name, agent.mode, depth));
 
+    // Для маршрутизатора: если user_query ещё не в состоянии сессии — добавляем
     if agent.mode == "router" && !current_dossier.contains_key("user_query") {
         current_dossier.insert("user_query".to_string(), user_text.clone());
     }
@@ -262,7 +275,6 @@ fn run_agent_node(
         }
     }
 
-    // Добавляем инструкцию о JSON только к ПЕРВОМУ запросу (не после результатов инструментов)
     let needs_json_instruction = (agent.mode == "router" || agent.mode == "primary") && (has_subagents || has_tools);
     if needs_json_instruction {
         if let Some(last_msg) = messages.last_mut() {
@@ -273,9 +285,9 @@ fn run_agent_node(
     }
 
     let initial_context_dump = format!(
-        "### [MODE: {}]\n### [DOSSIER]\n{}\n\n### [SYSTEM PROMPT]\n{}",
+        "### [MODE: {}]\n### [SESSION_STATE]\n{}\n\n### [SYSTEM PROMPT]\n{}",
         agent.mode,
-        if agent.mode == "router" { render_status_dossier(&current_dossier) } else { render_full_dossier(&current_dossier) },
+        if agent.mode == "router" { render_session_state_status(&current_dossier) } else { render_session_state_full(&current_dossier) },
         agent.system_prompt
     );
 
@@ -298,7 +310,6 @@ fn run_agent_node(
 
         let response = clean_thought_tags(&raw_response);
 
-        // 1. Проверяем вызов инструмента
         if let Some((tool_name, arguments, thought)) = parse_tool_call(&response) {
             if !thought.is_empty() {
                 emit_log(app, &format!("💭 Мысль {} (инструмент {}): {}", agent.name, tool_name, thought));
@@ -333,7 +344,6 @@ fn run_agent_node(
                 consecutive_failed_tools += 1;
             }
             
-            // Защита от бесконечного цикла неудачных вызовов
             if consecutive_failed_tools >= MAX_CONSECUTIVE_FAILED_TOOLS {
                 let err = format!("⚠️ Превышен лимит неудачных вызовов инструментов ({}). Прекращаю попытки.", consecutive_failed_tools);
                 emit_log(app, &err);
@@ -350,7 +360,6 @@ fn run_agent_node(
             tool_calls.push(ToolCallInfo { tool_name: tool_name.clone(), arguments: args_str, result: output.clone() });
             messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone(), sub_calls: None, agent_name: None });
             
-            // КЛЮЧЕВОЕ ИЗМЕНЕНИЕ: После результата инструмента чётко говорим агенту что делать
             let tool_result_msg = format!(
                 "[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\n{}\n{}", 
                 tool_name, 
@@ -362,7 +371,6 @@ fn run_agent_node(
             continue;
         }
 
-        // 2. Проверяем вызов сабагента / ответ reply
         if let Some((_conf, target, content, thought)) = parse_orchestrator_response(&response) {
             if !thought.is_empty() {
                 emit_log(app, &format!("💭 Мысль {} (вызов {}): {}", agent.name, target, thought));
@@ -374,7 +382,7 @@ fn run_agent_node(
                 break;
             } else if let Some(subagent) = agents.iter().find(|a| a.id == target) {
                 if subagent.mode == "worker" && current_dossier.contains_key(&subagent.id) && !current_dossier[&subagent.id].is_empty() {
-                    emit_log(app, &format!("🚫 Повторный вызов {} отклонён: данные уже в досье (✅).", subagent.id));
+                    emit_log(app, &format!("🚫 Повторный вызов {} отклонён: данные уже в состоянии сессии (✅).", subagent.id));
                     messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone(), sub_calls: None, agent_name: None });
                     messages.push(ChatMessage {
                         role: "user".to_string(),
@@ -388,7 +396,8 @@ fn run_agent_node(
                     continue;
                 }
 
-                let (sub_result, _sub_dossier) = run_agent_node(
+                // ИСПРАВЛЕНИЕ: Используем sub_dossier вместо _sub_dossier
+                let (sub_result, sub_dossier) = run_agent_node(
                     app, engine, subagent, agents, content.clone(), vec![], current_dossier.clone(),
                     max_gen_tokens, model_params, format_type, cancel_flag.clone(), depth + 1, all_sub_calls,
                     Some(agent.name.clone()),
@@ -396,11 +405,18 @@ fn run_agent_node(
 
                 if subagent.mode == "worker" {
                     current_dossier.insert(subagent.id.clone(), sub_result.clone());
-                    emit_log(app, &format!("📝 Досье обновлено: + {} (worker)", subagent.id));
+                    emit_log(app, &format!("📝 Состояние сессии обновлено: + {} (worker)", subagent.id));
                 }
                 if subagent.mode == "router" {
-                    current_dossier.insert("pipeline_result".to_string(), sub_result.clone());
-                    emit_log(app, &format!("📝 Досье обновлено: + pipeline_result (router)"));
+                    // КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Мерджим ВСЕ данные из состояния сессии
+                    // маршрутизатора в текущее состояние, чтобы primary-агент видел
+                    // результаты ВСЕХ воркеров, а не только pipeline_result
+                    for (key, value) in sub_dossier {
+                        if !key.is_empty() {
+                            current_dossier.insert(key, value);
+                        }
+                    }
+                    emit_log(app, "📝 Состояние сессии обновлено: + все данные от маршрутизатора");
                 }
 
                 if agent.mode == "primary" && subagent.mode == "router" {
@@ -414,7 +430,7 @@ fn run_agent_node(
                     messages.push(ChatMessage { 
                         role: "user".to_string(), 
                         content: format!(
-                            "Сабагент {} завершил работу. Прочитай досье и ответь клиенту простым языком. ОБЫЧНЫЙ ТЕКСТ без JSON.", 
+                            "Сабагент {} завершил работу. Прочитай [СОСТОЯНИЕ СЕССИИ] в своём системном промпте — там данные от ВСЕХ специалистов. Выведи данные от distiller_logos в начале ответа, затем переведи neuro_reprogrammer на простой язык. ОБЫЧНЫЙ ТЕКСТ без JSON.", 
                             subagent.name
                         ), 
                         sub_calls: None, 
@@ -426,7 +442,7 @@ fn run_agent_node(
                         ChatMessage { role: "system".to_string(), content: new_system, sub_calls: None, agent_name: None },
                         ChatMessage {
                             role: "user".to_string(),
-                            content: "Статус обновлен. Кого вызвать следующим? Или верни ответ через target: \"reply\".".to_string(),
+                            content: "Состояние сессии обновлено. Кого вызвать следующим? Или верни ответ через target: \"reply\".".to_string(),
                             sub_calls: None, agent_name: None,
                         },
                     ];
@@ -442,7 +458,6 @@ fn run_agent_node(
             }
         }
 
-        // 3. Пустой ответ
         if (has_subagents || has_tools) && response.trim().is_empty() {
             emit_log(app, &format!("⚠️ Агент {} выдал пустой ответ. Повторный запрос...", agent.name));
             messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone(), sub_calls: None, agent_name: None });
@@ -450,7 +465,6 @@ fn run_agent_node(
             continue;
         }
 
-        // 4. Обычный текстовый ответ — ЗАВЕРШАЕМ ЦИКЛ
         final_response = response;
         break;
     }

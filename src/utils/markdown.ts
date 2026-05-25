@@ -1,6 +1,9 @@
 export function renderMarkdown(text: string): string {
   if (!text) return "";
-  let html = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  let html = text.replace(/<think[\s\S]*?<\/think>/gi, '');
+  
+  // Удаление артефактов формата Gemma (</start_of_turn> и <start_of_turn>)
+  html = html.replace(/<\/?start_of_turn>/gi, '');
   
   // Вырезаем блоки mermaid до экранирования HTML, чтобы сохранить их синтаксис
   const mermaidBlocks: string[] = [];

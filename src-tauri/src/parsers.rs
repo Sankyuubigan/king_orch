@@ -17,16 +17,14 @@ fn extract_json_block(text: &str) -> Option<String> {
     None
 }
 
-/// Проверка, что имя инструмента валидное (не "none", "null" и т.д.)
 fn is_valid_tool_name(name: &str) -> bool {
     let lower = name.trim().to_lowercase();
     if lower.is_empty() { return false; }
-    // Агенты часто генерируют "none"/"null" чтобы сигнализировать "инструмент не нужен"
     let invalid_names = ["none", "null", "n/a", "reply", "нет", "no", "nobody", "nothing", "undefined"];
     !invalid_names.contains(&lower.as_str())
 }
 
-/// Очистка от технической разметки LLM (<|channel>thought...<channel|>, <think...>...</think...>)
+/// Очистка от технической разметки LLM и артефактов форматов
 pub fn clean_thought_tags(text: &str) -> String {
     let mut result = text.to_string();
     
@@ -42,6 +40,10 @@ pub fn clean_thought_tags(text: &str) -> String {
         result = re.replace_all(&result, "").to_string();
     }
     
+    // Удаление артефактов формата Gemma — модель иногда генерирует
+    // </start_of_turn> как закрывающий тег, которого нет в спецификации
+    result = result.replace("</start_of_turn>", "").replace("<start_of_turn>", "");
+    
     result.trim().to_string()
 }
 
@@ -55,7 +57,6 @@ pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)
 
         if let Ok(val) = parsed {
             if let Some(tool) = val.get("tool").and_then(|v| v.as_str()) {
-                // ФИЛЬТР: отклоняем невалидные имена инструментов ("none", "null" и т.д.)
                 if !is_valid_tool_name(tool) {
                     return None;
                 }
@@ -71,7 +72,6 @@ pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)
             let tool_re = regex::Regex::new(r#"(?is)"tool"\s*:\s*"([^"]+)""#).ok()?;
             if let Some(tool_cap) = tool_re.captures(&json_str) {
                 let tool = tool_cap.get(1)?.as_str().to_string();
-                // ФИЛЬТР: отклоняем невалидные имена инструментов
                 if !is_valid_tool_name(&tool) {
                     return None;
                 }
