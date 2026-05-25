@@ -55,19 +55,41 @@ function isValidIco(filePath) {
     return buf.length > 4 && buf[0] === 0 && buf[1] === 0 && buf[2] === 1 && buf[3] === 0;
 }
 
-function copyDirRecursive(src, dest) {
-    if (!fs.existsSync(src)) return;
-    if (!fs.existsSync(dest)) fs.mkdirSync(dest, { recursive: true });
-    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-        const srcPath = path.join(src, entry.name);
-        const destPath = path.join(dest, entry.name);
-        if (entry.isDirectory()) {
-            copyDirRecursive(srcPath, destPath);
+async function downloadAndExtractDeno(binDir, target) {
+    const denoExePath = path.join(binDir, `deno-${target}.exe`);
+    if (fs.existsSync(denoExePath)) {
+        console.log('  ✅ Deno уже загружен.');
+        return;
+    }
+
+    console.log('Загрузка Deno (v2.1.4)...');
+    const zipPath = path.join(binDir, 'deno-download.zip');
+    const extractDir = path.join(binDir, 'deno-extract');
+
+    try {
+        await downloadFile('https://github.com/denoland/deno/releases/download/v2.1.4/deno-x86_64-pc-windows-msvc.zip', zipPath);
+
+        console.log('  Распаковка Deno...');
+        if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true, force: true });
+        fs.mkdirSync(extractDir, { recursive: true });
+
+        // PowerShell для распаковки zip
+        execSync(`powershell -NoProfile -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${extractDir}' -Force"`, { stdio: 'pipe' });
+
+        const extractedExe = path.join(extractDir, 'deno.exe');
+        if (fs.existsSync(extractedExe)) {
+            fs.copyFileSync(extractedExe, denoExePath);
+            console.log('  ✅ Deno загружен и распакован.');
         } else {
-            if (!fs.existsSync(destPath) || fs.statSync(srcPath).mtimeMs > fs.statSync(destPath).mtimeMs) {
-                fs.copyFileSync(srcPath, destPath);
-            }
+            throw new Error('deno.exe не найден в архиве');
         }
+    } catch (e) {
+        console.error(`  ⚠️ Ошибка загрузки Deno: ${e.message}`);
+        console.error('  Deno-песочница будет недоступна. Скачайте вручную из https://deno.land/');
+    } finally {
+        // Очистка временных файлов
+        try { if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath); } catch (e) {}
+        try { if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true, force: true }); } catch (e) {}
     }
 }
 
@@ -107,6 +129,9 @@ async function main() {
         } else {
             console.log('  ✅ Node.js уже загружен.');
         }
+
+        // === Загрузка Deno для песочницы ===
+        await downloadAndExtractDeno(binDir, target);
 
         console.log('\n========================================');
         console.log('[3/5] Проверка иконок...');
@@ -154,7 +179,6 @@ async function main() {
         delete process.env.TAURI_PRIVATE_KEY;
         delete process.env.TAURI_KEY_PASSWORD;
 
-        // КРИТИЧЕСКОЕ ИЗМЕНЕНИЕ: Если сборка падает — НЕ продолжать, НЕ запускать старый экзешник
         try {
             await runCommand('npx', ['tauri', 'build']);
         } catch (buildError) {
@@ -172,14 +196,11 @@ async function main() {
             for (const file of fs.readdirSync(binDir)) {
                 const src = path.join(binDir, file);
                 const dst = path.join(releaseBinDir, file);
-                try {
-                    fs.copyFileSync(src, dst);
-                } catch (e) {}
+                try { fs.copyFileSync(src, dst); } catch (e) {}
             }
             console.log('  📋 Сайдкары скопированы.');
         }
 
-        // Проверяем что экзешник реально свежий (собрался только что)
         const exePath = path.join(releaseDir, 'king_orch.exe');
         if (!fs.existsSync(exePath)) {
             throw new Error('king_orch.exe не найден! Сборка не удалась.');
@@ -208,7 +229,6 @@ async function main() {
         console.error('❌ ОШИБКА:', e.message);
         console.error('========================================');
         console.error('Консоль НЕ закроется. Скопируйте ошибки и исправьте.');
-        // НЕ закрываем консоль — даём пользователю прочитать ошибки
         process.exit(1);
     }
 }

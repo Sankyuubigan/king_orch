@@ -4,7 +4,7 @@ use crate::parsers::{clean_thought_tags, parse_orchestrator_response, parse_tool
 use crate::{emit_log, emit_status};
 use crate::config::ModelParams;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
@@ -62,11 +62,9 @@ fn build_system_prompt(
 
     match agent.mode.as_str() {
         "router" => sp.push_str(&format!("\n\n{}\n", render_session_state_status(dossier))),
-        "worker" => sp.push_str(&format!("\n\n{}\n", render_session_state_full(dossier))),
         _ => sp.push_str(&format!("\n\n{}\n", render_session_state_full(dossier))),
     }
 
-    // Для worker-агентов: явная инструкция читать user_query из состояния сессии
     if agent.mode == "worker" && dossier.contains_key("user_query") && !dossier["user_query"].is_empty() {
         sp.push_str("\n[ИНСТРУКЦИЯ]: Данные пользователя (его запрос/жалоба) находятся в записи `user_query` выше, в блоке [СОСТОЯНИЕ СЕССИИ]. Используй их для своей работы. НЕ запрашивай данные повторно — они уже предоставлены в состоянии сессии.\n");
     }
@@ -120,11 +118,62 @@ fn get_mcp_server_path(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
         exe_dir.join("mcp_servers").join(format!("{}.js", name)),
         PathBuf::from("src-tauri").join("mcp_servers").join(format!("{}.js", name)),
         exe_dir.join("..").join("..").join("src-tauri").join("mcp_servers").join(format!("{}.js", name)),
+        resource_dir.join("mcp_servers").join(format!("{}.ts", name)),
+        exe_dir.join("mcp_servers").join(format!("{}.ts", name)),
+        PathBuf::from("src-tauri").join("mcp_servers").join(format!("{}.ts", name)),
+        exe_dir.join("..").join("..").join("src-tauri").join("mcp_servers").join(format!("{}.ts", name)),
     ];
     for path in possible_paths {
         if path.exists() { return Ok(path); }
     }
-    Err(format!("MCP-сервер {}.cjs (и {}.js) не найден ни в одной директории", name, name))
+    Err(format!("MCP-сервер {}.cjs/{}.js/{}.ts не найден", name, name, name))
+}
+
+fn resolve_runtime_and_args(app: &AppHandle, script_path: &Path) -> (PathBuf, Vec<String>) {
+    let ext = script_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let target = env!("TARGET");
+
+    if ext == "ts" || ext == "mts" {
+        let dev_name = format!("deno-{}.exe", target);
+        let mut deno_path = PathBuf::from("deno");
+        if let Ok(mut exe) = std::env::current_exe() {
+            exe.pop();
+            for p in vec![
+                exe.join("deno.exe"),
+                exe.join(&dev_name),
+                exe.join("bin").join(&dev_name),
+                PathBuf::from("bin").join(&dev_name),
+            ] {
+                if p.exists() { deno_path = p; break; }
+            }
+        }
+        emit_log(app, &format!("   🦎 Runtime: Deno | {}", script_path.display()));
+        let args = vec![
+            "run".to_string(),
+            "--allow-run".to_string(),
+            "--no-check".to_string(),
+            "--no-config".to_string(),
+            script_path.to_string_lossy().to_string(),
+        ];
+        (deno_path, args)
+    } else {
+        let dev_name = format!("node-{}.exe", target);
+        let mut node_path = PathBuf::from("node");
+        if let Ok(mut exe) = std::env::current_exe() {
+            exe.pop();
+            for p in vec![
+                exe.join("node.exe"),
+                exe.join(&dev_name),
+                exe.join("bin").join(&dev_name),
+                PathBuf::from("bin").join(&dev_name),
+            ] {
+                if p.exists() { node_path = p; break; }
+            }
+        }
+        emit_log(app, &format!("   🟢 Runtime: Node | {}", script_path.display()));
+        let args = vec![script_path.to_string_lossy().to_string()];
+        (node_path, args)
+    }
 }
 
 pub fn run_chat(
@@ -151,8 +200,6 @@ pub fn run_chat(
         recent_history = recent_history[recent_history.len() - 8..].to_vec();
     }
 
-    // КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Всегда сохраняем оригинальный запрос пользователя
-    // в состояние сессии, чтобы ВСЕ агенты в цепочке имели к нему доступ
     let mut initial_session_state = dossier.clone();
     if !initial_session_state.contains_key("user_query") {
         initial_session_state.insert("user_query".to_string(), user_text.clone());
@@ -196,7 +243,6 @@ fn run_agent_node(
     }
     emit_log(app, &format!("▶ Запуск агента: {} (mode: {}, глубина: {})", agent.name, agent.mode, depth));
 
-    // Для маршрутизатора: если user_query ещё не в состоянии сессии — добавляем
     if agent.mode == "router" && !current_dossier.contains_key("user_query") {
         current_dossier.insert("user_query".to_string(), user_text.clone());
     }
@@ -216,19 +262,10 @@ fn run_agent_node(
         emit_log(app, &format!("⏳ Инициализация MCP сервера: {}", mcp_name));
         match get_mcp_server_path(app, mcp_name) {
             Ok(script_path) => {
-                let target = env!("TARGET");
-                let dev_name = format!("node-{}.exe", target);
-                let mut node_path = PathBuf::from("node");
-                if let Ok(mut exe) = std::env::current_exe() {
-                    exe.pop();
-                    for p in vec![exe.join("node.exe"), exe.join(&dev_name), exe.join("bin").join(&dev_name), PathBuf::from("bin").join(&dev_name)] {
-                        if p.exists() { node_path = p; break; }
-                    }
-                }
+                let (runtime_path, runtime_args) = resolve_runtime_and_args(app, &script_path);
+                let args_refs: Vec<&str> = runtime_args.iter().map(|s| s.as_str()).collect();
                 
-                emit_log(app, &format!("   Путь к скрипту: {}", script_path.display()));
-                
-                match crate::mcp_client::McpClient::spawn(app, &node_path.to_string_lossy(), &[&script_path.to_string_lossy()]) {
+                match crate::mcp_client::McpClient::spawn(app, &runtime_path.to_string_lossy(), &args_refs) {
                     Ok(mut client) => {
                         match client.list_tools() {
                             Ok(tools) => {
@@ -240,10 +277,10 @@ fn run_agent_node(
                                     }
                                 }
                                 mcp_clients.insert(mcp_name.clone(), client);
-                                emit_log(app, &format!("✅ MCP сервер '{}' запущен. Инструментов загружено: {}", mcp_name, loaded_tools));
+                                emit_log(app, &format!("✅ MCP сервер '{}' запущен. Инструментов: {}", mcp_name, loaded_tools));
                             }
                             Err(e) => {
-                                emit_log(app, &format!("❌ Ошибка запроса списка инструментов у '{}': {}", mcp_name, e));
+                                emit_log(app, &format!("❌ Ошибка списка инструментов у '{}': {}", mcp_name, e));
                             }
                         }
                     }
@@ -340,9 +377,7 @@ fn run_agent_node(
                 }
             }
             
-            if !tool_found {
-                consecutive_failed_tools += 1;
-            }
+            if !tool_found { consecutive_failed_tools += 1; }
             
             if consecutive_failed_tools >= MAX_CONSECUTIVE_FAILED_TOOLS {
                 let err = format!("⚠️ Превышен лимит неудачных вызовов инструментов ({}). Прекращаю попытки.", consecutive_failed_tools);
@@ -362,8 +397,7 @@ fn run_agent_node(
             
             let tool_result_msg = format!(
                 "[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\n{}\n{}", 
-                tool_name, 
-                output,
+                tool_name, output,
                 if tool_found { "✅ Инструмент отработал." } else { "❌ Инструмент не найден или вызвал ошибку." },
                 "Если задача выполнена — просто ответь ОБЫЧНЫМ ТЕКСТОМ без JSON. Если нужен другой инструмент — вызови его через JSON."
             );
@@ -386,17 +420,12 @@ fn run_agent_node(
                     messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone(), sub_calls: None, agent_name: None });
                     messages.push(ChatMessage {
                         role: "user".to_string(),
-                        content: format!(
-                            "ОШИБКА: Сабагент '{}' уже был вызван (✅). Вызови другого или верни ответ через {{\"target\": \"reply\"}}.",
-                            subagent.id
-                        ),
-                        sub_calls: None,
-                        agent_name: None,
+                        content: format!("ОШИБКА: Сабагент '{}' уже был вызван (✅). Вызови другого или верни ответ через {{\"target\": \"reply\"}}.", subagent.id),
+                        sub_calls: None, agent_name: None,
                     });
                     continue;
                 }
 
-                // ИСПРАВЛЕНИЕ: Используем sub_dossier вместо _sub_dossier
                 let (sub_result, sub_dossier) = run_agent_node(
                     app, engine, subagent, agents, content.clone(), vec![], current_dossier.clone(),
                     max_gen_tokens, model_params, format_type, cancel_flag.clone(), depth + 1, all_sub_calls,
@@ -408,13 +437,8 @@ fn run_agent_node(
                     emit_log(app, &format!("📝 Состояние сессии обновлено: + {} (worker)", subagent.id));
                 }
                 if subagent.mode == "router" {
-                    // КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: Мерджим ВСЕ данные из состояния сессии
-                    // маршрутизатора в текущее состояние, чтобы primary-агент видел
-                    // результаты ВСЕХ воркеров, а не только pipeline_result
                     for (key, value) in sub_dossier {
-                        if !key.is_empty() {
-                            current_dossier.insert(key, value);
-                        }
+                        if !key.is_empty() { current_dossier.insert(key, value); }
                     }
                     emit_log(app, "📝 Состояние сессии обновлено: + все данные от маршрутизатора");
                 }
@@ -422,29 +446,19 @@ fn run_agent_node(
                 if agent.mode == "primary" && subagent.mode == "router" {
                     let new_system = build_system_prompt(agent, &current_dossier, has_subagents, has_tools, &filtered_agents, &all_tools);
                     if let Some(first_msg) = messages.first_mut() {
-                        if first_msg.role == "system" {
-                            first_msg.content = new_system;
-                        }
+                        if first_msg.role == "system" { first_msg.content = new_system; }
                     }
                     messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone(), sub_calls: None, agent_name: None });
                     messages.push(ChatMessage { 
                         role: "user".to_string(), 
-                        content: format!(
-                            "Сабагент {} завершил работу. Прочитай [СОСТОЯНИЕ СЕССИИ] в своём системном промпте — там данные от ВСЕХ специалистов. Выведи данные от distiller_logos в начале ответа, затем переведи neuro_reprogrammer на простой язык. ОБЫЧНЫЙ ТЕКСТ без JSON.", 
-                            subagent.name
-                        ), 
-                        sub_calls: None, 
-                        agent_name: Some(subagent.name.clone()) 
+                        content: format!("Сабагент {} завершил работу. Прочитай [СОСТОЯНИЕ СЕССИИ] в своём системном промпте — там данные от ВСЕХ специалистов. Выведи данные от distiller_logos в начале ответа, затем переведи neuro_reprogrammer на простой язык. ОБЫЧНЫЙ ТЕКСТ без JSON.", subagent.name), 
+                        sub_calls: None, agent_name: Some(subagent.name.clone()) 
                     });
                 } else if agent.mode == "router" {
                     let new_system = build_system_prompt(agent, &current_dossier, has_subagents, has_tools, &filtered_agents, &all_tools);
                     messages = vec![
                         ChatMessage { role: "system".to_string(), content: new_system, sub_calls: None, agent_name: None },
-                        ChatMessage {
-                            role: "user".to_string(),
-                            content: "Состояние сессии обновлено. Кого вызвать следующим? Или верни ответ через target: \"reply\".".to_string(),
-                            sub_calls: None, agent_name: None,
-                        },
+                        ChatMessage { role: "user".to_string(), content: "Состояние сессии обновлено. Кого вызвать следующим? Или верни ответ через target: \"reply\".".to_string(), sub_calls: None, agent_name: None },
                     ];
                 } else {
                     messages.push(ChatMessage { role: "assistant".to_string(), content: response.clone(), sub_calls: None, agent_name: None });

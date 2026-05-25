@@ -61,6 +61,42 @@ function formatBytes(bytes) {
     return (bytes / 1024 / 1024).toFixed(1) + ' MB';
 }
 
+async function downloadAndExtractDeno(binDir, target) {
+    const denoExePath = path.join(binDir, `deno-${target}.exe`);
+    if (fs.existsSync(denoExePath)) {
+        console.log('  ✅ Deno уже загружен.');
+        return;
+    }
+
+    console.log('Загрузка Deno (v2.1.4)...');
+    const zipPath = path.join(binDir, 'deno-download.zip');
+    const extractDir = path.join(binDir, 'deno-extract');
+
+    try {
+        await downloadFile('https://github.com/denoland/deno/releases/download/v2.1.4/deno-x86_64-pc-windows-msvc.zip', zipPath);
+
+        console.log('  Распаковка Deno...');
+        if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true, force: true });
+        fs.mkdirSync(extractDir, { recursive: true });
+
+        execSync(`powershell -NoProfile -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${extractDir}' -Force"`, { stdio: 'pipe' });
+
+        const extractedExe = path.join(extractDir, 'deno.exe');
+        if (fs.existsSync(extractedExe)) {
+            fs.copyFileSync(extractedExe, denoExePath);
+            console.log('  ✅ Deno загружен и распакован.');
+        } else {
+            throw new Error('deno.exe не найден в архиве');
+        }
+    } catch (e) {
+        console.error(`  ⚠️ Ошибка загрузки Deno: ${e.message}`);
+        throw new Error('Deno необходим для релизной сборки (песочница).');
+    } finally {
+        try { if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath); } catch (e) {}
+        try { if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true, force: true }); } catch (e) {}
+    }
+}
+
 async function main() {
     try {
         // 1. Обновление версии
@@ -131,6 +167,9 @@ async function main() {
         } else {
             console.log('  ✅ Node.js уже загружен.');
         }
+
+        // === Загрузка Deno для песочницы ===
+        await downloadAndExtractDeno(binDir, target);
 
         // 5. Проверка иконок
         console.log('\n========================================');

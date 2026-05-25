@@ -93,7 +93,7 @@ function indexDirectory(dirPath) {
             let stat;
             try { stat = fs.statSync(fullPath); } catch (e) { continue; }
             if (stat.isDirectory()) {
-                if (file === 'node_modules' || file === '.git' || file === 'target' || file === 'dist' || file === 'build') continue;
+                if (file === 'node_modules' || file === '.git' || file === 'target' || file === 'dist' || file === 'build' || file === '.agents_workspace') continue;
                 walk(fullPath);
             } else {
                 const ext = path.extname(file).toLowerCase();

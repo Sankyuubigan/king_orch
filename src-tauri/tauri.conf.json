@@ -36,7 +36,8 @@
     ],
     "externalBin": [
       "bin/yt-dlp",
-      "bin/node"
+      "bin/node",
+      "bin/deno"
     ]
   },
   "plugins": {

@@ -3,7 +3,7 @@ const path = require('path');
 const readline = require('readline');
 
 function log(msg) { process.stderr.write(`[AST-SERVER] ${msg}\n`); }
-log(`=== AST Map MCP v2.3 ===`);
+log(`=== AST Map MCP v3.0 ===`);
 
 // ============================================
 // NODE_MODULES
@@ -22,25 +22,58 @@ if (nmFound && !module.paths.includes(nmFound)) module.paths.unshift(nmFound);
 if (!module.paths.includes(path.resolve(process.cwd(), 'node_modules'))) module.paths.push(path.resolve(process.cwd(), 'node_modules'));
 
 // ============================================
-// TIKTOKEN — точный подсчёт токенов
+// @huggingface/transformers — точный подсчёт токенов
 // ============================================
-let tiktokenEncoder = null;
-let tiktokenAvailable = false;
+// У библиотеки нет встроенного универсального токенизатора — всегда нужен tokenizer.json
+// от конкретной модели. После первого скачивания он кэшируется локально.
+// Дефолт: Xenova/Meta-Llama-3-8B-Instruct (128k словарь, хорошо подходит для большинства моделей)
+let hfTokenizer = null;
+let hfInitPromise = null;
+let hfModelName = 'Xenova/Meta-Llama-3-8B-Instruct';
+let hfAvailable = false;
 
-try {
-    const tiktoken = require('js-tiktoken');
-    tiktokenEncoder = tiktoken.encodingForModel('gpt-4');
-    tiktokenAvailable = true;
-    log(`✅ tiktoken загружен (cl100k_base) — точный подсчёт токенов`);
-} catch (e) {
-    log(`⚠️ tiktoken недоступен: ${e.message.split('\n')[0]}`);
-    log(`⚠️ Фоллбэк: длина/3.7 (неточный, занижает русский)`);
+async function initTokenizer(modelName) {
+    if (hfTokenizer) return hfTokenizer;
+    if (hfInitPromise) return hfInitPromise;
+
+    const target = modelName || hfModelName;
+    hfInitPromise = (async () => {
+        try {
+            const hfModule = await import('@huggingface/transformers');
+            const AutoTokenizer = hfModule.AutoTokenizer;
+            log(`⏳ Загрузка токенизатора ${target}...`);
+            hfTokenizer = await AutoTokenizer.from_pretrained(target, {
+                progress_callback: (progress) => {
+                    if (progress.status === 'progress') {
+                        log(`📥 ${progress.file}: ${progress.progress?.toFixed(0) || '?'}%`);
+                    } else if (progress.status === 'done') {
+                        log(`✅ ${progress.file} загружен`);
+                    }
+                }
+            });
+            hfAvailable = true;
+            log(`✅ @huggingface/transformers загружен (${target}) — точный подсчёт токенов`);
+            return hfTokenizer;
+        } catch(e) {
+            log(`⚠️ @huggingface/transformers недоступен: ${e.message.split('\n')[0]}`);
+            log(`⚠️ Фоллбэк: длина/3.7 (неточный, занижает русский)`);
+            return null;
+        }
+    })();
+
+    return hfInitPromise;
 }
 
-function countTokens(text) {
+async function countTokens(text) {
     if (!text || !text.trim()) return 0;
-    if (tiktokenAvailable && tiktokenEncoder) {
-        try { return tiktokenEncoder.encode(text).length; } catch(e) {}
+    const tokenizer = await initTokenizer();
+    if (tokenizer) {
+        try {
+            const tokens = tokenizer.encode(text, { add_special_tokens: false });
+            return tokens.length;
+        } catch(e) {
+            log(`⚠️ HF encode error: ${e.message}`);
+        }
     }
     return Math.ceil(text.length / 3.7);
 }
@@ -60,17 +93,19 @@ if (Parser && !useFallback) {
 if (!useFallback && Object.keys(grammars).length === 0) useFallback = true;
 
 // ============================================
-// MCP PROTOCOL
+// MCP PROTOCOL (async)
 // ============================================
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: false });
-rl.on('line', line => { try { handleRequest(JSON.parse(line)); } catch(e) {} });
+rl.on('line', async (line) => {
+    try { await handleRequest(JSON.parse(line)); } catch(e) { log(`Request error: ${e.message}`); }
+});
 function send(id, result) { console.log(JSON.stringify({ jsonrpc: "2.0", id, result })); }
-function handleRequest(req) {
+async function handleRequest(req) {
     const { id, method, params } = req;
-    if (method === 'initialize') send(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "ast-map-mcp", version: "2.3.0" } });
-    else if (method === 'tools/list') send(id, { tools: [{ name: "generate_and_save_ast", description: "Полная карта: дерево файлов с токенами + AST функций. Уважает .gitignore, точный подсчёт токенов (tiktoken).", inputSchema: { type: "object", properties: { target_path: { type: "string", description: "Путь к папке проекта" } }, required: ["target_path"] } }] });
+    if (method === 'initialize') send(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "ast-map-mcp", version: "3.0.0" } });
+    else if (method === 'tools/list') send(id, { tools: [{ name: "generate_and_save_ast", description: "Полная карта: дерево файлов с токенами + AST функций. Уважает .gitignore, точный подсчёт токенов (@huggingface/transformers).", inputSchema: { type: "object", properties: { target_path: { type: "string", description: "Путь к папке проекта" }, tokenizer_model: { type: "string", description: "Модель токенизатора HuggingFace (по умолчанию: Xenova/Meta-Llama-3-8B-Instruct). Примеры: Xenova/gpt-4, Xenova/Qwen1.5-7B-Chat" } }, required: ["target_path"] } }] });
     else if (method === 'tools/call' && params.name === 'generate_and_save_ast') {
-        try { send(id, { content: [{ type: "text", text: processPathAndSave(params.arguments.target_path) }] }); }
+        try { send(id, { content: [{ type: "text", text: await processPathAndSave(params.arguments.target_path, params.arguments.tokenizer_model) }] }); }
         catch (e) { send(id, { content: [{ type: "text", text: `❌ ${e.message}` }] }); }
     }
 }
@@ -189,7 +224,7 @@ function isGitIgnored(relPath, name, isDir, rules) {
 // ============================================
 // ФИЛЬТРАЦИЯ
 // ============================================
-const SKIP_DIRS = new Set(['node_modules','dist','.git','.svn','.hg','.idea','.vscode','target']);
+const SKIP_DIRS = new Set(['node_modules','dist','.git','.svn','.hg','.idea','.vscode','target','.agents_workspace']);
 const SKIP_EXTS = new Set(['.lock']);
 const SKIP_NAMES = new Set(['package-lock.json']);
 const SHOW_EXTS = new Set([
@@ -205,9 +240,9 @@ function shouldShow(name) {
 }
 
 // ============================================
-// СКАНИРОВАНИЕ ДЕРЕВА
+// СКАНИРОВАНИЕ ДЕРЕВА (async для countTokens)
 // ============================================
-function scanDir(dirPath, rootDir, gitRules) {
+async function scanDir(dirPath, rootDir, gitRules) {
     let entries;
     try { entries = fs.readdirSync(dirPath); } catch(e) { return null; }
     const relDir = path.relative(rootDir, dirPath).replace(/\\/g, '/');
@@ -222,7 +257,7 @@ function scanDir(dirPath, rootDir, gitRules) {
         if (stat.isDirectory()) {
             if (isGitIgnored(relPath, entry, true, gitRules)) continue;
             if (SKIP_DIRS.has(entry) || SKIP_DIRS.has(entry.toLowerCase())) continue;
-            const child = scanDir(fullPath, rootDir, gitRules);
+            const child = await scanDir(fullPath, rootDir, gitRules);
             if (child && (child.dirNodes.length + child.fileNodes.length > 0)) dirNodes.push(child);
         } else {
             if (isGitIgnored(relPath, entry, false, gitRules)) continue;
@@ -233,9 +268,8 @@ function scanDir(dirPath, rootDir, gitRules) {
             const ext = path.extname(entry).toLowerCase();
             const bin = BINARY_EXTS.has(ext);
             let tokens = 0;
-            // Считаем токены только для текстовых файлов < 5MB
             if (!bin && stat.size < 5242880) {
-                try { tokens = countTokens(fs.readFileSync(fullPath, 'utf8')); } catch(e) {}
+                try { tokens = await countTokens(fs.readFileSync(fullPath, 'utf8')); } catch(e) {}
             }
             fileNodes.push({ name: entry, fullPath, tokens, size: stat.size, isBinary: bin });
         }
@@ -287,22 +321,30 @@ function collectCode(node, rootDir) {
 // ============================================
 // ОСНОВНАЯ ЛОГИКА
 // ============================================
-function processPathAndSave(targetPath) {
+async function processPathAndSave(targetPath, tokenizerModel) {
     const absPath = path.resolve(targetPath);
     log(`Генерация карты: ${absPath}`);
     let stats; try { stats = fs.statSync(absPath); } catch(e) { return `❌ Путь не существует: ${absPath}`; }
     const rootDir = stats.isDirectory() ? absPath : path.dirname(absPath);
     const folderName = path.basename(rootDir);
 
+    // Инициализируем токенизатор (если указана кастомная модель — используем её)
+    if (tokenizerModel && tokenizerModel !== hfModelName) {
+        hfModelName = tokenizerModel;
+        hfTokenizer = null;
+        hfInitPromise = null;
+    }
+    await initTokenizer(tokenizerModel);
+
     const gitRules = loadGitignore(rootDir);
     log(`Правил .gitignore: ${gitRules.length}`);
 
-    const tree = scanDir(rootDir, rootDir, gitRules);
+    const tree = await scanDir(rootDir, rootDir, gitRules);
     if (!tree) return `❌ Не удалось просканировать: ${absPath}`;
-    log(`Токенов: ~${fmtTok(tree.totalTokens)} (${tiktokenAvailable ? 'tiktoken' : 'оценка/3.7'})`);
+    log(`Токенов: ~${fmtTok(tree.totalTokens)} (${hfAvailable ? '🤗 HuggingFace' : '⚠️ оценка/3.7'})`);
 
     const now = new Date().toISOString().replace('T',' ').substring(0,19);
-    const tokMode = tiktokenAvailable ? '🎯 tiktoken (точный)' : '⚠️ длина/3.7 (неточный!)';
+    const tokMode = hfAvailable ? `🤗 @huggingface/transformers (${hfModelName})` : '⚠️ длина/3.7 (неточный!)';
     let out = `# Code Map: ${absPath}\n\n`;
     out += `> ${now} | Токенов: ~${fmtTok(tree.totalTokens)} | Подсчёт: ${tokMode}\n\n`;
 
@@ -323,12 +365,17 @@ function processPathAndSave(targetPath) {
 
     if (astContent) out += `## 💻 Функции и классы (${parsedCount} файлов)\n\n${astContent}`;
 
-    const savePath = path.join(rootDir, `${folderName}_ast_map.md`);
+    // Создаем папку .agents_workspace и сохраняем карту туда
+    const workspaceDir = path.join(rootDir, '.agents_workspace');
+    if (!fs.existsSync(workspaceDir)) {
+        try { fs.mkdirSync(workspaceDir, { recursive: true }); } catch(e) { log(`⚠️ Ошибка создания .agents_workspace: ${e.message}`); }
+    }
+    const savePath = path.join(workspaceDir, `${folderName}_ast_map.md`);
     try { fs.writeFileSync(savePath, out, 'utf8'); } catch(e) { return `❌ Не сохранилось: ${e.message}`; }
 
-    const msg = `✅ Карта готова!\n📁 ${savePath}\n📊 ~${fmtTok(tree.totalTokens)} токенов (${tiktokenAvailable ? 'tiktoken' : 'оценка'}) | ${parsedCount} файлов с AST`;
+    const msg = `✅ Карта готова!\n📁 ${savePath}\n📊 ~${fmtTok(tree.totalTokens)} токенов (${hfAvailable ? '🤗 HF' : 'оценка'}) | ${parsedCount} файлов с AST`;
     log(msg);
     return msg;
 }
 
-log(`✅ Готов. Токены: ${tiktokenAvailable ? '🎯 tiktoken' : '⚠️ оценка/3.7'} | Парсер: ${useFallback ? 'Регекс' : 'Tree-sitter'}`);
+log(`✅ Готов. Токены: ${hfAvailable ? '🤗 HuggingFace' : '⚠️ будет загружен при первом вызове'} | Парсер: ${useFallback ? 'Регекс' : 'Tree-sitter'}`);
