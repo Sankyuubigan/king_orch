@@ -1,12 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { ChatMessage, ModelParams, ChatResponse } from "../types";
 
 /**
  * Сервис управления стейтом чата и коммуникацией с LLM.
  * Выделен из main.ts по принципу SRP (Single Responsibility).
  */
 
-// Глобальный стейт чата
-export let globalChatHistory: {role: string, content: string, sub_calls?: any[], agent_name?: string}[] = [];
+export let globalChatHistory: ChatMessage[] = [];
 export let globalDossier: Record<string, string> = {};
 export let currentSessionId: string | null = null;
 export let isProcessing = false;
@@ -26,7 +26,7 @@ export function clearDraftTimeout() {
     clearTimeout(draftTimeout);
 }
 
-export function pushHistoryMessage(msg: {role: string, content: string, sub_calls?: any[], agent_name?: string}) {
+export function pushHistoryMessage(msg: ChatMessage) {
     globalChatHistory.push(msg);
 }
 
@@ -60,11 +60,11 @@ export async function sendChatRequest(
     modelPath: string,
     agentId: string,
     message: string,
-    history: any[],
+    history: ChatMessage[],
     contextSize: number,
     kvQuantization: boolean,
-    modelParams: any
-): Promise<{ text: string; sub_calls: any[]; dossier: Record<string, string> }> {
+    modelParams: ModelParams
+): Promise<ChatResponse> {
     return await invoke("chat_request", {
         modelPath,
         agentId,

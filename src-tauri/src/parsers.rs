@@ -40,8 +40,6 @@ pub fn clean_thought_tags(text: &str) -> String {
         result = re.replace_all(&result, "").to_string();
     }
     
-    // Удаление артефактов формата Gemma — модель иногда генерирует
-    // </start_of_turn> как закрывающий тег, которого нет в спецификации
     result = result.replace("</start_of_turn>", "").replace("<start_of_turn>", "");
     
     result.trim().to_string()
@@ -139,6 +137,28 @@ pub fn parse_orchestrator_response(text: &str) -> Option<(f32, String, String, S
         }
     }
     None
+}
+
+/// Проверяет, содержит ли текст JSON-блок с полем "thought",
+/// но без полей "target" или "tool". Это признак неполного ответа —
+/// модель начала размышлять, но не указала действие (не вызвала
+/// сабагента и не ответила пользователю).
+/// Оркестратор должен перезапросить модель в этом случае.
+pub fn has_incomplete_json_action(text: &str) -> bool {
+    if let Some(json_str) = extract_json_block(text) {
+        let parsed = serde_json::from_str::<serde_json::Value>(&json_str)
+            .or_else(|_| {
+                let cleaned = json_str.replace('\n', " ").replace('\r', "");
+                serde_json::from_str::<serde_json::Value>(&cleaned)
+            });
+        if let Ok(val) = parsed {
+            let has_thought = val.get("thought").is_some();
+            let has_target = val.get("target").is_some();
+            let has_tool = val.get("tool").is_some();
+            return has_thought && !has_target && !has_tool;
+        }
+    }
+    false
 }
 
 fn decode_json_escapes(s: &str) -> String {

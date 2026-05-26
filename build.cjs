@@ -73,7 +73,6 @@ async function downloadAndExtractDeno(binDir, target) {
         if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true, force: true });
         fs.mkdirSync(extractDir, { recursive: true });
 
-        // PowerShell для распаковки zip
         execSync(`powershell -NoProfile -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${extractDir}' -Force"`, { stdio: 'pipe' });
 
         const extractedExe = path.join(extractDir, 'deno.exe');
@@ -87,7 +86,6 @@ async function downloadAndExtractDeno(binDir, target) {
         console.error(`  ⚠️ Ошибка загрузки Deno: ${e.message}`);
         console.error('  Deno-песочница будет недоступна. Скачайте вручную из https://deno.land/');
     } finally {
-        // Очистка временных файлов
         try { if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath); } catch (e) {}
         try { if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true, force: true }); } catch (e) {}
     }
@@ -130,7 +128,6 @@ async function main() {
             console.log('  ✅ Node.js уже загружен.');
         }
 
-        // === Загрузка Deno для песочницы ===
         await downloadAndExtractDeno(binDir, target);
 
         console.log('\n========================================');
@@ -206,9 +203,11 @@ async function main() {
             throw new Error('king_orch.exe не найден! Сборка не удалась.');
         }
         
+        // Увеличенный таймаут: release-сборка Tauri (Vite + Rust + NSIS) 
+        // может занимать более 2 минут. 10 минут — безопасный порог.
         const exeStat = fs.statSync(exePath);
         const exeAgeSec = (Date.now() - exeStat.mtimeMs) / 1000;
-        if (exeAgeSec > 120) {
+        if (exeAgeSec > 600) {
             throw new Error(`king_orch.exe устарел (${Math.round(exeAgeSec)} сек назад). Сборка не удалась — это старый экзешник!`);
         }
 

@@ -1,65 +1,26 @@
 const https = require('https');
-const readline = require('readline');
+const http = require('http');
+const { createMcpServer } = require('./mcp_base');
 
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: false
-});
-
-rl.on('line', (line) => {
-    try {
-        const req = JSON.parse(line);
-        handleRequest(req);
-    } catch (e) {}
-});
-
-function sendResponse(id, result) {
-    console.log(JSON.stringify({
-        jsonrpc: "2.0",
-        id: id,
-        result: result
-    }));
-}
-
-function handleRequest(req) {
-    const { id, method, params } = req;
-    if (method === 'initialize') {
-        sendResponse(id, {
-            protocolVersion: "2024-11-05",
-            capabilities: { tools: {} },
-            serverInfo: { name: "docs-fetcher-mcp", version: "1.0.0" }
-        });
-    } else if (method === 'tools/list') {
-        sendResponse(id, {
-            tools:[
-                {
-                    name: "WebFetch",
-                    description: "Скачать веб-страницу или документацию по ссылке и извлечь чистый текст для анализа",
-                    inputSchema: {
-                        type: "object",
-                        properties: {
-                            url: { type: "string", description: "URL адрес страницы" }
-                        },
-                        required: ["url"]
-                    }
-                }
-            ]
-        });
-    } else if (method === 'tools/call') {
-        const { name, arguments: args } = params;
-        if (name === 'WebFetch') {
-            fetchUrl(args.url, (err, html) => {
-                if (err) {
-                    sendResponse(id, { content:[{ type: "text", text: `Ошибка загрузки страницы: ${err}` }] });
-                } else {
-                    const cleanText = cleanHtml(html);
-                    sendResponse(id, { content:[{ type: "text", text: cleanText }] });
-                }
+createMcpServer({
+    name: "docs-fetcher-mcp",
+    version: "1.0.0",
+    tools: [{
+        name: "WebFetch",
+        description: "Скачать веб-страницу или документацию по ссылке и извлечь чистый текст",
+        inputSchema: { type: "object", properties: { url: { type: "string", description: "URL адрес страницы" } }, required: ["url"] }
+    }],
+    handlers: {
+        WebFetch: (args) => {
+            return new Promise((resolve, reject) => {
+                fetchUrl(args.url, (err, html) => {
+                    if (err) { reject(new Error(err)); return; }
+                    resolve(cleanHtml(html));
+                });
             });
         }
     }
-}
+});
 
 function fetchUrl(targetUrl, callback) {
     try {
@@ -68,12 +29,9 @@ function fetchUrl(targetUrl, callback) {
             hostname: urlObj.hostname,
             path: urlObj.pathname + urlObj.search,
             method: 'GET',
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
-            }
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
         };
-        const client = urlObj.protocol === 'https:' ? https : require('http');
+        const client = urlObj.protocol === 'https:' ? https : http;
         const req = client.request(options, (res) => {
             if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 return fetchUrl(res.headers.location, callback);
@@ -84,9 +42,7 @@ function fetchUrl(targetUrl, callback) {
         });
         req.on('error', (err) => { callback(err.message, null); });
         req.end();
-    } catch (e) {
-        callback(e.message, null);
-    }
+    } catch (e) { callback(e.message, null); }
 }
 
 function cleanHtml(html) {
@@ -105,11 +61,5 @@ function cleanHtml(html) {
 }
 
 function unescapeHtml(str) {
-    return str
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#x27;/g, "'")
-        .replace(/&#39;/g, "'");
+    return str.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&#39;/g, "'");
 }

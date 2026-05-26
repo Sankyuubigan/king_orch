@@ -3,8 +3,6 @@ use std::io::{BufReader, BufRead, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use serde_json::{Value, json};
-use crate::emit_log;
-use tauri::AppHandle;
 
 pub struct McpClient {
     child: Child,
@@ -14,46 +12,30 @@ pub struct McpClient {
 }
 
 impl McpClient {
-    pub fn spawn(app: &AppHandle, cmd_path: &str, args: &[&str]) -> Result<Self, String> {
-        emit_log(app, &format!("🚀 Запуск MCP сервера: {} {:?}", cmd_path, args));
+    /// Спавн MCP сервера через коллбэк логирования (без привязки к AppHandle)
+    pub fn spawn_stub(cmd_path: &str, args: &[&str], log_cb: impl Fn(String) + Send + Sync + 'static) -> Result<Self, String> {
+        log_cb(format!("🚀 Запуск MCP сервера: {} {:?}", cmd_path, args));
         
         let mut cmd = Command::new(cmd_path);
-        cmd.args(args)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
         #[cfg(target_os = "windows")]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
-        }
+        { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); }
 
         let mut child = cmd.spawn().map_err(|e| format!("Не удалось запустить MCP-сервер: {}", e))?;
-
         let stdin = child.stdin.take().ok_or("Не удалось получить stdin")?;
         let stdout = child.stdout.take().ok_or("Не удалось получить stdout")?;
         let stderr = child.stderr.take().ok_or("Не удалось получить stderr")?;
 
-        let app_clone = app.clone();
+        let cb = Arc::new(log_cb);
         thread::spawn(move || {
             let reader = BufReader::new(stderr);
-            for line in reader.lines().flatten() {
-                emit_log(&app_clone, &format!("[MCP Server Stderr] {}", line));
-            }
+            for line in reader.lines().flatten() { cb(format!("[MCP Stderr] {}", line)); }
         });
 
         let stdout_reader = BufReader::new(stdout);
-
-        let mut client = Self {
-            child,
-            stdin,
-            stdout_reader,
-            next_id: Arc::new(Mutex::new(1)),
-        };
-
-        client.initialize(app)?;
-
+        let mut client = Self { child, stdin, stdout_reader, next_id: Arc::new(Mutex::new(1)) };
+        client.initialize()?;
         Ok(client)
     }
 
@@ -70,102 +52,45 @@ impl McpClient {
         loop {
             line.clear();
             let bytes_read = self.stdout_reader.read_line(&mut line).map_err(|e| e.to_string())?;
-            if bytes_read == 0 {
-                return Err("MCP-сервер неожиданно закрыл поток stdout".to_string());
-            }
-
+            if bytes_read == 0 { return Err("MCP-сервер неожиданно закрыл поток stdout".to_string()); }
             let trimmed = line.trim();
             if trimmed.is_empty() { continue; }
-
             if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
-                if val.get("id").and_then(|id| id.as_i64()) == Some(target_id) {
-                    return Ok(val);
-                }
+                if val.get("id").and_then(|id| id.as_i64()) == Some(target_id) { return Ok(val); }
             }
         }
     }
 
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        let id = {
-            let mut id_lock = self.next_id.lock().unwrap();
-            let current = *id_lock;
-            *id_lock += 1;
-            current
-        };
-
-        let request = json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "method": method,
-            "params": params
-        });
-
-        self.send_raw(&request)?;
+        let id = { let mut id_lock = self.next_id.lock().unwrap(); let current = *id_lock; *id_lock += 1; current };
+        self.send_raw(&json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params }))?;
         let response = self.read_response(id)?;
-
-        if let Some(error) = response.get("error") {
-            return Err(format!("Ошибка MCP JSON-RPC: {}", error));
-        }
-
+        if let Some(error) = response.get("error") { return Err(format!("Ошибка MCP JSON-RPC: {}", error)); }
         Ok(response.get("result").cloned().unwrap_or(Value::Null))
     }
 
-    fn initialize(&mut self, app: &AppHandle) -> Result<(), String> {
-        emit_log(app, "🔄 Выполнение рукопожатия MCP (initialize)...");
-        let params = json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {
-                "name": "king-orch-client",
-                "version": "1.0.0"
-            }
-        });
-
-        let result = self.call("initialize", params)?;
-        emit_log(app, &format!("✅ MCP сервер инициализирован. Инфо: {:?}", result.get("serverInfo")));
-
-        let notification = json!({
-            "jsonrpc": "2.0",
-            "method": "notifications/initialized"
-        });
-        self.send_raw(&notification)?;
-
+    fn initialize(&mut self) -> Result<(), String> {
+        let params = json!({ "protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": { "name": "king-orch-client", "version": "1.0.0" } });
+        self.call("initialize", params)?;
+        self.send_raw(&json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }))?;
         Ok(())
     }
 
     pub fn list_tools(&mut self) -> Result<Vec<Value>, String> {
         let result = self.call("tools/list", json!({}))?;
-        if let Some(tools) = result.get("tools").and_then(|t| t.as_array()) {
-            Ok(tools.clone())
-        } else {
-            Ok(vec![])
-        }
+        Ok(result.get("tools").and_then(|t| t.as_array()).cloned().unwrap_or_default())
     }
 
     pub fn call_tool(&mut self, name: &str, arguments: Value) -> Result<String, String> {
-        let params = json!({
-            "name": name,
-            "arguments": arguments
-        });
-
-        let result = self.call("tools/call", params)?;
-        
+        let result = self.call("tools/call", json!({ "name": name, "arguments": arguments }))?;
         if let Some(content_array) = result.get("content").and_then(|c| c.as_array()) {
             let mut output = String::new();
-            for item in content_array {
-                if let Some(text) = item.get("text").and_then(|t| t.as_str()) {
-                    output.push_str(text);
-                }
-            }
+            for item in content_array { if let Some(text) = item.get("text").and_then(|t| t.as_str()) { output.push_str(text); } }
             Ok(output)
-        } else {
-            Err("Некорректный формат ответа tools/call (отсутствует content)".to_string())
-        }
+        } else { Err("Некорректный формат ответа tools/call".to_string()) }
     }
 }
 
 impl Drop for McpClient {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-    }
+    fn drop(&mut self) { let _ = self.child.kill(); }
 }

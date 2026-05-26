@@ -73,6 +73,10 @@ let globalDossier: Record<string, string> = {};
 let modelsCatalog: any[] = [];
 let draftTimeout: number | undefined;
 
+// Трекинг сабагентов, уже отображённых через реалтайм-события subcall_done.
+// При финальном ответе мы НЕ рендерим их повторно, но сохраняем в globalChatHistory.
+const realtimeSubcallKeys = new Set<string>();
+
 export function logToGUI(msg: string) {
   if (logView) {
     logView.value += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
@@ -87,8 +91,8 @@ function appendMessageToContainer(container: HTMLDivElement, role: Role, content
   renderMermaidDiagrams();
 }
 
-function appendMessage(role: Role, content: string, agentName?: string, timeText?: string, subCalls?: any[]) {
-  if (subCalls && subCalls.length > 0) {
+function appendMessage(role: Role, content: string, agentName?: string, timeText?: string, subCalls?: any[], skipSubcallRender = false) {
+  if (subCalls && subCalls.length > 0 && !skipSubcallRender) {
     subCalls.forEach(call => { chatHistory.appendChild(createSubcallElement(call, showSubchat)); });
   }
   appendMessageToContainer(chatHistory, role, content, agentName, timeText);
@@ -353,7 +357,6 @@ async function openSessionUI(id: string) {
     const session = await loadSession(id);
     currentSessionId = id;
     globalChatHistory = session.messages;
-    // Загрузка dossier (Record<string, string>), с фоллбэком для старых сессий
     globalDossier = session.dossier || {};
     if (!globalDossier && session.state_markdown) {
       globalDossier = { legacy_state: session.state_markdown };
@@ -404,6 +407,7 @@ function startNewSession() {
   currentSessionId = null;
   globalChatHistory = [];
   globalDossier = {};
+  realtimeSubcallKeys.clear();
   chatHistory.innerHTML = '';
   chatInput.value = ''; 
   chatInput.style.height = "auto";
@@ -446,6 +450,7 @@ function setProcessingState(state: boolean) {
   btnStop.disabled = !state;
   if (state) {
     chatFeedback.style.display = "block"; progressBar.style.width = "0%"; statusLabel.innerText = "Подготовка...";
+    realtimeSubcallKeys.clear();
   } else { chatFeedback.style.display = "none"; }
 }
 
@@ -519,7 +524,15 @@ async function handleSend() {
     
     globalDossier = response.dossier || {};
     globalChatHistory.push({ role: "assistant", content: response.text, sub_calls: response.sub_calls });
-    appendMessage('agent', response.text, displayName, `⏱ Время: ${durationSec} сек.`);
+
+    // БАГФИКС: Не рендерим sub_calls кнопки из финального ответа,
+    // если они уже были отображены через реалтайм-события subcall_done.
+    // Данные сохранены в globalChatHistory для персистентности сессии.
+    const hasRealtimeSubcalls = response.sub_calls && response.sub_calls.some(
+      (call: any) => realtimeSubcallKeys.has(`${call.agent_name}:${call.time_sec.toFixed(2)}`)
+    );
+    appendMessage('agent', response.text, displayName, `⏱ Время: ${durationSec} сек.`, response.sub_calls, hasRealtimeSubcalls);
+    
     await saveSession(currentSessionId, globalChatHistory, globalDossier, chatInput.value);
   } catch (error) {
     if (String(error).includes("Отменено") || String(error).includes("Прервано")) {
@@ -546,11 +559,18 @@ btnStop?.addEventListener("click", async () => {
 listen("progress", (e) => { progressBar.style.width = `${e.payload}%`; });
 listen("status", (e) => { statusLabel.innerText = e.payload as string; });
 listen("log", (e) => { logToGUI(e.payload as string); });
+
+// БАГФИКС: Реалтайм-отчёты сабагентов.
+// Каждый завершённый сабагент эмитит событие subcall_done СРАЗУ,
+// не дожидаясь финального ответа всего пайплайна.
 listen("subcall_done", (e) => {
   const call = e.payload as any;
+  const key = `${call.agent_name}:${call.time_sec.toFixed(2)}`;
+  realtimeSubcallKeys.add(key);
   chatHistory.appendChild(createSubcallElement(call, showSubchat));
   chatHistory.scrollTop = chatHistory.scrollHeight;
 });
+
 listen("agent_thought", (e) => {
   const payload = e.payload as {agent_name: string, thought: string};
   const el = createThoughtElement(payload.agent_name, payload.thought);

@@ -32,7 +32,8 @@
       "icons/icon.png"
     ],
     "resources": [
-      "mcp_servers/*"
+      "mcp_servers/*",
+      "../agents/**/*"
     ],
     "externalBin": [
       "bin/yt-dlp",
