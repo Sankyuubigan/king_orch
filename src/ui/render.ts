@@ -1,4 +1,5 @@
 import { renderMarkdown } from "../utils/markdown";
+import { createMessageMenu, MessageMenuCallbacks } from "./message-menu";
 
 export type Role = 'user' | 'agent' | 'system';
 
@@ -6,10 +7,13 @@ export function createMessageElement(
   role: Role, 
   content: string, 
   agentName?: string, 
-  timeText?: string
+  timeText?: string,
+  msgUid?: string,
+  menuCallbacks?: MessageMenuCallbacks
 ): HTMLDivElement {
   const msgDiv = document.createElement("div");
   msgDiv.className = `message message-${role}`;
+  if (msgUid) msgDiv.dataset.msgUid = msgUid;
 
   if (role === 'agent' && agentName) {
     const nameSpan = document.createElement("span");
@@ -19,7 +23,6 @@ export function createMessageElement(
   }
 
   const contentDiv = document.createElement("div");
-  // Теперь все сообщения (включая системные отчеты) проходят через Markdown
   contentDiv.innerHTML = renderMarkdown(content);
   msgDiv.appendChild(contentDiv);
 
@@ -28,6 +31,12 @@ export function createMessageElement(
     timeDiv.className = "msg-time";
     timeDiv.innerText = timeText;
     msgDiv.appendChild(timeDiv);
+  }
+
+  // Контекстное меню (три точки) для сообщений юзера и агента
+  if (msgUid && menuCallbacks && (role === 'user' || role === 'agent')) {
+    const menu = createMessageMenu(msgUid, menuCallbacks);
+    msgDiv.appendChild(menu);
   }
 
   return msgDiv;
