@@ -1,9 +1,3 @@
-/**
- * Строгие типы вместо any.
- * ИИ-агенты работают в 10 раз точнее, когда видят конкретные интерфейсы,
- * а не загадочный `any`, под которым может скрываться что угодно.
- */
-
 export interface ChatMessage {
     role: 'user' | 'assistant' | 'system' | 'thought';
     content: string;
@@ -45,7 +39,7 @@ export interface AgentProfile {
 export interface ChatResponse {
     text: string;
     sub_calls: SubCall[];
-    dossier: Record<string, string>;
+    dossier: Record<string, Record<string, string>>;
 }
 
 export interface SessionMeta {
@@ -53,4 +47,9 @@ export interface SessionMeta {
     title: string;
     updated_at: number;
     created_at: number;
+}
+
+export interface ThoughtMenuCallbacks {
+    onDeleteThoughts: (assistantUid: string) => void;
+    onCloneFromThoughts: (assistantUid: string) => void;
 }

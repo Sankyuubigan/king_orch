@@ -8,11 +8,27 @@ export function renderMarkdown(text: string): string {
   // Вырезаем блоки mermaid до экранирования HTML, чтобы сохранить их синтаксис
   const mermaidBlocks: string[] = [];
   html = html.replace(/```mermaid\s*([\s\S]*?)```/gim, (_, code) => {
-    mermaidBlocks.push(code.trim());
+    // Сразу очищаем LaTeX из mermaid-кода — Mermaid не понимает LaTeX
+    let cleaned = code.trim();
+    cleaned = cleaned.replace(/\$\\rightarrow\$/gi, '→');
+    cleaned = cleaned.replace(/\$\\leftarrow\$/gi, '←');
+    cleaned = cleaned.replace(/\$\\Rightarrow\$/gi, '⇒');
+    cleaned = cleaned.replace(/\$\\Leftarrow\$/gi, '⇐');
+    cleaned = cleaned.replace(/\$\\leftrightarrow\$/gi, '↔');
+    cleaned = cleaned.replace(/\$\\Leftrightarrow\$/gi, '⇔');
+    cleaned = cleaned.replace(/\$\\to\$/gi, '→');
+    cleaned = cleaned.replace(/\$\\gets\$/gi, '←');
+    cleaned = cleaned.replace(/\\rightarrow/gi, '→');
+    cleaned = cleaned.replace(/\\leftarrow/gi, '←');
+    cleaned = cleaned.replace(/\\Rightarrow/gi, '⇒');
+    cleaned = cleaned.replace(/\\Leftarrow/gi, '⇐');
+    cleaned = cleaned.replace(/\\to/gi, '→');
+    cleaned = cleaned.replace(/\\gets/gi, '←');
+    mermaidBlocks.push(cleaned);
     return `__MERMAID_BLOCK_${mermaidBlocks.length - 1}__`;
   });
 
-  // Фикс для стрелок из синтаксиса LaTeX
+  // Фикс для стрелок из синтаксиса LaTeX (в обычном тексте, не в mermaid)
   html = html.replace(/\$?\\rightarrow\$?/gi, '→');
 
   html = html.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -32,7 +48,7 @@ export function renderMarkdown(text: string): string {
     return `${line}<br>`;
   }).join('\n');
 
-  // Возвращаем чистые mermaid блоки обратно в HTML
+  // Возвращаем mermaid блоки обратно в HTML (уже очищенные от LaTeX)
   mermaidBlocks.forEach((code, index) => {
     html = html.replace(`__MERMAID_BLOCK_${index}__`, `<pre class="mermaid">${code}</pre>`);
   });

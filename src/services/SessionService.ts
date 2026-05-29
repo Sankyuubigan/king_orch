@@ -1,8 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 
 /**
- * Сервис работы с сессиями (CRUD).
- * Выделен из main.ts для изоляции логики хранения.
+ * Единый сервис работы с сессиями (CRUD + save).
+ * Заменяет дублировавшийся api/sessions.ts.
  */
 
 export async function fetchSessions(): Promise<any[]> {
@@ -11,6 +11,15 @@ export async function fetchSessions(): Promise<any[]> {
 
 export async function loadSession(id: string): Promise<any> {
     return await invoke("load_session", { id });
+}
+
+export async function saveSession(
+    id: string,
+    messages: any[],
+    dossier: Record<string, Record<string, string>>,
+    draft: string
+): Promise<void> {
+    await invoke("save_session", { id, messages, dossier, draft });
 }
 
 export async function deleteSession(id: string): Promise<void> {

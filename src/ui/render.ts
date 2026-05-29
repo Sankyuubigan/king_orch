@@ -1,5 +1,7 @@
-import { renderMarkdown } from "../utils/markdown";
-import { createMessageMenu, MessageMenuCallbacks } from "./message-menu";
+import { renderMarkdown } from "../utils";
+import { createMessageMenu } from "./message-menu";
+import type { MessageMenuCallbacks } from "./message-menu";
+import type { ThoughtMenuCallbacks } from "../types";
 
 export type Role = 'user' | 'agent' | 'system';
 
@@ -33,7 +35,6 @@ export function createMessageElement(
     msgDiv.appendChild(timeDiv);
   }
 
-  // Контекстное меню (три точки) для сообщений юзера и агента
   if (msgUid && menuCallbacks && (role === 'user' || role === 'agent')) {
     const menu = createMessageMenu(msgUid, menuCallbacks);
     msgDiv.appendChild(menu);
