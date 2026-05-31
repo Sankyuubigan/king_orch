@@ -16,10 +16,9 @@ export async function loadSession(id: string): Promise<any> {
 export async function saveSession(
     id: string,
     messages: any[],
-    dossier: Record<string, Record<string, string>>,
     draft: string
 ): Promise<void> {
-    await invoke("save_session", { id, messages, dossier, draft });
+    await invoke("save_session", { id, messages, draft });
 }
 
 export async function deleteSession(id: string): Promise<void> {

@@ -1,16 +1,39 @@
 use serde::Serialize;
+use std::io::Write;
 use std::sync::atomic::Ordering;
+use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State, Emitter};
 
 use crate::domain;
-use crate::infra::{self, ChatMessage, Dossier, ModelParams, SubCall};
+use crate::infra::{self, ChatMessage, ModelParams, SubCall};
 use crate::api::AppState;
+
+// ─── Лог-файл последнего запуска ───
+static LAST_LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
+
+pub fn init_log_file() {
+    let path = std::path::PathBuf::from("temp").join("last_logs.txt");
+    let _ = std::fs::create_dir_all("temp");
+    if let Ok(file) = std::fs::File::create(&path) {
+        if let Ok(mut guard) = LAST_LOG_FILE.lock() {
+            *guard = Some(file);
+        }
+    }
+}
+
+fn append_log(msg: &str) {
+    if let Ok(mut guard) = LAST_LOG_FILE.lock() {
+        if let Some(ref mut file) = *guard {
+            let _ = writeln!(file, "{}", msg);
+        }
+    }
+}
 
 #[derive(Serialize)]
 pub struct ChatResponse {
     text: String,
     sub_calls: Vec<SubCall>,
-    dossier: Dossier,
+    messages: Vec<ChatMessage>,
 }
 
 fn find_agents_dir(app: &AppHandle) -> std::path::PathBuf {
@@ -47,12 +70,18 @@ fn find_mcp_servers_dir(app: &AppHandle) -> std::path::PathBuf {
     resource_dir.join("mcp_servers")
 }
 
-fn parse_thought_from_log(msg: &str) -> Option<(String, String)> {
+fn parse_thought_from_log(msg: &str) -> Option<(String, String, f32)> {
     let rest = msg.strip_prefix("💭 Мысль ")?;
     let paren_pos = rest.find(" (")?;
     let agent_name = rest[..paren_pos].to_string();
-    let colon_pos = rest.find("): ")?;
-    Some((agent_name, rest[colon_pos + 3..].to_string()))
+    let time_sec = rest.rfind("[⏱").and_then(|start| {
+        let after = &rest[start + 4..];
+        let end = after.find("с]")?;
+        after[..end].parse::<f32>().ok()
+    }).unwrap_or(0.0);
+    let colon_pos = rest.rfind("]: ").or_else(|| rest.rfind("): "));
+    let thought = colon_pos.map(|p| rest[p + 3..].to_string()).unwrap_or_default();
+    if thought.is_empty() { None } else { Some((agent_name, thought, time_sec)) }
 }
 
 #[tauri::command]
@@ -65,7 +94,6 @@ pub async fn chat_request(
     history: Vec<ChatMessage>,
     context_size: u32,
     kv_quantization: bool,
-    dossier: Dossier,
     model_params: ModelParams,
 ) -> Result<ChatResponse, String> {
     let mut cfg = infra::load_config(&app);
@@ -83,11 +111,12 @@ pub async fn chat_request(
 
     let app_log = app.clone();
     let log_cb = move |msg: String| {
+        append_log(&msg);
         let _ = app_log.emit("log", &msg);
-        if let Some((agent_name, thought)) = parse_thought_from_log(&msg) {
+        if let Some((agent_name, thought, time_sec)) = parse_thought_from_log(&msg) {
             let _ = app_log.emit(
                 "agent_thought",
-                serde_json::json!({ "agent_name": agent_name, "thought": thought }),
+                serde_json::json!({ "author": agent_name, "thought": thought, "time_sec": time_sec }),
             );
         }
     };
@@ -120,7 +149,6 @@ pub async fn chat_request(
             format_type,
             conf_threshold,
             cancel_flag,
-            dossier,
         )
     })
     .await
@@ -129,7 +157,7 @@ pub async fn chat_request(
     Ok(ChatResponse {
         text: result.0,
         sub_calls: result.1,
-        dossier: result.2,
+        messages: result.2,
     })
 }
 

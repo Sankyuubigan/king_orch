@@ -43,10 +43,14 @@ export function createMessageElement(
   return msgDiv;
 }
 
-export function createThoughtElement(agentName: string, thought: string): HTMLDivElement {
+export function createThoughtElement(agentName: string, thought: string, timeSec?: number): HTMLDivElement {
   const div = document.createElement("div");
   div.className = "message message-thought";
-  div.innerHTML = `🧠 <strong>${agentName}</strong>: <em>${thought}</em>`;
+  if (timeSec && timeSec > 0) {
+    div.innerHTML = `🧠 <strong>${agentName}</strong> <span class="thought-time">⏱${timeSec.toFixed(1)}с</span>: <em>${thought}</em>`;
+  } else {
+    div.innerHTML = `🧠 <strong>${agentName}</strong>: <em>${thought}</em>`;
+  }
   return div;
 }
 

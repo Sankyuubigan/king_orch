@@ -10,7 +10,6 @@ class Store {
   isProcessing = false;
   chatHistory: ChatMessage[] = [];
   currentSessionId: string | null = null;
-  dossier: Record<string, Record<string, string>> = {};
   activeThoughtsBlock: HTMLDivElement | null = null;
   realtimeSubcallKeys = new Set<string>();
 
@@ -32,7 +31,6 @@ class Store {
     this.chatHistory = [];
     this.msgUidList = [];
     this.uidCounter = 0;
-    this.dossier = {};
     this.realtimeSubcallKeys.clear();
     this.activeThoughtsBlock = null;
   }

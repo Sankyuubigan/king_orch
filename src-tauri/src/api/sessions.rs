@@ -17,12 +17,11 @@ pub fn save_session(
     app: AppHandle,
     id: String,
     messages: Vec<infra::ChatMessage>,
-    dossier: infra::Dossier,
     draft: String,
 ) -> Result<(), String> {
     let title = messages
         .iter()
-        .find(|m| m.role == "user" && !m.content.trim().is_empty())
+        .find(|m| m.msg_type == "message" && m.author.as_deref() == Some("user") && !m.content.trim().is_empty())
         .map(|m| {
             let text = m.content.replace('\n', " ");
             if text.chars().count() > 35 {
@@ -32,7 +31,7 @@ pub fn save_session(
             }
         })
         .unwrap_or_else(|| "Новая сессия".to_string());
-    infra::save_session(&app, &id, &title, messages, dossier, draft)
+    infra::save_session(&app, &id, &title, messages, draft)
 }
 
 #[tauri::command]

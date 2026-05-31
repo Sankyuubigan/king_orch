@@ -19,6 +19,13 @@ fn main() {
         .manage(AppState {
             cancel_flag: Arc::new(AtomicBool::new(false)),
         })
+        .setup(|app| {
+            let app_handle = app.handle();
+            let sessions_dir = infra::session_manager::sessions_dir(&app_handle);
+            infra::migration::migrate_all_sessions(&sessions_dir);
+            api::chat::init_log_file();
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             api::config::get_config,
             api::config::set_config_value,

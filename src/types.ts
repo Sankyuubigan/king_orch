@@ -1,8 +1,11 @@
 export interface ChatMessage {
-    role: 'user' | 'assistant' | 'system' | 'thought';
+    id?: string;
+    type: 'message' | 'thought';
     content: string;
+    namespace?: string;
     sub_calls?: SubCall[];
-    agent_name?: string;
+    author?: string;
+    time_sec?: number;
 }
 
 export interface SubCall {
@@ -39,7 +42,7 @@ export interface AgentProfile {
 export interface ChatResponse {
     text: string;
     sub_calls: SubCall[];
-    dossier: Record<string, Record<string, string>>;
+    messages: ChatMessage[];
 }
 
 export interface SessionMeta {

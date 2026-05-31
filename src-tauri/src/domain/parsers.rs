@@ -2,12 +2,30 @@ use serde_json;
 
 fn extract_json_block(text: &str) -> Option<String> {
     let text = clean_thought_tags(text);
-    if let Some(start) = text.find("```json") {
-        let content_start = start + 7;
-        if let Some(end) = text[content_start..].find("```") {
-            return Some(text[content_start..content_start + end].trim().to_string());
+    let mut first_block: Option<String> = None;
+    let mut search_pos = 0;
+
+    while let Some(start) = text[search_pos..].find("```json") {
+        let abs_start = search_pos + start + 7;
+        if let Some(end) = text[abs_start..].find("```") {
+            let block = text[abs_start..abs_start + end].trim().to_string();
+            if first_block.is_none() {
+                first_block = Some(block.clone());
+            }
+            // Prefer blocks that contain a target or tool action
+            if block.contains("\"target\"") || block.contains("\"tool\"") {
+                return Some(block);
+            }
+            search_pos = abs_start + end + 3;
+        } else {
+            break;
         }
     }
+
+    if let Some(block) = first_block {
+        return Some(block);
+    }
+
     if let Some(start) = text.find('{') {
         if let Some(end) = text.rfind('}') {
             return Some(text[start..=end].trim().to_string());

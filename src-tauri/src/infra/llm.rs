@@ -3,6 +3,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::num::NonZeroU32;
+use std::time::Instant;
 
 use llama_cpp_2::llama_backend::LlamaBackend;
 use llama_cpp_2::model::params::LlamaModelParams;
@@ -34,12 +35,30 @@ pub struct SubCall {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
-    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(rename = "type")]
+    pub msg_type: String,
     pub content: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sub_calls: Option<Vec<SubCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_name: Option<String>,
+    pub author: Option<String>,
+}
+
+impl ChatMessage {
+    pub fn llm_role(&self) -> &str {
+        match (self.msg_type.as_str(), self.author.as_deref()) {
+            ("message", Some("user")) => "user",
+            ("message", Some("system")) => "system",
+            ("message", Some(_)) => "assistant",
+            ("message", None) => "user",
+            ("thought", _) => "user",
+            _ => "user",
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -72,20 +91,23 @@ impl PromptFormat {
         match self {
             PromptFormat::ChatML | PromptFormat::Auto => {
                 for msg in messages {
-                    full_prompt.push_str(&format!("<|im_start|>{}\n{}<|im_end|>\n", msg.role, msg.content));
+                    full_prompt.push_str(&format!("<|im_start|>{}\n{}<|im_end|>\n", msg.llm_role(), msg.content));
                 }
                 full_prompt.push_str("<|im_start|>assistant\n");
             },
             PromptFormat::Gemma => {
                 for msg in messages {
-                    let role = if msg.role == "system" { "user" } else { if msg.role == "assistant" { "model" } else { &msg.role } };
+                    let role = match msg.llm_role() {
+                        "assistant" => "model",
+                        r => r,
+                    };
                     full_prompt.push_str(&format!("<start_of_turn>{}\n{}<end_of_turn>\n", role, msg.content));
                 }
                 full_prompt.push_str("<start_of_turn>model\n");
             },
             PromptFormat::Llama3 => {
                 for msg in messages {
-                    full_prompt.push_str(&format!("<|start_header_id|>{}<|end_header_id|>\n\n{}<|eot_id|>", msg.role, msg.content));
+                    full_prompt.push_str(&format!("<|start_header_id|>{}<|end_header_id|>\n\n{}<|eot_id|>", msg.llm_role(), msg.content));
                 }
                 full_prompt.push_str("<|start_header_id|>assistant<|end_header_id|>\n\n");
             }
@@ -216,7 +238,7 @@ fn render_jinja_template(template_str: &str, messages: &[ChatMessage]) -> Result
     env.add_template("chat", &safe_template).map_err(|e| e.to_string())?;
     let tmpl = env.get_template("chat").map_err(|e| e.to_string())?;
     let messages_val: Vec<serde_json::Value> = messages.iter().map(|m| {
-        serde_json::json!({ "role": m.role, "content": m.content })
+        serde_json::json!({ "role": m.llm_role(), "content": m.content })
     }).collect();
     tmpl.render(context! { messages => messages_val, add_generation_prompt => true, bos_token => "<s>", eos_token => "</s>" }).map_err(|e| e.to_string())
 }
@@ -230,12 +252,16 @@ pub struct LlamaEngine {
 }
 
 impl LlamaEngine {
-    pub fn new(model_path: &str, n_ctx: u32, kv_quant: bool) -> Result<Self, String> {
+    pub fn new<L: Fn(String)>(model_path: &str, n_ctx: u32, kv_quant: bool, log_cb: L) -> Result<Self, String> {
+        log_cb("⚡ Инициализация llama.cpp...".to_string());
         let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
+        let gpu_layers: u32 = 999;
         let mut model_params = LlamaModelParams::default();
-        model_params = model_params.with_n_gpu_layers(999);
+        model_params = model_params.with_n_gpu_layers(gpu_layers);
+        log_cb(format!("⚙️ GPU слоёв: {} (попытка полного оффлоуда)", gpu_layers));
         let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
             .map_err(|e| format!("Ошибка загрузки модели: {}", e))?;
+        log_cb("✅ Модель загружена успешно".to_string());
         Ok(Self { backend, model, n_ctx, kv_quant, model_path: model_path.to_string() })
     }
 
@@ -247,7 +273,7 @@ impl LlamaEngine {
         custom_stop_words: &[&str],
         cancel_flag: Arc<AtomicBool>,
         mut progress_cb: F,
-        _log_cb: L,
+        log_cb: L,
     ) -> Result<String, String>
     where
         F: FnMut(f32, &str),
@@ -279,6 +305,10 @@ impl LlamaEngine {
             return Err(format!("Текст слишком большой ({} токенов) для контекста ({}).", tokens.len(), self.n_ctx));
         }
 
+        log_cb(format!("📐 Промпт: {} токенов, max_gen={}", tokens.len(), max_tokens));
+
+        let prompt_start = Instant::now();
+
         let mut past_tokens = tokens.clone();
         let mut batch = LlamaBatch::new(batch_size, 1);
         let last_index = tokens.len() - 1;
@@ -298,6 +328,10 @@ impl LlamaEngine {
             ctx.decode(&mut batch).map_err(|e| e.to_string())?;
             n_past += chunk.len() as i32;
         }
+
+        log_cb(format!("⏱ Промпт обработан за {:.1}с", prompt_start.elapsed().as_secs_f64()));
+
+        let gen_start = Instant::now();
 
         let mut n_cur = n_past;
         let mut result_text = String::new();
@@ -394,6 +428,17 @@ impl LlamaEngine {
             }
         }
         progress_cb(100.0, &format!("Готово ({} токенов)", generated_tokens));
+
+        let gen_elapsed = gen_start.elapsed().as_secs_f64();
+        let speed = if gen_elapsed > 0.0 { generated_tokens as f64 / gen_elapsed } else { 0.0 };
+        log_cb(format!("⚙️ Сгенерировано {} токенов за {:.1}с ({:.0} tok/s)", generated_tokens, gen_elapsed, speed));
+
+        if generated_tokens > 50 {
+            let char_count: usize = result_text.chars().count();
+            let take = 300.min(char_count);
+            let preview: String = result_text.chars().take(take).collect();
+            log_cb(format!("📝 Первые {} символов: {}", take, preview.replace('\n', "\\n")));
+        }
         Ok(result_text)
     }
 

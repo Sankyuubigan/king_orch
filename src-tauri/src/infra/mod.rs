@@ -3,6 +3,7 @@
 
 pub mod config;
 pub mod llm;
+pub mod migration;
 pub mod session_manager;
 pub mod mcp_client;
 pub mod downloader;
@@ -10,7 +11,7 @@ pub mod downloader;
 // ─── Публичные типы ───
 pub use config::{AppConfig, CatalogEntry, ModelParams};
 pub use llm::{ChatMessage, LlamaEngine, SubCall, ToolCallInfo};
-pub use session_manager::{ChatSession, Dossier, SessionMeta};
+pub use session_manager::{ChatSession, SessionMeta};
 pub use mcp_client::McpClient;
 
 // ─── Публичные функции ───

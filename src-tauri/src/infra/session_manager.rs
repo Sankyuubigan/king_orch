@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use serde_json::Value;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
-use crate::infra::llm::ChatMessage;
 
-pub type Dossier = HashMap<String, HashMap<String, String>>;
+use crate::infra::llm::ChatMessage;
+use crate::infra::migration;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SessionMeta {
@@ -24,50 +24,55 @@ pub struct ChatSession {
     #[serde(default)]
     pub created_at: Option<u64>,
     #[serde(default)]
-    pub dossier: Dossier,
-    #[serde(default, skip_serializing)]
-    pub state_markdown: String,
-    #[serde(default)]
     pub draft: String,
     pub messages: Vec<ChatMessage>,
 }
 
-fn get_sessions_dir(app: &AppHandle) -> PathBuf {
-    let base = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+pub fn sessions_dir(app: &AppHandle) -> PathBuf {
+    let base = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
     let path = base.join("sessions");
-    if !path.exists() { let _ = fs::create_dir_all(&path); }
+    if !path.exists() {
+        let _ = fs::create_dir_all(&path);
+    }
     path
 }
 
-fn migrate_dossier_value(value: serde_json::Value) -> serde_json::Value {
-    match value {
-        serde_json::Value::Object(map) => {
-            let is_old_format = map.values().any(|v| v.is_string());
-            if is_old_format {
-                let new_map = serde_json::Map::from_iter([
-                    ("main".to_string(), serde_json::Value::Object(map))
-                ]);
-                serde_json::Value::Object(new_map)
-            } else {
-                serde_json::Value::Object(map)
-            }
-        }
-        _ => serde_json::Value::Object(serde_json::Map::new()),
+/// Reads a session file, migrates old format if needed, deserializes to ChatSession.
+fn load_migrated_session(path: &PathBuf) -> Result<(Value, ChatSession), String> {
+    let content =
+        fs::read_to_string(path).map_err(|e| format!("Ошибка чтения сессии: {}", e))?;
+    let mut value: Value = serde_json::from_str(&content)
+        .map_err(|e| format!("Ошибка парсинга сессии: {}", e))?;
+    let migrated = migration::migrate_session_value(&mut value);
+    if migrated {
+        let new_content = serde_json::to_string_pretty(&value)
+            .map_err(|e| format!("Ошибка сериализации сессии: {}", e))?;
+        fs::write(path, new_content)
+            .map_err(|e| format!("Ошибка сохранения сессии: {}", e))?;
     }
+    let session: ChatSession = serde_json::from_value(value.clone())
+        .map_err(|e| format!("Ошибка парсинга сессии: {}", e))?;
+    Ok((value, session))
 }
 
 pub fn get_sessions(app: &AppHandle) -> Vec<SessionMeta> {
     let mut sessions = Vec::new();
-    let dir = get_sessions_dir(app);
+    let dir = sessions_dir(app);
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() && path.extension().map_or(false, |e| e == "json") {
-                if let Ok(content) = fs::read_to_string(&path) {
-                    if let Ok(session) = serde_json::from_str::<ChatSession>(&content) {
-                        let created_at = session.created_at.unwrap_or(session.updated_at);
-                        sessions.push(SessionMeta { id: session.id, title: session.title, updated_at: session.updated_at, created_at });
-                    }
+                if let Ok((_, session)) = load_migrated_session(&path) {
+                    let created_at = session.created_at.unwrap_or(session.updated_at);
+                    sessions.push(SessionMeta {
+                        id: session.id,
+                        title: session.title,
+                        updated_at: session.updated_at,
+                        created_at,
+                    });
                 }
             }
         }
@@ -77,74 +82,76 @@ pub fn get_sessions(app: &AppHandle) -> Vec<SessionMeta> {
 }
 
 pub fn get_session(app: &AppHandle, id: &str) -> Result<ChatSession, String> {
-    let path = get_sessions_dir(app).join(format!("{}.json", id));
-    let content = fs::read_to_string(&path).map_err(|e| format!("Ошибка чтения сессии: {}", e))?;
-
-    let mut session: ChatSession = match serde_json::from_str(&content) {
-        Ok(s) => s,
-        Err(_) => {
-            let mut value: serde_json::Value = serde_json::from_str(&content)
-                .map_err(|e| format!("Ошибка парсинга сессии: {}", e))?;
-            if let Some(dossier_val) = value.get_mut("dossier") {
-                *dossier_val = migrate_dossier_value(dossier_val.clone());
-            }
-            serde_json::from_value(value)
-                .map_err(|e| format!("Ошибка парсинга после миграции: {}", e))?
-        }
-    };
-
-    if !session.state_markdown.is_empty() {
-        let main_ns = session.dossier.entry("main".to_string()).or_default();
-        main_ns.insert("legacy_state".to_string(), session.state_markdown.clone());
-        session.state_markdown = String::new();
-    }
-
+    let path = sessions_dir(app).join(format!("{}.json", id));
+    let (_, session) = load_migrated_session(&path)?;
     Ok(session)
 }
 
 pub fn save_session(
-    app: &AppHandle, id: &str, title: &str,
-    messages: Vec<ChatMessage>, dossier: Dossier, draft: String,
+    app: &AppHandle,
+    id: &str,
+    title: &str,
+    messages: Vec<ChatMessage>,
+    draft: String,
 ) -> Result<(), String> {
-    let path = get_sessions_dir(app).join(format!("{}.json", id));
+    let path = sessions_dir(app).join(format!("{}.json", id));
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     let mut session_created_at = now;
+
     if path.exists() {
-        if let Ok(content) = fs::read_to_string(&path) {
-            if let Ok(old_session) = serde_json::from_str::<ChatSession>(&content) {
-                session_created_at = old_session.created_at.unwrap_or(old_session.updated_at);
-            }
+        if let Ok((_, old_session)) = load_migrated_session(&path) {
+            session_created_at = old_session.created_at.unwrap_or(old_session.updated_at);
         }
     }
+
     let session = ChatSession {
-        id: id.to_string(), title: title.to_string(), updated_at: now,
-        created_at: Some(session_created_at), dossier, state_markdown: String::new(),
-        draft, messages,
+        id: id.to_string(),
+        title: title.to_string(),
+        updated_at: now,
+        created_at: Some(session_created_at),
+        draft,
+        messages,
     };
-    let content = serde_json::to_string_pretty(&session).map_err(|e| e.to_string())?;
-    fs::write(path, content).map_err(|e| format!("Ошибка сохранения сессии: {}", e))
+    save_session_raw(&path, &session)
 }
 
 pub fn delete_session(app: &AppHandle, id: &str) -> Result<(), String> {
-    let path = get_sessions_dir(app).join(format!("{}.json", id));
-    if path.exists() { fs::remove_file(path).map_err(|e| format!("Ошибка удаления сессии: {}", e))?; }
+    let path = sessions_dir(app).join(format!("{}.json", id));
+    if path.exists() {
+        fs::remove_file(path).map_err(|e| format!("Ошибка удаления сессии: {}", e))?;
+    }
     Ok(())
 }
 
+fn save_session_raw(path: &PathBuf, session: &ChatSession) -> Result<(), String> {
+    let content =
+        serde_json::to_string_pretty(&session).map_err(|e| e.to_string())?;
+    fs::write(path, content).map_err(|e| format!("Ошибка сохранения сессии: {}", e))
+}
+
 pub fn rename_session(app: &AppHandle, id: &str, new_title: &str) -> Result<(), String> {
-    let path = get_sessions_dir(app).join(format!("{}.json", id));
-    if !path.exists() { return Err("Сессия не найдена".to_string()); }
-    let content = fs::read_to_string(&path).map_err(|e| e.to_string())?;
-    let mut session: ChatSession = serde_json::from_str(&content).map_err(|e| e.to_string())?;
-    session.title = new_title.to_string();
-    let new_content = serde_json::to_string_pretty(&session).map_err(|e| e.to_string())?;
-    fs::write(path, new_content).map_err(|e| e.to_string())?;
+    let path = sessions_dir(app).join(format!("{}.json", id));
+    if !path.exists() {
+        return Err("Сессия не найдена".to_string());
+    }
+    let (mut value, _) = load_migrated_session(&path)?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.insert("title".to_string(), Value::String(new_title.to_string()));
+    }
+    let content =
+        serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+    fs::write(path, content).map_err(|e| e.to_string())?;
     Ok(())
 }
 
 pub fn open_session_folder(app: &AppHandle, _id: &str) -> Result<(), String> {
-    let dir = get_sessions_dir(app);
+    let dir = sessions_dir(app);
     #[cfg(target_os = "windows")]
-    { std::process::Command::new("explorer").arg(dir).spawn().map_err(|e| e.to_string())?; }
+    {
+        std::process::Command::new("explorer")
+            .arg(dir)
+            .spawn()
+            .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }

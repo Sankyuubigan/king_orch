@@ -108,12 +108,12 @@
 
 ### Подслой 5.2: Домен (`src-tauri/src/domain/`)
 
-**Дверь:** `domain/mod.rs` — реэкспортирует `run_chat`, `AgentProfile`, `load_agents`, `build_l0_manifest`, `ParsedOrchestratorResponse`
+**Дверь:** `domain/mod.rs` — реэкспортирует `run_chat`, `AgentProfile`, `load_agents`
 
 | Файл | Зона ответственности |
 |------|---------------------|
-| `orchestrator/mod.rs` | Главный цикл: парсинг ответа LLM, вызов сабагентов/инструментов, рекурсивный `run_agent_node()` |
-| `orchestrator/prompt.rs` | Сборка системного промпта, рендер состояния сессии |
+| `orchestrator/mod.rs` | Главный цикл: парсинг ответа LLM, вызов сабагентов/инструментов, рекурсивный `run_agent_node()`, built-in `get_agent_report` |
+| `orchestrator/prompt.rs` | Сборка системного промпта, инструкция по `get_agent_report` вместо рендера состояния |
 | `orchestrator/runtime.rs` | Загрузка и запуск MCP-серверов |
 | `parsers.rs` | Распаковка JSON от LLM, очистка think-тегов |
 | `agent_manager.rs` | Парсинг .md файлов агентов, обработка INCLUDE |
@@ -124,9 +124,10 @@
 
 | Файл | Зона ответственности |
 |------|---------------------|
-| `llm.rs` | Работа с llama-cpp-2, токенизация, генерация, сэмплирование, чтение GGUF |
+| `llm.rs` | Работа с llama-cpp-2, токенизация, генерация, сэмплирование, чтение GGUF, структура `ChatMessage` с полями `type`/`author` |
 | `config.rs` | Структуры AppConfig/ModelParams, чтение/запись конфига, каталог моделей |
-| `session_manager.rs` | Чтение/запись JSON-файлов сессий, миграция старых форматов |
+| `session_manager.rs` | Чтение/запись JSON-файлов сессий (единый массив `messages[]`) |
+| `migration.rs` | Миграция старых сессий: конвертация `role`/`agent_name` → `type`/`author`. Запускается при старте приложения |
 | `mcp_client.rs` | JSON-RPC клиент для MCP-серверов через stdin/stdout |
 | `downloader.rs` | Скачивание .gguf файлов с прогрессом |
 
