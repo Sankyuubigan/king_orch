@@ -110,13 +110,18 @@
 
 **Дверь:** `domain/mod.rs` — реэкспортирует `run_chat`, `AgentProfile`, `load_agents`
 
-| Файл | Зона ответственности |
-|------|---------------------|
-| `orchestrator/mod.rs` | Главный цикл: парсинг ответа LLM, вызов сабагентов/инструментов, рекурсивный `run_agent_node()`, built-in `get_agent_report` |
+| Файл/Модуль | Зона ответственности |
+|-------------|---------------------|
+| `orchestrator/mod.rs` | Главный цикл: парсинг ответа LLM, вызов сабагентов/инструментов, рекурсивный `run_agent_node()`, built-in `get_agent_report`. **Точка входа `run_chat()` автоматически определяет: запускать workflow YAML или legacy `run_agent_node()`** |
 | `orchestrator/prompt.rs` | Сборка системного промпта, инструкция по `get_agent_report` вместо рендера состояния |
 | `orchestrator/runtime.rs` | Загрузка и запуск MCP-серверов |
+| `workflow_engine/mod.rs` | **Графовый движок маршрутизации.** Исполняет YAML-графы (workflows). Точка входа — `run_workflow()` |
+| `workflow_engine/parser.rs` | Парсинг YAML workflow файлов, структуры `WorkflowDef`, `NodeDef`, `EdgeDef`, поиск `visible_agents` |
+| `workflow_engine/nodes.rs` | Исполнение узлов графа: `llm_worker`, `llm_classifier`, `system_condition`, `sub_workflow`, `switch`, `return` |
+| `workflow_engine/context.rs` | Контекст выполнения: проход `{{ template }}` переменных, хранение outputs узлов |
+| `workflow_engine/intent_classifier.rs` | **Built-in** intent-классификатор (не требует отдельного .md файла). Статусы инжектятся runtime из YAML |
 | `parsers.rs` | Распаковка JSON от LLM, очистка think-тегов |
-| `agent_manager.rs` | Парсинг .md файлов агентов, обработка INCLUDE |
+| `agent_manager.rs` | Парсинг .md файлов агентов, обработка INCLUDE, загрузка YAML workflow, вычисление `is_hidden` из `visible_agents` |
 
 ### Подслой 5.3: Инфраструктура (`src-tauri/src/infra/`)
 
@@ -139,7 +144,15 @@
 main.rs
   └→ api/ (дверь: api/mod.rs)
        ├→ domain/ (дверь: domain/mod.rs)
-       │    └→ infra/ (дверь: infra/mod.rs)
+       │    ├→ workflow_engine/ (YAML графы — маршрутизация)
+       │    │    ├→ parser.rs          — парсинг YAML, visible_agents
+       │    │    ├→ nodes.rs           — типы узлов (llm_worker, switch, ...)
+       │    │    ├→ context.rs         — контекст, template-переменные
+       │    │    ├→ intent_classifier.rs — built-in классификатор (без .md)
+       │    │    └→ mod.rs             — run_workflow() — вход в граф
+       │    ├→ orchestrator/           — legacy run_agent_node() (для worker)
+       │    ├→ parsers.rs
+       │    └→ agent_manager.rs       — загрузка .md + YAML, visible_agents
        └→ infra/ (дверь: infra/mod.rs)
 
 Frontend:
@@ -148,6 +161,22 @@ main.ts
        ├→ ui/ (дверь: ui/index.ts)
        ├→ services/ (дверь: services/index.ts)
        └→ utils/ (дверь: utils/index.ts)
+```
+
+**Поток выполнения:**
+```
+User → Primary Agent (выбор в UI)
+         ↓
+    run_chat() ищет workflow YAML с visible_agents = agent_id
+         ↓
+    [Найден] → workflow_engine::run_workflow()
+         │          ├→ llm_classifier → intent_classifier.rs (built-in)
+         │          ├→ switch → маршрутизация по status
+         │          ├→ sub_workflow → рекурсивный вызов другого YAML
+         │          ├→ llm_worker → run_agent_node() для .md агента
+         │          └→ system_condition → Rust-side проверка
+         │
+    [Не найден] → orchestrator::run_agent_node() (legacy)
 ```
 
 **Запрещённые импорты:**

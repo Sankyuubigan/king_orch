@@ -1,0 +1,76 @@
+name: Main Therapy Loop
+visible_agents: ["therapist_communicator"]
+
+config:
+  statuses:
+    - id: greeting
+      description: "Юзер просто поздоровался"
+    - id: multiple_problems
+      description: "Юзер вывалил кучу разных несвязанных проблем (каша)"
+    - id: one_problem_incomplete
+      description: "Юзер назвал одну проблему, но не хватает контекста, желания или адаптации"
+    - id: ready_for_treatment
+      description: "Проблема ясна, все 3 пункта собраны, можно лечить"
+
+nodes:
+  - id: classify_intent
+    type: llm_classifier
+    statuses: "$ref config.statuses"
+    input: "{{ user_message }}"
+
+  - id: route
+    type: switch
+    input: "{{ nodes.classify_intent.output.status }}"
+    cases:
+      greeting: respond
+      multiple_problems: triage
+      one_problem_incomplete: collect_info
+      ready_for_treatment: full_treatment
+
+  - id: respond
+    type: llm_worker
+    agent: therapist_communicator
+    task: "Пользователь поздоровался. Поприветствуй его и спроси, с чем он хочет поработать."
+
+  - id: collect_info
+    type: llm_worker
+    agent: therapist_communicator
+    task: >
+      Пользователь описал проблему, но не хватает данных.
+      Собери недостающие пункты по Протоколу 3 пунктов:
+      1. Контекст проблемы (подробное описание)
+      2. Как клиент хочет, чтобы проблема решилась (жизнь без неё)
+      3. Как клиент справляется сейчас (адаптация/компенсация)
+      Недостающие пункты: {{ nodes.classify_intent.output.missing_points }}
+
+  - id: triage
+    type: sub_workflow
+    workflow: triage_flow.yaml
+
+  - id: full_treatment
+    type: sub_workflow
+    workflow: treatment_flow.yaml
+
+edges:
+  - from: classify_intent
+    to: route
+  - from: route
+    case: greeting
+    to: respond
+  - from: route
+    case: multiple_problems
+    to: triage
+  - from: route
+    case: one_problem_incomplete
+    to: collect_info
+  - from: route
+    case: ready_for_treatment
+    to: full_treatment
+  - from: respond
+    to: END
+  - from: collect_info
+    to: END
+  - from: triage
+    to: END
+  - from: full_treatment
+    to: END

@@ -5,6 +5,7 @@
 pub mod orchestrator;
 pub mod parsers;
 pub mod agent_manager;
+pub mod workflow_engine;
 
 // ─── Публичные типы ───
 pub use agent_manager::AgentProfile;

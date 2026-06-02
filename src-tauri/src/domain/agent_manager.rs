@@ -3,6 +3,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use regex::Regex;
 
+use super::workflow_engine::parser::{collect_visible_agents, load_workflows};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProfile {
     pub id: String,
@@ -49,18 +51,25 @@ pub fn load_agents(agents_dir: &Path) -> Result<Vec<AgentProfile>, String> {
     let mut md_files = Vec::new();
     collect_md_files(agents_dir, &mut md_files);
     for path in md_files {
-        if let Some(agent) = parse_agent_file(&path) { agents.push(agent); }
+        if let Some(agent) = parse_agent_file(&path, agents_dir) { agents.push(agent); }
+    }
+    // Загружаем workflow YAML и вычисляем visible_agents
+    if let Ok(workflows) = load_workflows(agents_dir) {
+        let visible_agents = collect_visible_agents(&workflows);
+        for agent in &mut agents {
+            agent.is_hidden = !visible_agents.contains(&agent.id);
+        }
     }
     Ok(agents)
 }
 
-fn parse_agent_file(path: &Path) -> Option<AgentProfile> {
+fn parse_agent_file(path: &Path, _agents_dir: &Path) -> Option<AgentProfile> {
     if let Ok(content) = fs::read_to_string(path) {
         let base_dir = path.parent().unwrap_or_else(|| Path::new(""));
         let processed_content = process_includes(base_dir, &content);
         if let Some(mut agent) = parse_agent_markdown(&processed_content) {
             agent.id = path.file_stem().unwrap().to_string_lossy().to_string();
-            agent.is_hidden = agent.mode != "primary";
+            agent.is_hidden = true; // по умолчанию скрыт; load_agents скорректирует через visible_agents
             return Some(agent);
         }
     }
@@ -86,7 +95,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 else if line.starts_with("mcp_servers:") { if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["mcp_servers:".len()..].trim()) { mcp_servers = parsed; } }
                 else if line.starts_with("subagents:") { if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["subagents:".len()..].trim()) { subagents = parsed; } }
             }
-            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: false, mode, mcp_servers, subagents }); }
+            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: true, mode, mcp_servers, subagents }); }
         }
     }
     None

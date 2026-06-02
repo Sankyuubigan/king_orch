@@ -1,0 +1,45 @@
+name: Triage Workflow
+
+nodes:
+  - id: extract_problems
+    type: llm_worker
+    agent: _extractor
+    task: >
+      Прочитай запрос пользователя ({{ user_message }}).
+      Составь ПОЛНЫЙ список всех уникальных независимых проблем.
+      Ответь списком, каждая проблема с номером.
+
+  - id: check_all_analyzed
+    type: system_condition
+    action: all_problems_analyzed
+    problems: "{{ nodes.extract_problems.output }}"
+
+  - id: analyze_next
+    type: sub_workflow
+    workflow: analysis_flow.yaml
+    namespace: "problem_{{ nodes.check_all_analyzed.output.next_index }}"
+
+  - id: build_map
+    type: llm_worker
+    agent: visualizer_agent
+    task: >
+      Сгенерируй диаграмму в формате flowchart TD.
+      Узлы: 9 паттернов поведения (-3 этаж) → Деструкторы (-2 этаж) → Ментальные баги (-1 этаж) → Симптомы (0 этаж).
+      Используй данные из всех проблем.
+
+  - id: return_result
+    type: return
+
+edges:
+  - from: extract_problems
+    to: check_all_analyzed
+  - from: check_all_analyzed
+    condition: has_unanalyzed
+    to: analyze_next
+  - from: analyze_next
+    to: check_all_analyzed
+  - from: check_all_analyzed
+    condition: all_done
+    to: build_map
+  - from: build_map
+    to: return_result

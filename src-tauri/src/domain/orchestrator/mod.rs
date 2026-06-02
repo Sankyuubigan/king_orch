@@ -2,6 +2,9 @@ mod prompt;
 mod runtime;
 
 use crate::domain::agent_manager::{load_agents, AgentProfile};
+use crate::domain::workflow_engine::{
+    find_workflow_for_agent, load_workflows, WorkflowContext, WorkflowRunner,
+};
 use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SubCall, ToolCallInfo};
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
@@ -79,6 +82,41 @@ where
     if let Some(id) = agent_id.strip_prefix("agent_") {
         if let Some(primary_agent) = agents.iter().find(|a| a.id == id) {
             let mut all_sub_calls = Vec::new();
+
+            // Пытаемся найти workflow для этого агента
+            if let Ok(workflows) = load_workflows(&agents_dir) {
+                if let Some(workflow) = find_workflow_for_agent(&workflows, id) {
+                    log_cb(format!("▶ Запуск workflow '{}' для агента '{}'", workflow.name, id));
+                    let mut ctx = WorkflowContext::new(
+                        user_text.clone(),
+                        "main".to_string(),
+                        messages_store.clone(),
+                        recent_history.clone(),
+                    );
+                    let mut runner = WorkflowRunner {
+                        engine: &engine,
+                        agents: &agents,
+                        workflows: &workflows,
+                        log_cb: log_cb.clone(),
+                        status_cb: status_cb.clone(),
+                        subcall_cb: subcall_cb.clone(),
+                        max_gen_tokens,
+                        model_params: &model_params,
+                        format_type: &format_type,
+                        cancel_flag: cancel_flag.clone(),
+                        mcp_servers_dir: &mcp_servers_dir,
+                        all_sub_calls: &mut all_sub_calls,
+                        msg_counter: &mut msg_counter,
+                    };
+                    let final_res = crate::domain::workflow_engine::run_workflow(
+                        workflow, &mut ctx, &mut runner,
+                    )?;
+                    return Ok((final_res, all_sub_calls, ctx.messages));
+                }
+            }
+
+            // Fallback: старый путь (если workflow нет)
+            log_cb(format!("▶ Запуск агента (legacy): {} (mode: {}, ns: main)", primary_agent.name, primary_agent.mode));
             let final_res = run_agent_node(
                 log_cb, status_cb, subcall_cb,
                 &engine, primary_agent, &agents, user_text, recent_history,
@@ -150,14 +188,14 @@ fn has_json_thought_without_action(text: &str) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 #[allow(unused_assignments)]
-fn run_agent_node<L, S, C>(
+pub(crate) fn run_agent_node<L, S, C>(
     log_cb: L, status_cb: S, subcall_cb: C,
     engine: &LlamaEngine, agent: &AgentProfile, agents: &[AgentProfile],
     user_text: String, history: Vec<ChatMessage>,
     current_namespace: &str,
     max_gen_tokens: usize, model_params: &ModelParams, format_type: &str,
     cancel_flag: Arc<AtomicBool>, depth: usize,
-    all_sub_calls: &mut Vec<SubCall>, caller_name: Option<String>,
+    all_sub_calls: &mut Vec<SubCall>, _caller_name: Option<String>,
     mcp_servers_dir: &Path,
     messages: &mut Vec<ChatMessage>, msg_counter: &mut u32,
 ) -> Result<String, String>
@@ -468,13 +506,34 @@ where
                         let uq_truncated: String = uq.chars().take(1000).collect();
                         router_msg.push_str(&format!("\n\n[НАПОМИНАНИЕ: ЗАПРОС ПОЛЬЗОВАТЕЛЯ]\n{}", uq_truncated));
                     }
-                    // Добавляем сводку текущих отчётов в этом неймспейсе
-                    router_msg.push_str("\n\n[ТЕКУЩИЕ ОТЧЁТЫ В ЭТОМ КОНТЕКСТЕ]");
-                    for a in &filtered_agents {
-                        let found = get_agent_report_from_messages(messages, &a.id, current_namespace).is_some();
-                        router_msg.push_str(&format!("\n  {} '{}' — {}", if found { "✅" } else { "❌" }, a.id, if found { "отчёт есть (пропусти)" } else { "отчёта нет (вызови)" }));
+                    // Добавляем сводку отчётов по ВСЕМ неймспейсам (не только current_namespace)
+                    let mut all_ns: Vec<String> = Vec::new();
+                    for msg in messages.iter() {
+                        if let Some(ns) = &msg.namespace {
+                            if ns != "main" && !all_ns.contains(ns) {
+                                all_ns.push(ns.clone());
+                            }
+                        }
                     }
-                    router_msg.push_str("\n\nНЕ завершай работу пока все ❌ не станут ✅.");
+                    all_ns.sort();
+                    router_msg.push_str("\n\n[ОТЧЁТЫ ПО ВСЕМ НЕЙМСПЕЙСАМ]");
+                    for ns in &all_ns {
+                        let mut ns_agents: Vec<&str> = Vec::new();
+                        for a in &filtered_agents {
+                            if get_agent_report_from_messages(messages, &a.id, ns).is_some() {
+                                ns_agents.push(&a.id);
+                            }
+                        }
+                        if !ns_agents.is_empty() {
+                            router_msg.push_str(&format!("\n  ✅ {}: {}", ns, ns_agents.join(", ")));
+                        }
+                    }
+                    for a in &filtered_agents {
+                        let found_any = all_ns.iter().any(|ns| get_agent_report_from_messages(messages, &a.id, ns).is_some());
+                        if !found_any {
+                            router_msg.push_str(&format!("\n  ❌ '{}' — ещё не вызывался", a.id));
+                        }
+                    }
                     let sys_content = llm_messages.first().map(|m| m.content.clone()).unwrap_or_default();
                     llm_messages = vec![
                         ChatMessage { id: None, msg_type: "message".to_string(), content: sys_content, namespace: None, sub_calls: None, author: Some("system".to_string()) },
