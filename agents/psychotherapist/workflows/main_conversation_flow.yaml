@@ -9,7 +9,7 @@ config:
       description: "Юзер вывалил кучу разных несвязанных проблем (каша)"
     - id: one_problem_incomplete
       description: "Юзер назвал одну проблему, но не хватает контекста, желания или адаптации"
-    - id: ready_for_treatment
+    - id: ready_for_expose
       description: "Проблема ясна, все 3 пункта собраны, можно лечить"
 
 nodes:
@@ -25,7 +25,7 @@ nodes:
       greeting: respond
       multiple_problems: triage
       one_problem_incomplete: collect_info
-      ready_for_treatment: full_treatment
+      ready_for_expose: start_datamining
 
   - id: respond
     type: llm_worker
@@ -47,7 +47,20 @@ nodes:
     type: sub_workflow
     workflow: triage_flow.yaml
 
-  - id: full_treatment
+  - id: check_analysis_done
+    type: system_condition
+    action: has_reports
+    required:
+      - pattern_finder_by_double_bind
+      - destructor_detector
+    namespace: main
+
+  - id: run_analysis_if_needed
+    type: sub_workflow
+    workflow: analysis_flow.yaml
+    namespace: main
+
+  - id: start_datamining
     type: sub_workflow
     workflow: treatment_flow.yaml
 
@@ -64,13 +77,21 @@ edges:
     case: one_problem_incomplete
     to: collect_info
   - from: route
-    case: ready_for_treatment
-    to: full_treatment
+    case: ready_for_expose
+    to: check_analysis_done
+  - from: check_analysis_done
+    condition: missing
+    to: run_analysis_if_needed
+  - from: check_analysis_done
+    condition: present
+    to: start_datamining
+  - from: run_analysis_if_needed
+    to: start_datamining
   - from: respond
     to: END
   - from: collect_info
     to: END
   - from: triage
     to: END
-  - from: full_treatment
+  - from: start_datamining
     to: END

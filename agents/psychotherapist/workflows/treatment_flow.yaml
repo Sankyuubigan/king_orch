@@ -1,19 +1,6 @@
 name: Treatment Workflow
 
 nodes:
-  - id: check_analysis
-    type: system_condition
-    action: has_reports
-    required:
-      - pattern_finder_by_double_bind
-      - destructor_detector
-    namespace: "{{ namespace }}"
-
-  - id: ensure_analysis
-    type: sub_workflow
-    workflow: analysis_flow.yaml
-    namespace: "{{ namespace }}"
-
   - id: check_reports
     type: system_condition
     action: get_missing_reports
@@ -31,20 +18,12 @@ nodes:
     agent: therapist_communicator
     task: >
       Лечение завершено в неймспейсе {{ namespace }}.
-      Получи отчёт neuro_reprogrammer через get_agent_report.
+      Получи отчёт neuro_reprogrammer через batch_get_agent_report.
       Переведи инструкцию от neuro_reprogrammer на простой бытовой язык.
       Используя отчёты soma_translator, destructor_detector, pattern_finder_by_double_bind,
       объясни клиенту что с ним происходило. НЕ используй технические термины.
 
 edges:
-  - from: check_analysis
-    condition: missing
-    to: ensure_analysis
-  - from: check_analysis
-    condition: present
-    to: check_reports
-  - from: ensure_analysis
-    to: check_reports
   - from: check_reports
     to: call_neuro
   - from: call_neuro

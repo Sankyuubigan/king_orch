@@ -61,6 +61,9 @@
 ### SessionController (`src/controllers/sessions.ts`)
 Список сессий, удаление, переименование. Работает через `../services` (дверь).
 
+### GraphController (`src/controllers/graph.ts`)
+Визуализация workflow-графов. Загружает данные с бэкенда через `invoke("get_workflow_graphs")` и рендерит их через vis-network (canvas).
+
 ---
 
 ## 🌉 СЛОЙ 2: СЕРВИСЫ
@@ -104,6 +107,7 @@
 | `sessions.rs` | `get_sessions`, `load_session`, `save_session`, `delete_session`, `rename_session`, `open_session_folder` | CRUD сессий |
 | `models.rs` | `get_models_catalog`, `get_model_params`, `set_model_params`, `reset_model_params`, `add_model` | Параметры моделей и каталог |
 | `agents.rs` | `get_agents` | Загрузка списка агентов |
+| `graph.rs` | `get_workflow_graphs` | Чтение YAML workflow и возврат структуры графа для UI |
 | `chat.rs` | `chat_request`, `stop_processing` | Главный цикл чата |
 
 ### Подслой 5.2: Домен (`src-tauri/src/domain/`)

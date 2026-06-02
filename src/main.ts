@@ -101,7 +101,7 @@ function initApp() {
     viewSubchat.classList.remove('active');
     viewSettings.classList.toggle('active', tab === 'settings');
     viewLogs.classList.toggle('active', tab === 'logs');
-    if (tab === 'graph') graphCtrl.onTabActivated();
+    if (tab === 'graph') requestAnimationFrame(() => graphCtrl.onTabActivated());
   }
 
   tabChat?.addEventListener("click", () => switchTab('chat'));

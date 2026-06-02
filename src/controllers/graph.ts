@@ -66,7 +66,7 @@ const WF_COLORS: Record<string, string> = {
   main_conversation_flow: "#42a5f5",
   triage_flow:            "#66bb6a",
   analysis_flow:          "#ffa726",
-  treatment_flow:         "#ab47bc",
+  treatment_flow: "#ab47bc",
 };
 
 // ─── Интерфейс для элементов DOM ───
@@ -137,8 +137,6 @@ export class GraphController {
     const visNodes: any[] = [];
     const visEdges: any[] = [];
     this.nodeDataMap.clear();
-    this.el.graphSidebar.classList.remove("open");
-
     // === Prepare workflow metadata ===
     const firstNodePerWorkflow: Record<string, string> = {};
     const entryWorkflows: string[] = [];
@@ -409,7 +407,38 @@ export class GraphController {
       }
     }
 
-    // === 7) Build network ===
+    // === 7) Assign hierarchical levels via BFS from START ===
+    const adj = new Map<string, string[]>();
+    for (const e of visEdges) {
+      if (!adj.has(e.from)) adj.set(e.from, []);
+      adj.get(e.from)!.push(e.to);
+    }
+    const levelMap = new Map<string, number>();
+    const bfsQueue: string[] = [ENTRY_NODE];
+    levelMap.set(ENTRY_NODE, 0);
+    while (bfsQueue.length > 0) {
+      const id = bfsQueue.shift()!;
+      const lvl = levelMap.get(id)!;
+      for (const next of adj.get(id) || []) {
+        if (!levelMap.has(next)) {
+          levelMap.set(next, lvl + 1);
+          bfsQueue.push(next);
+        }
+      }
+    }
+    for (const node of visNodes) {
+      if (node.id === ENTRY_NODE || node.id === USER_NODE) {
+        node.level = 0;
+      } else if (node.id.startsWith("_agent_")) {
+        const agentEdge = visEdges.find(e => e.from === node.id);
+        if (agentEdge) node.level = levelMap.get(agentEdge.to) ?? 99;
+        else node.level = 99;
+      } else {
+        node.level = levelMap.get(node.id) ?? 99;
+      }
+    }
+
+    // === 8) Build network ===
     if (this.network) {
       this.network.destroy();
       this.network = null;
@@ -417,6 +446,7 @@ export class GraphController {
 
     const data = { nodes: new DataSet(visNodes), edges: new DataSet(visEdges) };
     const options = {
+      autoResize: true,
       layout: {
         hierarchical: {
           enabled: true,
@@ -457,6 +487,8 @@ export class GraphController {
     };
 
     this.network = new Network(this.el.graphContainer, data, options);
+    this.network.fit();
+    this.network.setSize();
 
     // Click handler
     this.network.on("click", (params: any) => {
@@ -480,6 +512,9 @@ export class GraphController {
     if (!data) return;
 
     this.el.graphSidebar.classList.add("open");
+    setTimeout(() => {
+      this.network?.redraw();
+    }, 270);
 
     const parts: string[] = [];
 
@@ -602,14 +637,20 @@ export class GraphController {
 
   private hideSidebar(): void {
     this.el.graphSidebar.classList.remove("open");
+    setTimeout(() => {
+      this.network?.redraw();
+    }, 270);
   }
 
   onTabActivated(): void {
     if (!this.allData) {
       this.loadData();
-    } else {
+    } else if (!this.network) {
       this.loadGraph();
-      setTimeout(() => this.network?.redraw(), 100);
+    } else {
+      this.network.fit();
+      this.network.setSize();
+      this.network.redraw();
     }
   }
 }

@@ -60,8 +60,7 @@ tools:
 Неймспейс — это изолированный контекст внутри сессии. По умолчанию все агенты работают в неймспейсе `"main"`. Но если workflow создаёт отдельные неймспейсы для каждой проблемы, агенты не перезаписывают данные друг друга.
 
 ### Как агент получает данные:
-Все агенты используют built-in инструменты для чтения отчётов других агентов:
-- `get_agent_report(author, namespace)` — одиночный запрос
+Все агенты используют built-in инструмент пакетного запроса для чтения отчётов других агентов:
 - `batch_get_agent_report(queries)` — пакетный запрос (передаётся массив `{author, namespace}`)
 
 Движок ищет в массиве `messages[]` самое свежее сообщение с совпадением `author + namespace`. Для `author: "user"` namespace игнорируется.
@@ -112,10 +111,10 @@ edges:
 
 ## 🧠 Хранение данных (сообщения)
 
-Система работает без бесконечного раздувания контекста через **инструмент `get_agent_report`**:
+Система работает без бесконечного раздувания контекста через **инструмент `batch_get_agent_report`**:
 1. Оригинальный запрос пользователя — это сообщение с `type: "message"`, `author: "user"` в массиве `messages[]`
 2. Когда `worker` завершает работу, его ответ сохраняется как сообщение с `type: "thought"`, `namespace` и `author` (ID агента)
-3. Любой агент может запросить отчёт другого агента через `get_agent_report(author, namespace)` или пакетно через `batch_get_agent_report(queries)`
+3. Любой агент может запросить отчёт другого агента через `batch_get_agent_report(queries)`
 4. В промпт агента не рендерится содержимое сессии — только инструкция по использованию инструмента
 
 ## 🧩 Подключение модулей (Includes)
@@ -133,7 +132,7 @@ agents/psychotherapist/
 │   ├── main_conversation_flow.yaml # Entry-граф (visible_agents, маршруты)
 │   ├── triage_flow.yaml            # Триаж (извлечение проблем, визуализация)
 │   ├── analysis_flow.yaml          # Анализ (soma → destructor → pattern)
-│   └── treatment_flow.yaml         # Лечение (neuro → distiller → результат)
+│   └── treatment_flow.yaml # Лечение (neuro → distiller → результат)
 ├── workers/                        # Воркеры (без изменений)
 │   ├── soma_translator.md
 │   ├── destructor_detector.md
@@ -151,7 +150,7 @@ config:
     - id: greeting
     - id: multiple_problems
     - id: one_problem_incomplete
-    - id: ready_for_treatment
+    - id: ready_for_expose
 nodes:
   - id: classify
     type: llm_classifier
@@ -163,7 +162,7 @@ nodes:
       greeting: respond
       multiple_problems: triage
       one_problem_incomplete: collect_info
-      ready_for_treatment: full_treatment
+      ready_for_expose: start_datamining
   - id: respond
     type: llm_worker
     agent: therapist_communicator

@@ -60,11 +60,7 @@ pub struct ChatMessage {
 Все данные сессии — массив `messages[]`. Результаты воркеров сохраняются как `type: "thought"` с указанием `author` (ID агента).
 
 ### Получение данных агентами
-Вместо `[СОСТОЯНИЕ СЕССИИ]` в промпте агенты используют built-in инструменты:
-```json
-{"thought": "...", "tool": "get_agent_report", "arguments": {"author": "soma_translator", "namespace": "problem_1"}}
-```
-или пакетный запрос:
+Вместо `[СОСТОЯНИЕ СЕССИИ]` в промпте агенты используют built-in инструмент пакетного запроса:
 ```json
 {"thought": "...", "tool": "batch_get_agent_report", "arguments": {"queries": [{"author": "soma_translator", "namespace": "problem_1"}, {"author": "user", "namespace": "main"}]}}
 ```
