@@ -6,6 +6,7 @@ pub mod sessions;
 pub mod models;
 pub mod agents;
 pub mod chat;
+pub mod graph;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

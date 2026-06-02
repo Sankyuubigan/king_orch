@@ -18,6 +18,7 @@
     <main class="main-content">
       <div class="tabs">
         <button id="tab-chat" class="tab-btn active">💬 Чат</button>
+        <button id="tab-graph" class="tab-btn">🔀 Граф</button>
         <button id="tab-settings" class="tab-btn">⚙️ Настройки</button>
         <button id="tab-logs" class="tab-btn">📝 Логи</button>
       </div>
@@ -50,6 +51,27 @@
               <button id="btn-send" class="btn-primary">Отправить</button>
             </div>
           </div>
+        </div>
+      </div>
+
+      <div id="view-graph" class="view graph-view">
+        <div id="graph-toolbar">
+          <label for="graph-team-select">Команда агентов:</label>
+          <select id="graph-team-select">
+            <option value="">Загрузка...</option>
+          </select>
+        </div>
+        <div id="graph-layout">
+          <div id="graph-container"></div>
+          <aside id="graph-sidebar">
+            <div class="graph-sidebar-header">
+              <span id="graph-detail-title">Информация</span>
+              <button id="graph-sidebar-close" class="btn-secondary" style="padding:4px 10px;">✕</button>
+            </div>
+            <div id="graph-detail-content">
+              <p class="graph-hint">Загрузка графа...</p>
+            </div>
+          </aside>
         </div>
       </div>
 

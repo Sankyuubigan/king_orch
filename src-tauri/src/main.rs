@@ -46,6 +46,7 @@ fn main() {
             api::models::add_model,
             api::chat::chat_request,
             api::chat::stop_processing,
+            api::graph::get_workflow_graphs,
             infra::downloader::download_model,
         ])
         .run(tauri::generate_context!())

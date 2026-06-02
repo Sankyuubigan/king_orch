@@ -7,3 +7,6 @@ export type { SessionElements } from './sessions'
 
 export { SettingsController } from './settings'
 export type { SettingsElements } from './settings'
+
+export { GraphController } from './graph'
+export type { GraphElements } from './graph'

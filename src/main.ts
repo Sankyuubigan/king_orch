@@ -4,7 +4,7 @@
  * Импорты идут через двери (index.ts) — модули не лезут в кишки друг друга.
  */
 import { initConfirmDialog } from "./ui";
-import { ChatController, SessionController, SettingsController } from "./controllers";
+import { ChatController, SessionController, SettingsController, GraphController } from "./controllers";
 import { bus } from "./events";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -68,34 +68,50 @@ function initApp() {
     viewSubchat: $<HTMLDivElement>("view-subchat"),
   });
 
+  // ─── Контроллер графа (вкладка 🔀) ───
+  const graphCtrl = new GraphController({
+    graphContainer: $<HTMLDivElement>("graph-container"),
+    graphSidebar: $<HTMLDivElement>("graph-sidebar"),
+    graphTeamSelect: $<HTMLSelectElement>("graph-team-select"),
+    graphDetailTitle: $<HTMLSpanElement>("graph-detail-title"),
+    graphDetailContent: $<HTMLDivElement>("graph-detail-content"),
+    graphSidebarClose: $<HTMLButtonElement>("graph-sidebar-close"),
+  });
+
   // ─── Переключение вкладок (общий UI, не принадлежит одному контроллеру) ───
   const tabChat = $<HTMLButtonElement>("tab-chat");
+  const tabGraph = $<HTMLButtonElement>("tab-graph");
   const tabSettings = $<HTMLButtonElement>("tab-settings");
   const tabLogs = $<HTMLButtonElement>("tab-logs");
   const viewChat = $<HTMLDivElement>("view-chat");
+  const viewGraph = $<HTMLDivElement>("view-graph");
   const viewSettings = $<HTMLDivElement>("view-settings");
   const viewLogs = $<HTMLDivElement>("view-logs");
   const viewSubchat = $<HTMLDivElement>("view-subchat");
   const btnClearLogs = $<HTMLButtonElement>("btn-clear-logs");
   const logView = $<HTMLTextAreaElement>("log-view");
 
-  function switchTab(tab: 'chat' | 'settings' | 'logs') {
+  function switchTab(tab: 'chat' | 'graph' | 'settings' | 'logs') {
     tabChat.classList.toggle('active', tab === 'chat');
+    tabGraph.classList.toggle('active', tab === 'graph');
     tabSettings.classList.toggle('active', tab === 'settings');
     tabLogs.classList.toggle('active', tab === 'logs');
     viewChat.classList.toggle('active', tab === 'chat');
+    viewGraph.classList.toggle('active', tab === 'graph');
     viewSubchat.classList.remove('active');
     viewSettings.classList.toggle('active', tab === 'settings');
     viewLogs.classList.toggle('active', tab === 'logs');
+    if (tab === 'graph') graphCtrl.onTabActivated();
   }
 
   tabChat?.addEventListener("click", () => switchTab('chat'));
+  tabGraph?.addEventListener("click", () => switchTab('graph'));
   tabSettings?.addEventListener("click", () => switchTab('settings'));
   tabLogs?.addEventListener("click", () => switchTab('logs'));
   btnClearLogs?.addEventListener("click", () => { logView.value = ""; });
 
   // ─── Мосты шины событий ───
-  bus.on("tab:switch", (tab: string) => switchTab(tab as any));
+  bus.on("tab:switch", (tab: string) => switchTab(tab as 'chat' | 'graph' | 'settings' | 'logs'));
   bus.on("log", (msg: string) => chatCtrl.logToGUI(msg));
 
   // ─── Старт ───
