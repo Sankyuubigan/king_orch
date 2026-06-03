@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const { createMcpServer } = require('./mcp_base');
+const { createMcpServer } = require('./mcp_base.cjs');
 
 let indexedFiles = [];
 

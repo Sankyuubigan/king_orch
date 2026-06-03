@@ -83,7 +83,8 @@ where
             let ns = node
                 .namespace
                 .as_deref()
-                .unwrap_or(&context.namespace);
+                .map(|ns| context.resolve_template(ns))
+                .unwrap_or_else(|| context.namespace.clone());
 
             (runner.log_cb)(format!(
                 "[worker] Вызов '{}' (ns: {}): {}",
@@ -92,22 +93,22 @@ where
                 task.chars().take(200).collect::<String>()
             ));
 
-            let result = runner.call_agent(agent, &task, ns, &mut context.messages)?;
+            let result = runner.call_agent(agent, &task, &ns, &mut context.messages)?;
 
             // Сохраняем результат в messages как thought
             let msg = ChatMessage {
                 id: Some(format!("msg_{}", runner.msg_counter)),
                 msg_type: "thought".to_string(),
                 content: result.clone(),
-                namespace: Some(ns.to_string()),
-                sub_calls: None,
-                author: Some(agent_id.to_string()),
-            };
-            context.messages.push(msg);
-            *runner.msg_counter += 1;
+            namespace: Some(ns),
+            sub_calls: None,
+            author: Some(agent_id.to_string()),
+        };
+        context.messages.push(msg);
+        *runner.msg_counter += 1;
 
-            Ok(NodeResult {
-                output: serde_json::json!({"result": result, "agent": agent_id}),
+        Ok(NodeResult {
+            output: serde_json::json!({"result": result, "agent": agent_id}),
                 next_node: None,
             })
         }
@@ -117,7 +118,8 @@ where
             let ns = node
                 .namespace
                 .as_deref()
-                .unwrap_or(&context.namespace);
+                .map(|ns| context.resolve_template(ns))
+                .unwrap_or_else(|| context.namespace.clone());
 
             match action {
                 "get_missing_reports" => {
@@ -129,7 +131,7 @@ where
                         .filter(|agent_id| {
                             !context.messages.iter().any(|m| {
                                 m.author.as_deref() == Some(agent_id.as_str())
-                                    && m.namespace.as_deref() == Some(ns)
+                                    && m.namespace.as_deref() == Some(ns.as_str())
                             })
                         })
                         .cloned()
@@ -152,7 +154,7 @@ where
                     let all_present = required.iter().all(|agent_id| {
                         context.messages.iter().any(|m| {
                             m.author.as_deref() == Some(agent_id.as_str())
-                                && m.namespace.as_deref() == Some(ns)
+                                && m.namespace.as_deref() == Some(ns.as_str())
                         })
                     });
                     Ok(NodeResult {
@@ -221,7 +223,8 @@ where
             let ns = node
                 .namespace
                 .as_deref()
-                .unwrap_or(&context.namespace);
+                .map(|ns| context.resolve_template(ns))
+                .unwrap_or_else(|| context.namespace.clone());
 
             (runner.log_cb)(format!(
                 "[sub_workflow] Запуск '{}' (ns: {})",
@@ -230,7 +233,7 @@ where
 
             let mut sub_ctx = WorkflowContext::new(
                 context.user_message.clone(),
-                ns.to_string(),
+                ns,
                 context.messages.clone(),
                 context.history.clone(),
             );

@@ -25,7 +25,7 @@ nodes:
       greeting: respond
       multiple_problems: triage
       one_problem_incomplete: collect_info
-      ready_for_expose: start_datamining
+      ready_for_expose: check_analysis_done
 
   - id: respond
     type: llm_worker

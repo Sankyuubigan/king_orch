@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const os = require('os');
-const { createMcpServer } = require('./mcp_base');
+const { createMcpServer } = require('./mcp_base.cjs');
 
 const videoCache = {};
 

@@ -111,6 +111,14 @@ where
                     let final_res = crate::domain::workflow_engine::run_workflow(
                         workflow, &mut ctx, &mut runner,
                     )?;
+                    ctx.messages.push(ChatMessage {
+                        id: Some(format!("msg_{}", msg_counter)),
+                        msg_type: "message".to_string(),
+                        content: final_res.clone(),
+                        namespace: None,
+                        sub_calls: None,
+                        author: Some("assistant".to_string()),
+                    });
                     return Ok((final_res, all_sub_calls, ctx.messages));
                 }
             }

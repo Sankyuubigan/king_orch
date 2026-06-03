@@ -1,6 +1,6 @@
 const https = require('https');
 const http = require('http');
-const { createMcpServer } = require('./mcp_base');
+const { createMcpServer } = require('./mcp_base.cjs');
 
 createMcpServer({
     name: "docs-fetcher-mcp",

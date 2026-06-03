@@ -1,5 +1,5 @@
 const https = require('https');
-const { createMcpServer } = require('./mcp_base');
+const { createMcpServer } = require('./mcp_base.cjs');
 
 createMcpServer({
     name: "ddg-search-mcp",

@@ -129,6 +129,7 @@ where
     ));
 
     let mut current_node_id: Option<String> = workflow.nodes.first().map(|n| n.id.clone());
+    let mut last_node_output: Option<serde_json::Value> = None;
 
     while let Some(node_id) = current_node_id {
         if runner.cancel_flag.load(Ordering::SeqCst) {
@@ -149,14 +150,12 @@ where
         let result = nodes::execute_node(node, workflow, context, runner)?;
 
         context.node_outputs.insert(node.id.clone(), result.output.clone());
+        last_node_output = Some(result.output.clone());
         current_node_id = find_next_node(&node_id, &workflow.edges, &result);
     }
 
-    let final_output = context
-        .node_outputs
-        .iter()
-        .last()
-        .map(|(_, v)| {
+    let final_output = last_node_output
+        .map(|v| {
             // {"result": "text"} → "text"
             if let Some(result_str) = v.get("result").and_then(|r| r.as_str()) {
                 return result_str.to_string();
@@ -165,7 +164,7 @@ where
             if let Some(s) = v.as_str() {
                 return s.to_string();
             }
-            serde_json::to_string(v).unwrap_or_default()
+            serde_json::to_string(&v).unwrap_or_default()
         })
         .unwrap_or_default();
 
