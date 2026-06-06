@@ -1,6 +1,7 @@
 ---
 name: soma_translator
 description: Расшифровщик психосоматики (переводит симптомы на ментальный язык)
+destiny: Найти ментальный баг юзера по его психосоматическим симптомам
 mode: worker
 tools:
   write: false
