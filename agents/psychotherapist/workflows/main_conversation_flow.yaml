@@ -64,6 +64,30 @@ nodes:
     type: sub_workflow
     workflow: treatment_flow.yaml
 
+  - id: aggregate_reports
+    type: system_condition
+    action: aggregate_reports
+    required:
+      - soma_translator
+      - destructor_detector
+      - pattern_finder_by_double_bind
+      - neuro_reprogrammer
+    namespace: main
+
+  - id: present_results
+    type: llm_worker
+    agent: therapist_communicator
+    task: >
+      Лечение завершено в неймспейсе main.
+      Вот отчёты всех агентов. Используй их чтобы объяснить клиенту ситуацию.
+
+      Сводка агентов:
+      {{ nodes.aggregate_reports.output.reports }}
+
+      Переведи инструкцию от neuro_reprogrammer на простой бытовой язык.
+      Используя отчёты soma_translator, destructor_detector, pattern_finder_by_double_bind,
+      объясни клиенту что с ним происходило. НЕ используй технические термины.
+
 edges:
   - from: classify_intent
     to: route
@@ -87,11 +111,15 @@ edges:
     to: start_datamining
   - from: run_analysis_if_needed
     to: start_datamining
+  - from: start_datamining
+    to: aggregate_reports
+  - from: aggregate_reports
+    to: present_results
   - from: respond
     to: END
   - from: collect_info
     to: END
   - from: triage
     to: END
-  - from: start_datamining
+  - from: present_results
     to: END

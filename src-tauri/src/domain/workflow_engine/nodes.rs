@@ -190,6 +190,35 @@ where
                     })
                 }
 
+                "aggregate_reports" => {
+                    let required = node.required.as_ref().ok_or_else(|| {
+                        "aggregate_reports: нет required".to_string()
+                    })?;
+                    let mut reports = String::new();
+                    for agent_id in required {
+                        let ns_check = if ns.is_empty() { "main" } else { &ns };
+                        if let Some(msg) = context.messages.iter().rev()
+                            .find(|m| m.author.as_deref() == Some(agent_id.as_str())
+                                && m.namespace.as_deref() == Some(ns_check))
+                        {
+                            reports.push_str(&format!(
+                                "--- {} ---\n{}\n\n",
+                                agent_id,
+                                &msg.content
+                            ));
+                        } else {
+                            reports.push_str(&format!(
+                                "--- {} ---\n[отчёт не найден]\n\n",
+                                agent_id
+                            ));
+                        }
+                    }
+                    Ok(NodeResult {
+                        output: serde_json::json!({"reports": reports}),
+                        next_node: None,
+                    })
+                }
+
                 _ => Err(format!(
                     "Неизвестное действие system_condition: {}",
                     action

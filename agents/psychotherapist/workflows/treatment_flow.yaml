@@ -13,20 +13,8 @@ nodes:
     agent: neuro_reprogrammer
     namespace: "{{ namespace }}"
 
-  - id: present_results
-    type: llm_worker
-    agent: therapist_communicator
-    task: >
-      Лечение завершено в неймспейсе {{ namespace }}.
-      Получи отчёт neuro_reprogrammer через batch_get_agent_report.
-      Переведи инструкцию от neuro_reprogrammer на простой бытовой язык.
-      Используя отчёты soma_translator, destructor_detector, pattern_finder_by_double_bind,
-      объясни клиенту что с ним происходило. НЕ используй технические термины.
-
 edges:
   - from: check_reports
     to: call_neuro
   - from: call_neuro
-    to: present_results
-  - from: present_results
     to: END

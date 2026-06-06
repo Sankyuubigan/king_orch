@@ -84,23 +84,20 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             let system_prompt = text[end_idx + 6..].trim().to_string();
             let mut name = String::new();
             let mut description = String::new();
-            let mut mode = String::from("worker");
             let mut mcp_servers = Vec::new();
-            let mut subagents = Vec::new();
             for line in frontmatter.lines() {
                 let line = line.trim();
                 if line.starts_with("name:") { name = line["name:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string(); }
                 else if line.starts_with("description:") { description = line["description:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string(); }
-                else if line.starts_with("mode:") { mode = line["mode:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string(); if mode == "subagent" { mode = "worker".to_string(); } }
                 else if line.starts_with("mcp_servers:") { if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["mcp_servers:".len()..].trim()) { mcp_servers = parsed; } }
-                else if line.starts_with("subagents:") { if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["subagents:".len()..].trim()) { subagents = parsed; } }
             }
-            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: true, mode, mcp_servers, subagents }); }
+            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: true, mode: "worker".to_string(), mcp_servers, subagents: Vec::new() }); }
         }
     }
     None
 }
 
+#[allow(dead_code)]
 pub fn build_l0_manifest(agents: &[AgentProfile]) -> String {
     if agents.is_empty() { return String::from("У тебя нет доступных сабагентов. Всегда отвечай пользователю напрямую."); }
     let mut manifest = String::from("ДОСТУПНЫЕ САБАГЕНТЫ (Твоя команда):\n");

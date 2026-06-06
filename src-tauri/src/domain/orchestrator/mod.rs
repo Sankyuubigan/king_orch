@@ -124,7 +124,7 @@ where
             }
 
             // Fallback: старый путь (если workflow нет)
-            log_cb(format!("▶ Запуск агента (legacy): {} (mode: {}, ns: main)", primary_agent.name, primary_agent.mode));
+            log_cb(format!("▶ Запуск агента (legacy): {} (ns: main)", primary_agent.name));
             let final_res = run_agent_node(
                 log_cb, status_cb, subcall_cb,
                 &engine, primary_agent, &agents, user_text, recent_history,
@@ -199,7 +199,7 @@ fn has_json_thought_without_action(text: &str) -> bool {
 pub(crate) fn run_agent_node<L, S, C>(
     log_cb: L, status_cb: S, subcall_cb: C,
     engine: &LlamaEngine, agent: &AgentProfile, agents: &[AgentProfile],
-    user_text: String, history: Vec<ChatMessage>,
+    user_text: String, _history: Vec<ChatMessage>,
     current_namespace: &str,
     max_gen_tokens: usize, model_params: &ModelParams, format_type: &str,
     cancel_flag: Arc<AtomicBool>, depth: usize,
@@ -216,13 +216,7 @@ where
     //  PHASE 1: SETUP
     // ═══════════════════════════════════════
     if depth > 5 { return Err("Превышена максимальная глубина вложенности сабагентов".into()); }
-    log_cb(format!("▶ Запуск агента: {} (mode: {}, ns: {}, глубина: {})", agent.name, agent.mode, current_namespace, depth));
-
-    let allows_all = agent.subagents.iter().any(|s| s == "*");
-    let filtered_agents: Vec<AgentProfile> = agents.iter()
-        .filter(|a| a.id != agent.id && a.mode != "primary")
-        .filter(|a| allows_all || agent.subagents.contains(&a.id))
-        .cloned().collect();
+    log_cb(format!("▶ Запуск агента: {} (ns: {}, глубина: {})", agent.name, current_namespace, depth));
 
     let mut mcp_clients = HashMap::new();
     let mut all_tools: Vec<(String, String, serde_json::Value)> = Vec::new();
@@ -251,21 +245,14 @@ where
         }
     })));
 
-    let has_subagents = !filtered_agents.is_empty();
     let has_tools = !all_tools.is_empty();
-    let system_prompt = build_system_prompt(agent, messages, current_namespace, has_subagents, has_tools, &filtered_agents, &all_tools);
+    let system_prompt = build_system_prompt(agent, messages, current_namespace, has_tools, &all_tools);
 
     let mut llm_messages = vec![ChatMessage { id: None, msg_type: "message".to_string(), content: system_prompt.clone(), namespace: None, sub_calls: None, author: Some("system".to_string()) }];
-    match agent.mode.as_str() {
-        "router" | "worker" => { llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: user_text.clone(), namespace: None, sub_calls: None, author: Some("user".to_string()) }); }
-        _ => { llm_messages.extend(history); llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: user_text.clone(), namespace: None, sub_calls: None, author: Some("user".to_string()) }); }
-    }
-    if (agent.mode == "router" || agent.mode == "primary") && (has_subagents || has_tools) {
-        if let Some(last) = llm_messages.last_mut() { if last.msg_type == "message" && last.author.as_deref() == Some("user") { last.content.push_str("\n\n[ВАЖНО]: Если нужен инструмент — ответь JSON."); } }
-    }
+    llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: user_text.clone(), namespace: None, sub_calls: None, author: Some("user".to_string()) });
 
-    let initial_dump = format!("### [MODE: {} | NS: {}]\n### [SYSTEM PROMPT]\n{}",
-        agent.mode, current_namespace, agent.system_prompt);
+    let initial_dump = format!("### [NS: {}]\n### [SYSTEM PROMPT]\n{}",
+        current_namespace, agent.system_prompt);
 
     // ═══════════════════════════════════════
     //  PHASE 2: LOOP STATE
@@ -275,6 +262,7 @@ where
     let start_time = Instant::now();
     let mut consecutive_failed_tools = 0;
     let mut consecutive_incomplete = 0;
+    #[allow(unused_variables)]
     let mut consecutive_thoughts = 0;
     let mut consecutive_invalid_targets = 0;
 
@@ -293,17 +281,6 @@ where
         )?;
 
         log_cb(format!("⏱ Генерация {}: {:.1}с, сырой ответ {} символов", agent.name, gen_start.elapsed().as_secs_f32(), raw_response.len()));
-        if agent.mode == "router" {
-            let char_count: usize = raw_response.chars().count();
-            let take = 500.min(char_count);
-            let preview: String = raw_response.chars().take(take).collect();
-            log_cb(format!("📝 Первые {} символов ответа {}: {}", take, agent.name, preview.replace('\n', "\\n")));
-            if char_count > 1000 {
-                let skip = char_count.saturating_sub(500);
-                let last: String = raw_response.chars().skip(skip).take(500).collect();
-                log_cb(format!("📝 Последние 500 символов ответа {}: {}", agent.name, last.replace('\n', "\\n")));
-            }
-        }
 
         let response = clean_thought_tags(&raw_response);
         let cleaned_len = response.len();
@@ -312,7 +289,6 @@ where
         }
         let mut action_found = false;
         let mut thought_logged = false;
-        let is_router = agent.mode == "router" && has_subagents;
 
         // ── 3b. RESPONSE DISPATCH: Tool call ──
         if let Some((tool_name, arguments, thought)) = parse_tool_call(&response) {
@@ -431,19 +407,11 @@ where
 
                 // Skip if already called in this namespace
                 let ens = parsed.namespace.as_deref().unwrap_or(current_namespace);
-                if subagent.mode == "worker" {
-                    if get_agent_report_from_messages(messages, &subagent.id, ens).is_some() {
-                        llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), namespace: None, sub_calls: None, author: Some("assistant".to_string()) });
-                        llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: format!(
-                            "ВНИМАНИЕ: Сабагент '{}' уже вызывался в '{}'. НЕ вызывай повторно! Вызови другого или заверши через {{\"target\": \"reply\"}}.", subagent.id, ens), namespace: None, sub_calls: None, author: Some("user".to_string()) });
-                        continue;
-                    }
-                } else if subagent.mode == "router" {
-                    if get_agent_report_from_messages(messages, &subagent.id, ens).is_some() {
-                        log_cb(format!("❌ Повторный вызов router-агента '{}' в '{}' — fold.", subagent.id, ens));
-                        final_response = format!("{} Маршрутизатор '{}' уже вызывался в '{}'. Используй `batch_get_agent_report(\"{}\", \"{}\")` для чтения его отчёта.", AGENT_ERROR_PREFIX, subagent.id, ens, subagent.id, ens);
-                        break;
-                    }
+                if get_agent_report_from_messages(messages, &subagent.id, ens).is_some() {
+                    llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), namespace: None, sub_calls: None, author: Some("assistant".to_string()) });
+                    llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: format!(
+                        "ВНИМАНИЕ: Сабагент '{}' уже вызывался в '{}'. НЕ вызывай повторно! Вызови другого или заверши через {{\"target\": \"reply\"}}.", subagent.id, ens), namespace: None, sub_calls: None, author: Some("user".to_string()) });
+                    continue;
                 }
 
                 // Recurse into subagent
@@ -477,80 +445,21 @@ where
                     break;
                 }
 
-                if subagent.mode == "worker" || subagent.mode == "router" {
-                    let msg = ChatMessage {
-                        id: Some(format!("msg_{}", msg_counter)),
-                        msg_type: "thought".to_string(),
-                        content: sub_result.clone(),
-                        namespace: Some(child_ns.to_string()),
-                        sub_calls: None,
-                        author: Some(subagent.id.clone()),
-                    };
-                    messages.push(msg);
-                    *msg_counter += 1;
-                }
+                let msg = ChatMessage {
+                    id: Some(format!("msg_{}", msg_counter)),
+                    msg_type: "thought".to_string(),
+                    content: sub_result.clone(),
+                    namespace: Some(child_ns.to_string()),
+                    sub_calls: None,
+                    author: Some(subagent.id.clone()),
+                };
+                messages.push(msg);
+                *msg_counter += 1;
 
-                let new_sys = build_system_prompt(agent, messages, current_namespace, has_subagents, has_tools, &filtered_agents, &all_tools);
+                let new_sys = build_system_prompt(agent, messages, current_namespace, has_tools, &all_tools);
                 if let Some(f) = llm_messages.first_mut() { if f.msg_type == "message" && f.author.as_deref() == Some("system") { f.content = new_sys; } }
-
-                if agent.mode == "primary" {
-                    llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), namespace: None, sub_calls: None, author: Some("assistant".to_string()) });
-                    llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: format!(
-                        "Сабагент {} (ns: {}) завершил работу.\n\
-                        ⚠️ НЕ копируй технические отчёты! Используй `batch_get_agent_report` для получения данных и сформулируй ответ пользователю ОБЫЧНЫМ ТЕКСТОМ.",
-                        subagent.name, child_ns), namespace: None, sub_calls: None, author: Some("user".to_string()) });
-                } else if agent.mode == "router" {
-                    let mut router_msg = format!(
-                        "[САБАГЕНТ '{}' ЗАВЕРШИЛ РАБОТУ (ns: {})]\n\
-                        Статус: проверь через `batch_get_agent_report(\"{}\", \"{}\")`.\n\
-                        \n\
-                        ⚠️ ПРОДОЛЖИ ПАЙПЛАЙН. НЕ завершай работу — есть ещё незавершённые шаги.\n\
-                        Вызови следующего сабагента или проверь отчёты через `batch_get_agent_report`.\n\
-                        Завершить можно ТОЛЬКО когда ВСЕ шаги процесса выполнены.",
-                        subagent.name, child_ns, subagent.id, child_ns
-                    );
-                    // Добавляем user query обратно в контекст
-                    if let Some(uq) = get_agent_report_from_messages(messages, "user", "main") {
-                        let uq_truncated: String = uq.chars().take(1000).collect();
-                        router_msg.push_str(&format!("\n\n[НАПОМИНАНИЕ: ЗАПРОС ПОЛЬЗОВАТЕЛЯ]\n{}", uq_truncated));
-                    }
-                    // Добавляем сводку отчётов по ВСЕМ неймспейсам (не только current_namespace)
-                    let mut all_ns: Vec<String> = Vec::new();
-                    for msg in messages.iter() {
-                        if let Some(ns) = &msg.namespace {
-                            if ns != "main" && !all_ns.contains(ns) {
-                                all_ns.push(ns.clone());
-                            }
-                        }
-                    }
-                    all_ns.sort();
-                    router_msg.push_str("\n\n[ОТЧЁТЫ ПО ВСЕМ НЕЙМСПЕЙСАМ]");
-                    for ns in &all_ns {
-                        let mut ns_agents: Vec<&str> = Vec::new();
-                        for a in &filtered_agents {
-                            if get_agent_report_from_messages(messages, &a.id, ns).is_some() {
-                                ns_agents.push(&a.id);
-                            }
-                        }
-                        if !ns_agents.is_empty() {
-                            router_msg.push_str(&format!("\n  ✅ {}: {}", ns, ns_agents.join(", ")));
-                        }
-                    }
-                    for a in &filtered_agents {
-                        let found_any = all_ns.iter().any(|ns| get_agent_report_from_messages(messages, &a.id, ns).is_some());
-                        if !found_any {
-                            router_msg.push_str(&format!("\n  ❌ '{}' — ещё не вызывался", a.id));
-                        }
-                    }
-                    let sys_content = llm_messages.first().map(|m| m.content.clone()).unwrap_or_default();
-                    llm_messages = vec![
-                        ChatMessage { id: None, msg_type: "message".to_string(), content: sys_content, namespace: None, sub_calls: None, author: Some("system".to_string()) },
-                        ChatMessage { id: None, msg_type: "message".to_string(), content: router_msg, namespace: None, sub_calls: None, author: Some("user".to_string()) }
-                    ];
-                } else {
-                    llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), namespace: None, sub_calls: None, author: Some("assistant".to_string()) });
-                    llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: format!("Отчет от {} (ns: {}):\n{}\n\nЕсли достаточно — ответь ОБЫЧНЫМ ТЕКСТОМ.", subagent.name, child_ns, truncate_result(&sub_result, 2000)), namespace: None, sub_calls: None, author: Some("user".to_string()) });
-                }
+                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), namespace: None, sub_calls: None, author: Some("assistant".to_string()) });
+                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: format!("Отчет от {} (ns: {}):\n{}\n\nЕсли достаточно — ответь ОБЫЧНЫМ ТЕКСТОМ.", subagent.name, child_ns, truncate_result(&sub_result, 2000)), namespace: None, sub_calls: None, author: Some("user".to_string()) });
                 continue;
             } else {
                 // FIX A + D: Invalid target — DON'T log thought, limit retries, list valid agents
@@ -586,7 +495,7 @@ where
         }
 
         // ── 3e. HANDLE NO ACTION ──
-        if !action_found && (has_subagents || has_tools) {
+        if !action_found && has_tools {
             if response.trim().is_empty() {
                 consecutive_incomplete += 1;
                 if consecutive_incomplete >= 5 {
@@ -609,24 +518,6 @@ where
                 continue;
             }
 
-            // FIX C: Router mode — never fall through to text completion
-            if is_router {
-                consecutive_thoughts += 1;
-                if consecutive_thoughts >= 3 {
-                    log_cb(format!("❌ {} превысил лимит размышлений (3).", agent.name));
-                    final_response = format!("{} Маршрутизатор '{}' не смог выбрать действие (3 цикла размышлений). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
-                    break;
-                }
-                let valid_ids = valid_agent_ids(agents, &agent.id, "primary");
-                let re_prompt = if valid_ids.is_empty() {
-                    "Ты — маршрутизатор. Отвечай ТОЛЬКО в формате JSON с полем \"target\". НЕ пиши обычный текст.".to_string()
-                } else {
-                    format!("Ты — маршрутизатор. Отвечай ТОЛЬКО в формате JSON с полем \"target\". Доступные цели: {}. НЕ пиши обычный текст.", valid_ids.join(", "))
-                };
-                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), namespace: None, sub_calls: None, author: Some("assistant".to_string()) });
-                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: re_prompt, namespace: None, sub_calls: None, author: Some("user".to_string()) });
-                continue;
-            }
         }
 
         // ── 3f. COMPLETION (worker/primary with plain text) ──
