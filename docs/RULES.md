@@ -30,7 +30,7 @@ infra/    — Инфраструктура (LLM, сессии, MCP, конфиг
 ### Двери (Backend)
 Каждый слой имеет `mod.rs` с реэкспортом только публичного API:
 - `api/mod.rs` — экспортирует команды и AppState
-- `domain/mod.rs` — экспортирует run_chat, AgentProfile, парсеры
+- `domain/mod.rs` — экспортирует run_chat, AgentEntry, load_entry_points
 - `infra/mod.rs` — экспортирует LlamaEngine, ChatMessage, AppConfig, SessionManager и т.д.
 
 **Правило:** Слой импортирует другой слой только через его `mod.rs`.
@@ -91,10 +91,11 @@ pub struct ChatMessage {
 ### Workflow графы (YAML)
 - Каждый граф — это `nodes` (узлы) и `edges` (рёбра).
 - Типы узлов: `llm_worker` (вызов .md), `llm_classifier` (built-in), `system_condition` (Rust), `sub_workflow` (рекурсия), `switch` (условие), `return` (конец).
-- `visible_agents` в entry-графе определяет, какие агенты видны в UI.
+- `visible: true` в корне YAML — граф отображается в UI как entry point.
 
 ### Агенты (.md)
 - **Нет поля `mode`** — все агенты одного типа.
+- `visible: true` в frontmatter — агент отображается в UI как entry point.
 - Коммуникатор содержит только стиль общения и правила представления результатов.
 - Воркер содержит узкую задачу и ссылки на базу знаний через `<<INCLUDE: ...>>`.
 - **Запрещено** писать в `.md` логику вызова других агентов — это в YAML.

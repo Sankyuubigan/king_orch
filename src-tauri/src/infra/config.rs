@@ -43,6 +43,8 @@ pub struct AppConfig {
     pub prompt_format: String,
     #[serde(default = "default_confidence_threshold")]
     pub confidence_threshold: f32,
+    #[serde(default = "default_show_advanced_features")]
+    pub show_advanced_features: bool,
 }
 
 fn default_context_size() -> u32 { 24576 }
@@ -50,6 +52,7 @@ fn default_kv_quantization() -> bool { false }
 fn default_theme() -> String { "dark".to_string() }
 fn default_prompt_format() -> String { "Auto".to_string() }
 fn default_confidence_threshold() -> f32 { 0.8 }
+fn default_show_advanced_features() -> bool { false }
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -62,6 +65,7 @@ impl Default for AppConfig {
             theme: default_theme(),
             prompt_format: default_prompt_format(),
             confidence_threshold: default_confidence_threshold(),
+            show_advanced_features: default_show_advanced_features(),
         }
     }
 }

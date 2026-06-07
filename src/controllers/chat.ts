@@ -203,7 +203,7 @@ export class ChatController {
     await saveSession(store.currentSessionId, store.chatHistory, ""); bus.emit("session:changed");
     const startTime = performance.now();
     try {
-      const displayName = this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace('📁 ', '');
+      const displayName = this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace(/^[📁📊]\s*/, '');
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value) };
       const allHistory = store.chatHistory.slice();
       const response: any = await invoke("chat_request", { modelPath, agentId: activeAgent, message: text, history: allHistory, contextSize: parseInt(this.el.contextSlider.value, 10), kvQuantization: this.el.chkKvQuant.checked, modelParams: params });

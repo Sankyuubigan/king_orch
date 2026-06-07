@@ -1,5 +1,5 @@
 name: Main Therapy Loop
-visible_agents: ["therapist_communicator"]
+visible: true
 
 config:
   statuses:

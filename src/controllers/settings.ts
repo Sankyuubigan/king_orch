@@ -26,6 +26,7 @@ export interface SettingsElements {
   downloadProgressBar: HTMLDivElement;
   downloadStatusLabel: HTMLDivElement;
   btnAddModel: HTMLButtonElement;
+  chkShowAdvanced: HTMLInputElement;
 }
 
 export class SettingsController {
@@ -68,6 +69,11 @@ export class SettingsController {
       if (config.kv_quantization !== undefined) this.el.chkKvQuant.checked = config.kv_quantization;
       if (config.theme) { this.el.themeSelect.value = config.theme; document.documentElement.setAttribute('data-theme', config.theme); }
       if (config.prompt_format) this.el.promptFormatSelect.value = config.prompt_format;
+      if (config.show_advanced_features !== undefined) {
+        this.el.chkShowAdvanced.checked = config.show_advanced_features;
+        store.showAdvancedFeatures = config.show_advanced_features;
+        bus.emit("advanced:visibility", config.show_advanced_features);
+      }
       await this.loadAgents();
       bus.emit("config:loaded", config);
       await this.loadCatalog();
@@ -77,11 +83,17 @@ export class SettingsController {
 
   private async loadAgents() {
     try {
-      const agents: any[] = await invoke("get_agents");
+      const entries: any[] = await invoke("get_agents");
       this.el.agentSelect.innerHTML = '';
-      for (const a of agents) { if (!a.is_hidden) { const o = document.createElement("option"); o.value = `agent_${a.id}`; o.text = `📁 ${a.name} (${a.id})`; this.el.agentSelect.appendChild(o); } }
-      const orch = Array.from(this.el.agentSelect.options).find(o => o.value === 'agent_therapist_communicator');
-      if (orch) this.el.agentSelect.value = orch.value;
+      for (const e of entries) {
+        if (!e.is_hidden) {
+          const o = document.createElement("option");
+          o.value = e.id;
+          const prefix = e.entry_type === 'workflow' ? '📊' : '📁';
+          o.text = `${prefix} ${e.name} (${e.id})`;
+          this.el.agentSelect.appendChild(o);
+        }
+      }
     } catch(e) {}
   }
 
@@ -101,6 +113,12 @@ export class SettingsController {
     for (const [s, l] of sliders) s?.addEventListener("input", () => { l.innerText = s.value; this.saveModelParams(); });
     this.el.btnResetParams?.addEventListener("click", async () => { const p = this.el.modelSelect.value; if (!p) return; await invoke("reset_model_params", { modelPath: p }); await this.loadModelParams(); showToast("Параметры сброшены.", "success"); });
     this.el.modelSelect?.addEventListener("change", async () => { await invoke("set_last_model", { path: this.el.modelSelect.value }); await this.loadModelParams(); });
+    this.el.chkShowAdvanced?.addEventListener("change", async () => {
+      const val = this.el.chkShowAdvanced.checked;
+      store.showAdvancedFeatures = val;
+      await invoke("set_config_value", { key: "show_advanced_features", value: val });
+      bus.emit("advanced:visibility", val);
+    });
     this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await open({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); await this.loadModelParams(); } } catch(e) {} });
     this.el.btnDownloadModel?.addEventListener("click", async () => {
       const name = this.el.downloadModelSelect.value; if (!name) return;

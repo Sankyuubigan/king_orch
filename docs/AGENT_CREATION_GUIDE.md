@@ -42,6 +42,7 @@
 ---
 name: Имя агента (человекочитаемое)
 description: Краткое описание того, что он делает
+visible: true        # опционально: показывать в UI как точку входа
 tools:
   write: false
   bash: false
@@ -50,7 +51,7 @@ tools:
 ```
 
 > **Примечание:** Поле `mode` (primary/router/worker) **устарело**. Все агенты теперь одного типа.
-> Видимость агента в UI определяется полем `visible_agents` в workflow YAML.
+> Видимость в UI определяется полем `visible: true/false` — либо в frontmatter `.md` файла, либо в корне YAML workflow. Если поле не указано — entry point скрыт из UI.
 
 ---
 
@@ -72,10 +73,10 @@ tools:
 ### Структура workflow
 ```yaml
 name: Название графа
-visible_agents: ["id_агента_1"]  # Какие агенты видны в UI (только в entry-графе)
+visible: true                      # показывать в UI как точку входа (опционально)
 
 config:
-  statuses:                       # Опционально: для llm_classifier
+  statuses:                        # Опционально: для llm_classifier
     - id: greeting
       description: "..."
 
@@ -101,11 +102,12 @@ edges:
 | `switch` | Условный переход по значению | `{ input: "{{ nodes.X.output.status }}", cases: { greeting: node_y } }` |
 | `return` | Завершает текущий workflow | — |
 
-### Как работает `visible_agents`
-- Только entry-графы (главные, не sub_workflow) содержат `visible_agents`.
-- Движок собирает все `visible_agents` из всех workflow и помечает этих агентов как видимые в UI (`is_hidden: false`).
-- Если для агента найден workflow — запускается `workflow_engine::run_workflow()`.
-- Если workflow нет — используется legacy `run_agent_node()` (обратная совместимость).
+### Как работает `visible`
+- **YAML workflow:** поле `visible: true` в корне графа — граф отображается в UI как entry point.
+- **`.md` файл:** поле `visible: true` в frontmatter — агент отображается в UI как entry point.
+- Если для entry point найден YAML workflow (по совпадению его file_stem с ID) — запускается `workflow_engine::run_workflow()`.
+- Если workflow нет — используется `orchestrator::run_agent_node()`.
+- По умолчанию (`visible: false` или не указано) entry point скрыт из UI.
 
 ---
 
@@ -129,7 +131,7 @@ edges:
 agents/psychotherapist/
 ├── therapist_communicator.md       # Чистый коммуникатор (стиль общения)
 ├── workflows/
-│   ├── main_conversation_flow.yaml # Entry-граф (visible_agents, маршруты)
+│   ├── main_conversation_flow.yaml # Entry-граф (visible: true, маршруты)
 │   ├── triage_flow.yaml            # Триаж (извлечение проблем, визуализация)
 │   ├── analysis_flow.yaml          # Анализ (soma → destructor → pattern)
 │   └── treatment_flow.yaml # Лечение (neuro → distiller → результат)
@@ -144,7 +146,7 @@ agents/psychotherapist/
 ### Пример entry-графа (`main_conversation_flow.yaml`)
 ```yaml
 name: Main Therapy Loop
-visible_agents: ["therapist_communicator"]
+visible: true
 config:
   statuses:
     - id: greeting

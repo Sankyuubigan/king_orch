@@ -21,8 +21,7 @@ pub struct GraphWorkflowDef {
     pub team: String,
     pub name: String,
     pub file_stem: String,
-    #[serde(default)]
-    pub visible_agents: Vec<String>,
+    pub visible: bool,
     pub config: Option<WorkflowConfig>,
     pub nodes: Vec<NodeDef>,
     pub edges: Vec<EdgeDef>,
@@ -68,7 +67,7 @@ pub fn get_workflow_graphs(app: tauri::AppHandle) -> Result<GraphResponse, Strin
                         team: team_name.clone(),
                         name: wf.name.clone(),
                         file_stem: wf.file_stem.clone(),
-                        visible_agents: wf.visible_agents.clone(),
+                        visible: wf.visible,
                         config: wf.config.clone(),
                         nodes: wf.nodes.clone(),
                         edges: wf.edges.clone(),

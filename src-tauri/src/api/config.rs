@@ -16,6 +16,11 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
                 cfg.confidence_threshold = v as f32;
             }
         }
+        "show_advanced_features" => {
+            if let Some(v) = value.as_bool() {
+                cfg.show_advanced_features = v;
+            }
+        }
         _ => {}
     }
     infra::save_config(&app, &cfg);

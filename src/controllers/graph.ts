@@ -14,7 +14,7 @@ interface WorkflowGraphDef {
   team: string;
   name: string;
   file_stem: string;
-  visible_agents: string[];
+  visible: boolean;
   config?: { statuses: Array<{ id: string; description: string }> };
   nodes: GraphNodeDef[];
   edges: GraphEdgeDef[];
@@ -145,7 +145,7 @@ export class GraphController {
       if (wf.nodes.length > 0) {
         firstNodePerWorkflow[wf.file_stem] = `${wf.file_stem}.${wf.nodes[0].id}`;
       }
-      if (wf.visible_agents && wf.visible_agents.length > 0) {
+      if (wf.visible) {
         entryWorkflows.push(wf.file_stem);
       }
     }

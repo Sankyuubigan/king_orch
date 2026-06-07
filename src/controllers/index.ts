@@ -10,3 +10,6 @@ export type { SettingsElements } from './settings'
 
 export { GraphController } from './graph'
 export type { GraphElements } from './graph'
+
+export { AgentTestController } from './agent-test'
+export type { AgentTestElements } from './agent-test'

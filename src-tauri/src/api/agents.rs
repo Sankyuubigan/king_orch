@@ -3,19 +3,12 @@ use tauri::{AppHandle, Manager, Emitter};
 use crate::domain;
 
 #[tauri::command]
-pub fn get_agents(app: AppHandle) -> Vec<domain::AgentProfile> {
+pub fn get_agents(app: AppHandle) -> Vec<domain::AgentEntry> {
     let agents_dir = find_agents_dir(&app);
-    let _ = app.emit("log", &format!("🔍 Поиск агентов в: {}", agents_dir.display()));
-    match domain::load_agents(&agents_dir) {
-        Ok(agents) => {
-            let _ = app.emit("log", &format!("✅ Загружено агентов: {}", agents.len()));
-            agents
-        }
-        Err(e) => {
-            let _ = app.emit("log", &format!("❌ Ошибка загрузки агентов: {}", e));
-            vec![]
-        }
-    }
+    let _ = app.emit("log", &format!("🔍 Поиск entry points в: {}", agents_dir.display()));
+    let entries = domain::load_entry_points(&agents_dir);
+    let _ = app.emit("log", &format!("✅ Загружено entry points: {}", entries.len()));
+    entries
 }
 
 fn find_agents_dir(app: &AppHandle) -> std::path::PathBuf {

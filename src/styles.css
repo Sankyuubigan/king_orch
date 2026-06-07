@@ -264,3 +264,105 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   font-weight: 600;
   margin-right: 6px;
 }
+
+/* ─── Студия агентов (вкладка 🧪) ─── */
+.hidden-tab { display: none; }
+.hidden-tab.visible { display: block; }
+
+.sub-tabs {
+  display: flex;
+  background-color: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  margin-bottom: 10px;
+}
+.subtab-btn {
+  flex: 1;
+  background: none;
+  border: none;
+  padding: 10px 16px;
+  font-size: 14px;
+  cursor: pointer;
+  border-bottom: 3px solid transparent;
+  transition: background-color 0.2s;
+  color: var(--text);
+  margin: 0;
+  border-radius: 6px 6px 0 0;
+}
+.subtab-btn:hover { background-color: var(--session-hover); }
+.subtab-btn.active { border-bottom-color: var(--primary); font-weight: bold; background-color: var(--bg-color); }
+
+.sub-view { display: none; flex-direction: column; gap: 10px; flex: 1; overflow: hidden; }
+.sub-view.active { display: flex; }
+
+/* ─── AI тест (суб-вкладка) ─── */
+.test-checklist {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+.test-checklist label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+.test-checklist label:hover { background: var(--session-hover); }
+.test-checklist input[type="checkbox"] { margin: 0; }
+.test-hint { color: #888; font-size: 13px; font-style: italic; }
+.test-progress { margin-top: 10px; }
+
+#test-file-path {
+  background: var(--input-bg);
+  color: var(--text);
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+}
+#test-results-content {
+  max-height: 400px;
+  overflow-y: auto;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.test-result-item {
+  padding: 10px;
+  margin-bottom: 8px;
+  background: var(--bg-color);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.test-result-item .result-label {
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  color: #888;
+  margin-bottom: 4px;
+}
+.test-result-item .result-value {
+  font-size: 13px;
+  word-break: break-word;
+  white-space: pre-wrap;
+  margin-bottom: 6px;
+}
+.test-result-item .result-response {
+  font-size: 12px;
+  color: var(--primary);
+  padding: 4px 8px;
+  background: var(--panel-bg);
+  border-left: 3px solid var(--primary);
+  border-radius: 2px;
+  margin-bottom: 4px;
+}
+.test-result-item .result-error {
+  color: var(--danger);
+  border-left-color: var(--danger);
+}

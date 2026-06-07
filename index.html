@@ -18,7 +18,7 @@
     <main class="main-content">
       <div class="tabs">
         <button id="tab-chat" class="tab-btn active">💬 Чат</button>
-        <button id="tab-graph" class="tab-btn">🔀 Граф</button>
+        <button id="tab-agent-studio" class="tab-btn hidden-tab">🧪 Студия агентов</button>
         <button id="tab-settings" class="tab-btn">⚙️ Настройки</button>
         <button id="tab-logs" class="tab-btn">📝 Логи</button>
       </div>
@@ -54,24 +54,73 @@
         </div>
       </div>
 
-      <div id="view-graph" class="view graph-view">
-        <div id="graph-toolbar">
-          <label for="graph-team-select">Команда агентов:</label>
-          <select id="graph-team-select">
-            <option value="">Загрузка...</option>
-          </select>
+      <div id="view-agent-studio" class="view">
+        <div class="sub-tabs">
+          <button id="subtab-graph" class="subtab-btn active">🔀 Граф</button>
+          <button id="subtab-ai-test" class="subtab-btn">🤖 Тест агентов ИИ</button>
         </div>
-        <div id="graph-layout">
-          <div id="graph-container"></div>
-          <aside id="graph-sidebar">
-            <div class="graph-sidebar-header">
-              <span id="graph-detail-title">Информация</span>
-              <button id="graph-sidebar-close" class="btn-secondary" style="padding:4px 10px;">✕</button>
+
+        <div id="view-sub-graph" class="sub-view active">
+          <div id="graph-toolbar">
+            <label for="graph-team-select">Команда агентов:</label>
+            <select id="graph-team-select">
+              <option value="">Загрузка...</option>
+            </select>
+          </div>
+          <div id="graph-layout">
+            <div id="graph-container"></div>
+            <aside id="graph-sidebar">
+              <div class="graph-sidebar-header">
+                <span id="graph-detail-title">Информация</span>
+                <button id="graph-sidebar-close" class="btn-secondary" style="padding:4px 10px;">✕</button>
+              </div>
+              <div id="graph-detail-content">
+                <p class="graph-hint">Загрузка графа...</p>
+              </div>
+            </aside>
+          </div>
+        </div>
+
+        <div id="view-sub-ai-test" class="sub-view">
+          <div class="group-box">
+            <div class="group-title">1. Выберите YAML-файл с тест-кейсами</div>
+            <div class="input-row">
+              <input type="text" id="test-file-path" readonly placeholder="Файл не выбран..." style="flex:1;" />
+              <button id="btn-select-test-file" class="btn-secondary">Выбрать файл</button>
             </div>
-            <div id="graph-detail-content">
-              <p class="graph-hint">Загрузка графа...</p>
+          </div>
+
+          <div class="group-box">
+            <div class="group-title">2. Выберите агентов для тестирования</div>
+            <div id="test-agent-list" class="test-checklist">
+              <span class="test-hint">Загрузка агентов...</span>
             </div>
-          </aside>
+          </div>
+
+          <div class="group-box">
+            <div class="group-title">3. Выберите модели LLM</div>
+            <div id="test-model-list" class="test-checklist">
+              <span class="test-hint">Загрузка моделей...</span>
+            </div>
+          </div>
+
+          <div class="group-box">
+            <button id="btn-run-test" class="btn-primary" disabled>▶ Запустить тест</button>
+            <div id="test-progress" class="test-progress" style="display:none;">
+              <div class="status-label" id="test-status-label">Подготовка...</div>
+              <div class="progress-bar-container">
+                <div id="test-progress-bar" class="progress-bar"></div>
+              </div>
+            </div>
+          </div>
+
+          <div class="group-box" id="test-results-box" style="display:none;">
+            <div class="group-title" style="display:flex; justify-content:space-between; align-items:center;">
+              <span>Результаты</span>
+              <button id="btn-save-test-results" class="btn-secondary" style="padding:4px 10px; font-size:12px;">💾 Сохранить</button>
+            </div>
+            <div id="test-results-content"></div>
+          </div>
         </div>
       </div>
 
@@ -159,6 +208,10 @@
           <div class="input-row" style="margin-top: 10px;">
             <input type="checkbox" id="chk-kv-quant" />
             <label for="chk-kv-quant">Квантизация KV кэша (Q8_0)</label>
+          </div>
+          <div class="input-row" style="margin-top: 10px;">
+            <input type="checkbox" id="chk-show-advanced" />
+            <label for="chk-show-advanced">Отображать продвинутые функции</label>
           </div>
         </div>
       </div>

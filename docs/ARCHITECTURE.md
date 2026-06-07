@@ -91,7 +91,7 @@
 ## 🛠 СЛОЙ 4: УТИЛИТЫ
 
 - **Markdown** (`src/utils/markdown.ts`) — конвертация MD → HTML
-- **Types** (`src/types.ts`) — глобальные TypeScript-интерфейсы
+- **Types** (`src/types.ts`) — глобальные TypeScript-интерфейсы, включая `AgentEntry` (id, name, description, entry_type, is_hidden)
 
 ---
 
@@ -106,13 +106,13 @@
 | `config.rs` | `get_config`, `set_config_value`, `set_last_model`, `set_theme`, `set_prompt_format` | Чтение/запись конфигурации |
 | `sessions.rs` | `get_sessions`, `load_session`, `save_session`, `delete_session`, `rename_session`, `open_session_folder` | CRUD сессий |
 | `models.rs` | `get_models_catalog`, `get_model_params`, `set_model_params`, `reset_model_params`, `add_model` | Параметры моделей и каталог |
-| `agents.rs` | `get_agents` | Загрузка списка агентов |
+| `agents.rs` | `get_agents` | Загрузка списка entry points (.md + YAML) |
 | `graph.rs` | `get_workflow_graphs` | Чтение YAML workflow и возврат структуры графа для UI |
 | `chat.rs` | `chat_request`, `stop_processing` | Главный цикл чата |
 
 ### Подслой 5.2: Домен (`src-tauri/src/domain/`)
 
-**Дверь:** `domain/mod.rs` — реэкспортирует `run_chat`, `AgentProfile`, `load_agents`
+**Дверь:** `domain/mod.rs` — реэкспортирует `run_chat`, `AgentEntry`, `load_entry_points`
 
 | Файл/Модуль | Зона ответственности |
 |-------------|---------------------|
@@ -120,12 +120,12 @@
 | `orchestrator/prompt.rs` | Сборка системного промпта, инструкция по `get_agent_report` вместо рендера состояния |
 | `orchestrator/runtime.rs` | Загрузка и запуск MCP-серверов |
 | `workflow_engine/mod.rs` | **Графовый движок маршрутизации.** Исполняет YAML-графы (workflows). Точка входа — `run_workflow()` |
-| `workflow_engine/parser.rs` | Парсинг YAML workflow файлов, структуры `WorkflowDef`, `NodeDef`, `EdgeDef`, поиск `visible_agents` |
+| `workflow_engine/parser.rs` | Парсинг YAML workflow файлов, структуры `WorkflowDef`, `NodeDef`, `EdgeDef`, поиск по `file_stem` |
 | `workflow_engine/nodes.rs` | Исполнение узлов графа: `llm_worker`, `llm_classifier`, `system_condition`, `sub_workflow`, `switch`, `return` |
 | `workflow_engine/context.rs` | Контекст выполнения: проход `{{ template }}` переменных, хранение outputs узлов |
 | `workflow_engine/intent_classifier.rs` | **Built-in** intent-классификатор (не требует отдельного .md файла). Статусы инжектятся runtime из YAML |
 | `parsers.rs` | Распаковка JSON от LLM, очистка think-тегов |
-| `agent_manager.rs` | Парсинг .md файлов агентов, обработка INCLUDE, загрузка YAML workflow, вычисление `is_hidden` из `visible_agents` |
+| `agent_manager.rs` | Парсинг .md файлов агентов, обработка INCLUDE, загрузка entry points (`load_entry_points`) через `visible` поле |
 
 ### Подслой 5.3: Инфраструктура (`src-tauri/src/infra/`)
 
@@ -148,15 +148,15 @@
 main.rs
   └→ api/ (дверь: api/mod.rs)
        ├→ domain/ (дверь: domain/mod.rs)
-       │    ├→ workflow_engine/ (YAML графы — маршрутизация)
-       │    │    ├→ parser.rs          — парсинг YAML, visible_agents
-       │    │    ├→ nodes.rs           — типы узлов (llm_worker, switch, ...)
-       │    │    ├→ context.rs         — контекст, template-переменные
-       │    │    ├→ intent_classifier.rs — built-in классификатор (без .md)
-       │    │    └→ mod.rs             — run_workflow() — вход в граф
-       │    ├→ orchestrator/           — legacy run_agent_node() (для worker)
-       │    ├→ parsers.rs
-       │    └→ agent_manager.rs       — загрузка .md + YAML, visible_agents
+        │    ├→ workflow_engine/ (YAML графы — маршрутизация)
+        │    │    ├→ parser.rs          — парсинг YAML, visible/find_workflow_by_stem
+        │    │    ├→ nodes.rs           — типы узлов (llm_worker, switch, ...)
+        │    │    ├→ context.rs         — контекст, template-переменные
+        │    │    ├→ intent_classifier.rs — built-in классификатор (без .md)
+        │    │    └→ mod.rs             — run_workflow() — вход в граф
+        │    ├→ orchestrator/           — run_agent_node() (для .md агентов)
+        │    ├→ parsers.rs
+        │    └→ agent_manager.rs       — загрузка .md + YAML, load_entry_points()
        └→ infra/ (дверь: infra/mod.rs)
 
 Frontend:
@@ -169,18 +169,18 @@ main.ts
 
 **Поток выполнения:**
 ```
-User → Primary Agent (выбор в UI)
+User → Entry point (выбор в UI: .md с visible: true или YAML с visible: true)
          ↓
-    run_chat() ищет workflow YAML с visible_agents = agent_id
+    run_chat() проверяет: есть ли YAML workflow с file_stem == agent_id?
          ↓
-    [Найден] → workflow_engine::run_workflow()
+    [Да] → workflow_engine::run_workflow()
          │          ├→ llm_classifier → intent_classifier.rs (built-in)
          │          ├→ switch → маршрутизация по status
          │          ├→ sub_workflow → рекурсивный вызов другого YAML
          │          ├→ llm_worker → run_agent_node() для .md агента
          │          └→ system_condition → Rust-side проверка
          │
-    [Не найден] → orchestrator::run_agent_node() (legacy)
+    [Нет] → orchestrator::run_agent_node()
 ```
 
 **Запрещённые импорты:**

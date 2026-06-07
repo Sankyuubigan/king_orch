@@ -9,7 +9,7 @@ pub mod nodes;
 pub mod parser;
 
 pub use context::WorkflowContext;
-pub use parser::{find_workflow_for_agent, load_workflows, WorkflowDef};
+pub use parser::{find_workflow_by_stem, load_workflows, WorkflowDef};
 
 use crate::domain::agent_manager::AgentProfile;
 use crate::domain::orchestrator;

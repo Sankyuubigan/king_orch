@@ -1,9 +1,9 @@
-mod prompt;
+pub mod prompt;
 mod runtime;
 
 use crate::domain::agent_manager::{load_agents, AgentProfile};
 use crate::domain::workflow_engine::{
-    find_workflow_for_agent, load_workflows, WorkflowContext, WorkflowRunner,
+    find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner,
 };
 use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SubCall, ToolCallInfo};
 use crate::domain::parsers::{
@@ -79,62 +79,62 @@ where
     }
     let mut msg_counter = messages_store.len() as u32;
 
-    if let Some(id) = agent_id.strip_prefix("agent_") {
-        if let Some(primary_agent) = agents.iter().find(|a| a.id == id) {
-            let mut all_sub_calls = Vec::new();
+    // Определяем entry type: если agent_id совпадает с file_stem YAML workflow — запускаем граф
+    let mut all_sub_calls = Vec::new();
+    let workflows = load_workflows(&agents_dir).unwrap_or_default();
+    let workflow_match = find_workflow_by_stem(&workflows, &agent_id).filter(|wf| wf.visible);
 
-            // Пытаемся найти workflow для этого агента
-            if let Ok(workflows) = load_workflows(&agents_dir) {
-                if let Some(workflow) = find_workflow_for_agent(&workflows, id) {
-                    log_cb(format!("▶ Запуск workflow '{}' для агента '{}'", workflow.name, id));
-                    let mut ctx = WorkflowContext::new(
-                        user_text.clone(),
-                        "main".to_string(),
-                        messages_store.clone(),
-                        recent_history.clone(),
-                    );
-                    let mut runner = WorkflowRunner {
-                        engine: &engine,
-                        agents: &agents,
-                        workflows: &workflows,
-                        log_cb: log_cb.clone(),
-                        status_cb: status_cb.clone(),
-                        subcall_cb: subcall_cb.clone(),
-                        max_gen_tokens,
-                        model_params: &model_params,
-                        format_type: &format_type,
-                        cancel_flag: cancel_flag.clone(),
-                        mcp_servers_dir: &mcp_servers_dir,
-                        all_sub_calls: &mut all_sub_calls,
-                        msg_counter: &mut msg_counter,
-                    };
-                    let final_res = crate::domain::workflow_engine::run_workflow(
-                        workflow, &mut ctx, &mut runner,
-                    )?;
-                    ctx.messages.push(ChatMessage {
-                        id: Some(format!("msg_{}", msg_counter)),
-                        msg_type: "message".to_string(),
-                        content: final_res.clone(),
-                        namespace: None,
-                        sub_calls: None,
-                        author: Some("assistant".to_string()),
-                    });
-                    return Ok((final_res, all_sub_calls, ctx.messages));
-                }
-            }
+    if let Some(workflow) = workflow_match {
+        log_cb(format!("▶ Запуск workflow '{}' (entry: {})", workflow.name, agent_id));
+        let mut ctx = WorkflowContext::new(
+            user_text.clone(),
+            "main".to_string(),
+            messages_store.clone(),
+            recent_history.clone(),
+        );
+        let mut runner = WorkflowRunner {
+            engine: &engine,
+            agents: &agents,
+            workflows: &workflows,
+            log_cb: log_cb.clone(),
+            status_cb: status_cb.clone(),
+            subcall_cb: subcall_cb.clone(),
+            max_gen_tokens,
+            model_params: &model_params,
+            format_type: &format_type,
+            cancel_flag: cancel_flag.clone(),
+            mcp_servers_dir: &mcp_servers_dir,
+            all_sub_calls: &mut all_sub_calls,
+            msg_counter: &mut msg_counter,
+        };
+        let final_res = crate::domain::workflow_engine::run_workflow(
+            workflow, &mut ctx, &mut runner,
+        )?;
+        ctx.messages.push(ChatMessage {
+            id: Some(format!("msg_{}", msg_counter)),
+            msg_type: "message".to_string(),
+            content: final_res.clone(),
+            namespace: None,
+            sub_calls: None,
+            author: Some("assistant".to_string()),
+        });
+        return Ok((final_res, all_sub_calls, ctx.messages));
+    }
 
-            // Fallback: старый путь (если workflow нет)
-            log_cb(format!("▶ Запуск агента (legacy): {} (ns: main)", primary_agent.name));
-            let final_res = run_agent_node(
-                log_cb, status_cb, subcall_cb,
-                &engine, primary_agent, &agents, user_text, recent_history,
-                "main", max_gen_tokens, &model_params, &format_type,
-                cancel_flag, 0, &mut all_sub_calls, None, &mcp_servers_dir,
-                &mut messages_store, &mut msg_counter,
-            )?;
-            Ok((final_res, all_sub_calls, messages_store))
-        } else { Err(format!("Агент с ID '{}' не найден", id)) }
-    } else { Err("Неизвестный тип агента".to_string()) }
+    // Fallback: запуск .md агента
+    if let Some(primary_agent) = agents.iter().find(|a| a.id == agent_id) {
+        log_cb(format!("▶ Запуск агента: {} (ns: main)", primary_agent.name));
+        let final_res = run_agent_node(
+            log_cb, status_cb, subcall_cb,
+            &engine, primary_agent, &agents, user_text, recent_history,
+            "main", max_gen_tokens, &model_params, &format_type,
+            cancel_flag, 0, &mut all_sub_calls, None, &mcp_servers_dir,
+            &mut messages_store, &mut msg_counter,
+        )?;
+        Ok((final_res, all_sub_calls, messages_store))
+    } else {
+        Err(format!("Entry point '{}' не найден: нет ни workflow, ни .md агента с таким ID", agent_id))
+    }
 }
 
 fn get_agent_report_from_messages(messages: &[ChatMessage], author: &str, namespace: &str) -> Option<String> {

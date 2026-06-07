@@ -47,6 +47,9 @@ fn main() {
             api::chat::chat_request,
             api::chat::stop_processing,
             api::graph::get_workflow_graphs,
+            api::test::run_iterative_test,
+            api::test::read_test_file,
+            api::test::write_test_results,
             infra::downloader::download_model,
         ])
         .run(tauri::generate_context!())

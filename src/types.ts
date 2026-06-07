@@ -31,12 +31,12 @@ export interface ModelParams {
     presence_penalty: number;
 }
 
-export interface AgentProfile {
+export interface AgentEntry {
     id: string;
     name: string;
     description: string;
+    entry_type: 'agent' | 'workflow';
     is_hidden: boolean;
-    mode: 'primary' | 'router' | 'worker' | 'auto';
 }
 
 export interface ChatResponse {
@@ -55,4 +55,15 @@ export interface SessionMeta {
 export interface ThoughtMenuCallbacks {
     onDeleteThoughts: (assistantUid: string) => void;
     onCloneFromThoughts: (assistantUid: string) => void;
+}
+
+export interface TestCaseDef {
+    input_data: string;
+    right_answer_context: string;
+}
+
+export interface SingleTestResult {
+    input_data: string;
+    right_answer_context: string;
+    responses: Record<string, string>;
 }

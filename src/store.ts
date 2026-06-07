@@ -20,6 +20,12 @@ class Store {
   // Черновик
   draftTimeout: number | undefined;
 
+  // Продвинутые функции
+  showAdvancedFeatures = false;
+
+  // Тестирование агентов
+  testFileContent: any[] | null = null;
+
   // Каталог моделей
   modelsCatalog: any[] = [];
 

@@ -4,7 +4,7 @@
  * Импорты идут через двери (index.ts) — модули не лезут в кишки друг друга.
  */
 import { initConfirmDialog } from "./ui";
-import { ChatController, SessionController, SettingsController, GraphController } from "./controllers";
+import { ChatController, SessionController, SettingsController, GraphController, AgentTestController } from "./controllers";
 import { bus } from "./events";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -39,6 +39,7 @@ function initApp() {
     downloadProgressBar: $<HTMLDivElement>("download-progress-bar"),
     downloadStatusLabel: $<HTMLDivElement>("download-status-label"),
     btnAddModel: $<HTMLButtonElement>("btn-add-model"),
+    chkShowAdvanced: $<HTMLInputElement>("chk-show-advanced"),
   });
 
   // ─── Контроллер чата (вкладка 💬) ───
@@ -68,7 +69,7 @@ function initApp() {
     viewSubchat: $<HTMLDivElement>("view-subchat"),
   });
 
-  // ─── Контроллер графа (вкладка 🔀) ───
+  // ─── Контроллер графа (вкладка 🔀 в студии агентов) ───
   const graphCtrl = new GraphController({
     graphContainer: $<HTMLDivElement>("graph-container"),
     graphSidebar: $<HTMLDivElement>("graph-sidebar"),
@@ -78,41 +79,93 @@ function initApp() {
     graphSidebarClose: $<HTMLButtonElement>("graph-sidebar-close"),
   });
 
-  // ─── Переключение вкладок (общий UI, не принадлежит одному контроллеру) ───
+  // ─── Контроллер теста агентов (суб-вкладка в студии агентов) ───
+  const agentTestCtrl = new AgentTestController({
+    testFilePath: $<HTMLInputElement>("test-file-path"),
+    btnSelectTestFile: $<HTMLButtonElement>("btn-select-test-file"),
+    testAgentList: $<HTMLDivElement>("test-agent-list"),
+    testModelList: $<HTMLDivElement>("test-model-list"),
+    btnRunTest: $<HTMLButtonElement>("btn-run-test"),
+    testProgress: $<HTMLDivElement>("test-progress"),
+    testStatusLabel: $<HTMLDivElement>("test-status-label"),
+    testProgressBar: $<HTMLDivElement>("test-progress-bar"),
+    testResultsBox: $<HTMLDivElement>("test-results-box"),
+    testResultsContent: $<HTMLDivElement>("test-results-content"),
+    btnSaveTestResults: $<HTMLButtonElement>("btn-save-test-results"),
+  });
+
+  // ─── Переключение вкладок ───
   const tabChat = $<HTMLButtonElement>("tab-chat");
-  const tabGraph = $<HTMLButtonElement>("tab-graph");
+  const tabAgentStudio = $<HTMLButtonElement>("tab-agent-studio");
   const tabSettings = $<HTMLButtonElement>("tab-settings");
   const tabLogs = $<HTMLButtonElement>("tab-logs");
   const viewChat = $<HTMLDivElement>("view-chat");
-  const viewGraph = $<HTMLDivElement>("view-graph");
+  const viewAgentStudio = $<HTMLDivElement>("view-agent-studio");
   const viewSettings = $<HTMLDivElement>("view-settings");
   const viewLogs = $<HTMLDivElement>("view-logs");
   const viewSubchat = $<HTMLDivElement>("view-subchat");
   const btnClearLogs = $<HTMLButtonElement>("btn-clear-logs");
   const logView = $<HTMLTextAreaElement>("log-view");
 
-  function switchTab(tab: 'chat' | 'graph' | 'settings' | 'logs') {
-    tabChat.classList.toggle('active', tab === 'chat');
-    tabGraph.classList.toggle('active', tab === 'graph');
-    tabSettings.classList.toggle('active', tab === 'settings');
-    tabLogs.classList.toggle('active', tab === 'logs');
-    viewChat.classList.toggle('active', tab === 'chat');
-    viewGraph.classList.toggle('active', tab === 'graph');
-    viewSubchat.classList.remove('active');
-    viewSettings.classList.toggle('active', tab === 'settings');
-    viewLogs.classList.toggle('active', tab === 'logs');
+  // Суб-вкладки студии агентов
+  const subtabGraph = $<HTMLButtonElement>("subtab-graph");
+  const subtabAiTest = $<HTMLButtonElement>("subtab-ai-test");
+  const viewSubGraph = $<HTMLDivElement>("view-sub-graph");
+  const viewSubAiTest = $<HTMLDivElement>("view-sub-ai-test");
+
+  let activeSubTab: 'graph' | 'ai-test' = 'graph';
+
+  function switchSubTab(tab: 'graph' | 'ai-test') {
+    activeSubTab = tab;
+    subtabGraph.classList.toggle('active', tab === 'graph');
+    subtabAiTest.classList.toggle('active', tab === 'ai-test');
+    viewSubGraph.classList.toggle('active', tab === 'graph');
+    viewSubAiTest.classList.toggle('active', tab === 'ai-test');
     if (tab === 'graph') requestAnimationFrame(() => graphCtrl.onTabActivated());
   }
 
+  function switchTab(tab: 'chat' | 'agent-studio' | 'settings' | 'logs') {
+    tabChat.classList.toggle('active', tab === 'chat');
+    tabAgentStudio.classList.toggle('active', tab === 'agent-studio');
+    tabSettings.classList.toggle('active', tab === 'settings');
+    tabLogs.classList.toggle('active', tab === 'logs');
+    viewChat.classList.toggle('active', tab === 'chat');
+    viewAgentStudio.classList.toggle('active', tab === 'agent-studio');
+    viewSubchat.classList.remove('active');
+    viewSettings.classList.toggle('active', tab === 'settings');
+    viewLogs.classList.toggle('active', tab === 'logs');
+    if (tab === 'agent-studio') {
+      switchSubTab(activeSubTab);
+    }
+    if (tab === 'agent-studio' && activeSubTab === 'graph') {
+      requestAnimationFrame(() => graphCtrl.onTabActivated());
+    }
+  }
+
+  // Управление видимостью студии агентов
+  function updateAgentStudioVisibility(visible: boolean) {
+    tabAgentStudio.classList.toggle('visible', visible);
+    if (!visible && viewAgentStudio.classList.contains('active')) {
+      switchTab('chat');
+    }
+  }
+
   tabChat?.addEventListener("click", () => switchTab('chat'));
-  tabGraph?.addEventListener("click", () => switchTab('graph'));
+  tabAgentStudio?.addEventListener("click", () => switchTab('agent-studio'));
   tabSettings?.addEventListener("click", () => switchTab('settings'));
   tabLogs?.addEventListener("click", () => switchTab('logs'));
   btnClearLogs?.addEventListener("click", () => { logView.value = ""; });
 
+  subtabGraph?.addEventListener("click", () => switchSubTab('graph'));
+  subtabAiTest?.addEventListener("click", () => {
+    switchSubTab('ai-test');
+    agentTestCtrl.init();
+  });
+
   // ─── Мосты шины событий ───
-  bus.on("tab:switch", (tab: string) => switchTab(tab as 'chat' | 'graph' | 'settings' | 'logs'));
+  bus.on("tab:switch", (tab: string) => switchTab(tab as 'chat' | 'agent-studio' | 'settings' | 'logs'));
   bus.on("log", (msg: string) => chatCtrl.logToGUI(msg));
+  bus.on("advanced:visibility", (visible: boolean) => updateAgentStudioVisibility(visible));
 
   // ─── Старт ───
   settingsCtrl.loadConfig();
