@@ -116,7 +116,7 @@
 
 | Файл/Модуль | Зона ответственности |
 |-------------|---------------------|
-| `orchestrator/mod.rs` | Главный цикл: парсинг ответа LLM, вызов сабагентов/инструментов, рекурсивный `run_agent_node()`, built-in `get_agent_report`. **Точка входа `run_chat()` автоматически определяет: запускать workflow YAML или legacy `run_agent_node()`** |
+| `orchestrator/mod.rs` | Главный цикл: парсинг ответа LLM, вызов сабагентов/инструментов, рекурсивный `run_agent_node()`, built-in `get_agent_report`. В legacy .md режиме вся история non-thought сообщений inject'ится в `llm_messages` как отдельные ChatMessage. **Точка входа `run_chat()` автоматически определяет: запускать workflow YAML или legacy `run_agent_node()`** |
 | `orchestrator/prompt.rs` | Сборка системного промпта, инструкция по `get_agent_report` вместо рендера состояния |
 | `orchestrator/runtime.rs` | Загрузка и запуск MCP-серверов |
 | `workflow_engine/mod.rs` | **Графовый движок маршрутизации.** Исполняет YAML-графы (workflows). Точка входа — `run_workflow()` |
@@ -177,10 +177,12 @@ User → Entry point (выбор в UI: .md с visible: true или YAML с visi
          │          ├→ llm_classifier → intent_classifier.rs (built-in)
          │          ├→ switch → маршрутизация по status
          │          ├→ sub_workflow → рекурсивный вызов другого YAML
-         │          ├→ llm_worker → run_agent_node() для .md агента
+         │          ├→ llm_worker → run_agent_node() для .md агента (без авто-истории)
          │          └→ system_condition → Rust-side проверка
          │
     [Нет] → orchestrator::run_agent_node()
+         │          └→ вся история non-thought сообщений inject'ится в llm_messages
+         │             (автоматически, в отличие от workflow где {{ messages }} опционален)
 ```
 
 **Запрещённые импорты:**

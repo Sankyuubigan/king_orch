@@ -131,6 +131,15 @@ where
             cancel_flag, 0, &mut all_sub_calls, None, &mcp_servers_dir,
             &mut messages_store, &mut msg_counter,
         )?;
+        messages_store.push(ChatMessage {
+            id: Some(format!("msg_{}", msg_counter)),
+            msg_type: "message".to_string(),
+            content: final_res.clone(),
+            namespace: None,
+            sub_calls: None,
+            author: Some("assistant".to_string()),
+        });
+        msg_counter += 1;
         Ok((final_res, all_sub_calls, messages_store))
     } else {
         Err(format!("Entry point '{}' не найден: нет ни workflow, ни .md агента с таким ID", agent_id))
@@ -249,6 +258,24 @@ where
     let system_prompt = build_system_prompt(agent, messages, current_namespace, has_tools, &all_tools);
 
     let mut llm_messages = vec![ChatMessage { id: None, msg_type: "message".to_string(), content: system_prompt.clone(), namespace: None, sub_calls: None, author: Some("system".to_string()) }];
+
+    for msg in messages.iter() {
+        if msg.msg_type == "thought" { continue; }
+        let role = match msg.author.as_deref() {
+            Some("user") => "user",
+            Some("system") => "system",
+            _ => "assistant",
+        };
+        llm_messages.push(ChatMessage {
+            id: None,
+            msg_type: "message".to_string(),
+            content: msg.content.clone(),
+            namespace: None,
+            sub_calls: None,
+            author: Some(role.to_string()),
+        });
+    }
+
     llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: user_text.clone(), namespace: None, sub_calls: None, author: Some("user".to_string()) });
 
     let initial_dump = format!("### [NS: {}]\n### [SYSTEM PROMPT]\n{}",
