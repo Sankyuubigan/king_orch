@@ -44,6 +44,8 @@ fn main() {
             api::models::set_model_params,
             api::models::reset_model_params,
             api::models::add_model,
+            api::models::set_mmproj_path,
+            api::models::get_mmproj_path,
             api::chat::chat_request,
             api::chat::stop_processing,
             api::graph::get_workflow_graphs,

@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State, Emitter};
 
 use crate::domain;
-use crate::infra::{self, ChatMessage, ModelParams, SubCall};
+use crate::infra::{self, ChatMessage, ChatAttachment, ModelParams, SubCall};
 use crate::api::AppState;
 
 // ─── Лог-файл последнего запуска ───
@@ -95,6 +95,8 @@ pub async fn chat_request(
     context_size: u32,
     kv_quantization: bool,
     model_params: ModelParams,
+    attachments: Vec<ChatAttachment>,
+    mmproj_path: Option<String>,
 ) -> Result<ChatResponse, String> {
     let mut cfg = infra::load_config(&app);
     cfg.context_size = context_size;
@@ -143,11 +145,13 @@ pub async fn chat_request(
             agent_id,
             message,
             history,
+            attachments,
             context_size,
             kv_quantization,
             model_params,
             format_type,
             conf_threshold,
+            mmproj_path,
             cancel_flag,
         )
     })

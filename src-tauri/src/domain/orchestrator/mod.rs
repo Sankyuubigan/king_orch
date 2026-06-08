@@ -5,7 +5,7 @@ use crate::domain::agent_manager::{load_agents, AgentProfile};
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner,
 };
-use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SubCall, ToolCallInfo};
+use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, ToolCallInfo};
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
     has_incomplete_json_action, parse_orchestrator_response, parse_tool_call,
@@ -52,8 +52,9 @@ pub fn run_chat<L, S, C>(
     log_cb: L, status_cb: S, subcall_cb: C,
     agents_dir: std::path::PathBuf, mcp_servers_dir: std::path::PathBuf,
     model_path: String, agent_id: String, user_text: String, history: Vec<ChatMessage>,
+    attachments: Vec<ChatAttachment>,
     context_size: u32, kv_quantization: bool, model_params: ModelParams, format_type: String,
-    _conf_threshold: f32, cancel_flag: Arc<AtomicBool>,
+    _conf_threshold: f32, mmproj_path: Option<String>, cancel_flag: Arc<AtomicBool>,
 ) -> Result<(String, Vec<SubCall>, Vec<ChatMessage>), String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -61,7 +62,11 @@ where
     C: Fn(&SubCall) + Clone + Send + Sync + 'static,
 {
     status_cb("Загрузка модели в память...".to_string(), 10);
-    let engine = LlamaEngine::new(&model_path, context_size, kv_quantization, &log_cb)?;
+    let engine = if mmproj_path.is_some() {
+        LlamaEngine::new_with_mmproj(&model_path, mmproj_path.as_deref(), context_size, kv_quantization, &log_cb)?
+    } else {
+        LlamaEngine::new(&model_path, context_size, kv_quantization, &log_cb)?
+    };
     let agents = load_agents(&agents_dir)?;
     let max_gen_tokens = (context_size as usize).saturating_sub(2048).max(1024);
     let recent_history: Vec<ChatMessage> = history.iter()
@@ -127,6 +132,7 @@ where
         let final_res = run_agent_node(
             log_cb, status_cb, subcall_cb,
             &engine, primary_agent, &agents, user_text, recent_history,
+            &attachments,
             "main", max_gen_tokens, &model_params, &format_type,
             cancel_flag, 0, &mut all_sub_calls, None, &mcp_servers_dir,
             &mut messages_store, &mut msg_counter,
@@ -209,6 +215,7 @@ pub(crate) fn run_agent_node<L, S, C>(
     log_cb: L, status_cb: S, subcall_cb: C,
     engine: &LlamaEngine, agent: &AgentProfile, agents: &[AgentProfile],
     user_text: String, _history: Vec<ChatMessage>,
+    attachments: &[ChatAttachment],
     current_namespace: &str,
     max_gen_tokens: usize, model_params: &ModelParams, format_type: &str,
     cancel_flag: Arc<AtomicBool>, depth: usize,
@@ -301,11 +308,19 @@ where
 
         // ── 3a. LLM GENERATION ──
         let gen_start = Instant::now();
-        let raw_response = engine.generate_chat(
-            &llm_messages, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
-            |p, _| { status_cb(format!("{} думает (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
-            log_cb.clone(),
-        )?;
+        let raw_response = if !attachments.is_empty() && engine.is_multimodal() {
+            engine.generate_chat_multimodal(
+                &llm_messages, &attachments, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
+                |p, _| { status_cb(format!("{} обрабатывает медиа (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
+                log_cb.clone(),
+            )?
+        } else {
+            engine.generate_chat(
+                &llm_messages, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
+                |p, _| { status_cb(format!("{} думает (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
+                log_cb.clone(),
+            )?
+        };
 
         log_cb(format!("⏱ Генерация {}: {:.1}с, сырой ответ {} символов", agent.name, gen_start.elapsed().as_secs_f32(), raw_response.len()));
 
@@ -448,6 +463,7 @@ where
                 let sub_result = run_agent_node(
                     log_cb.clone(), status_cb.clone(), subcall_cb.clone(),
                     engine, subagent, agents, parsed.content.clone(), vec![],
+                    &[],
                     child_ns,
                     max_gen_tokens, model_params, format_type,
                     cancel_flag.clone(), depth + 1, all_sub_calls, Some(agent.name.clone()), mcp_servers_dir,

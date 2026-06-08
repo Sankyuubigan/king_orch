@@ -60,6 +60,7 @@ where
             self.agents,
             task.to_string(),
             vec![],
+            &[],
             namespace,
             self.max_gen_tokens,
             self.model_params,

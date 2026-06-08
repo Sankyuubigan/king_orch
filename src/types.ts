@@ -67,3 +67,9 @@ export interface SingleTestResult {
     right_answer_context: string;
     responses: Record<string, string>;
 }
+
+export interface Attachment {
+    file_name: string;
+    mime_type: string;
+    data_base64: string;
+}

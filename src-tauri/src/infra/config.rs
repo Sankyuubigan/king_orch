@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -45,6 +45,22 @@ pub struct AppConfig {
     pub confidence_threshold: f32,
     #[serde(default = "default_show_advanced_features")]
     pub show_advanced_features: bool,
+    #[serde(default)]
+    pub mmproj_files: HashMap<String, String>,
+}
+
+pub fn auto_detect_mmproj(model_path: &str) -> Option<String> {
+    let dir = Path::new(model_path).parent()?;
+
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.to_lowercase().contains("mmproj") && name.ends_with(".gguf") {
+                return Some(entry.path().to_string_lossy().to_string());
+            }
+        }
+    }
+    None
 }
 
 fn default_context_size() -> u32 { 24576 }
@@ -66,6 +82,7 @@ impl Default for AppConfig {
             prompt_format: default_prompt_format(),
             confidence_threshold: default_confidence_threshold(),
             show_advanced_features: default_show_advanced_features(),
+            mmproj_files: HashMap::new(),
         }
     }
 }

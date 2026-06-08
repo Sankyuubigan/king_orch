@@ -15,6 +15,9 @@ use llama_cpp_2::token::data_array::LlamaTokenDataArray;
 use llama_cpp_2::llama_batch::LlamaBatch;
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "mtmd")]
+use llama_cpp_2::mtmd::{MtmdContext, MtmdContextParams, MtmdBitmap, mtmd_default_marker};
+
 use crate::infra::config::ModelParams;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -46,6 +49,13 @@ pub struct ChatMessage {
     pub sub_calls: Option<Vec<SubCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatAttachment {
+    pub file_name: String,
+    pub mime_type: String,
+    pub data_base64: String,
 }
 
 impl ChatMessage {
@@ -249,10 +259,17 @@ pub struct LlamaEngine {
     n_ctx: u32,
     kv_quant: bool,
     model_path: String,
+    pub mmproj_path: Option<String>,
+    #[cfg(feature = "mtmd")]
+    mtmd_ctx: Option<MtmdContext>,
 }
 
 impl LlamaEngine {
     pub fn new<L: Fn(String)>(model_path: &str, n_ctx: u32, kv_quant: bool, log_cb: L) -> Result<Self, String> {
+        Self::new_with_mmproj(model_path, None, n_ctx, kv_quant, log_cb)
+    }
+
+    pub fn new_with_mmproj<L: Fn(String)>(model_path: &str, mmproj_path: Option<&str>, n_ctx: u32, kv_quant: bool, log_cb: L) -> Result<Self, String> {
         log_cb("⚡ Инициализация llama.cpp...".to_string());
         let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
         let gpu_layers: u32 = 999;
@@ -262,7 +279,28 @@ impl LlamaEngine {
         let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
             .map_err(|e| format!("Ошибка загрузки модели: {}", e))?;
         log_cb("✅ Модель загружена успешно".to_string());
-        Ok(Self { backend, model, n_ctx, kv_quant, model_path: model_path.to_string() })
+
+        #[cfg(feature = "mtmd")]
+        let mtmd_ctx = if let Some(mmp) = mmproj_path {
+            match MtmdContext::init_from_file(mmp, &model, &MtmdContextParams::default()) {
+                Ok(ctx) => {
+                    log_cb(format!("✅ mmproj загружен: {} (vision={}, audio={})", mmp, ctx.support_vision(), ctx.support_audio()));
+                    Some(ctx)
+                }
+                Err(e) => {
+                    log_cb(format!("⚠️ Не удалось загрузить mmproj: {}", e));
+                    None
+                }
+            }
+        } else { None };
+
+        Ok(Self {
+            backend, model, n_ctx, kv_quant,
+            model_path: model_path.to_string(),
+            mmproj_path: mmproj_path.map(|s| s.to_string()),
+            #[cfg(feature = "mtmd")]
+            mtmd_ctx,
+        })
     }
 
     fn run_generation<F, L>(
@@ -442,6 +480,13 @@ impl LlamaEngine {
         Ok(result_text)
     }
 
+    pub fn is_multimodal(&self) -> bool {
+        #[cfg(feature = "mtmd")]
+        { self.mtmd_ctx.is_some() }
+        #[cfg(not(feature = "mtmd"))]
+        { false }
+    }
+
     pub fn generate_chat<F, L>(
         &self,
         messages: &[ChatMessage],
@@ -472,4 +517,208 @@ impl LlamaEngine {
         let stop_words_refs: Vec<&str> = stop_words.iter().map(|s| s.as_str()).collect();
         self.run_generation(&full_prompt, max_tokens, model_params, &stop_words_refs, cancel_flag, progress_cb, log_cb)
     }
+
+    #[cfg(feature = "mtmd")]
+    pub fn generate_chat_multimodal<F, L>(
+        &self,
+        messages: &[ChatMessage],
+        attachments: &[ChatAttachment],
+        max_tokens: usize,
+        model_params: &ModelParams,
+        format_type: &str,
+        cancel_flag: Arc<AtomicBool>,
+        mut progress_cb: F,
+        log_cb: L,
+    ) -> Result<String, String>
+    where F: FnMut(f32, &str), L: Fn(String) {
+        let mtmd_ctx = self.mtmd_ctx.as_ref().ok_or("mmproj не загружен")?;
+
+        // Build prompt text with media markers
+        let mut pf = PromptFormat::from_str(format_type);
+        let mut full_prompt = String::new();
+
+        if pf == PromptFormat::Auto {
+            if let Some(template_str) = extract_string_from_gguf(&self.model_path, "tokenizer.chat_template") {
+                if let Ok(rendered) = render_jinja_template(&template_str, messages) {
+                    full_prompt = rendered;
+                }
+            }
+        }
+
+        if full_prompt.is_empty() {
+            if pf == PromptFormat::Auto { pf = PromptFormat::detect_from_path(&self.model_path); }
+            full_prompt = pf.format_messages(messages);
+        }
+
+        // Append media markers so mtmd can replace them
+        let marker = mtmd_default_marker();
+        for _ in attachments.iter() {
+            full_prompt.push_str(marker);
+        }
+
+        log_cb(format!("📐 Мультимодальный промпт: {} символов, {} вложений", full_prompt.len(), attachments.len()));
+
+        // Load all attachments as MtmdBitmaps
+        let mut bitmaps = Vec::new();
+        for att in attachments {
+            let data = base64_decode(&att.data_base64)
+                .map_err(|_| format!("Ошибка декодирования base64: {}", att.file_name))?;
+            let bitmap = MtmdBitmap::from_buffer(mtmd_ctx, &data)
+                .map_err(|e| format!("Ошибка загрузки {}: {:?}", att.file_name, e))?;
+            bitmaps.push(bitmap);
+        }
+
+        let bitmap_refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
+
+        // Tokenize
+        let input_text = llama_cpp_2::mtmd::MtmdInputText {
+            text: full_prompt.clone(),
+            add_special: true,
+            parse_special: true,
+        };
+
+        let chunks = mtmd_ctx.tokenize(input_text, &bitmap_refs)
+            .map_err(|e| format!("Ошибка токенизации: {:?}", e))?;
+
+        let batch_size = 512;
+        let logical_cores = std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(8);
+        let threads = (logical_cores / 2).max(4);
+
+        let mut ctx_params = LlamaContextParams::default();
+        ctx_params = ctx_params.with_n_ctx(NonZeroU32::new(self.n_ctx));
+        ctx_params = ctx_params.with_n_batch(batch_size as u32);
+        ctx_params = ctx_params.with_n_threads(threads);
+        ctx_params = ctx_params.with_n_threads_batch(threads);
+        ctx_params = ctx_params.with_flash_attention_policy(1);
+
+        if self.kv_quant {
+            ctx_params = ctx_params.with_type_k(KvCacheType::Q8_0).with_type_v(KvCacheType::Q8_0);
+        }
+
+        let mut ctx = self.model.new_context(&self.backend, ctx_params)
+            .map_err(|e| format!("Ошибка создания контекста: {}", e))?;
+
+        // Evaluate multimodal chunks
+        let n_past = chunks.eval_chunks(mtmd_ctx, &ctx, 0, 0, batch_size, true)
+            .map_err(|e| format!("Ошибка eval_chunks: {:?}", e))?;
+
+        progress_cb(50.0, "Генерация ответа...");
+
+        // Now run the generation loop
+        let gen_start = std::time::Instant::now();
+        let mut n_cur = n_past as i32;
+        let mut generated_tokens = 0;
+        let mut result_text = String::new();
+        let mut past_tokens: Vec<llama_cpp_2::token::LlamaToken> = Vec::new();
+
+        let mut stop_words = vec![
+            "<|im_end|>", "<end_of_turn>", "</s>", "<|eot_id|>",
+            "<turn>", "<|eot|>", "User:", "System:", "<eos>", "Yes",
+            "<turn|>", "/end_of_turn>", "<step>", "<|end_of_text|>", "<｜end of sentence｜>",
+            "</start_of_turn>"
+        ];
+        // Also add format-specific stop words
+        let pf_stop = PromptFormat::from_str(format_type);
+        for w in pf_stop.get_stop_words() {
+            if !stop_words.contains(&w) {
+                stop_words.push(w);
+            }
+        }
+
+        while n_cur < self.n_ctx as i32 && generated_tokens < max_tokens as usize {
+            if cancel_flag.load(Ordering::SeqCst) { return Err("Прервано пользователем".to_string()); }
+
+            let candidates_array = ctx.candidates_ith(0);
+            let candidates = LlamaTokenDataArray::from_iter(candidates_array, false);
+            let mut candidates_vec: Vec<(llama_cpp_2::token::LlamaToken, f32)> = candidates.data.iter().map(|d| (d.id(), d.logit())).collect();
+
+            let penalty_last_n = 256.min(past_tokens.len());
+            let last_tokens_slice = if past_tokens.len() > penalty_last_n { &past_tokens[past_tokens.len() - penalty_last_n..] } else { &past_tokens };
+            let mut penalty_tokens = last_tokens_slice.to_vec();
+            penalty_tokens.sort(); penalty_tokens.dedup();
+
+            for (id, logit) in candidates_vec.iter_mut() {
+                if penalty_tokens.binary_search(id).is_ok() {
+                    *logit -= model_params.presence_penalty;
+                    if *logit <= 0.0 { *logit *= model_params.repetition_penalty; }
+                    else { *logit /= model_params.repetition_penalty; }
+                }
+            }
+
+            let temp = model_params.temperature.max(0.01);
+            for (_, logit) in candidates_vec.iter_mut() { *logit /= temp; }
+
+            let max_logit = candidates_vec.iter().map(|(_, l)| *l).fold(f32::NEG_INFINITY, f32::max);
+            let mut sum_exp = 0.0;
+            let mut probs: Vec<(llama_cpp_2::token::LlamaToken, f32)> = candidates_vec.into_iter().map(|(id, logit)| {
+                let p = (logit - max_logit).exp(); sum_exp += p; (id, p)
+            }).collect();
+            for (_, p) in probs.iter_mut() { *p /= sum_exp; }
+            probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            let k = (model_params.top_k as usize).min(probs.len()).max(1);
+            probs.truncate(k);
+            let max_prob = probs.first().map(|(_, p)| *p).unwrap_or(1.0);
+            let min_p_thresh = max_prob * model_params.min_p;
+            probs.retain(|(_, p)| *p >= min_p_thresh);
+
+            let mut cumulative_prob = 0.0;
+            let mut top_p_idx = probs.len();
+            for (i, (_, p)) in probs.iter().enumerate() {
+                cumulative_prob += *p;
+                if cumulative_prob >= model_params.top_p { top_p_idx = i + 1; break; }
+            }
+            probs.truncate(top_p_idx);
+
+            let sum_prob: f32 = probs.iter().map(|(_, p)| *p).sum();
+            for (_, p) in probs.iter_mut() { *p /= sum_prob; }
+
+            static SEED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1337);
+            let mut seed = SEED.load(Ordering::SeqCst);
+            if seed == 1337 { seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos().max(1); }
+            seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
+            SEED.store(seed, Ordering::SeqCst);
+            let r = (seed as f32) / (u32::MAX as f32);
+
+            let mut cumulative = 0.0;
+            let mut new_token = probs.last().map(|(id, _)| *id).unwrap_or_else(|| self.model.token_eos());
+            for (id, p) in probs.iter() { cumulative += *p; if r <= cumulative { new_token = *id; break; } }
+
+            if new_token == self.model.token_eos() { break; }
+            past_tokens.push(new_token);
+
+            if let Ok(bytes) = self.model.token_to_bytes(new_token, Special::Tokenize) {
+                result_text.push_str(&String::from_utf8_lossy(&bytes));
+            }
+
+            let mut should_stop = false;
+            for word in stop_words.iter() {
+                if result_text.contains(word) { result_text = result_text.replace(word, "").trim().to_string(); should_stop = true; break; }
+            }
+            if should_stop { break; }
+
+            let mut batch = LlamaBatch::new(batch_size as usize, 1);
+            batch.add(new_token, n_cur, &[0], true).map_err(|e| e.to_string())?;
+            ctx.decode(&mut batch).map_err(|e| e.to_string())?;
+
+            n_cur += 1; generated_tokens += 1;
+            if generated_tokens % 20 == 0 {
+                let gen_p = (generated_tokens as f32 / max_tokens as f32) * 50.0;
+                progress_cb(50.0 + gen_p, &format!("Генерация: {} токенов...", generated_tokens));
+            }
+        }
+        progress_cb(100.0, &format!("Готово ({} токенов)", generated_tokens));
+
+        let gen_elapsed = gen_start.elapsed().as_secs_f64();
+        let speed = if gen_elapsed > 0.0 { generated_tokens as f64 / gen_elapsed } else { 0.0 };
+        log_cb(format!("⚙️ Сгенерировано {} токенов за {:.1}с ({:.0} tok/s)", generated_tokens, gen_elapsed, speed));
+
+        Ok(result_text)
+    }
+}
+
+fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
+    use base64::Engine as _;
+    base64::engine::general_purpose::STANDARD.decode(input)
+        .map_err(|e| format!("base64 decode error: {}", e))
 }

@@ -4,7 +4,7 @@ import { store } from "../store";
 import { bus } from "../events";
 import { createMessageElement, createSubcallElement, createToolCallElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, showToast } from "../ui";
 import type { Role, MessageMenuCallbacks } from "../ui";
-import type { ThoughtMenuCallbacks } from "../types";
+import type { ThoughtMenuCallbacks, Attachment } from "../types";
 import { saveSession, loadSession } from "../services";
 import mermaid from "mermaid";
 
@@ -48,12 +48,16 @@ export interface ChatElements {
   prespenSlider: HTMLInputElement;
   viewChat: HTMLDivElement;
   viewSubchat: HTMLDivElement;
+  btnAttach: HTMLButtonElement;
+  fileInput: HTMLInputElement;
+  filePreview: HTMLDivElement;
 }
 
 export class ChatController {
   private el: ChatElements;
   private menuCallbacks: MessageMenuCallbacks;
   private thoughtMenuCallbacks: ThoughtMenuCallbacks;
+  private attachments: Attachment[] = [];
 
   constructor(el: ChatElements) {
     this.el = el;
@@ -68,6 +72,7 @@ export class ChatController {
     this.bindDomEvents();
     this.bindTauriEvents();
     this.bindBusEvents();
+    setTimeout(() => this.updateAttachButtonState(), 100);
   }
 
   // ─── Скролл ───
@@ -190,23 +195,31 @@ export class ChatController {
 
   // ─── Отправка сообщения ───
   async handleSend() {
-    const text = this.el.chatInput.value.trim(); if (!text || store.isProcessing) return;
+    const text = this.el.chatInput.value.trim(); if (!text && this.attachments.length === 0) return; if (store.isProcessing) return;
     const activeAgent = this.el.agentSelect.value; const modelPath = this.el.modelSelect.value;
     if (!modelPath) { showToast("Выберите модель!", "error"); return; }
     const userUid = store.nextUid(); store.msgUidList.push(userUid);
-    this.appendMessage('user', text, undefined, undefined, undefined, false, userUid);
+    const displayText = text || (this.attachments.length > 0 ? `[${this.attachments.length} файлов]` : '');
+    this.appendMessage('user', displayText, undefined, undefined, undefined, false, userUid);
     this.el.chatInput.value = ""; this.el.chatInput.style.height = "auto"; clearTimeout(store.draftTimeout);
+    // Clear attachments preview
+    this.el.filePreview.innerHTML = '';
+    const attachments = [...this.attachments];
+    this.attachments = [];
     this.setProcessingState(true);
     if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     const preSendLength = store.chatHistory.length;
-    store.chatHistory.push({ type: "message", author: "user", content: text });
+    store.chatHistory.push({ type: "message", author: "user", content: displayText });
     await saveSession(store.currentSessionId, store.chatHistory, ""); bus.emit("session:changed");
     const startTime = performance.now();
     try {
       const displayName = this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace(/^[📁📊]\s*/, '');
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value) };
       const allHistory = store.chatHistory.slice();
-      const response: any = await invoke("chat_request", { modelPath, agentId: activeAgent, message: text, history: allHistory, contextSize: parseInt(this.el.contextSlider.value, 10), kvQuantization: this.el.chkKvQuant.checked, modelParams: params });
+      // Get mmproj path for the current model
+      let mmprojPath: string | null = null;
+      try { mmprojPath = await invoke("get_mmproj_path", { modelPath }); } catch (_) {}
+      const response: any = await invoke("chat_request", { modelPath, agentId: activeAgent, message: text, history: allHistory, contextSize: parseInt(this.el.contextSlider.value, 10), kvQuantization: this.el.chkKvQuant.checked, modelParams: params, attachments, mmprojPath });
       const dur = ((performance.now() - startTime) / 1000).toFixed(1);
       // Merge streamed intermediate thoughts with final results from Rust
       const newMessages = response.messages || [];
@@ -244,6 +257,8 @@ export class ChatController {
     if (store.isProcessing) return;
     store.currentSessionId = null; store.resetForNewSession(); this.thoughtDedupSet.clear();
     this.el.chatHistory.innerHTML = ''; this.el.chatInput.value = ''; this.el.chatInput.style.height = "auto";
+    this.el.filePreview.innerHTML = ''; this.attachments = [];
+    this.updateAttachButtonState();
     this.appendMessage('system', 'Новая сессия. Выберите агента и напишите запрос.');
     bus.emit("session:changed"); bus.emit("tab:switch", 'chat');
   }
@@ -260,6 +275,76 @@ export class ChatController {
     } catch(e) { showToast(`Ошибка: ${e}`, "error"); }
   }
 
+  // ─── Состояние кнопки прикрепления ───
+  private async updateAttachButtonState() {
+    const btn = this.el.btnAttach;
+    const modelPath = this.el.modelSelect?.value;
+    if (!modelPath) { btn.disabled = true; btn.classList.remove('btn-attach-active'); btn.classList.add('btn-attach-inactive'); btn.title = 'Сначала выберите модель'; return; }
+    let hasMmproj = false;
+    try { hasMmproj = !!(await invoke("get_mmproj_path", { modelPath })); } catch (_) {}
+    if (hasMmproj) {
+      btn.disabled = false;
+      btn.classList.remove('btn-attach-inactive');
+      btn.classList.add('btn-attach-active');
+      btn.title = 'Прикрепить файл (изображение/аудио)';
+    } else {
+      btn.disabled = true;
+      btn.classList.remove('btn-attach-active');
+      btn.classList.add('btn-attach-inactive');
+      btn.title = 'mmproj не найден — мультимодальный режим недоступен';
+    }
+  }
+
+  // ─── Файловые вложения ───
+  private async handleFileSelect(files: FileList | null) {
+    if (!files || store.isProcessing) return;
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      if (file.size > 20 * 1024 * 1024) { showToast(`Файл ${file.name} слишком большой (>20MB)`, "error"); continue; }
+      const dataBase64 = await this.fileToBase64(file);
+      this.attachments.push({ file_name: file.name, mime_type: file.type, data_base64: dataBase64 });
+      this.addFilePreview(file.name, file.type, dataBase64);
+    }
+    this.el.fileInput.value = '';
+  }
+
+  private fileToBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const result = reader.result as string;
+        resolve(result.split(',')[1] || result);
+      };
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+  }
+
+  private addFilePreview(fileName: string, mimeType: string, dataBase64: string) {
+    const div = document.createElement('div');
+    div.className = 'file-preview-item';
+    const isImage = mimeType.startsWith('image/');
+    if (isImage) {
+      const img = document.createElement('img');
+      img.src = `data:${mimeType};base64,${dataBase64}`;
+      div.appendChild(img);
+    }
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'file-preview-name';
+    nameSpan.textContent = fileName;
+    div.appendChild(nameSpan);
+    const remove = document.createElement('span');
+    remove.className = 'file-preview-remove';
+    remove.textContent = '✕';
+    remove.addEventListener('click', () => {
+      const idx = this.attachments.findIndex(a => a.file_name === fileName);
+      if (idx !== -1) this.attachments.splice(idx, 1);
+      div.remove();
+    });
+    div.appendChild(remove);
+    this.el.filePreview.appendChild(div);
+  }
+
   // ─── Привязка DOM-событий ───
   private bindDomEvents() {
     this.el.btnSend?.addEventListener("click", () => this.handleSend());
@@ -268,6 +353,9 @@ export class ChatController {
     this.el.btnBackChat?.addEventListener("click", () => { this.el.viewSubchat.classList.remove('active'); this.el.viewChat.classList.add('active'); });
     this.el.chatInput.addEventListener("input", () => { this.el.chatInput.style.height = "auto"; this.el.chatInput.style.height = `${this.el.chatInput.scrollHeight}px`; this.triggerDraftSave(); });
     this.el.chatInput.addEventListener("blur", () => { if (store.currentSessionId && !store.isProcessing) { clearTimeout(store.draftTimeout); saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value); } });
+    this.el.btnAttach?.addEventListener("click", () => { if (!this.el.btnAttach.disabled) this.el.fileInput.click(); });
+    this.el.fileInput?.addEventListener("change", (e) => this.handleFileSelect((e.target as HTMLInputElement).files));
+    this.el.modelSelect?.addEventListener("change", () => this.updateAttachButtonState());
   }
 
   // ─── Привязка Tauri-событий ───
@@ -305,5 +393,6 @@ export class ChatController {
   private bindBusEvents() {
     bus.on("session:new", () => this.startNewSession());
     bus.on("session:open", (id: string) => this.openSession(id));
+    bus.on("config:loaded", () => this.updateAttachButtonState());
   }
 }

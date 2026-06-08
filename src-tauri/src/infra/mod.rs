@@ -10,11 +10,11 @@ pub mod downloader;
 
 // ─── Публичные типы ───
 pub use config::{AppConfig, CatalogEntry, ModelParams};
-pub use llm::{ChatMessage, LlamaEngine, SubCall, ToolCallInfo};
+pub use llm::{ChatMessage, ChatAttachment, LlamaEngine, SubCall, ToolCallInfo};
 pub use session_manager::{ChatSession, SessionMeta};
 pub use mcp_client::McpClient;
 
 // ─── Публичные функции ───
-pub use config::{load_config, save_config, load_catalog};
+pub use config::{load_config, save_config, load_catalog, auto_detect_mmproj};
 pub use llm::{extract_f32_from_gguf, extract_u32_from_gguf};
 pub use session_manager::{get_session, get_sessions, save_session, delete_session, rename_session, open_session_folder};

@@ -40,8 +40,12 @@
         <div class="chat-input-area group-box">
           <textarea id="chat-input" placeholder="Спросите что угодно (Shift+Enter для переноса)..."></textarea>
           
+          <div id="file-preview" class="file-preview-row"></div>
+
           <div class="chat-input-controls">
             <div class="chat-input-controls-left">
+              <button id="btn-attach" class="btn-icon" title="Прикрепить файл (изображение/аудио)">📎</button>
+              <input type="file" id="file-input" accept="image/*,audio/*,.wav,.mp3,.flac,.jpg,.jpeg,.png,.webp" multiple style="display: none;" />
               <select id="agent-select" title="Выбор агента"></select>
               <select id="model-select" title="Выбор модели GGUF"></select>
               <button id="btn-add-model" class="btn-secondary" title="Добавить новую модель (локально)">+</button>

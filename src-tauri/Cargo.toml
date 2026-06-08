@@ -8,6 +8,10 @@ edition = "2021"
 [build-dependencies]
 tauri-build = { version = "2.0.0", features = [] }
 
+[features]
+default = ["mtmd"]
+mtmd = ["llama-cpp-2/mtmd"]
+
 [dependencies]
 tauri = { version = "2.0.0", features = [] }
 tauri-plugin-dialog = "2.0.0"
@@ -16,10 +20,11 @@ tauri-plugin-updater = "2.0.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["full"] }
-llama-cpp-2 = { version = "0.1.146", features = ["cuda"] }
+llama-cpp-2 = { version = "0.1.146", features = ["cuda", "mtmd"] }
 regex = "1.10"
 lazy_static = "1.4"
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
 futures-util = "0.3"
 minijinja = "1.0"
 serde_yaml = "0.9"
+base64 = "0.22"

@@ -67,6 +67,9 @@ function initApp() {
     prespenSlider: $<HTMLInputElement>("prespen-slider"),
     viewChat: $<HTMLDivElement>("view-chat"),
     viewSubchat: $<HTMLDivElement>("view-subchat"),
+    btnAttach: $<HTMLButtonElement>("btn-attach"),
+    fileInput: $<HTMLInputElement>("file-input"),
+    filePreview: $<HTMLDivElement>("file-preview"),
   });
 
   // ─── Контроллер графа (вкладка 🔀 в студии агентов) ───
