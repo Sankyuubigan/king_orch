@@ -1,26 +1,47 @@
-use crate::domain::workflow_engine::parser::StatusDef;
+use crate::domain::workflow_engine::parser::{StatusDef, WorkflowConfig};
 
-/// Возвращает системный промпт для встроенного intent-классификатора.
-/// Статусы инжектятся runtime из YAML workflow (config.statuses).
-pub fn build_classifier_prompt(statuses: &[StatusDef], user_message: &str) -> String {
-    let status_list: String = statuses
+/// Возвращает системный промпт для intent-классификатора.
+/// Если в config указан `classifier_prompt` — использует его как есть.
+/// Иначе собирает дефолтный промпт из статусов (description + criteria).
+pub fn build_classifier_prompt(config: &WorkflowConfig, user_message: &str) -> String {
+    if let Some(ref custom_prompt) = config.classifier_prompt {
+        let status_list = build_status_list(&config.statuses);
+        let result = custom_prompt.replace("{{ statuses }}", &status_list);
+        return result.replace("{{ user_message }}", user_message);
+    }
+
+    build_default_prompt(&config.statuses, user_message)
+}
+
+fn build_status_list(statuses: &[StatusDef]) -> String {
+    statuses
         .iter()
-        .map(|s| format!("- \"{}\": {}", s.id, s.description))
+        .map(|s| {
+            let mut entry = format!("- \"{}\": {}", s.id, s.description);
+            if let Some(ref criteria) = s.criteria {
+                entry.push_str(&format!("\n  Критерии: {}", criteria));
+            }
+            entry
+        })
         .collect::<Vec<_>>()
-        .join("\n");
+        .join("\n")
+}
+
+fn build_default_prompt(statuses: &[StatusDef], user_message: &str) -> String {
+    let status_list = build_status_list(statuses);
 
     format!(
         r#"Ты — системный анализатор. Прочитай сообщение пользователя.
-Твоя единственная задача — определить текущее состояние и выдать ответ СТРОГО в JSON.
+Твоя задача — определить текущее состояние по критериям ниже.
+Ответь ТОЛЬКО JSON, без пояснений.
 
 Доступные статусы:
 {status_list}
 
-Формат ответа (всегда JSON):
-{{"status": "<твой выбор>"}}
+Формат ответа:
+{{"status": "<статус>"}}
 
-Если статус "one_problem_incomplete" — добавь поле missing_points:
-{{"status": "one_problem_incomplete", "missing_points": ["контекст", "желание", "адаптация"]}}
+При необходимости можешь добавить любые дополнительные поля в JSON.
 
 Сообщение пользователя:
 {user_message}

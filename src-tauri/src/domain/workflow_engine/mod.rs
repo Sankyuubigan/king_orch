@@ -75,6 +75,30 @@ where
         )
     }
 
+    /// Зовёт LLM со свободным ответом (без системного промпта) — для llm_freeform
+    pub fn call_llm_freeform(&self, user_text: &str, history: &[ChatMessage]) -> Result<String, String> {
+        let mut msgs = history.to_vec();
+        msgs.push(ChatMessage {
+            id: None,
+            msg_type: "message".to_string(),
+            content: user_text.to_string(),
+            namespace: None,
+            sub_calls: None,
+            author: Some("user".to_string()),
+        });
+        self.engine
+            .generate_chat(
+                &msgs,
+                self.max_gen_tokens,
+                self.model_params,
+                self.format_type,
+                self.cancel_flag.clone(),
+                |_, _| {},
+                self.log_cb.clone(),
+            )
+            .map_err(|e| format!("Ошибка LLM в freeform: {}", e))
+    }
+
     /// Зовёт LLM напрямую (без .md агента) — для intent-классификатора
     pub fn call_llm_direct(&self, system_prompt: &str, user_text: &str) -> Result<String, String> {
         let msgs = vec![

@@ -1,40 +1,37 @@
-name: Main Therapy Loop
+name: Therapist
 visible: true
 
 config:
-  statuses:
-    - id: greeting
-      description: "Юзер просто поздоровался"
-    - id: multiple_problems
-      description: "Юзер вывалил кучу разных несвязанных проблем (каша)"
-    - id: one_problem_incomplete
-      description: "Юзер назвал одну проблему, но не хватает контекста, желания или адаптации"
-    - id: ready_for_expose
-      description: "Проблема ясна, все 3 пункта собраны, можно лечить"
+  statuses_file: "statuses.yaml"
 
 nodes:
   - id: classify_intent
     type: llm_classifier
-    statuses: "$ref config.statuses"
     input: "{{ user_message }}"
 
   - id: route
     type: switch
     input: "{{ nodes.classify_intent.output.status }}"
+    default: freestyle
     cases:
       greeting: respond
-      multiple_problems: triage
+      somatic_symptoms: call_soma_aux
       one_problem_incomplete: collect_info
-      ready_for_expose: check_analysis_done
+      ready_for_expose: check_analysis_all_done
+      user_doesnt_agree: call_curator
+
+  - id: freestyle
+    type: llm_freeform
+    input: "{{ user_message }}"
 
   - id: respond
     type: llm_worker
-    agent: therapist_communicator
+    agent: liaison
     task: "Пользователь поздоровался. Поприветствуй его и спроси, с чем он хочет поработать."
 
   - id: collect_info
     type: llm_worker
-    agent: therapist_communicator
+    agent: liaison
     task: >
       Пользователь описал проблему, но не хватает данных.
       Собери недостающие пункты по Протоколу 3 пунктов:
@@ -43,21 +40,62 @@ nodes:
       3. Как клиент справляется сейчас (адаптация/компенсация)
       Недостающие пункты: {{ nodes.classify_intent.output.missing_points }}
 
-  - id: triage
-    type: sub_workflow
-    workflow: triage_flow.yaml
+  - id: call_soma_aux
+    type: llm_worker
+    agent: soma_translator
+    namespace: main
+    task: >
+      Пользователь описывает физические симптомы.
+      Используя базу знаний 10 сегментов тела и НГМ,
+      напиши пользователю вспомогательную информацию,
+      чтобы помочь ему раскрыть его проблему.
+      Пиши простым языком, будто пользователю 15 лет.
 
-  - id: check_analysis_done
+  - id: call_curator
+    type: llm_worker
+    agent: curator
+    task: >
+      Пользователь не согласен с ответами команды психотерапии.
+      Используй свой алгоритм проекций, чтобы выяснить истинную причину
+      несогласия и помочь пользователю раскрыть проблему.
+
+  - id: check_analysis_all_done
     type: system_condition
     action: has_reports
     required:
-      - pattern_finder_by_double_bind
+      - soma_translator
       - destructor_detector
+      - pattern_finder_by_double_bind
     namespace: main
 
-  - id: run_analysis_if_needed
-    type: sub_workflow
-    workflow: analysis_flow.yaml
+  - id: check_reports
+    type: system_condition
+    action: get_missing_reports
+    required:
+      - soma_translator
+      - destructor_detector
+      - pattern_finder_by_double_bind
+    namespace: main
+
+  - id: call_soma
+    type: llm_worker
+    agent: soma_translator
+    namespace: main
+    task: >
+      Пользователь описывает физические симптомы.
+      Используя базу знаний 10 сегментов тела и НГМ,
+      напиши пользователю вспомогательную информацию,
+      чтобы помочь ему раскрыть его проблему.
+      Пиши простым языком, будто пользователю 15 лет.
+
+  - id: call_destructor
+    type: llm_worker
+    agent: destructor_detector
+    namespace: main
+
+  - id: call_pattern
+    type: llm_worker
+    agent: pattern_finder_by_double_bind
     namespace: main
 
   - id: start_datamining
@@ -76,7 +114,7 @@ nodes:
 
   - id: present_results
     type: llm_worker
-    agent: therapist_communicator
+    agent: liaison
     task: >
       Лечение завершено в неймспейсе main.
       Вот отчёты всех агентов. Используй их чтобы объяснить клиенту ситуацию.
@@ -95,31 +133,47 @@ edges:
     case: greeting
     to: respond
   - from: route
-    case: multiple_problems
-    to: triage
+    case: somatic_symptoms
+    to: call_soma_aux
   - from: route
     case: one_problem_incomplete
     to: collect_info
   - from: route
     case: ready_for_expose
-    to: check_analysis_done
-  - from: check_analysis_done
-    condition: missing
-    to: run_analysis_if_needed
-  - from: check_analysis_done
+    to: check_analysis_all_done
+  - from: route
+    case: user_doesnt_agree
+    to: call_curator
+
+  - from: check_analysis_all_done
     condition: present
     to: start_datamining
-  - from: run_analysis_if_needed
+  - from: check_analysis_all_done
+    condition: missing
+    to: check_reports
+  - from: check_reports
+    to: call_soma
+  - from: call_soma
+    to: call_destructor
+  - from: call_destructor
+    to: call_pattern
+  - from: call_pattern
     to: start_datamining
+
   - from: start_datamining
     to: aggregate_reports
   - from: aggregate_reports
     to: present_results
+
+  - from: freestyle
+    to: END
   - from: respond
     to: END
   - from: collect_info
     to: END
-  - from: triage
+  - from: call_soma_aux
+    to: END
+  - from: call_curator
     to: END
   - from: present_results
     to: END

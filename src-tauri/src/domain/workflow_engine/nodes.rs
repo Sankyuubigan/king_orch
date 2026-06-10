@@ -1,5 +1,5 @@
 use crate::domain::workflow_engine::context::WorkflowContext;
-use crate::domain::workflow_engine::parser::{EdgeDef, NodeDef, NodeType, WorkflowDef};
+use crate::domain::workflow_engine::parser::{EdgeDef, NodeDef, NodeType, WorkflowConfig, WorkflowDef};
 use crate::domain::workflow_engine::WorkflowRunner;
 use crate::infra::{ChatMessage, SubCall};
 
@@ -24,14 +24,14 @@ where
 {
     match node.node_type {
         NodeType::LlmClassifier => {
-            let statuses = workflow
+            let config = workflow
                 .config
                 .as_ref()
-                .map(|c| c.statuses.clone())
-                .unwrap_or_default();
+                .cloned()
+                .unwrap_or(WorkflowConfig::default());
             let input = context.resolve_template(node.input.as_deref().unwrap_or(""));
             let prompt =
-                super::intent_classifier::build_classifier_prompt(&statuses, &input);
+                super::intent_classifier::build_classifier_prompt(&config, &input);
 
             let llm_response = runner.call_llm_direct(&prompt, &input)?;
 
@@ -44,26 +44,17 @@ where
                         .unwrap_or_else(|| serde_json::json!({"status": "greeting"}))
                 });
 
-            let status = parsed
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("greeting")
-                .to_string();
-            let missing = parsed.get("missing_points");
-
+            let status = parsed.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
             (runner.log_cb)(format!(
                 "[classifier] Статус: {}, ответ: {}",
                 status,
                 llm_response.chars().take(200).collect::<String>()
             ));
+            eprintln!("[classifier] Статус: {}", status);
 
-            let mut output = serde_json::json!({"status": status});
-            if let Some(mp) = missing {
-                output["missing_points"] = mp.clone();
-            }
-
+            // Пробрасываем все поля из JSON LLM в output узла
             Ok(NodeResult {
-                output,
+                output: parsed,
                 next_node: None,
             })
         }
@@ -278,6 +269,15 @@ where
             })
         }
 
+        NodeType::LlmFreeform => {
+            let user_text = context.resolve_template(node.input.as_deref().unwrap_or("{{ user_message }}"));
+            let result = runner.call_llm_freeform(&user_text, &context.history)?;
+            Ok(NodeResult {
+                output: serde_json::json!({"result": result}),
+                next_node: None,
+            })
+        }
+
         NodeType::Switch => {
             let input = context.resolve_template(node.input.as_deref().unwrap_or(""));
             let status = serde_json::from_str::<serde_json::Value>(&input)
@@ -295,7 +295,7 @@ where
                 .ok_or_else(|| "Switch node без cases".to_string())?;
             let target = cases
                 .get(&status)
-                .or_else(|| cases.values().next())
+                .or_else(|| node.default.as_ref())
                 .cloned();
 
             Ok(NodeResult {
