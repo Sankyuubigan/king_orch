@@ -10,8 +10,8 @@ nodes:
     type: llm_fact_extractor
     input: "{{ user_message }}"
     ui_pos:
-      x: 100
       y: 130
+      x: 100
   - id: priority_router
     type: switch
     input_object: "{{ nodes.extract_facts.output }}"
@@ -21,11 +21,11 @@ nodes:
       - key: has_somatic
         to: call_soma_translator
       - key: not_enough_data
-        to: extract_protocol_data
+        to: check_has_grounding
     default: freestyle
     ui_pos:
-      y: 130
       x: 420
+      y: 130
   - id: call_curator
     type: llm_worker
     agent: curator
@@ -42,67 +42,43 @@ nodes:
     ui_pos:
       x: 740
       y: -10
-  - id: respond_greeting
-    type: llm_worker
-    agent: liaison
-    task: Поздоровайся и спроси, с чем будем работать.
-    output_type: message
-    ui_pos:
-      y: 130
-      x: 740
   - id: freestyle
     type: llm_freeform
     input: "{{ user_message }}"
     ui_pos:
-      x: 740
-      y: 270
-  - id: extract_protocol_data
-    type: llm_worker
-    agent: protocol_extractor
-    task: Обнови статус протокола.
-    output_type: thought
-    ui_pos:
-      y: 410
-      x: 740
-  - id: check_protocol
-    type: system_condition
-    action: check_protocol_state
-    required:
-      - protocol_extractor
-    ui_pos:
-      x: 1060
-      y: 130
-  - id: protocol_router
-    type: switch
-    input: "{{ nodes.check_protocol.output.status }}"
-    cases:
-      need_more_data: ask_missing
-      ready: start_datamining
-    ui_pos:
-      y: 130
-      x: 1380
-  - id: ask_missing
+      x: 739
+      y: 315
+  - id: collect_info
     type: llm_worker
     agent: liaison
-    task: "Нам не хватает: {{ nodes.check_protocol.output.missing_points }}. Спроси об этом."
-    output_type: message
+    task: |
+      Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
     ui_pos:
-      x: 1700
-      y: 60
+      x: 1701
+      y: 34
+  - id: check_has_grounding
+    type: switch
+    input: "{{ nodes.extract_facts.output.not_enough_data }}"
+    cases:
+      "true": collect_info
+      "false": start_datamining
+    ui_pos:
+      x: 986
+      y: 165
   - id: start_datamining
     type: sub_workflow
     workflow: treatment_flow.yaml
     ui_pos:
-      x: 1700
       y: 200
+      x: 1700
   - id: output_raw_datamining
     type: system_condition
     action: aggregate_and_output
     required:
       - neuro_reprogrammer
     ui_pos:
-      x: 2020
       y: 130
+      x: 2020
 
 edges:
   - from: extract_facts
@@ -114,23 +90,16 @@ edges:
     case: has_somatic
     to: call_soma_translator
   - from: priority_router
-    case: is_greeting
-    to: respond_greeting
-  - from: priority_router
     case: default
     to: freestyle
   - from: priority_router
     case: not_enough_data
-    to: extract_protocol_data
-  - from: extract_protocol_data
-    to: check_protocol
-  - from: check_protocol
-    to: protocol_router
-  - from: protocol_router
-    case: need_more_data
-    to: ask_missing
-  - from: protocol_router
-    case: ready
+    to: check_has_grounding
+  - from: check_has_grounding
+    case: "true"
+    to: collect_info
+  - from: check_has_grounding
+    case: "false"
     to: start_datamining
   - from: start_datamining
     to: output_raw_datamining

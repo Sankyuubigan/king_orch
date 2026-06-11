@@ -293,6 +293,28 @@ export class GraphController {
         }
       }
 
+      for (const node of nodes) {
+        if (node.type !== "switch") continue;
+        const switchEdges = edges.filter(e => e.from === node.id);
+        if (node.cases_priority) {
+          node.cases_priority = node.cases_priority.filter(cp =>
+            switchEdges.some(e => e.to === cp.to && e.case === cp.key)
+          );
+        }
+        if (node.cases) {
+          const newCases: Record<string, string> = {};
+          for (const [key, val] of Object.entries(node.cases as Record<string, string>)) {
+            if (switchEdges.some(e => e.to === val && e.case === key)) {
+              newCases[key] = val;
+            }
+          }
+          node.cases = newCases;
+        }
+        if (node.default && !switchEdges.some(e => e.to === node.default)) {
+          delete node.default;
+        }
+      }
+
       const workflow = { name: this.currentWorkflowName, visible: true, config: this.currentWorkflowConfig, nodes, edges };
       await invoke("save_workflow", { path: this.currentFilePath, workflow });
       showToast("✅ Workflow сохранён", "success");
@@ -370,6 +392,15 @@ export class GraphController {
     if (taskTextarea) {
       taskTextarea.addEventListener("change", () => {
         this.editor!.drawflow.drawflow.Home.data[nodeId].data.task = taskTextarea.value;
+      });
+    }
+
+    const nodeIdInput = document.getElementById("ge-node-id") as HTMLInputElement;
+    if (nodeIdInput) {
+      nodeIdInput.addEventListener("change", () => {
+        this.editor!.drawflow.drawflow.Home.data[nodeId].data.id = nodeIdInput.value;
+        this.updateNodeHtml(nodeId);
+        this.el.graphDetailTitle.textContent = `✏️ ${nodeIdInput.value}`;
       });
     }
   }
