@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::Manager;
 
 use crate::domain::workflow_engine::parser::{
@@ -121,4 +121,45 @@ fn find_agents_dir(app: &tauri::AppHandle) -> PathBuf {
     let default = exe_dir.join("agents");
     let _ = fs::create_dir_all(&default);
     default
+}
+
+/// Загружает один YAML-файл workflow по полному пути
+#[tauri::command]
+pub fn read_workflow_file(path: String) -> Result<GraphWorkflowDef, String> {
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Ошибка чтения файла {}: {}", path, e))?;
+    let file_stem = Path::new(&path)
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    let mut wf: crate::domain::workflow_engine::parser::WorkflowDef =
+        serde_yaml::from_str(&content)
+            .map_err(|e| format!("Ошибка парсинга YAML: {}", e))?;
+    wf.file_stem = file_stem.clone();
+
+    Ok(GraphWorkflowDef {
+        team: String::new(),
+        name: wf.name,
+        file_stem,
+        visible: wf.visible,
+        config: wf.config,
+        nodes: wf.nodes,
+        edges: wf.edges,
+    })
+}
+
+/// Сохраняет workflow в указанный файл (полный путь)
+#[tauri::command]
+pub fn save_workflow(
+    app: tauri::AppHandle,
+    path: String,
+    workflow: crate::domain::workflow_engine::parser::WorkflowDef,
+) -> Result<(), String> {
+    let _ = &app;
+    let yaml_str = serde_yaml::to_string(&workflow)
+        .map_err(|e| format!("Ошибка сериализации YAML: {}", e))?;
+    fs::write(&path, &yaml_str)
+        .map_err(|e| format!("Ошибка записи файла {}: {}", path, e))?;
+    Ok(())
 }

@@ -76,10 +76,15 @@ function initApp() {
   const graphCtrl = new GraphController({
     graphContainer: $<HTMLDivElement>("graph-container"),
     graphSidebar: $<HTMLDivElement>("graph-sidebar"),
-    graphTeamSelect: $<HTMLSelectElement>("graph-team-select"),
     graphDetailTitle: $<HTMLSpanElement>("graph-detail-title"),
     graphDetailContent: $<HTMLDivElement>("graph-detail-content"),
     graphSidebarClose: $<HTMLButtonElement>("graph-sidebar-close"),
+    btnOpenWorkflow: $<HTMLButtonElement>("btn-open-workflow"),
+    btnSaveWorkflow: $<HTMLButtonElement>("btn-save-workflow"),
+    currentWorkflowName: $<HTMLSpanElement>("current-workflow-name"),
+    btnAddWorker: $<HTMLButtonElement>("btn-add-worker"),
+    btnAddSwitch: $<HTMLButtonElement>("btn-add-switch"),
+    btnAddExtractor: $<HTMLButtonElement>("btn-add-extractor"),
   });
 
   // ─── Контроллер теста агентов (суб-вкладка в студии агентов) ───

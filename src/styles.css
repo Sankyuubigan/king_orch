@@ -185,26 +185,54 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 .thoughts-collapsed { max-height: 0; padding: 0; border: none; }
 .thoughts-expanded { max-height: 5000px; padding: 8px 0; }
 
-/* ─── Граф (вкладка 🔀) ─── */
-.graph-view { height: 100%; display: none; flex-direction: column; gap: 0; padding: 0; }
-.graph-view.active { display: flex; }
-
+/* ─── Граф (вкладка 🔀) — редактор Drawflow ─── */
 #graph-toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 10px 15px;
+  gap: 8px;
+  padding: 8px 12px;
   background: var(--panel-bg);
   border-bottom: 1px solid var(--border);
-  font-size: 14px;
+  font-size: 13px;
+  flex-wrap: wrap;
 }
-#graph-toolbar label { font-weight: 600; white-space: nowrap; }
-#graph-toolbar select { flex: 0 1 260px; }
+#graph-toolbar .toolbar-separator {
+  width: 1px;
+  height: 24px;
+  background: var(--border);
+  margin: 0 4px;
+}
+#graph-toolbar .toolbar-label {
+  font-weight: 600;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #999;
+  margin-right: 4px;
+}
+.graph-add-btn {
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--panel-bg);
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.graph-add-btn:hover { background: var(--session-hover); border-color: var(--primary); color: var(--primary); }
+.graph-add-btn.add-worker { border-color: #4caf5066; }
+.graph-add-btn.add-worker:hover { border-color: #4caf50; color: #4caf50; }
+.graph-add-btn.add-switch { border-color: #ef535066; }
+.graph-add-btn.add-switch:hover { border-color: #ef5350; color: #ef5350; }
+.graph-add-btn.add-extractor { border-color: #7e57c266; }
+.graph-add-btn.add-extractor:hover { border-color: #7e57c2; color: #7e57c2; }
 
-#graph-layout { flex: 1; display: flex; overflow: hidden; }
-#graph-container { flex: 1; height: 100%; border: none; background: #0a0a0a; }
+#graph-layout { flex: 1; display: flex; overflow: hidden; position: relative; }
+#graph-container { flex: 1; height: 100%; border: none; background: #1a1a1a; position: relative; }
 
-/* ─── Боковая панель деталей ─── */
+/* ─── Боковая панель редактирования ─── */
 #graph-sidebar {
   width: 0;
   overflow: hidden;
@@ -214,7 +242,7 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   display: flex;
   flex-direction: column;
 }
-#graph-sidebar.open { width: 340px; min-width: 340px; }
+#graph-sidebar.open { width: 360px; min-width: 360px; }
 
 .graph-sidebar-header {
   display: flex;
@@ -235,7 +263,13 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   line-height: 1.5;
 }
 
-.graph-hint { color: #888; font-style: italic; text-align: center; padding: 40px 10px; }
+.graph-hint {
+  color: #666;
+  font-style: italic;
+  text-align: center;
+  padding: 40px 10px;
+  font-size: 13px;
+}
 
 .graph-detail-section {
   margin-bottom: 14px;
@@ -285,6 +319,138 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   color: #ffe082;
   font-weight: 600;
   margin-right: 6px;
+}
+
+/* ─── Редактируемые поля в сайдбаре ─── */
+.ge-input, .ge-select, .ge-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  background: var(--input-bg);
+  color: var(--text);
+  box-sizing: border-box;
+  transition: border-color 0.15s;
+}
+.ge-input:focus, .ge-select:focus, .ge-textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.ge-textarea {
+  resize: vertical;
+  min-height: 60px;
+  line-height: 1.5;
+}
+
+/* ─── Drawflow custom node styles ─── */
+.drawflow-node {
+  background: var(--panel-bg) !important;
+  border: 2px solid var(--border) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 3px 10px rgba(0,0,0,0.3) !important;
+  min-width: 160px !important;
+  transition: box-shadow 0.15s, border-color 0.15s !important;
+}
+.drawflow-node:hover {
+  box-shadow: 0 5px 16px rgba(0,0,0,0.4) !important;
+}
+.drawflow-node.selected {
+  border-color: var(--primary) !important;
+  box-shadow: 0 0 0 2px rgba(76,175,80,0.3) !important;
+}
+.drawflow-node .drawflow-content {
+  padding: 10px 14px !important;
+  text-align: center;
+}
+.drawflow-node .drawflow_content_node {
+  font-size: 13px;
+  color: var(--text);
+}
+.drawflow-node .input {
+  background: #455a64 !important;
+  width: 18px !important;
+  height: 18px !important;
+  border: 2px solid #546e7a !important;
+}
+.drawflow-node .output {
+  background: #78909c !important;
+  width: 18px !important;
+  height: 18px !important;
+  border: 2px solid #90a4ae !important;
+}
+.drawflow-node .input:hover, .drawflow-node .output:hover {
+  background: var(--primary) !important;
+  border-color: var(--primary-hover) !important;
+}
+
+/* Node content items */
+.gn-title {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text);
+  margin-bottom: 2px;
+}
+.gn-type {
+  font-size: 11px;
+  color: #888;
+}
+.gn-agent {
+  font-size: 11px;
+  color: #4caf50;
+  margin-top: 2px;
+}
+
+/* Drawflow connection lines */
+.drawflow .connection .main-path {
+  stroke: #78909c !important;
+  stroke-width: 2.5 !important;
+}
+.drawflow .connection .main-path:hover {
+  stroke: var(--primary) !important;
+}
+.drawflow .connection .main-path.selected {
+  stroke: var(--primary) !important;
+}
+.drawflow .connection-point {
+  fill: var(--primary) !important;
+  stroke: var(--primary-hover) !important;
+  stroke-width: 2;
+}
+
+/* Drawflow canvas background grid */
+#graph-container {
+  --grid-color: #2a2a2a;
+  --grid-size: 30px;
+  background-image:
+    linear-gradient(var(--grid-color) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-color) 1px, transparent 1px) !important;
+  background-size: var(--grid-size) var(--grid-size) !important;
+}
+
+/* Drawflow zoom/pan controls */
+.drawflow .drawflow-controls {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  z-index: 10;
+}
+.drawflow .drawflow-controls button {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 4px 10px;
+  margin: 2px;
+  min-width: 32px;
+  text-align: center;
+}
+.drawflow .drawflow-controls button:hover {
+  background: var(--session-hover);
+  border-color: var(--primary);
 }
 
 /* ─── Студия агентов (вкладка 🧪) ─── */

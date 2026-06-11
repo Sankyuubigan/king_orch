@@ -1,24 +1,15 @@
 import { invoke } from "@tauri-apps/api/core";
-import { Network, DataSet } from "vis-network/standalone";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import Drawflow from "drawflow";
+import "drawflow/dist/drawflow.min.css";
 import { showToast } from "../ui";
-
-// ─── Типы данных с бэкенда ───
-
-interface GraphResponse {
-  teams: string[];
-  workflows: WorkflowGraphDef[];
-  agents: GraphAgentDef[];
-}
 
 interface WorkflowGraphDef {
   team: string;
   name: string;
   file_stem: string;
   visible: boolean;
-  config?: {
-    statuses?: Array<{ id: string; description: string }>;
-    facts?: Array<{ id: string; description: string }>;
-  };
+  config?: any;
   nodes: GraphNodeDef[];
   edges: GraphEdgeDef[];
 }
@@ -33,7 +24,12 @@ interface GraphNodeDef {
   required?: string[];
   workflow?: string;
   cases?: Record<string, string>;
+  default?: string;
+  cases_priority?: Array<{ key: string; to: string }>;
+  input_object?: string;
   namespace?: string;
+  output_type?: string;
+  ui_pos?: { x: number; y: number };
 }
 
 interface GraphEdgeDef {
@@ -43,57 +39,57 @@ interface GraphEdgeDef {
   case?: string;
 }
 
-interface GraphAgentDef {
-  team: string;
-  id: string;
-  name: string;
-  description: string;
-  is_hidden: boolean;
-  mode: string;
-}
-
-// ─── Стили узлов по типу ───
-
-const NODE_STYLES: Record<string, { shape: string; color: string; label: string }> = {
-  llm_worker:        { shape: "box",        color: "#4caf50", label: "Worker" },
-  llm_classifier:    { shape: "diamond",    color: "#42a5f5", label: "Classifier (legacy)" },
-  llm_fact_extractor:{ shape: "diamond",    color: "#7e57c2", label: "Fact Extractor" },
-  system_condition:  { shape: "hexagon",    color: "#ffa726", label: "Condition" },
-  sub_workflow:      { shape: "database",   color: "#ab47bc", label: "Sub-workflow" },
-  switch:            { shape: "triangle",   color: "#ef5350", label: "Switch" },
-  return:            { shape: "dot",        color: "#78909c", label: "Return" },
-};
-
-// ─── Workflow color map ───
-
-const WF_COLORS: Record<string, string> = {
-  main_conversation_flow: "#42a5f5",
-  triage_flow:            "#66bb6a",
-  analysis_flow:          "#ffa726",
-  treatment_flow: "#ab47bc",
-};
-
-// ─── Интерфейс для элементов DOM ───
-
 export interface GraphElements {
   graphContainer: HTMLDivElement;
   graphSidebar: HTMLDivElement;
-  graphTeamSelect: HTMLSelectElement;
   graphDetailTitle: HTMLSpanElement;
   graphDetailContent: HTMLDivElement;
   graphSidebarClose: HTMLButtonElement;
+  btnOpenWorkflow: HTMLButtonElement;
+  btnSaveWorkflow: HTMLButtonElement;
+  currentWorkflowName: HTMLSpanElement;
+  btnAddWorker: HTMLButtonElement;
+  btnAddSwitch: HTMLButtonElement;
+  btnAddExtractor: HTMLButtonElement;
 }
 
-// ─── Контроллер ───
+const NODE_COLORS: Record<string, string> = {
+  llm_worker: "#4caf50",
+  llm_classifier: "#42a5f5",
+  llm_fact_extractor: "#7e57c2",
+  llm_freeform: "#26c6da",
+  system_condition: "#ffa726",
+  sub_workflow: "#ab47bc",
+  switch: "#ef5350",
+  return: "#78909c",
+};
 
-const ENTRY_NODE = "__start__";
-const USER_NODE = "__user__";
+const NODE_LABELS: Record<string, string> = {
+  llm_worker: "🤖 Worker",
+  llm_classifier: "📋 Classifier",
+  llm_fact_extractor: "📋 Fact Extractor",
+  llm_freeform: "💬 Freeform",
+  system_condition: "⚡ Condition",
+  sub_workflow: "📦 Sub-workflow",
+  switch: "🔀 Switch",
+  return: "🏁 Return",
+};
+
+const OUTPUT_COUNT: Record<string, number> = {
+  llm_worker: 1,
+  llm_classifier: 1,
+  llm_fact_extractor: 1,
+  llm_freeform: 1,
+  system_condition: 1,
+  sub_workflow: 1,
+  switch: 0,
+  return: 0,
+};
 
 export class GraphController {
   private el: GraphElements;
-  private network: Network | null = null;
-  private allData: GraphResponse | null = null;
-  private nodeDataMap = new Map<string, any>();
+  private editor: Drawflow | null = null;
+  private currentFilePath: string | null = null;
 
   constructor(el: GraphElements) {
     this.el = el;
@@ -101,571 +97,382 @@ export class GraphController {
   }
 
   private bindEvents(): void {
-    this.el.graphTeamSelect.addEventListener("change", () => this.loadGraph());
+    this.el.btnOpenWorkflow.addEventListener("click", () => this.handleOpen());
+    this.el.btnSaveWorkflow.addEventListener("click", () => this.handleSave());
     this.el.graphSidebarClose.addEventListener("click", () => this.hideSidebar());
+    this.el.btnAddWorker.addEventListener("click", () => this.addNode("llm_worker"));
+    this.el.btnAddSwitch.addEventListener("click", () => this.addNode("switch"));
+    this.el.btnAddExtractor.addEventListener("click", () => this.addNode("llm_fact_extractor"));
   }
 
-  async loadData(): Promise<void> {
-    try {
-      this.allData = await invoke<GraphResponse>("get_workflow_graphs");
-      this.populateTeamSelect();
-      if (this.allData.teams.length > 0 && this.el.graphTeamSelect.value) {
-        this.loadGraph();
-      }
-    } catch (e) {
-      showToast(`Ошибка загрузки графа: ${e}`, "error");
-    }
-  }
+  private ensureEditor(): void {
+    if (this.editor) return;
+    this.editor = new Drawflow(this.el.graphContainer);
+    this.editor.start();
 
-  private populateTeamSelect(): void {
-    const sel = this.el.graphTeamSelect;
-    sel.innerHTML = "";
-    for (const team of this.allData!.teams) {
-      const opt = document.createElement("option");
-      opt.value = team;
-      opt.textContent = team === "psychotherapist" ? "🧠 Психотерапевт" : team;
-      sel.appendChild(opt);
-    }
-    if (sel.options.length > 0) {
-      sel.selectedIndex = 0;
-    }
-  }
-
-  private loadGraph(): void {
-    const team = this.el.graphTeamSelect.value;
-    if (!team || !this.allData) return;
-
-    const workflows = this.allData.workflows.filter(w => w.team === team);
-    const agents = this.allData.agents.filter(a => a.team === team);
-
-    const visNodes: any[] = [];
-    const visEdges: any[] = [];
-    this.nodeDataMap.clear();
-    // === Prepare workflow metadata ===
-    const firstNodePerWorkflow: Record<string, string> = {};
-    const entryWorkflows: string[] = [];
-
-    for (const wf of workflows) {
-      if (wf.nodes.length > 0) {
-        firstNodePerWorkflow[wf.file_stem] = `${wf.file_stem}.${wf.nodes[0].id}`;
-      }
-      if (wf.visible) {
-        entryWorkflows.push(wf.file_stem);
-      }
-    }
-
-    // Collect set of nodes referencing user_message
-    const userMsgNodeIds = new Set<string>();
-    for (const wf of workflows) {
-      for (const node of wf.nodes) {
-        const fullId = `${wf.file_stem}.${node.id}`;
-        if (node.input && node.input.includes("user_message")) {
-          userMsgNodeIds.add(fullId);
-        }
-        if (node.task && node.task.includes("user_message")) {
-          userMsgNodeIds.add(fullId);
-        }
-      }
-    }
-
-    // Precompute cross-workflow targets: sub_workflow node → target first node id
-    const subWfTargets: Map<string, string> = new Map();
-    for (const wf of workflows) {
-      for (const node of wf.nodes) {
-        if (node.type === "sub_workflow" && node.workflow) {
-          const targetStem = node.workflow.replace(/\.yaml$/, "").replace(/\.yml$/, "");
-          const targetFirst = firstNodePerWorkflow[targetStem];
-          if (targetFirst) {
-            subWfTargets.set(`${wf.file_stem}.${node.id}`, targetFirst);
-          }
-        }
-      }
-    }
-
-    // === 1) START node (entry) ===
-    if (entryWorkflows.length > 0) {
-      const firstEntry = entryWorkflows[0];
-      const targetId = firstNodePerWorkflow[firstEntry];
-      this.nodeDataMap.set(ENTRY_NODE, { type: "special", label: "🚀 START", description: "Точка входа в систему" });
-      visNodes.push({
-        id: ENTRY_NODE,
-        label: "🚀 START",
-        shape: "star",
-        color: {
-          background: "#ffd70033",
-          border: "#ffd700",
-          highlight: { background: "#ffd70055", border: "#ffffff" },
-          hover: { background: "#ffd70044", border: "#ffd700" },
-        },
-        font: { size: 14, color: "#ffd700", multi: "md" },
-        margin: { top: 8, bottom: 8, left: 14, right: 14 },
-        borderWidth: 2,
-      });
-      if (targetId) {
-        visEdges.push({
-          from: ENTRY_NODE,
-          to: targetId,
-          color: "#ffd700",
-          width: 2,
-          arrows: "to",
-        });
-      }
-    }
-
-    // === 2) User Input node ===
-    if (userMsgNodeIds.size > 0) {
-      this.nodeDataMap.set(USER_NODE, { type: "special", label: "👤 User Input", description: "Сообщение пользователя (user_message)" });
-      visNodes.push({
-        id: USER_NODE,
-        label: "👤 User",
-        shape: "ellipse",
-        color: {
-          background: "#fff17633",
-          border: "#fff176",
-          highlight: { background: "#fff17655", border: "#ffffff" },
-          hover: { background: "#fff17644", border: "#fff176" },
-        },
-        font: { size: 14, color: "#fff176", multi: "md" },
-        margin: { top: 6, bottom: 6, left: 12, right: 12 },
-        borderWidth: 2,
-      });
-      for (const targetId of userMsgNodeIds) {
-        visEdges.push({
-          from: USER_NODE,
-          to: targetId,
-          label: "user_message",
-          font: { size: 10, color: "#fff176", strokeWidth: 0 },
-          color: "#fff176",
-          width: 1,
-          dashes: true,
-          arrows: "to",
-        });
-      }
-    }
-
-    // === 3) Workflow step nodes ===
-    for (const wf of workflows) {
-      const prefix = wf.file_stem.replace(/_flow$/, "").replace(/_/g, " ");
-      for (const node of wf.nodes) {
-        const fullId = `${wf.file_stem}.${node.id}`;
-        const style = NODE_STYLES[node.type] || NODE_STYLES.llm_worker;
-        const wfColor = WF_COLORS[wf.file_stem] || "#888";
-        const borderColor = node.type === "sub_workflow" ? wfColor : style.color;
-
-        const lines: string[] = [];
-        // First line: node id (monospace look)
-        lines.push(node.id);
-
-        // Workflow context on second line
-        const typeLabel = `${node.type === "llm_worker" ? "🤖" : node.type === "llm_fact_extractor" || node.type === "llm_classifier" ? "📋" : node.type === "system_condition" ? "⚡" : node.type === "sub_workflow" ? "📦" : node.type === "switch" ? "🔀" : "🏁"} ${style.label} [${prefix}]`;
-        lines.push(typeLabel);
-
-        // Agent name on third line for workers
-        if (node.type === "llm_worker" && node.agent) {
-          const agent = agents.find(a => a.id === node.agent);
-          lines.push(agent ? `→ ${agent.name || node.agent}` : `→ ${node.agent}`);
-        }
-
-        // Statuses/facts for classifiers/extractors
-        if (node.type === "llm_fact_extractor" || node.type === "llm_classifier") {
-          if (wf.config?.facts && wf.config.facts.length > 0) {
-            lines.push(`facts: ${wf.config.facts.map((s: any) => s.id).join(", ")}`);
-          } else if (wf.config?.statuses && wf.config.statuses.length > 0) {
-            lines.push(`statuses: ${wf.config.statuses.map((s: any) => s.id).join(", ")}`);
-          }
-        }
-
-        // Cases for switches
-        if (node.type === "switch" && node.cases) {
-          lines.push(Object.keys(node.cases).join(" / "));
-        }
-
-        // Action for conditions
-        if (node.type === "system_condition" && node.action) {
-          lines.push(`action: ${node.action}`);
-        }
-
-        // Target for sub_workflow
-        if (node.type === "sub_workflow" && node.workflow) {
-          const targetStem = node.workflow.replace(/\.yaml$/, "");
-          lines.push(`→ ${targetStem}`);
-        }
-
-        this.nodeDataMap.set(fullId, {
-          type: "workflow-node",
-          node,
-          wf_name: wf.name,
-          file_stem: wf.file_stem,
-        });
-
-        const borderWidth = (node.type === "llm_classifier" || node.type === "llm_fact_extractor") ? 3 : node.type === "sub_workflow" ? 2 : 2;
-        const bgAlpha = (node.type === "llm_classifier" || node.type === "llm_fact_extractor") ? "33" : "22";
-
-        visNodes.push({
-          id: fullId,
-          label: lines.join("\n"),
-          shape: style.shape,
-          color: {
-            background: borderColor + bgAlpha,
-            border: borderColor,
-            highlight: { background: borderColor + "55", border: "#ffffff" },
-            hover: { background: borderColor + "44", border: borderColor },
-          },
-          font: { size: 12, color: "#e0e0e0", multi: "md", align: "center" },
-          margin: { top: 7, bottom: 7, left: 10, right: 10 },
-          borderWidth,
-          borderWidthSelected: 3,
-        });
-      }
-    }
-
-    // === 4) Within-workflow edges ===
-    for (const wf of workflows) {
-      for (const edge of wf.edges) {
-        const fromId = `${wf.file_stem}.${edge.from}`;
-        const toId = `${wf.file_stem}.${edge.to}`;
-        const label = edge.case || edge.condition || "";
-        visEdges.push({
-          from: fromId,
-          to: toId,
-          label,
-          font: { size: 11, color: "#ffe082", strokeWidth: 0 },
-          color: { color: "#90a4ae", highlight: "#fff" },
-          width: 2,
-          arrows: "to",
-          smooth: { enabled: true, type: "curvedCW", roundness: 0.15 },
-          dashes: edge.condition ? [5, 5] : false,
-        });
-      }
-    }
-
-    // === 5) Cross-workflow edges (sub_workflow → target first node) ===
-    for (const [fromId, toId] of subWfTargets) {
-      // Find the label for this sub_workflow
-      let subLabel = "";
-      for (const wf of workflows) {
-        for (const node of wf.nodes) {
-          if (`${wf.file_stem}.${node.id}` === fromId && node.workflow) {
-            subLabel = "→ " + node.workflow.replace(/\.yaml$/, "");
-          }
-        }
-      }
-      // Check target node exists
-      if (visNodes.some((n: any) => n.id === toId)) {
-        visEdges.push({
-          from: fromId,
-          to: toId,
-          label: subLabel,
-          font: { size: 10, color: "#ce93d8", strokeWidth: 0 },
-          color: { color: "#ce93d8" },
-          width: 2,
-          dashes: [6, 4],
-          arrows: "to",
-        });
-      }
-    }
-
-    // === 6) Agent nodes ===
-    const connectedAgents = new Set<string>();
-    for (const wf of workflows) {
-      for (const node of wf.nodes) {
-        if (node.type === "llm_worker" && node.agent) {
-          connectedAgents.add(node.agent);
-        }
-      }
-    }
-
-    for (const agent of agents) {
-      if (!connectedAgents.has(agent.id)) continue;
-
-      const agentId = `_agent_${agent.id}`;
-      this.nodeDataMap.set(agentId, { type: "agent", agent });
-
-      const label = agent.name || agent.id;
-      visNodes.push({
-        id: agentId,
-        label,
-        shape: "ellipse",
-        color: {
-          background: "#26a69a22",
-          border: "#26a69a",
-          highlight: { background: "#26a69a55", border: "#ffffff" },
-          hover: { background: "#26a69a44", border: "#26a69a" },
-        },
-        font: { size: 11, color: "#80cbc4" },
-        margin: { top: 5, bottom: 5, left: 10, right: 10 },
-        borderWidth: 1,
-      });
-
-      for (const wf of workflows) {
-        for (const node of wf.nodes) {
-          if (node.type === "llm_worker" && node.agent === agent.id) {
-            const nodeId = `${wf.file_stem}.${node.id}`;
-            visEdges.push({
-              from: agentId,
-              to: nodeId,
-              color: "#26a69a66",
-              width: 1,
-              dashes: [3, 3],
-              arrows: "to",
-            });
-          }
-        }
-      }
-    }
-
-    // === 7) Assign hierarchical levels via BFS from START ===
-    const adj = new Map<string, string[]>();
-    for (const e of visEdges) {
-      if (!adj.has(e.from)) adj.set(e.from, []);
-      adj.get(e.from)!.push(e.to);
-    }
-    const levelMap = new Map<string, number>();
-    const bfsQueue: string[] = [ENTRY_NODE];
-    levelMap.set(ENTRY_NODE, 0);
-    while (bfsQueue.length > 0) {
-      const id = bfsQueue.shift()!;
-      const lvl = levelMap.get(id)!;
-      for (const next of adj.get(id) || []) {
-        if (!levelMap.has(next)) {
-          levelMap.set(next, lvl + 1);
-          bfsQueue.push(next);
-        }
-      }
-    }
-    for (const node of visNodes) {
-      if (node.id === ENTRY_NODE || node.id === USER_NODE) {
-        node.level = 0;
-      } else if (node.id.startsWith("_agent_")) {
-        const agentEdge = visEdges.find(e => e.from === node.id);
-        if (agentEdge) node.level = levelMap.get(agentEdge.to) ?? 99;
-        else node.level = 99;
-      } else {
-        node.level = levelMap.get(node.id) ?? 99;
-      }
-    }
-
-    // === 8) Build network ===
-    if (this.network) {
-      this.network.destroy();
-      this.network = null;
-    }
-
-    const data = { nodes: new DataSet(visNodes), edges: new DataSet(visEdges) };
-    const options = {
-      autoResize: true,
-      layout: {
-        hierarchical: {
-          enabled: true,
-          direction: "UD",
-          sortMethod: "directed",
-          levelSeparation: 200,
-          nodeSpacing: 180,
-          treeSpacing: 250,
-          edgeMinimization: true,
-          blockShifting: true,
-        },
-      },
-      physics: { enabled: false },
-      edges: {
-        smooth: { enabled: true, type: "curvedCW", roundness: 0.15 },
-      },
-      nodes: {
-        shape: "box",
-        font: { size: 13, color: "#e0e0e0", multi: "md" },
-        borderWidth: 2,
-        color: {
-          border: "#666",
-          background: "#2a2a2a",
-          highlight: { border: "#ffffff" },
-        },
-      },
-      interaction: {
-        hover: true,
-        tooltipDelay: 200,
-        navigationButtons: true,
-        keyboard: true,
-        zoomView: true,
-        dragView: true,
-      },
-      groups: {
-        agent: { shape: "ellipse" },
-      },
-    };
-
-    this.network = new Network(this.el.graphContainer, data, options);
-    this.network.fit();
-    this.network.setSize();
-
-    // Click handler
-    this.network.on("click", (params: any) => {
-      if (params.nodes.length > 0) {
-        this.showNodeDetail(params.nodes[0], workflows, agents);
-      } else {
-        this.hideSidebar();
-      }
+    this.editor.on("nodeSelected", (id: string) => {
+      this.showNodeEditor(id);
     });
 
-    this.el.graphDetailContent.innerHTML = `<p class="graph-hint">Кликните на узел для просмотра деталей</p>`;
-    this.el.graphDetailTitle.textContent = "Информация";
+    this.editor.on("nodeCreated", (id: string) => {
+      this.updateNodeHtml(id);
+    });
+
+    this.editor.on("click", () => {
+      this.el.graphDetailContent.innerHTML = `<p class="graph-hint">Выберите ноду для редактирования</p>`;
+      this.el.graphDetailTitle.textContent = "Информация";
+    });
   }
 
-  private showNodeDetail(
-    nodeId: string,
-    allWorkflows: WorkflowGraphDef[],
-    allAgents: GraphAgentDef[],
-  ): void {
-    const data = this.nodeDataMap.get(nodeId);
-    if (!data) return;
+  // ─── Системный диалог открытия ───
 
-    this.el.graphSidebar.classList.add("open");
-    setTimeout(() => {
-      this.network?.redraw();
-    }, 270);
+  private async handleOpen(): Promise<void> {
+    try {
+      const selected = await openDialog({
+        multiple: false,
+        filters: [{ name: "YAML", extensions: ["yaml", "yml"] }],
+      });
+      if (!selected) return;
 
-    const parts: string[] = [];
+      const wf = await invoke<WorkflowGraphDef>("read_workflow_file", {
+        path: selected,
+      });
 
-    if (data.type === "special") {
-      this.el.graphDetailTitle.textContent = data.label;
-      parts.push(`<div class="graph-detail-section">
-        <div class="detail-label">Описание</div>
-        <div class="detail-value">${data.description || ""}</div>
-      </div>`);
-    } else if (data.type === "agent") {
-      const agent = data.agent as GraphAgentDef;
-      this.el.graphDetailTitle.textContent = `🧑 ${agent.name || agent.id}`;
-      parts.push(`<div class="graph-detail-section">
-        <div class="detail-label">ID</div>
-        <div class="detail-value code">${agent.id}</div>
-      </div>`);
-      parts.push(`<div class="graph-detail-section">
-        <div class="detail-label">Имя</div>
-        <div class="detail-value">${agent.name}</div>
-      </div>`);
-      parts.push(`<div class="graph-detail-section">
-        <div class="detail-label">Описание</div>
-        <div class="detail-value">${agent.description}</div>
-      </div>`);
-      parts.push(`<div class="graph-detail-section">
-        <div class="detail-label">Режим</div>
-        <div class="detail-value">${agent.mode}</div>
-      </div>`);
-      parts.push(`<div class="graph-detail-section">
-        <div class="detail-label">Скрыт в UI</div>
-        <div class="detail-value">${agent.is_hidden ? "Да" : "Нет"}</div>
-      </div>`);
-    } else {
-      const node = data.node as GraphNodeDef;
-      const style = NODE_STYLES[node.type];
-      const colorBox = style?.color || "#666";
-      this.el.graphDetailTitle.textContent = `${node.id} [${data.file_stem}]`;
+      this.currentFilePath = selected;
+      this.el.btnSaveWorkflow.disabled = false;
+      this.hideSidebar();
+      this.ensureEditor();
 
-      parts.push(`<div class="graph-detail-section">
-        <div class="detail-label">Тип</div>
-        <div class="detail-value" style="border-left: 4px solid ${colorBox}; padding-left: 8px;">
-          ${style?.label || node.type}
-        </div>
-      </div>`);
-      parts.push(`<div class="graph-detail-section">
-        <div class="detail-label">Граф</div>
-        <div class="detail-value">${data.wf_name} <span class="detail-sub">${data.file_stem}.yaml</span></div>
-      </div>`);
-      if (node.agent) {
-        const agent = allAgents.find(a => a.id === node.agent);
-        parts.push(`<div class="graph-detail-section">
-          <div class="detail-label">Агент</div>
-          <div class="detail-value">${agent ? agent.name : node.agent}
-            <span class="detail-sub">${node.agent}</span>
-          </div>
-        </div>`);
+      this.el.currentWorkflowName.textContent = `${wf.name} (${wf.file_stem}.yaml)`;
+
+      const nodePositions = this.computeAutoLayout(wf.nodes, wf.edges);
+
+      // Build import data structure with custom IDs as keys
+      const importData: import("drawflow").DrawflowExport = {
+        drawflow: {
+          Home: {
+            data: {},
+          },
+        },
+      };
+      const nodesData = importData.drawflow.Home.data;
+
+      for (const node of wf.nodes) {
+        const pos = node.ui_pos || nodePositions.get(node.id) || { x: 100, y: 100 };
+        const outs = node.type === "switch" ? this.getSwitchOutputCount(node) : OUTPUT_COUNT[node.type] ?? 1;
+
+        const inputs: Record<string, { connections: any[] }> = {};
+        for (let i = 1; i <= 1; i++) inputs[`input_${i}`] = { connections: [] };
+        const outputs: Record<string, { connections: any[] }> = {};
+        for (let i = 1; i <= outs; i++) outputs[`output_${i}`] = { connections: [] };
+
+        nodesData[node.id] = {
+          id: node.id,
+          name: node.id,
+          data: JSON.parse(JSON.stringify(node)),
+          class: "",
+          html: "",
+          typenode: false,
+          inputs,
+          outputs,
+          pos_x: pos.x,
+          pos_y: pos.y,
+        };
       }
-      if (node.task) {
-        parts.push(`<div class="graph-detail-section">
-          <div class="detail-label">Задача</div>
-          <div class="detail-value pre-wrap">${node.task}</div>
-        </div>`);
-      }
-      if (node.input) {
-        parts.push(`<div class="graph-detail-section">
-          <div class="detail-label">Вход</div>
-          <div class="detail-value code">${node.input}</div>
-        </div>`);
-      }
-      if (node.type === "llm_fact_extractor" || node.type === "llm_classifier") {
-        const wf = allWorkflows.find(w => w.file_stem === data.file_stem);
-        if (wf?.config?.facts && wf.config.facts.length > 0) {
-          const rows = wf.config.facts.map((s: any) =>
-            `<div class="detail-case"><span class="case-key">${s.id}</span> ${s.description}</div>`
-          ).join("");
-          parts.push(`<div class="graph-detail-section">
-            <div class="detail-label">Факты экстрактора</div>
-            <div class="detail-value">${rows}</div>
-          </div>`);
-        } else if (wf?.config?.statuses && wf.config.statuses.length > 0) {
-          const rows = wf.config.statuses.map((s: any) =>
-            `<div class="detail-case"><span class="case-key">${s.id}</span> ${s.description}</div>`
-          ).join("");
-          parts.push(`<div class="graph-detail-section">
-            <div class="detail-label">Статусы классификации</div>
-            <div class="detail-value">${rows}</div>
-          </div>`);
+
+      this.editor!.import(importData);
+
+      for (const edge of wf.edges) {
+        if (!nodesData[edge.from] || !nodesData[edge.to]) continue;
+        const fromNode = wf.nodes.find((n) => n.id === edge.from);
+        const outIdx = fromNode?.type === "switch" ? this.getSwitchOutputIndex(fromNode, edge.case) : 0;
+        try {
+          this.editor!.addConnection(edge.from, edge.to, `output_${outIdx + 1}`, "input_1");
+        } catch (connErr) {
+          console.error("addConnection error:", connErr);
         }
       }
-      if (node.action) {
-        parts.push(`<div class="graph-detail-section">
-          <div class="detail-label">Действие</div>
-          <div class="detail-value code">${node.action}</div>
-        </div>`);
+
+      this.editor!.zoom_reset();
+    } catch (e) {
+      console.error("handleOpen error:", e);
+      showToast(`Ошибка загрузки: ${e}`, "error");
+    }
+  }
+
+  private clearEditor(): void {
+    if (!this.editor) return;
+    const exportData = this.editor.export();
+    const nodes = exportData.drawflow.Home.data;
+    for (const id of Object.keys(nodes)) {
+      this.editor.removeNodeId("node-" + id);
+    }
+  }
+
+  // ─── Сохранение ───
+
+  private async handleSave(): Promise<void> {
+    if (!this.currentFilePath || !this.editor) return;
+
+    try {
+      const exportData = this.editor.export();
+      const drawflowNodes: Record<string, any> = exportData.drawflow.Home.data;
+
+      const nodes: GraphNodeDef[] = [];
+      const edges: GraphEdgeDef[] = [];
+
+      for (const nodeId of Object.keys(drawflowNodes)) {
+        const dn = drawflowNodes[nodeId];
+        const data = JSON.parse(JSON.stringify(dn.data));
+        data.ui_pos = { x: Math.round(dn.pos_x), y: Math.round(dn.pos_y) };
+        nodes.push(data);
       }
-      if (node.required && node.required.length > 0) {
-        const names = node.required.map((id: string) => {
-          const a = allAgents.find(ag => ag.id === id);
-          return a ? `${a.name} (${id})` : id;
-        });
-        parts.push(`<div class="graph-detail-section">
-          <div class="detail-label">Требуемые агенты</div>
-          <div class="detail-value">${names.join(", ")}</div>
-        </div>`);
+
+      for (const nodeId of Object.keys(drawflowNodes)) {
+        const dn = drawflowNodes[nodeId];
+        for (const inKey of Object.keys(dn.inputs)) {
+          for (const conn of dn.inputs[inKey].connections || []) {
+            const fromNode = nodes.find((n) => n.id === conn.node);
+            let caseVal: string | undefined;
+            if (fromNode && fromNode.type === "switch") {
+              caseVal = this.getCaseKeyForOutput(fromNode, parseInt(conn.input.replace("output_", ""), 10) - 1);
+            }
+            edges.push({ from: conn.node, to: nodeId, case: caseVal });
+          }
+        }
       }
-      if (node.workflow) {
-        const wf = allWorkflows.find(w => node.workflow && w.file_stem === node.workflow.replace(/\.yaml$/, ""));
-        parts.push(`<div class="graph-detail-section">
-          <div class="detail-label">Вызывает граф</div>
-          <div class="detail-value">${wf ? wf.name : node.workflow}
-            <span class="detail-sub">${node.workflow}</span>
-          </div>
-        </div>`);
-      }
-      if (node.cases) {
-        const html = Object.entries(node.cases)
-          .map(([k, v]) => `<div class="detail-case"><span class="case-key">${k}</span> → ${v}</div>`)
-          .join("");
-        parts.push(`<div class="graph-detail-section">
-          <div class="detail-label">Варианты (switch)</div>
-          <div class="detail-value">${html}</div>
-        </div>`);
-      }
+
+      const workflow = { name: "", visible: true, config: null, nodes, edges };
+      await invoke("save_workflow", { path: this.currentFilePath, workflow });
+      showToast("✅ Workflow сохранён", "success");
+    } catch (e) {
+      console.error("handleSave error:", e);
+      showToast(`❌ Ошибка сохранения: ${e}`, "error");
+    }
+  }
+
+  // ─── Редактор ноды в сайдбаре ───
+
+  private showNodeEditor(nodeId: string): void {
+    if (!this.editor) return;
+    const dn = this.editor.drawflow.drawflow.Home.data[nodeId];
+    if (!dn) return;
+    const data = dn.data;
+
+    this.el.graphSidebar.classList.add("open");
+    this.el.graphDetailTitle.textContent = `✏️ ${nodeId}`;
+
+    const color = NODE_COLORS[data.type] || "#666";
+    const typeLabel = NODE_LABELS[data.type] || data.type;
+
+    let html = `<div class="graph-detail-section">
+      <div class="detail-label">ID ноды</div>
+      <input type="text" id="ge-node-id" class="ge-input" value="${this.esc(data.id || nodeId)}" />
+    </div>
+    <div class="graph-detail-section">
+      <div class="detail-label">Тип</div>
+      <div class="detail-value" style="border-left:4px solid ${color};padding-left:8px;">${typeLabel}</div>
+    </div>`;
+
+    if (data.type === "llm_worker") {
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Агент</div>
+        <select id="ge-agent" class="ge-select">
+          <option value="">— не выбран —</option>
+          ${this.loadedAgents().map((a) => `<option value="${this.esc(a.id)}" ${a.id === data.agent ? "selected" : ""}>${this.esc(a.name)}</option>`).join("")}
+        </select>
+      </div>`;
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Задача (Task)</div>
+        <textarea id="ge-task" class="ge-textarea" rows="4">${this.esc(data.task || "")}</textarea>
+      </div>`;
     }
 
-    this.el.graphDetailContent.innerHTML = parts.join("");
+    if (data.type === "switch") {
+      const caseEntries = data.cases ? Object.entries(data.cases as Record<string, string>) : [];
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Варианты (cases)</div>
+        <div id="ge-cases-list">`;
+      for (const [key, val] of caseEntries) {
+        html += `<div style="display:flex;gap:6px;margin-bottom:4px;">
+          <input class="ge-input" style="flex:1;" value="${this.esc(key)}" readonly />
+          <input class="ge-input" style="flex:1;" value="${this.esc(val)}" readonly />
+        </div>`;
+      }
+      if (caseEntries.length === 0) {
+        html += `<span style="color:#888;font-size:12px;">Нет вариантов</span>`;
+      }
+      html += `</div></div>`;
+    }
+
+    this.el.graphDetailContent.innerHTML = html;
+
+    const agentSelect = document.getElementById("ge-agent") as HTMLSelectElement;
+    if (agentSelect) {
+      agentSelect.addEventListener("change", () => {
+        this.editor!.drawflow.drawflow.Home.data[nodeId].data.agent = agentSelect.value;
+        this.updateNodeHtml(nodeId);
+      });
+    }
+
+    const taskTextarea = document.getElementById("ge-task") as HTMLTextAreaElement;
+    if (taskTextarea) {
+      taskTextarea.addEventListener("change", () => {
+        this.editor!.drawflow.drawflow.Home.data[nodeId].data.task = taskTextarea.value;
+      });
+    }
   }
 
   private hideSidebar(): void {
     this.el.graphSidebar.classList.remove("open");
-    setTimeout(() => {
-      this.network?.redraw();
-    }, 270);
+  }
+
+  // ─── Добавление ноды ───
+
+  private addNode(type: string): void {
+    this.ensureEditor();
+    const id = `${type}_${Date.now()}`;
+    const rect = this.el.graphContainer.getBoundingClientRect();
+    const cx = (rect.width / 2 - 100) * (1 / (this.editor!.zoom || 1));
+    const cy = (rect.height / 2 - 50) * (1 / (this.editor!.zoom || 1));
+    const outs = type === "switch" ? 2 : OUTPUT_COUNT[type] ?? 1;
+
+    const inputs: Record<string, { connections: any[] }> = {};
+    for (let i = 1; i <= 1; i++) inputs[`input_${i}`] = { connections: [] };
+    const outputs: Record<string, { connections: any[] }> = {};
+    for (let i = 1; i <= outs; i++) outputs[`output_${i}`] = { connections: [] };
+
+    const nodeData: import("drawflow").DrawflowNode = {
+      id,
+      name: id,
+      data: { id, type },
+      class: "",
+      html: "",
+      typenode: false,
+      inputs,
+      outputs,
+      pos_x: cx + Math.random() * 80 - 40,
+      pos_y: cy + Math.random() * 80 - 40,
+    };
+
+    this.editor!.drawflow.drawflow.Home.data[id] = nodeData;
+    this.editor!.addNodeImport(nodeData, this.editor!.precanvas);
+    this.editor!.dispatch("nodeCreated", id);
+
+    this.updateNodeHtml(id);
+  }
+
+  // ─── Обновление HTML ноды ───
+
+  private updateNodeHtml(nodeId: string): void {
+    if (!this.editor) return;
+    const dn = this.editor.drawflow.drawflow.Home.data[nodeId];
+    if (!dn) return;
+    const data = dn.data;
+    const el = document.querySelector(`#node-${nodeId} .drawflow_content_node`) as HTMLElement;
+    if (!el) return;
+
+    const typeLabel = NODE_LABELS[data.type] || data.type;
+    let agentLine = "";
+    if (data.type === "llm_worker" && data.agent) {
+      agentLine = `<div class="gn-agent">→ ${this.esc(data.agent)}</div>`;
+    }
+    let casesLine = "";
+    if (data.type === "switch" && data.cases) {
+      casesLine = `<div class="gn-type">${Object.keys(data.cases).join(" / ")}</div>`;
+    }
+
+    el.innerHTML = `
+      <div class="gn-title">${this.esc(data.id || nodeId)}</div>
+      <div class="gn-type">${typeLabel}</div>
+      ${agentLine}
+      ${casesLine}
+    `;
+  }
+
+  // ─── Утилиты ───
+
+  private loadedAgents(): Array<{ id: string; name: string }> {
+    return [];
+  }
+
+  private getSwitchOutputCount(node: GraphNodeDef): number {
+    if (node.cases) return Object.keys(node.cases).length;
+    if (node.cases_priority) return node.cases_priority.length;
+    if (node.default) return 1;
+    return 2;
+  }
+
+  private getSwitchCaseKeys(node: GraphNodeDef): string[] {
+    if (node.cases) return Object.keys(node.cases);
+    if (node.cases_priority) return node.cases_priority.map((c) => c.key);
+    if (node.default) return ["default"];
+    return ["default", "other"];
+  }
+
+  private getSwitchOutputIndex(node: GraphNodeDef, caseVal?: string): number {
+    const keys = this.getSwitchCaseKeys(node);
+    const idx = keys.indexOf(caseVal || "default");
+    return idx >= 0 ? idx : 0;
+  }
+
+  private getCaseKeyForOutput(node: GraphNodeDef, outputIdx: number): string | undefined {
+    const keys = this.getSwitchCaseKeys(node);
+    return keys[outputIdx];
+  }
+
+  private computeAutoLayout(nodes: GraphNodeDef[], edges: GraphEdgeDef[]): Map<string, { x: number; y: number }> {
+    const positions = new Map<string, { x: number; y: number }>();
+    const inDegree = new Map<string, number>();
+    for (const n of nodes) inDegree.set(n.id, 0);
+    for (const e of edges) inDegree.set(e.to, (inDegree.get(e.to) || 0) + 1);
+
+    const levels = new Map<string, number>();
+    let queue = nodes.filter((n) => (inDegree.get(n.id) ?? 0) === 0).map((n) => n.id);
+    const visited = new Set<string>();
+    let level = 0;
+    while (queue.length > 0) {
+      const next: string[] = [];
+      for (const id of queue) {
+        if (visited.has(id)) continue;
+        visited.add(id);
+        levels.set(id, level);
+        for (const e of edges.filter((e) => e.from === id)) {
+          if (!visited.has(e.to)) next.push(e.to);
+        }
+      }
+      queue = next;
+      level++;
+    }
+
+    const levelCounts = new Map<number, number>();
+    for (const n of nodes) {
+      const lvl = levels.get(n.id) ?? 0;
+      levelCounts.set(lvl, (levelCounts.get(lvl) || 0) + 1);
+    }
+    const levelOffsets = new Map<number, number>();
+    for (const n of nodes) {
+      const lvl = levels.get(n.id) ?? 0;
+      const offset = levelOffsets.get(lvl) || 0;
+      levelOffsets.set(lvl, offset + 1);
+      const total = levelCounts.get(lvl) || 1;
+      positions.set(n.id, {
+        x: lvl * 320 + 100,
+        y: (offset - total / 2) * 140 + 200,
+      });
+    }
+    return positions;
+  }
+
+  private esc(s: string): string {
+    return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
 
   onTabActivated(): void {
-    if (!this.allData) {
-      this.loadData();
-    } else if (!this.network) {
-      this.loadGraph();
+    if (!this.editor) {
+      this.ensureEditor();
     } else {
-      this.network.fit();
-      this.network.setSize();
-      this.network.redraw();
+      this.editor.zoom_reset();
     }
   }
 }

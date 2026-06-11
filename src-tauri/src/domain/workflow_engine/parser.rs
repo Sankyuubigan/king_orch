@@ -112,6 +112,9 @@ pub struct NodeDef {
     pub problems: Option<String>,
     #[serde(default)]
     pub output_type: Option<String>,
+    /// Визуальные координаты для редактора графов (x, y)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_pos: Option<HashMap<String, i32>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -223,4 +226,80 @@ pub fn find_workflow_by_stem<'a>(
     stem: &str,
 ) -> Option<&'a WorkflowDef> {
     workflows.iter().find(|wf| wf.file_stem == stem)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_main_conversation_flow() {
+        let path_str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../agents/psychotherapist/transitions/main_conversation_flow.yaml"
+        );
+        let path = Path::new(path_str);
+        assert!(path.exists(), "Файл не найден: {:?}", path);
+        let wf = parse_workflow_file(path).expect("Парсинг YAML не удался");
+        assert_eq!(wf.name, "Therapist");
+        assert!(wf.visible);
+
+        // 12 узлов
+        assert_eq!(wf.nodes.len(), 12);
+        // 12 рёбер
+        assert_eq!(wf.edges.len(), 12);
+
+        // LLM_FACT_EXTRACTOR
+        let ef = wf.nodes.iter().find(|n| n.id == "extract_facts").unwrap();
+        assert_eq!(ef.node_type, NodeType::LlmFactExtractor);
+        assert_eq!(ef.input.as_deref(), Some("{{ user_message }}"));
+
+        // SWITCH с cases_priority (5 кейсов + default)
+        let pr = wf.nodes.iter().find(|n| n.id == "priority_router").unwrap();
+        assert_eq!(pr.node_type, NodeType::Switch);
+        assert!(pr.cases_priority.is_some());
+        assert_eq!(pr.cases_priority.as_ref().unwrap().len(), 4);
+        assert_eq!(pr.default.as_deref(), Some("freestyle"));
+
+        // SWITCH с обычными cases
+        let pr2 = wf.nodes.iter().find(|n| n.id == "protocol_router").unwrap();
+        assert_eq!(pr2.node_type, NodeType::Switch);
+        assert!(pr2.cases.is_some());
+        let cases = pr2.cases.as_ref().unwrap();
+        assert_eq!(cases.get("need_more_data").map(String::as_str), Some("ask_missing"));
+        assert_eq!(cases.get("ready").map(String::as_str), Some("start_datamining"));
+
+        // LLM_WORKER с agent + task
+        let curator = wf.nodes.iter().find(|n| n.id == "call_curator").unwrap();
+        assert_eq!(curator.node_type, NodeType::LlmWorker);
+        assert_eq!(curator.agent.as_deref(), Some("curator"));
+        assert_eq!(curator.output_type.as_deref(), Some("message"));
+
+        // SYSTEM_CONDITION с action + required
+        let cond = wf.nodes.iter().find(|n| n.id == "check_protocol").unwrap();
+        assert_eq!(cond.node_type, NodeType::SystemCondition);
+        assert_eq!(cond.action.as_deref(), Some("check_protocol_state"));
+        assert!(cond.required.is_some());
+        assert_eq!(cond.required.as_ref().unwrap().len(), 1);
+
+        // SUB_WORKFLOW
+        let sub = wf.nodes.iter().find(|n| n.id == "start_datamining").unwrap();
+        assert_eq!(sub.node_type, NodeType::SubWorkflow);
+        assert_eq!(sub.workflow.as_deref(), Some("treatment_flow.yaml"));
+
+        // LLM_FREEFORM
+        let ff = wf.nodes.iter().find(|n| n.id == "freestyle").unwrap();
+        assert_eq!(ff.node_type, NodeType::LlmFreeform);
+
+        // Рёбра с case
+        let case_edge_1 = wf.edges.iter().find(|e| e.from == "protocol_router" && e.case.as_deref() == Some("need_more_data")).unwrap();
+        assert_eq!(case_edge_1.to, "ask_missing");
+        let case_edge_2 = wf.edges.iter().find(|e| e.from == "protocol_router" && e.case.as_deref() == Some("ready")).unwrap();
+        assert_eq!(case_edge_2.to, "start_datamining");
+
+        // Проверка, что facts.yaml подгрузился
+        assert!(wf.config.is_some());
+        let cfg = wf.config.as_ref().unwrap();
+        assert!(!cfg.facts.is_empty(), "facts.yaml должен был загрузиться");
+    }
 }
