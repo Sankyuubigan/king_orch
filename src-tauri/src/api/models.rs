@@ -79,13 +79,6 @@ pub fn add_model(app: AppHandle, path: String) -> infra::AppConfig {
 }
 
 #[tauri::command]
-pub fn set_mmproj_path(app: AppHandle, model_path: String, mmproj_path: String) {
-    let mut cfg = infra::load_config(&app);
-    cfg.mmproj_files.insert(model_path, mmproj_path);
-    infra::save_config(&app, &cfg);
-}
-
-#[tauri::command]
 pub fn get_mmproj_path(app: AppHandle, model_path: String) -> Option<String> {
     let cfg = infra::load_config(&app);
     if let Some(path) = cfg.mmproj_files.get(&model_path) {

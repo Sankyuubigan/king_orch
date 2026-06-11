@@ -54,7 +54,7 @@ pub fn run_chat<L, S, C>(
     model_path: String, agent_id: String, user_text: String, history: Vec<ChatMessage>,
     attachments: Vec<ChatAttachment>,
     context_size: u32, kv_quantization: bool, model_params: ModelParams, format_type: String,
-    _conf_threshold: f32, mmproj_path: Option<String>, cancel_flag: Arc<AtomicBool>,
+    mmproj_path: Option<String>, cancel_flag: Arc<AtomicBool>,
 ) -> Result<(String, Vec<SubCall>, Vec<ChatMessage>), String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -299,8 +299,6 @@ where
     let start_time = Instant::now();
     let mut consecutive_failed_tools = 0;
     let mut consecutive_incomplete = 0;
-    #[allow(unused_variables)]
-    let mut consecutive_thoughts = 0;
     let mut consecutive_invalid_targets = 0;
 
     // ═══════════════════════════════════════
@@ -338,7 +336,6 @@ where
         // ── 3b. RESPONSE DISPATCH: Tool call ──
         if let Some((tool_name, arguments, thought)) = parse_tool_call(&response) {
             action_found = true;
-            consecutive_thoughts = 0;
             consecutive_incomplete = 0;
             log_agent_thought(&log_cb, agent, "инструмент", &tool_name, &thought, gen_start.elapsed().as_secs_f32());
             thought_logged = true;
@@ -426,7 +423,6 @@ where
         // ── 3c. RESPONSE DISPATCH: Orchestrator JSON (target) ──
         if let Some(parsed) = parse_orchestrator_response(&response) {
             action_found = true;
-            consecutive_thoughts = 0;
             consecutive_incomplete = 0;
 
             if parsed.target == "reply" || parsed.target == "user" {

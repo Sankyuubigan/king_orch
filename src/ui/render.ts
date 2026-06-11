@@ -1,7 +1,7 @@
 import { renderMarkdown } from "../utils";
 import { createMessageMenu } from "./message-menu";
 import type { MessageMenuCallbacks } from "./message-menu";
-import type { ThoughtMenuCallbacks } from "../types";
+
 
 export type Role = 'user' | 'agent' | 'system';
 

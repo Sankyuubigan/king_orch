@@ -30,13 +30,6 @@ pub struct WorkflowConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extractor_prompt: Option<String>,
 
-    // --- Старый паттерн: Status Classifier (для обратной совместимости) ---
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub statuses: Vec<StatusDef>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub statuses_file: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub classifier_prompt: Option<String>,
 }
 
 /// Внешний файл фактов (facts.yaml)
@@ -48,24 +41,8 @@ pub struct FactsFile {
     pub facts: Vec<FactDef>,
 }
 
-/// Внешний файл статусов (statuses.yaml) — для обратной совместимости
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StatusesFile {
-    #[serde(default)]
-    pub classifier_prompt: Option<String>,
-    #[serde(default)]
-    pub statuses: Vec<StatusDef>,
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactDef {
-    pub id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub criteria: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct StatusDef {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub criteria: Option<String>,

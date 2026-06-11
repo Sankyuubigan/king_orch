@@ -133,12 +133,3 @@ pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
 
     entries
 }
-
-#[allow(dead_code)]
-pub fn build_l0_manifest(agents: &[AgentProfile]) -> String {
-    if agents.is_empty() { return String::from("У тебя нет доступных сабагентов. Всегда отвечай пользователю напрямую."); }
-    let mut manifest = String::from("ДОСТУПНЫЕ САБАГЕНТЫ (Твоя команда):\n");
-    for agent in agents { manifest.push_str(&format!("- ID: \"{}\" | Имя: {} | Роль: {}\n", agent.id, agent.name, agent.description)); }
-    manifest.push_str("\nЕсли задача требует специфических навыков, вызови нужного сабагента по его ID.");
-    manifest
-}

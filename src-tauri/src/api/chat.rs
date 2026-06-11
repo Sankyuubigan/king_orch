@@ -104,7 +104,6 @@ pub async fn chat_request(
     infra::save_config(&app, &cfg);
 
     let format_type = cfg.prompt_format.clone();
-    let conf_threshold = cfg.confidence_threshold;
     state.cancel_flag.store(false, Ordering::SeqCst);
     let cancel_flag = state.cancel_flag.clone();
 
@@ -150,7 +149,6 @@ pub async fn chat_request(
             kv_quantization,
             model_params,
             format_type,
-            conf_threshold,
             mmproj_path,
             cancel_flag,
         )

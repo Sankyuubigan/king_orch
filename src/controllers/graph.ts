@@ -330,7 +330,7 @@ export class GraphController {
         <div class="detail-label">Агент</div>
         <select id="ge-agent" class="ge-select">
           <option value="">— не выбран —</option>
-          ${this.loadedAgents().map((a) => `<option value="${this.esc(a.id)}" ${a.id === data.agent ? "selected" : ""}>${this.esc(a.name)}</option>`).join("")}
+          ${[].map((a: any) => `<option value="${this.esc(a.id)}" ${a.id === data.agent ? "selected" : ""}>${this.esc(a.name)}</option>`).join("")}
         </select>
       </div>`;
       html += `<div class="graph-detail-section">
@@ -447,10 +447,6 @@ export class GraphController {
   }
 
   // ─── Утилиты ───
-
-  private loadedAgents(): Array<{ id: string; name: string }> {
-    return [];
-  }
 
   private getSwitchOutputCount(node: GraphNodeDef): number {
     if (node.cases) return Object.keys(node.cases).length;
