@@ -232,7 +232,9 @@ export class ChatController {
       }
       const agentUid = store.nextUid(); store.msgUidList.push(agentUid);
       const hasRT = response.sub_calls && response.sub_calls.some((c: any) => store.realtimeSubcallKeys.has(`${c.agent_name}:${c.time_sec.toFixed(2)}`));
-      this.appendMessage('agent', response.text, displayName, `⏱ ${dur} сек`, response.sub_calls, hasRT, agentUid);
+      if (response.text) {
+        this.appendMessage('agent', response.text, displayName, `⏱ ${dur} сек`, response.sub_calls, hasRT, agentUid);
+      }
       await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
     } catch (error) {
       if (String(error).includes("Отменено") || String(error).includes("Прервано")) this.appendMessage('system', '⚠️ Прервано.');

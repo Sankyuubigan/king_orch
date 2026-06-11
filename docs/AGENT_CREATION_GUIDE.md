@@ -9,14 +9,14 @@
 
 ---
 
-## 🏗 Новая архитектура: Разделение ответственности
+## 🏗 Архитектура: Разделение ответственности
 
 | Слой | Формат | Что содержит | Кто пишет |
 |------|--------|-------------|-----------|
 | **Коммуникатор** | `.md` | Стиль общения, эмпатия, психологические фишки, перевод терминов. **Чистая бизнес-логика** | Команда агентов |
 | **Workflow (граф)** | `.yaml` | Маршрутизация: какой узел вызывать, в каком порядке, по какому условию. **Техническая логика** | Команда агентов |
-| **Классификатор** | generic built-in + YAML конфиг | Generic движок в Rust, вся логика (статусы + критерии) в YAML файле команды | Движок (Rust — generic) + Команда агентов (статусы) |
-| **Воркер** | `.md` | Узкоспециализированная задача, ответ = `thought` | Команда агентов |
+| **Экстрактор фактов** | generic built-in + YAML конфиг | Generic движок в Rust, вся логика (факты + критерии) в YAML файле команды | Движок (Rust — generic) + Команда агентов (факты) |
+| **Воркер** | `.md` | Узкоспециализированная задача, ответ = `thought` или `message` | Команда агентов |
 
 **Главное правило:** В `.md` файлах **НЕТ** логики маршрутизации (вызовов сабагентов, проверок статусов, циклов). Всё это — в YAML графах.
 
@@ -76,16 +76,16 @@ name: Название графа
 visible: true                      # показывать в UI как точку входа (опционально)
 
 config:
-  statuses:                        # Статусы для llm_classifier (можно inline)
-    - id: greeting
+  facts:                           # Факты для llm_fact_extractor (можно inline)
+    - id: is_greeting
       description: "..."
-      criteria: "..."              # Критерии определения статуса (опционально)
-  statuses_file: "../statuses.yaml" # Или вынести статусы + classifier_prompt в отдельный файл
-  classifier_prompt: "..."         # Кастомный системный промпт для llm_classifier (опционально)
+      criteria: "..."              # Критерии определения факта (опционально)
+  facts_file: "../facts.yaml"      # Или вынести факты + extractor_prompt в отдельный файл
+  extractor_prompt: "..."          # Кастомный системный промпт для llm_fact_extractor (опционально)
 
 nodes:
   - id: node_name
-    type: llm_worker | llm_classifier | system_condition | sub_workflow | switch | return
+    type: llm_worker | llm_fact_extractor | system_condition | sub_workflow | switch | return
     # тип-специфичные поля...
 
 edges:
@@ -98,13 +98,39 @@ edges:
 
 | Тип узла | Что делает | Пример |
 |----------|-----------|--------|
-| `llm_worker` | Вызывает `.md` агента с задачей | `{ agent: "therapist_communicator", task: "Ответь пользователю" }` |
-| `llm_classifier` | Generic классификатор. Статусы + критерии из `config.statuses` (inline или внешний файл). Если есть `config.classifier_prompt` — использует его как шаблон, иначе дефолтный | `{ input: "{{ user_message }}" }` |
+| `llm_worker` | Вызывает `.md` агента с задачей. Результат сохраняется как `thought` (в свернутый блок отчётов) или как `message` (в чат) — управляется параметром `output_type` | `{ agent: "soma_translator", task: "...", output_type: message }` |
+| `llm_fact_extractor` | Generic экстрактор фактов. Факты + критерии из `config.facts` (inline или внешний `facts.yaml`). Возвращает JSON `{"fact_id": true/false, ...}` | `{ input: "{{ user_message }}" }` |
 | `llm_freeform` | Зовёт LLM без системного промпта (только история чата). Для неизвестных/off-topic запросов | `{ input: "{{ user_message }}" }` |
-| `system_condition` | Rust-side проверка (reports, состояние) | `{ action: "get_missing_reports", required: ["soma_translator"] }` |
+| `system_condition` | Rust-side проверка (reports, состояние). Включает `aggregate_and_output` для склейки отчётов в сообщение чата | `{ action: "get_missing_reports", required: ["soma_translator"] }` |
 | `sub_workflow` | Рекурсивный вызов другого YAML графа | `{ workflow: "triage_flow.yaml", namespace: "{{ namespace }}" }` |
-| `switch` | Условный переход по значению. Если ни один `cases` не совпал — идёт в `default` (если указан), иначе workflow завершается | `{ input: "{{ nodes.X.output.status }}", default: freestyle, cases: { greeting: node_y } }` |
+| `switch` | Два режима: (1) стандартный — по `input` + `cases`, (2) приоритетный — по `input_object` + `cases_priority` (первый true факт = маршрут) | Стандарт: `{ input: "{{ nodes.X.output.status }}", cases: {...} }` / Приоритет: `{ input_object: "{{ nodes.X.output }}", cases_priority: [{key: "has_somatic", to: "node_y"}], default: ... }` |
 | `return` | Завершает текущий workflow | — |
+
+### Параметр `output_type` (для `llm_worker`)
+
+Управляет, куда сохраняется результат агента:
+
+| Значение | Куда сохраняется | Внешний вид в чате |
+|----------|-----------------|-------------------|
+| `message` | Сразу как обычное сообщение (`type: "message"`, `author: ID_агента`) | Полноценное сообщение в чате, как от ассистента |
+| `thought` | Как внутренний отчёт (`type: "thought"`, виден только в свернутом блоке мыслей) | Раскрывающийся блок "Мысли агентов" (🧠) |
+| не указан | Сначала как `thought`, потом **дублируется** как `message` при завершении workflow | И отчёт, и сообщение (для обратной совместимости) |
+
+```yaml
+  # Агент пишет сразу в чат — никаких дублей
+  - id: call_soma_aux
+    type: llm_worker
+    agent: soma_translator
+    output_type: message
+
+  # Агент работает внутри — отчёт только в свернутый блок
+  - id: analyze_data
+    type: llm_worker
+    agent: data_analyzer
+    output_type: thought
+```
+
+**Важно:** Если узел идёт не на END, а в середине pipeline (дальше есть другие узлы), результат всегда сохраняется как `thought` независимо от `output_type` — сообщение в чат добавляет только последний узел workflow. Параметр `output_type` определяет поведение именно последнего узла перед END.
 
 ### Как работает `visible`
 - **YAML workflow:** поле `visible: true` в корне графа — граф отображается в UI как entry point.
@@ -133,7 +159,7 @@ edges:
 ### Структура папок
 ```
 agents/psychotherapist/
-├── statuses.yaml                   # Статусы + критерии + classifier_prompt для llm_classifier
+├── facts.yaml                      # Факты + критерии + extractor_prompt для llm_fact_extractor
 ├── therapist_communicator.md       # Чистый коммуникатор (стиль общения)
 ├── workflows/
 │   ├── main_conversation_flow.yaml # Entry-граф (visible: true, маршруты)
@@ -152,22 +178,24 @@ agents/psychotherapist/
 name: Therapist
 visible: true
 config:
-  statuses_file: "../statuses.yaml"  # Статусы + критерии + classifier_prompt
+  facts_file: "../facts.yaml"        # Факты + критерии + extractor_prompt
 
 nodes:
-  - id: classify_intent
-    type: llm_classifier
+  - id: extract_facts
+    type: llm_fact_extractor
     input: "{{ user_message }}"
 
   - id: route
     type: switch
-    input: "{{ nodes.classify_intent.output.status }}"
-    default: freestyle           # Если статус неизвестен — свободный ответ LLM
-    cases:
-      greeting: respond
-      multiple_problems: triage
-      one_problem_incomplete: collect_info
-      ready_for_expose: check_analysis_done
+    input_object: "{{ nodes.extract_facts.output }}"
+    cases_priority:
+      - key: has_resistance
+        to: call_curator
+      - key: has_somatic
+        to: call_soma_translator
+      - key: is_greeting
+        to: respond
+    default: freestyle
 
   - id: freestyle                # Свободный ответ без системного промпта
     type: llm_freeform
@@ -176,16 +204,13 @@ nodes:
   - id: respond
     type: llm_worker
     agent: therapist_communicator
-
-  - id: triage
-    type: sub_workflow
-    workflow: triage_flow.yaml
+    output_type: message
 
 edges:
-  - from: classify_intent
+  - from: extract_facts
     to: route
   - from: route
-    case: greeting
+    case: is_greeting
     to: respond
   ...
   - from: freestyle
@@ -195,41 +220,57 @@ edges:
 
 ---
 
-## 🧠 Generic `llm_classifier` (как работают статусы)
+## 🧠 Generic `llm_fact_extractor` (как работают факты)
 
-`llm_classifier` — built-in узел в Rust, но **без бизнес-логики**. Всё, что он знает — приходит из YAML:
+`llm_fact_extractor` — built-in узел в Rust, но **без бизнес-логики**. Всё, что он знает — приходит из YAML:
 
-1. **Статусы** (`config.statuses` или `config.statuses_file`) — список с `id`, `description`, `criteria`
-2. **Кастомный промпт** (`config.classifier_prompt`) — если указан, используется вместо дефолтного
+1. **Факты** (`config.facts` или `config.facts_file`) — список с `id`, `description`, `criteria`
+2. **Кастомный промпт** (`config.extractor_prompt`) — если указан, используется вместо дефолтного
 
-Если `classifier_prompt` указан — используется как шаблон с подстановками:
-- `{{ statuses }}` — список статусов с описаниями и критериями
+Если `extractor_prompt` указан — используется как шаблон с подстановками:
+- `{{ facts }}` — список фактов с описаниями и критериями
 - `{{ user_message }}` — сообщение пользователя
 
-Если не указан — собирается дефолтный промпт: перечисление статусов + criteria + просьба вернуть JSON.
+Если не указан — собирается дефолтный промпт: перечисление фактов + criteria + просьба вернуть JSON.
 
-### Пример файла статусов (`statuses.yaml`)
+### Пример файла фактов (`facts.yaml`)
 
 ```yaml
-classifier_prompt: |
-  Ты — системный анализатор. Определи состояние по критериям.
-  Если статус "one_problem_incomplete" — добавь поле "missing_points".
+extractor_prompt: |
+  Ты — системный анализатор. Определи присутствие фактов.
+  Ответь ТОЛЬКО JSON: {"fact_id": true, "fact_id2": false}
 
-statuses:
-  - id: greeting
+facts:
+  - id: is_greeting
     description: "Простое приветствие"
     criteria: Сообщение не содержит описания проблемы
 
-  - id: one_problem_incomplete
-    description: "Одна проблема, не хватает данных"
-    criteria: >
-      Определена проблема, но отсутствует хотя бы 1 из 3 пунктов:
-      контекст, желание, адаптация
+  - id: has_somatic
+    description: "Есть соматические симптомы"
+    criteria: Описывает физическую боль, зажимы, болезни
 ```
+
+### Приоритетная маршрутизация (cases_priority)
+
+Вместо обычного `switch` с `input` + `cases`, используйте `input_object` + `cases_priority` для маршрутизации по первому истинному факту:
+
+```yaml
+  - id: route
+    type: switch
+    input_object: "{{ nodes.extract_facts.output }}"
+    cases_priority:
+      - key: has_resistance
+        to: call_curator       # Если has_resistance = true → call_curator
+      - key: has_somatic
+        to: call_soma          # Иначе если has_somatic = true → call_soma
+    default: freestyle         # Если ни один не true → freestyle
+```
+
+Проверка идёт по порядку: первый факт со значением `true` определяет маршрут.
 
 ### Как добавить `llm_freeform` для off-topic
 
-Если пользователь пишет не по теме, и ни один статус не подошёл:
+Если ни один факт не совпал (default):
 1. В `switch` укажи `default: имя_ноды`
 2. Создай ноду с `type: llm_freeform`
 3. Добавь ребро от неё к `END`
@@ -238,9 +279,7 @@ statuses:
   - id: route
     type: switch
     default: freestyle
-    cases:
-      greeting: respond
-      ...
+    ...
 
   - id: freestyle
     type: llm_freeform
@@ -248,6 +287,19 @@ statuses:
 ```
 
 `llm_freeform` отправляет историю чата + `user_message` в LLM без system prompt — модель отвечает как обычный ассистент.
+
+### Склейка ответов воркеров (aggregate_and_output)
+
+Чтобы вывести сырые ответы воркеров в чат без LLM-синтеза:
+
+```yaml
+  - id: output_raw
+    type: system_condition
+    action: aggregate_and_output
+    required: ["neuro_reprogrammer"]
+```
+
+Это действие собирает отчёты всех указанных агентов, склеивает их через `\n\n` и сохраняет как `message` в чат (минуя финальный LLM-синтез).
 
 ---
 

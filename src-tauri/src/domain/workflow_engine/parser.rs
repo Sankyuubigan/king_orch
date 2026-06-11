@@ -7,10 +7,8 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDef {
     pub name: String,
-    /// Показывать ли граф в UI как точку входа
     #[serde(default)]
     pub visible: bool,
-    /// Имя файла без расширения (заполняется при загрузке, не из YAML)
     #[serde(skip)]
     pub file_stem: String,
     #[serde(default)]
@@ -21,23 +19,47 @@ pub struct WorkflowDef {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkflowConfig {
+    // --- Новый паттерн: Fact Extractor ---
+    #[serde(default)]
+    pub facts: Vec<FactDef>,
+    #[serde(default)]
+    pub facts_file: Option<String>,
+    #[serde(default)]
+    pub extractor_prompt: Option<String>,
+
+    // --- Старый паттерн: Status Classifier (для обратной совместимости) ---
     #[serde(default)]
     pub statuses: Vec<StatusDef>,
-    /// Путь к внешнему файлу со статусами (относительно папки workflow)
     #[serde(default)]
     pub statuses_file: Option<String>,
-    /// Кастомный системный промпт для llm_classifier
     #[serde(default)]
     pub classifier_prompt: Option<String>,
 }
 
-/// Структура внешнего файла статусов
+/// Внешний файл фактов (facts.yaml)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FactsFile {
+    #[serde(default)]
+    pub extractor_prompt: Option<String>,
+    #[serde(default)]
+    pub facts: Vec<FactDef>,
+}
+
+/// Внешний файл статусов (statuses.yaml) — для обратной совместимости
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusesFile {
     #[serde(default)]
     pub classifier_prompt: Option<String>,
     #[serde(default)]
     pub statuses: Vec<StatusDef>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FactDef {
+    pub id: String,
+    pub description: String,
+    #[serde(default)]
+    pub criteria: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,43 +71,47 @@ pub struct StatusDef {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PriorityCase {
+    pub key: String,
+    #[serde(rename = "to")]
+    pub to: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeDef {
     pub id: String,
     #[serde(rename = "type")]
     pub node_type: NodeType,
-    /// Для llm_worker / llm_classifier
     #[serde(default)]
     pub agent: Option<String>,
-    /// Для llm_worker — задача
     #[serde(default)]
     pub task: Option<String>,
-    /// Для llm_classifier / llm_worker — входные данные
     #[serde(default)]
     pub input: Option<String>,
-    /// Для llm_classifier — статусы (ссылка на config.statuses)
     #[serde(default)]
     pub statuses: Option<serde_yaml::Value>,
-    /// Для system_condition — действие
     #[serde(default)]
     pub action: Option<String>,
-    /// Для system_condition — список required агентов
     #[serde(default)]
     pub required: Option<Vec<String>>,
-    /// Для sub_workflow — имя файла workflow
     #[serde(default)]
     pub workflow: Option<String>,
-    /// Для switch — входное значение
     #[serde(default)]
     pub cases: Option<HashMap<String, String>>,
-    /// Для switch — default маршрут, если ни один case не совпал
     #[serde(default)]
     pub default: Option<String>,
-    /// Неймспейс для работы (пробрасывается во все дочерние вызовы)
+    /// Для switch с приоритетной маршрутизацией (первый true = переход)
+    #[serde(default)]
+    pub cases_priority: Option<Vec<PriorityCase>>,
+    /// Для switch — ссылка на JSON-объект ({{ nodes.X.output }})
+    #[serde(default)]
+    pub input_object: Option<String>,
     #[serde(default)]
     pub namespace: Option<String>,
-    /// Проблемы (для triage check_all_analyzed)
     #[serde(default)]
     pub problems: Option<String>,
+    #[serde(default)]
+    pub output_type: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -93,6 +119,7 @@ pub struct NodeDef {
 pub enum NodeType {
     LlmWorker,
     LlmClassifier,
+    LlmFactExtractor,
     LlmFreeform,
     SystemCondition,
     SubWorkflow,
@@ -112,7 +139,6 @@ pub struct EdgeDef {
     pub case: Option<String>,
 }
 
-/// Загружает все YAML workflow файлы из папки workflows/ внутри teams
 pub fn load_workflows(agents_dir: &Path) -> Result<Vec<WorkflowDef>, String> {
     let mut workflows = Vec::new();
     let mut yaml_files = Vec::new();
@@ -151,9 +177,28 @@ fn parse_workflow_file(path: &Path) -> Result<WorkflowDef, String> {
         .map_err(|e| format!("Ошибка парсинга YAML {}: {}", path.display(), e))?;
     wf.file_stem = file_stem;
 
-    // Загружаем внешний файл статусов, если указан
+    let parent_dir = path.parent().unwrap_or(Path::new("."));
+
+    // Загружаем внешний файл фактов (facts.yaml), если указан
+    if let Some(ref facts_file) = wf.config.as_ref().and_then(|c| c.facts_file.clone()) {
+        let ext_path = parent_dir.join(&facts_file);
+        let ext_content = fs::read_to_string(&ext_path)
+            .map_err(|e| format!("Не удалось прочитать факты {}: {}", ext_path.display(), e))?;
+        let ext: FactsFile = serde_yaml::from_str(&ext_content)
+            .map_err(|e| format!("Ошибка парсинга фактов {}: {}", ext_path.display(), e))?;
+
+        if let Some(ref mut config) = wf.config {
+            if !ext.facts.is_empty() {
+                config.facts = ext.facts;
+            }
+            if let Some(prompt) = ext.extractor_prompt {
+                config.extractor_prompt = Some(prompt);
+            }
+        }
+    }
+
+    // Загружаем внешний файл статусов (statuses.yaml) — обратная совместимость
     if let Some(ref statuses_file) = wf.config.as_ref().and_then(|c| c.statuses_file.clone()) {
-        let parent_dir = path.parent().unwrap_or(Path::new("."));
         let ext_path = parent_dir.join(&statuses_file);
         let ext_content = fs::read_to_string(&ext_path)
             .map_err(|e| format!("Не удалось прочитать статусы {}: {}", ext_path.display(), e))?;
@@ -161,11 +206,9 @@ fn parse_workflow_file(path: &Path) -> Result<WorkflowDef, String> {
             .map_err(|e| format!("Ошибка парсинга статусов {}: {}", ext_path.display(), e))?;
 
         if let Some(ref mut config) = wf.config {
-            // Статусы из внешнего файла заменяют inline-статусы
             if !ext.statuses.is_empty() {
                 config.statuses = ext.statuses;
             }
-            // Приоритет у classifier_prompt из внешнего файла
             if let Some(prompt) = ext.classifier_prompt {
                 config.classifier_prompt = Some(prompt);
             }
@@ -175,7 +218,6 @@ fn parse_workflow_file(path: &Path) -> Result<WorkflowDef, String> {
     Ok(wf)
 }
 
-/// Находит workflow по его file_stem
 pub fn find_workflow_by_stem<'a>(
     workflows: &'a [WorkflowDef],
     stem: &str,

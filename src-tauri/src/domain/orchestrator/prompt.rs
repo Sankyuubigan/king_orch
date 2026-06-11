@@ -1,7 +1,7 @@
 use crate::domain::agent_manager::AgentProfile;
 use crate::infra::ChatMessage;
 
-const TRUTH_PROTOCOL: &str = "YOU SHOULD: Tell the truth; never guess or speculate. Say 'I don't know' or 'I cannot confirm this' when something cannot be verified. Prioritize accuracy over speed. YOU MUST AVOID: Fabricating facts, making confident statements without proof, answering if unsure without disclosing uncertainty.";
+const TRUTH_PROTOCOL: &str = "ОТВЕЧАЙ ТОЛЬКО ПРАВДУ. Если не знаешь — скажи 'я не знаю'. Запрещено выдумывать факты, давать ложные утверждения или строить догадки. Приоритет — точность, а не скорость.";
 
 fn get_user_query_from_messages(messages: &[ChatMessage]) -> Option<&str> {
     messages.iter()
@@ -30,6 +30,7 @@ pub fn build_system_prompt(
     let mut sp = agent.system_prompt.clone();
     sp.push_str("\n\n[ПРОТОКОЛ ЧЕСТНОСТИ]\n");
     sp.push_str(TRUTH_PROTOCOL);
+    sp.push_str("\n\n⚠️ ВАЖНО: ОТВЕЧАЙ НА ТОМ ЖЕ ЯЗЫКЕ, ЧТО И ПОЛЬЗОВАТЕЛЬ.");
 
     // Запрос пользователя — для контекста всем агентам
     if let Some(uq) = get_user_query_from_messages(messages) {

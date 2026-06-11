@@ -115,6 +115,9 @@ where
         let final_res = crate::domain::workflow_engine::run_workflow(
             workflow, &mut ctx, &mut runner,
         )?;
+        if ctx.output_emitted {
+            return Ok((String::new(), all_sub_calls, ctx.messages));
+        }
         ctx.messages.push(ChatMessage {
             id: Some(format!("msg_{}", msg_counter)),
             msg_type: "message".to_string(),

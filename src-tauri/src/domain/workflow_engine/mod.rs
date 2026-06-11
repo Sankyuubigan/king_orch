@@ -4,7 +4,7 @@
 //! Каждый workflow — это направленный граф узлов (nodes) и рёбер (edges).
 
 pub mod context;
-pub mod intent_classifier;
+pub mod fact_extractor;
 pub mod nodes;
 pub mod parser;
 
@@ -13,6 +13,7 @@ pub use parser::{find_workflow_by_stem, load_workflows, WorkflowDef};
 
 use crate::domain::agent_manager::AgentProfile;
 use crate::domain::orchestrator;
+use crate::domain::parsers::clean_thought_tags;
 use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SubCall};
 use nodes::find_next_node;
 use std::path::Path;
@@ -86,7 +87,8 @@ where
             sub_calls: None,
             author: Some("user".to_string()),
         });
-        self.engine
+        let raw = self
+            .engine
             .generate_chat(
                 &msgs,
                 self.max_gen_tokens,
@@ -96,10 +98,11 @@ where
                 |_, _| {},
                 self.log_cb.clone(),
             )
-            .map_err(|e| format!("Ошибка LLM в freeform: {}", e))
+            .map_err(|e| format!("Ошибка LLM в freeform: {}", e))?;
+        Ok(clean_thought_tags(&raw))
     }
 
-    /// Зовёт LLM напрямую (без .md агента) — для intent-классификатора
+    /// Зовёт LLM напрямую (без .md агента) — для fact-экстрактора
     pub fn call_llm_direct(&self, system_prompt: &str, user_text: &str) -> Result<String, String> {
         let msgs = vec![
             ChatMessage {

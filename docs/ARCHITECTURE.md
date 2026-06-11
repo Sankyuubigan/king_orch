@@ -121,9 +121,9 @@
 | `orchestrator/runtime.rs` | Загрузка и запуск MCP-серверов |
 | `workflow_engine/mod.rs` | **Графовый движок маршрутизации.** Исполняет YAML-графы (workflows). Точка входа — `run_workflow()` |
 | `workflow_engine/parser.rs` | Парсинг YAML workflow файлов, структуры `WorkflowDef`, `NodeDef`, `EdgeDef`, поиск по `file_stem` |
-| `workflow_engine/nodes.rs` | Исполнение узлов графа: `llm_worker`, `llm_classifier`, `system_condition`, `sub_workflow`, `switch`, `return` |
+| `workflow_engine/nodes.rs` | Исполнение узлов графа: `llm_worker`, `llm_fact_extractor`, `system_condition`, `sub_workflow`, `switch`, `return` |
 | `workflow_engine/context.rs` | Контекст выполнения: проход `{{ template }}` переменных, хранение outputs узлов |
-| `workflow_engine/intent_classifier.rs` | **Built-in** intent-классификатор (не требует отдельного .md файла). Статусы инжектятся runtime из YAML |
+| `workflow_engine/fact_extractor.rs` | **Built-in** fact-экстрактор (не требует отдельного .md файла). Факты инжектятся runtime из YAML |
 | `parsers.rs` | Распаковка JSON от LLM, очистка think-тегов |
 | `agent_manager.rs` | Парсинг .md файлов агентов, обработка INCLUDE, загрузка entry points (`load_entry_points`) через `visible` поле |
 
@@ -148,12 +148,12 @@
 main.rs
   └→ api/ (дверь: api/mod.rs)
        ├→ domain/ (дверь: domain/mod.rs)
-        │    ├→ workflow_engine/ (YAML графы — маршрутизация)
-        │    │    ├→ parser.rs          — парсинг YAML, visible/find_workflow_by_stem
-        │    │    ├→ nodes.rs           — типы узлов (llm_worker, switch, ...)
-        │    │    ├→ context.rs         — контекст, template-переменные
-        │    │    ├→ intent_classifier.rs — built-in классификатор (без .md)
-        │    │    └→ mod.rs             — run_workflow() — вход в граф
+         │    ├→ workflow_engine/ (YAML графы — маршрутизация)
+         │    │    ├→ parser.rs          — парсинг YAML, visible/find_workflow_by_stem
+         │    │    ├→ nodes.rs           — типы узлов (llm_worker, switch, ...)
+         │    │    ├→ context.rs         — контекст, template-переменные
+         │    │    ├→ fact_extractor.rs  — built-in экстрактор фактов (без .md)
+         │    │    └→ mod.rs             — run_workflow() — вход в граф
         │    ├→ orchestrator/           — run_agent_node() (для .md агентов)
         │    ├→ parsers.rs
         │    └→ agent_manager.rs       — загрузка .md + YAML, load_entry_points()
@@ -173,12 +173,12 @@ User → Entry point (выбор в UI: .md с visible: true или YAML с visi
          ↓
     run_chat() проверяет: есть ли YAML workflow с file_stem == agent_id?
          ↓
-    [Да] → workflow_engine::run_workflow()
-         │          ├→ llm_classifier → intent_classifier.rs (built-in)
-         │          ├→ switch → маршрутизация по status
+     [Да] → workflow_engine::run_workflow()
+         │          ├→ llm_fact_extractor → fact_extractor.rs (built-in, возвращает JSON фактов)
+         │          ├→ switch → приоритетная (cases_priority) или стандартная маршрутизация
          │          ├→ sub_workflow → рекурсивный вызов другого YAML
          │          ├→ llm_worker → run_agent_node() для .md агента (без авто-истории)
-         │          └→ system_condition → Rust-side проверка
+         │          └→ system_condition → Rust-side проверка (aggregate_and_output для вывода)
          │
     [Нет] → orchestrator::run_agent_node()
          │          └→ вся история non-thought сообщений inject'ится в llm_messages

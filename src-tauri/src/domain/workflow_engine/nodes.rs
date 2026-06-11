@@ -31,14 +31,12 @@ where
                 .unwrap_or(WorkflowConfig::default());
             let input = context.resolve_template(node.input.as_deref().unwrap_or(""));
             let prompt =
-                super::intent_classifier::build_classifier_prompt(&config, &input);
+                super::fact_extractor::build_extractor_prompt(&config, &input);
 
             let llm_response = runner.call_llm_direct(&prompt, &input)?;
 
-            // Парсим JSON из ответа LLM
             let parsed: serde_json::Value =
                 serde_json::from_str(&llm_response).unwrap_or_else(|_| {
-                    // fallback: ищем JSON-блок в тексте
                     extract_json(&llm_response)
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_else(|| serde_json::json!({"status": "greeting"}))
@@ -46,13 +44,41 @@ where
 
             let status = parsed.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
             (runner.log_cb)(format!(
-                "[classifier] Статус: {}, ответ: {}",
+                "[classifier] Статус: {}, сырой ответ: {}",
                 status,
-                llm_response.chars().take(200).collect::<String>()
+                llm_response.chars().take(500).collect::<String>()
             ));
-            eprintln!("[classifier] Статус: {}", status);
 
-            // Пробрасываем все поля из JSON LLM в output узла
+            Ok(NodeResult {
+                output: parsed,
+                next_node: None,
+            })
+        }
+
+        NodeType::LlmFactExtractor => {
+            let config = workflow
+                .config
+                .as_ref()
+                .cloned()
+                .unwrap_or(WorkflowConfig::default());
+            let input = context.resolve_template(node.input.as_deref().unwrap_or("{{ user_message }}"));
+            let prompt =
+                super::fact_extractor::build_extractor_prompt(&config, &input);
+
+            let llm_response = runner.call_llm_direct(&prompt, &input)?;
+
+            let parsed: serde_json::Value =
+                serde_json::from_str(&llm_response).unwrap_or_else(|_| {
+                    extract_json(&llm_response)
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_else(|| serde_json::json!({}))
+                });
+
+            (runner.log_cb)(format!(
+                "[fact_extractor] Сырой ответ: {}",
+                llm_response.chars().take(500).collect::<String>()
+            ));
+
             Ok(NodeResult {
                 output: parsed,
                 next_node: None,
@@ -86,10 +112,11 @@ where
 
             let result = runner.call_agent(agent, &task, &ns, &mut context.messages)?;
 
-            // Сохраняем результат в messages как thought
+            // Тип сохранения: message (в чат юзеру) или thought (внутренний отчёт)
+            let msg_type = node.output_type.as_deref().unwrap_or("thought");
             let msg = ChatMessage {
                 id: Some(format!("msg_{}", runner.msg_counter)),
-                msg_type: "thought".to_string(),
+                msg_type: msg_type.to_string(),
                 content: result.clone(),
             namespace: Some(ns),
             sub_calls: None,
@@ -97,6 +124,7 @@ where
         };
         context.messages.push(msg);
         *runner.msg_counter += 1;
+        context.output_emitted = node.output_type.is_some();
 
         Ok(NodeResult {
             output: serde_json::json!({"result": result, "agent": agent_id}),
@@ -210,6 +238,80 @@ where
                     })
                 }
 
+                "check_protocol_state" => {
+                    let required = node.required.as_ref().ok_or_else(|| {
+                        "check_protocol_state: нет required".to_string()
+                    })?;
+                    let all_present = required.iter().all(|agent_id| {
+                        context.messages.iter().any(|m| {
+                            m.author.as_deref() == Some(agent_id.as_str())
+                                && m.namespace.as_deref() == Some(ns.as_str())
+                        })
+                    });
+
+                    if all_present {
+                        Ok(NodeResult {
+                            output: serde_json::json!({"status": "ready"}),
+                            next_node: None,
+                        })
+                    } else {
+                        // Проверяем, какие агенты не хватает
+                        let missing: Vec<String> = required
+                            .iter()
+                            .filter(|agent_id| {
+                                !context.messages.iter().any(|m| {
+                                    m.author.as_deref() == Some(agent_id.as_str())
+                                        && m.namespace.as_deref() == Some(ns.as_str())
+                                })
+                            })
+                            .cloned()
+                            .collect();
+                        Ok(NodeResult {
+                            output: serde_json::json!({
+                                "status": "need_more_data",
+                                "missing_points": missing
+                            }),
+                            next_node: None,
+                        })
+                    }
+                }
+
+                "aggregate_and_output" => {
+                    let required = node.required.as_ref().ok_or_else(|| {
+                        "aggregate_and_output: нет required".to_string()
+                    })?;
+                    let mut reports = String::new();
+                    for agent_id in required {
+                        let ns_check = if ns.is_empty() { "main" } else { &ns };
+                        if let Some(msg) = context.messages.iter().rev()
+                            .find(|m| m.author.as_deref() == Some(agent_id.as_str())
+                                && m.namespace.as_deref() == Some(ns_check))
+                        {
+                            if !reports.is_empty() {
+                                reports.push_str("\n\n");
+                            }
+                            reports.push_str(&msg.content);
+                        }
+                    }
+
+                    let msg = ChatMessage {
+                        id: Some(format!("msg_{}", runner.msg_counter)),
+                        msg_type: "message".to_string(),
+                        content: reports.clone(),
+                        namespace: Some(ns.clone()),
+                        sub_calls: None,
+                        author: Some("system".to_string()),
+                    };
+                    context.messages.push(msg);
+                    *runner.msg_counter += 1;
+                    context.output_emitted = true;
+
+                    Ok(NodeResult {
+                        output: serde_json::json!({"reports": reports}),
+                        next_node: None,
+                    })
+                }
+
                 _ => Err(format!(
                     "Неизвестное действие system_condition: {}",
                     action
@@ -279,6 +381,44 @@ where
         }
 
         NodeType::Switch => {
+            // Приоритетная маршрутизация по input_object + cases_priority
+            if let Some(ref input_obj) = node.input_object {
+                let resolved = context.resolve_template(input_obj);
+                let json_val: serde_json::Value = serde_json::from_str(&resolved)
+                    .unwrap_or(serde_json::Value::Null);
+
+                if let Some(obj) = json_val.as_object() {
+                    if let Some(ref priority_cases) = node.cases_priority {
+                        for pc in priority_cases {
+                            if let Some(val) = obj.get(&pc.key) {
+                                if val.as_bool().unwrap_or(false) {
+                                    (runner.log_cb)(format!(
+                                        "[switch] Приоритет: '{}' = true → {}",
+                                        pc.key, pc.to
+                                    ));
+                                    return Ok(NodeResult {
+                                        output: serde_json::json!({"matched_case": pc.key, "target": pc.to}),
+                                        next_node: Some(pc.to.clone()),
+                                    });
+                                }
+                            }
+                        }
+                        // Ни один приоритет не совпал
+                        if let Some(ref default) = node.default {
+                            return Ok(NodeResult {
+                                output: serde_json::json!({"matched_case": "__default__", "target": default}),
+                                next_node: Some(default.clone()),
+                            });
+                        }
+                        return Ok(NodeResult {
+                            output: serde_json::json!({"matched_case": "__none__", "target": null}),
+                            next_node: None,
+                        });
+                    }
+                }
+            }
+
+            // Стандартная маршрутизация по input + cases
             let input = context.resolve_template(node.input.as_deref().unwrap_or(""));
             let status = serde_json::from_str::<serde_json::Value>(&input)
                 .ok()

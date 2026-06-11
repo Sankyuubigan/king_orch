@@ -15,7 +15,10 @@ interface WorkflowGraphDef {
   name: string;
   file_stem: string;
   visible: boolean;
-  config?: { statuses: Array<{ id: string; description: string }> };
+  config?: {
+    statuses?: Array<{ id: string; description: string }>;
+    facts?: Array<{ id: string; description: string }>;
+  };
   nodes: GraphNodeDef[];
   edges: GraphEdgeDef[];
 }
@@ -52,12 +55,13 @@ interface GraphAgentDef {
 // ─── Стили узлов по типу ───
 
 const NODE_STYLES: Record<string, { shape: string; color: string; label: string }> = {
-  llm_worker:       { shape: "box",        color: "#4caf50", label: "Worker" },
-  llm_classifier:   { shape: "diamond",    color: "#42a5f5", label: "Classifier" },
-  system_condition: { shape: "hexagon",    color: "#ffa726", label: "Condition" },
-  sub_workflow:     { shape: "database",   color: "#ab47bc", label: "Sub-workflow" },
-  switch:           { shape: "triangle",   color: "#ef5350", label: "Switch" },
-  return:           { shape: "dot",        color: "#78909c", label: "Return" },
+  llm_worker:        { shape: "box",        color: "#4caf50", label: "Worker" },
+  llm_classifier:    { shape: "diamond",    color: "#42a5f5", label: "Classifier (legacy)" },
+  llm_fact_extractor:{ shape: "diamond",    color: "#7e57c2", label: "Fact Extractor" },
+  system_condition:  { shape: "hexagon",    color: "#ffa726", label: "Condition" },
+  sub_workflow:      { shape: "database",   color: "#ab47bc", label: "Sub-workflow" },
+  switch:            { shape: "triangle",   color: "#ef5350", label: "Switch" },
+  return:            { shape: "dot",        color: "#78909c", label: "Return" },
 };
 
 // ─── Workflow color map ───
@@ -253,7 +257,7 @@ export class GraphController {
         lines.push(node.id);
 
         // Workflow context on second line
-        const typeLabel = `${node.type === "llm_worker" ? "🤖" : node.type === "llm_classifier" ? "📋" : node.type === "system_condition" ? "⚡" : node.type === "sub_workflow" ? "📦" : node.type === "switch" ? "🔀" : "🏁"} ${style.label} [${prefix}]`;
+        const typeLabel = `${node.type === "llm_worker" ? "🤖" : node.type === "llm_fact_extractor" || node.type === "llm_classifier" ? "📋" : node.type === "system_condition" ? "⚡" : node.type === "sub_workflow" ? "📦" : node.type === "switch" ? "🔀" : "🏁"} ${style.label} [${prefix}]`;
         lines.push(typeLabel);
 
         // Agent name on third line for workers
@@ -262,10 +266,13 @@ export class GraphController {
           lines.push(agent ? `→ ${agent.name || node.agent}` : `→ ${node.agent}`);
         }
 
-        // Statuses for classifiers
-        if (node.type === "llm_classifier" && wf.config?.statuses && wf.config.statuses.length > 0) {
-          const names = wf.config.statuses.map((s: any) => s.id).join(", ");
-          lines.push(`statuses: ${names}`);
+        // Statuses/facts for classifiers/extractors
+        if (node.type === "llm_fact_extractor" || node.type === "llm_classifier") {
+          if (wf.config?.facts && wf.config.facts.length > 0) {
+            lines.push(`facts: ${wf.config.facts.map((s: any) => s.id).join(", ")}`);
+          } else if (wf.config?.statuses && wf.config.statuses.length > 0) {
+            lines.push(`statuses: ${wf.config.statuses.map((s: any) => s.id).join(", ")}`);
+          }
         }
 
         // Cases for switches
@@ -291,8 +298,8 @@ export class GraphController {
           file_stem: wf.file_stem,
         });
 
-        const borderWidth = node.type === "llm_classifier" ? 3 : node.type === "sub_workflow" ? 2 : 2;
-        const bgAlpha = node.type === "llm_classifier" ? "33" : "22";
+        const borderWidth = (node.type === "llm_classifier" || node.type === "llm_fact_extractor") ? 3 : node.type === "sub_workflow" ? 2 : 2;
+        const bgAlpha = (node.type === "llm_classifier" || node.type === "llm_fact_extractor") ? "33" : "22";
 
         visNodes.push({
           id: fullId,
@@ -584,9 +591,17 @@ export class GraphController {
           <div class="detail-value code">${node.input}</div>
         </div>`);
       }
-      if (node.type === "llm_classifier") {
+      if (node.type === "llm_fact_extractor" || node.type === "llm_classifier") {
         const wf = allWorkflows.find(w => w.file_stem === data.file_stem);
-        if (wf?.config?.statuses && wf.config.statuses.length > 0) {
+        if (wf?.config?.facts && wf.config.facts.length > 0) {
+          const rows = wf.config.facts.map((s: any) =>
+            `<div class="detail-case"><span class="case-key">${s.id}</span> ${s.description}</div>`
+          ).join("");
+          parts.push(`<div class="graph-detail-section">
+            <div class="detail-label">Факты экстрактора</div>
+            <div class="detail-value">${rows}</div>
+          </div>`);
+        } else if (wf?.config?.statuses && wf.config.statuses.length > 0) {
           const rows = wf.config.statuses.map((s: any) =>
             `<div class="detail-case"><span class="case-key">${s.id}</span> ${s.description}</div>`
           ).join("");

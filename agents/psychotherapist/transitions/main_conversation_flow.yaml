@@ -2,178 +2,117 @@ name: Therapist
 visible: true
 
 config:
-  statuses_file: "statuses.yaml"
+  facts_file: "facts.yaml"
 
 nodes:
-  - id: classify_intent
-    type: llm_classifier
+  # 1. Извлекаем ВСЕ факты из сообщения пользователя
+  - id: extract_facts
+    type: llm_fact_extractor
     input: "{{ user_message }}"
 
-  - id: route
+  # 2. Роутер на основе приоритетов фактов
+  # Первый true факт определяет маршрут
+  - id: priority_router
     type: switch
-    input: "{{ nodes.classify_intent.output.status }}"
+    input_object: "{{ nodes.extract_facts.output }}"
+    cases_priority:
+      - key: user_doesnt_agree
+        to: call_curator
+      - key: has_somatic
+        to: call_soma_translator
+      - key: not_enough_data
+        to: extract_protocol_data
+      - key: is_greeting
+        to: respond_greeting
     default: freestyle
-    cases:
-      greeting: respond
-      somatic_symptoms: call_soma_aux
-      one_problem_incomplete: collect_info
-      ready_for_expose: check_analysis_all_done
-      user_doesnt_agree: call_curator
+
+  # 3. Воркеры, пишущие сразу в чат (без синтеза)
+  - id: call_curator
+    type: llm_worker
+    agent: curator
+    output_type: message
+    task: "Пользователь не согласен или сопротивляется. Ответь ему."
+
+  - id: call_soma_translator
+    type: llm_worker
+    agent: soma_translator
+    output_type: message
+    task: "Пользователь описал боль. Дай ему расшифровку по НГМ."
+
+  - id: respond_greeting
+    type: llm_worker
+    agent: liaison
+    output_type: message
+    task: "Поздоровайся и спроси, с чем будем работать."
 
   - id: freestyle
     type: llm_freeform
     input: "{{ user_message }}"
 
-  - id: respond
+  # --- Блок работы с протоколом ---
+  - id: extract_protocol_data
+    type: llm_worker
+    agent: protocol_extractor
+    output_type: thought
+    task: "Обнови статус протокола."
+
+  - id: check_protocol
+    type: system_condition
+    action: check_protocol_state
+    required: ["protocol_extractor"]
+
+  - id: protocol_router
+    type: switch
+    input: "{{ nodes.check_protocol.output.status }}"
+    cases:
+      need_more_data: ask_missing
+      ready: start_datamining
+
+  - id: ask_missing
     type: llm_worker
     agent: liaison
-    task: "Пользователь поздоровался. Поприветствуй его и спроси, с чем он хочет поработать."
-
-  - id: collect_info
-    type: llm_worker
-    agent: liaison
-    task: >
-      Пользователь описал проблему, но не хватает данных.
-      Собери недостающие пункты по Протоколу 3 пунктов:
-      1. Контекст проблемы (подробное описание)
-      2. Как клиент хочет, чтобы проблема решилась (жизнь без неё)
-      3. Как клиент справляется сейчас (адаптация/компенсация)
-      Недостающие пункты: {{ nodes.classify_intent.output.missing_points }}
-
-  - id: call_soma_aux
-    type: llm_worker
-    agent: soma_translator
-    namespace: main
-    task: >
-      Пользователь описывает физические симптомы.
-      Используя базу знаний 10 сегментов тела и НГМ,
-      напиши пользователю вспомогательную информацию,
-      чтобы помочь ему раскрыть его проблему.
-      Пиши простым языком, будто пользователю 15 лет.
-
-  - id: call_curator
-    type: llm_worker
-    agent: curator
-    task: >
-      Пользователь не согласен с ответами команды психотерапии.
-      Используй свой алгоритм проекций, чтобы выяснить истинную причину
-      несогласия и помочь пользователю раскрыть проблему.
-
-  - id: check_analysis_all_done
-    type: system_condition
-    action: has_reports
-    required:
-      - soma_translator
-      - destructor_detector
-      - pattern_finder_by_double_bind
-    namespace: main
-
-  - id: check_reports
-    type: system_condition
-    action: get_missing_reports
-    required:
-      - soma_translator
-      - destructor_detector
-      - pattern_finder_by_double_bind
-    namespace: main
-
-  - id: call_soma
-    type: llm_worker
-    agent: soma_translator
-    namespace: main
-    task: >
-      Пользователь описывает физические симптомы.
-      Используя базу знаний 10 сегментов тела и НГМ,
-      напиши пользователю вспомогательную информацию,
-      чтобы помочь ему раскрыть его проблему.
-      Пиши простым языком, будто пользователю 15 лет.
-
-  - id: call_destructor
-    type: llm_worker
-    agent: destructor_detector
-    namespace: main
-
-  - id: call_pattern
-    type: llm_worker
-    agent: pattern_finder_by_double_bind
-    namespace: main
+    output_type: message
+    task: "Нам не хватает: {{ nodes.check_protocol.output.missing_points }}. Спроси об этом."
 
   - id: start_datamining
     type: sub_workflow
     workflow: treatment_flow.yaml
 
-  - id: aggregate_reports
+  - id: output_raw_datamining
     type: system_condition
-    action: aggregate_reports
-    required:
-      - soma_translator
-      - destructor_detector
-      - pattern_finder_by_double_bind
-      - neuro_reprogrammer
-    namespace: main
-
-  - id: present_results
-    type: llm_worker
-    agent: liaison
-    task: >
-      Лечение завершено в неймспейсе main.
-      Вот отчёты всех агентов. Используй их чтобы объяснить клиенту ситуацию.
-
-      Сводка агентов:
-      {{ nodes.aggregate_reports.output.reports }}
-
-      Переведи инструкцию от neuro_reprogrammer на простой бытовой язык.
-      Используя отчёты soma_translator, destructor_detector, pattern_finder_by_double_bind,
-      объясни клиенту что с ним происходило. НЕ используй технические термины.
+    action: aggregate_and_output
+    required: ["neuro_reprogrammer"]
 
 edges:
-  - from: classify_intent
-    to: route
-  - from: route
-    case: greeting
-    to: respond
-  - from: route
-    case: somatic_symptoms
-    to: call_soma_aux
-  - from: route
-    case: one_problem_incomplete
-    to: collect_info
-  - from: route
-    case: ready_for_expose
-    to: check_analysis_all_done
-  - from: route
-    case: user_doesnt_agree
-    to: call_curator
+  - from: extract_facts
+    to: priority_router
 
-  - from: check_analysis_all_done
-    condition: present
-    to: start_datamining
-  - from: check_analysis_all_done
-    condition: missing
-    to: check_reports
-  - from: check_reports
-    to: call_soma
-  - from: call_soma
-    to: call_destructor
-  - from: call_destructor
-    to: call_pattern
-  - from: call_pattern
-    to: start_datamining
-
-  - from: start_datamining
-    to: aggregate_reports
-  - from: aggregate_reports
-    to: present_results
-
-  - from: freestyle
-    to: END
-  - from: respond
-    to: END
-  - from: collect_info
-    to: END
-  - from: call_soma_aux
-    to: END
+  # Переходы от priority_router заданы внутри (cases_priority + default)
   - from: call_curator
     to: END
-  - from: present_results
+  - from: call_soma_translator
+    to: END
+  - from: respond_greeting
+    to: END
+  - from: freestyle
+    to: END
+
+  # Блок протокола
+  - from: extract_protocol_data
+    to: check_protocol
+  - from: check_protocol
+    to: protocol_router
+  - from: protocol_router
+    case: need_more_data
+    to: ask_missing
+  - from: protocol_router
+    case: ready
+    to: start_datamining
+  - from: ask_missing
+    to: END
+
+  # Вывод без синтеза
+  - from: start_datamining
+    to: output_raw_datamining
+  - from: output_raw_datamining
     to: END

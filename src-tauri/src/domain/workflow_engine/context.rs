@@ -15,6 +15,8 @@ pub struct WorkflowContext {
     pub messages: Vec<ChatMessage>,
     /// История сообщений (только от пользователя и ассистента)
     pub history: Vec<ChatMessage>,
+    /// Флаг: финальный узел workflow уже сохранил результат как message
+    pub output_emitted: bool,
 }
 
 impl WorkflowContext {
@@ -30,6 +32,7 @@ impl WorkflowContext {
             node_outputs: HashMap::new(),
             messages,
             history,
+            output_emitted: false,
         }
     }
 
