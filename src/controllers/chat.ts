@@ -240,7 +240,7 @@ export class ChatController {
       await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
     } catch (error) {
       if (String(error).includes("Отменено") || String(error).includes("Прервано")) this.appendMessage('system', '⚠️ Прервано.');
-      else { showToast(`Ошибка: ${error}`, "error"); this.logToGUI(`${error}`); }
+      else { showToast(`Ошибка: ${error}`, "error"); }
     } finally { this.setProcessingState(false); }
   }
 

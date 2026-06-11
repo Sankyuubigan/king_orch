@@ -1,3 +1,5 @@
+import { bus } from "../events";
+
 const TOAST_DURATION = 5000;
 
 export function showToast(message: string, type: 'error' | 'success' | 'info' = 'error') {
@@ -9,6 +11,10 @@ export function showToast(message: string, type: 'error' | 'success' | 'info' = 
   toast.textContent = message;
 
   container.appendChild(toast);
+
+  if (type === "error") {
+    bus.emit("log", `❌ ${message}`);
+  }
 
   // Анимация появления
   requestAnimationFrame(() => {
