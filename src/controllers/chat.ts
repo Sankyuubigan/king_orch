@@ -234,6 +234,8 @@ export class ChatController {
       const hasRT = response.sub_calls && response.sub_calls.some((c: any) => store.realtimeSubcallKeys.has(`${c.agent_name}:${c.time_sec.toFixed(2)}`));
       if (response.text) {
         this.appendMessage('agent', response.text, displayName, `⏱ ${dur} сек`, response.sub_calls, hasRT, agentUid);
+      } else if (newMessages.length > 0) {
+        this.renderChatFromHistory();
       }
       await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
     } catch (error) {

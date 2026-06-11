@@ -60,11 +60,8 @@ fn build_facts_list(facts: &[FactDef]) -> String {
     facts
         .iter()
         .map(|f| {
-            let mut entry = format!("- \"{}\": {}", f.id, f.description);
-            if let Some(ref criteria) = f.criteria {
-                entry.push_str(&format!("\n  Критерии: {}", criteria));
-            }
-            entry
+            let text = f.criteria.as_deref().unwrap_or("");
+            format!("- \"{}\": {}", f.id, text)
         })
         .collect::<Vec<_>>()
         .join("\n")

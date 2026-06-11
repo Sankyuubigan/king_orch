@@ -379,7 +379,7 @@ impl LlamaEngine {
             "<|im_end|>", "<end_of_turn>", "</s>", "<|eot_id|>", 
             "<turn>", "<|eot|>", "User:", "System:", "<eos>", "Yes",
             "<turn|>", "/end_of_turn>", "<step>", "<|end_of_text|>", "<｜end of sentence｜>",
-            "</start_of_turn>"
+            "</start_of_turn>", "<|channel|>"
         ];
         stop_words.extend_from_slice(custom_stop_words);
 
@@ -511,8 +511,10 @@ impl LlamaEngine {
         if full_prompt.is_empty() {
             if pf == PromptFormat::Auto { pf = PromptFormat::detect_from_path(&self.model_path); }
             full_prompt = pf.format_messages(messages);
-            let words = pf.get_stop_words(); stop_words = words.into_iter().map(|s| s.to_string()).collect();
+        } else {
+            if pf == PromptFormat::Auto { pf = PromptFormat::detect_from_path(&self.model_path); }
         }
+        let words = pf.get_stop_words(); stop_words = words.into_iter().map(|s| s.to_string()).collect();
         
         let stop_words_refs: Vec<&str> = stop_words.iter().map(|s| s.as_str()).collect();
         self.run_generation(&full_prompt, max_tokens, model_params, &stop_words_refs, cancel_flag, progress_cb, log_cb)

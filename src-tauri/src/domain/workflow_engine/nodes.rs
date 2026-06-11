@@ -126,7 +126,7 @@ where
         };
         context.messages.push(msg);
         *runner.msg_counter += 1;
-        context.output_emitted = node.output_type.is_some();
+        context.output_emitted = node.output_type.as_deref() == Some("message");
 
         Ok(NodeResult {
             output: serde_json::json!({"result": result, "agent": agent_id}),

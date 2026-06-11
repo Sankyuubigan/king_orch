@@ -60,7 +60,6 @@ pub struct StatusesFile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactDef {
     pub id: String,
-    pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub criteria: Option<String>,
 }
@@ -68,7 +67,6 @@ pub struct FactDef {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StatusDef {
     pub id: String,
-    pub description: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub criteria: Option<String>,
 }
