@@ -145,7 +145,8 @@ export class GraphController {
 
       this.el.currentWorkflowName.textContent = `${wf.name} (${wf.file_stem}.yaml)`;
 
-      const nodePositions = this.computeAutoLayout(wf.nodes, wf.edges);
+      const allEdges = [...wf.edges, ...this.getImplicitSwitchEdges(wf.nodes)];
+      const nodePositions = this.computeAutoLayout(wf.nodes, allEdges);
 
       // Build import data structure with custom IDs as keys
       const importData: import("drawflow").DrawflowExport = {
@@ -166,12 +167,33 @@ export class GraphController {
         const outputs: Record<string, { connections: any[] }> = {};
         for (let i = 1; i <= outs; i++) outputs[`output_${i}`] = { connections: [] };
 
+        const typeLabel = NODE_LABELS[node.type] || node.type;
+        let agentLine = "";
+        if (node.type === "llm_worker" && node.agent) {
+          agentLine = `<div class="gn-agent">→ ${this.esc(node.agent)}</div>`;
+        }
+        let casesLine = "";
+        if (node.type === "switch") {
+          const labels = this.getSwitchCaseKeys(node);
+          if (labels.length > 0) {
+            casesLine = `<div class="gn-cases">` + labels.map((key, i) =>
+              `<div class="gn-case">${i + 1}: ${this.esc(key)}</div>`
+            ).join("") + `</div>`;
+          }
+        }
+        const html = `
+          <div class="gn-title">${this.esc(node.id)}</div>
+          <div class="gn-type">${typeLabel}</div>
+          ${agentLine}
+          ${casesLine}
+        `;
+
         nodesData[node.id] = {
           id: node.id,
           name: node.id,
           data: JSON.parse(JSON.stringify(node)),
           class: "",
-          html: "",
+          html,
           typenode: false,
           inputs,
           outputs,
@@ -190,6 +212,31 @@ export class GraphController {
           this.editor!.addConnection(edge.from, edge.to, `output_${outIdx + 1}`, "input_1");
         } catch (connErr) {
           console.error("addConnection error:", connErr);
+        }
+      }
+
+      // Generate implicit edges for switch nodes from cases_priority/cases/default
+      for (const node of wf.nodes) {
+        if (node.type !== "switch") continue;
+        const targets: Array<{ to: string; caseKey?: string }> = [];
+        if (node.cases_priority) {
+          for (const cp of node.cases_priority) targets.push({ to: cp.to, caseKey: cp.key });
+        } else if (node.cases) {
+          for (const [key, val] of Object.entries(node.cases)) targets.push({ to: val, caseKey: key });
+        }
+        if (node.default) targets.push({ to: node.default, caseKey: "default" });
+        for (const target of targets) {
+          const alreadyExists = wf.edges.some(
+            (e) => e.from === node.id && e.to === target.to && (!target.caseKey || e.case === target.caseKey)
+          );
+          if (alreadyExists) continue;
+          if (!nodesData[target.to]) continue;
+          const outIdx = this.getSwitchOutputIndex(node, target.caseKey);
+          try {
+            this.editor!.addConnection(node.id, target.to, `output_${outIdx + 1}`, "input_1");
+          } catch (connErr) {
+            console.error("addConnection error:", connErr);
+          }
         }
       }
 
@@ -378,8 +425,13 @@ export class GraphController {
       agentLine = `<div class="gn-agent">→ ${this.esc(data.agent)}</div>`;
     }
     let casesLine = "";
-    if (data.type === "switch" && data.cases) {
-      casesLine = `<div class="gn-type">${Object.keys(data.cases).join(" / ")}</div>`;
+    if (data.type === "switch") {
+      const labels = this.getSwitchCaseKeys(data);
+      if (labels.length > 0) {
+        casesLine = `<div class="gn-cases">` + labels.map((key, i) =>
+          `<div class="gn-case">${i + 1}: ${this.esc(key)}</div>`
+        ).join("") + `</div>`;
+      }
     }
 
     el.innerHTML = `
@@ -398,14 +450,18 @@ export class GraphController {
 
   private getSwitchOutputCount(node: GraphNodeDef): number {
     if (node.cases) return Object.keys(node.cases).length;
-    if (node.cases_priority) return node.cases_priority.length;
+    if (node.cases_priority) return node.cases_priority.length + (node.default ? 1 : 0);
     if (node.default) return 1;
     return 2;
   }
 
   private getSwitchCaseKeys(node: GraphNodeDef): string[] {
     if (node.cases) return Object.keys(node.cases);
-    if (node.cases_priority) return node.cases_priority.map((c) => c.key);
+    if (node.cases_priority) {
+      const keys = node.cases_priority.map((c) => c.key);
+      if (node.default) keys.push("default");
+      return keys;
+    }
     if (node.default) return ["default"];
     return ["default", "other"];
   }
@@ -419,6 +475,27 @@ export class GraphController {
   private getCaseKeyForOutput(node: GraphNodeDef, outputIdx: number): string | undefined {
     const keys = this.getSwitchCaseKeys(node);
     return keys[outputIdx];
+  }
+
+  private getImplicitSwitchEdges(nodes: GraphNodeDef[]): GraphEdgeDef[] {
+    const implicit: GraphEdgeDef[] = [];
+    for (const node of nodes) {
+      if (node.type !== "switch") continue;
+      if (node.cases_priority) {
+        for (const cp of node.cases_priority) {
+          implicit.push({ from: node.id, to: cp.to });
+        }
+      }
+      if (node.cases) {
+        for (const val of Object.values(node.cases)) {
+          implicit.push({ from: node.id, to: val });
+        }
+      }
+      if (node.default) {
+        implicit.push({ from: node.id, to: node.default });
+      }
+    }
+    return implicit;
   }
 
   private computeAutoLayout(nodes: GraphNodeDef[], edges: GraphEdgeDef[]): Map<string, { x: number; y: number }> {

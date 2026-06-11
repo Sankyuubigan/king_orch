@@ -156,33 +156,22 @@ async function main() {
         }
 
         console.log('\n========================================');
-        console.log('[4/5] Сборка приложения (release)...');
+        console.log('[4/5] Сборка приложения (без установщика)...');
 
-        let privKeyPath = process.env.TAURI_PRIVATE_KEY_ORIGINAL || 'D:\\Projects\\docusaurus-starter\\docs\\Sega Mega Note\\Моя картотека\\software\\настройки\\tauri_signed_keys\\tauri.key';
-        let hasKey = fs.existsSync(privKeyPath);
+        // Переопределяем конфиг Tauri — отключаем бандлер (NSIS), но компиляция идёт штатно
+        const overridePath = path.join(scriptDir, 'src-tauri', 'tauri-dev-override.json');
+        fs.writeFileSync(overridePath, JSON.stringify({ bundle: { active: false } }));
 
-        if (hasKey) {
-            console.log('🔑 Ключ подписи найден.');
-            let keyContent = fs.readFileSync(privKeyPath, 'utf8').trim();
-            const singleLineKey = keyContent.replace(/\r?\n|\r/g, '');
-            process.env.TAURI_SIGNING_PRIVATE_KEY = singleLineKey;
-            process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = '123';
-        } else {
-            console.log('⚠️ Ключ подписи не найден — сборка без подписи (для локального тестирования это нормально).');
-            process.env.TAURI_SIGNING_PRIVATE_KEY = '';
-            process.env.TAURI_SIGNING_PRIVATE_KEY_PASSWORD = '';
-        }
-        delete process.env.TAURI_SIGNING_PRIVATE_KEY_PATH;
-        delete process.env.TAURI_PRIVATE_KEY;
-        delete process.env.TAURI_KEY_PASSWORD;
-
+        let buildOk = false;
         try {
-            await runCommand('npx', ['tauri', 'build']);
-        } catch (buildError) {
-            console.error('\n❌ СБОРКА ЗАВЕРШИЛАСЬ С ОШИБКОЙ!');
-            console.error('Старый экзешник НЕ будет запущен.');
-            console.error('Исправьте ошибки компиляции и запустите build.bat снова.');
-            throw buildError;
+            await runCommand('npx', ['tauri', 'build', '--config', overridePath]);
+            buildOk = true;
+        } finally {
+            try { fs.unlinkSync(overridePath); } catch (e) {}
+        }
+
+        if (!buildOk) {
+            throw new Error('Сборка Tauri не удалась');
         }
 
         // Копируем сайдкары рядом с exe
@@ -202,9 +191,7 @@ async function main() {
         if (!fs.existsSync(exePath)) {
             throw new Error('king_orch.exe не найден! Сборка не удалась.');
         }
-        
-        // Увеличенный таймаут: release-сборка Tauri (Vite + Rust + NSIS) 
-        // может занимать более 2 минут. 10 минут — безопасный порог.
+
         const exeStat = fs.statSync(exePath);
         const exeAgeSec = (Date.now() - exeStat.mtimeMs) / 1000;
         if (exeAgeSec > 600) {

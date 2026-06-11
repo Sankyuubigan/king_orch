@@ -401,6 +401,16 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   color: #4caf50;
   margin-top: 2px;
 }
+.gn-cases {
+  margin-top: 4px;
+  text-align: left;
+  font-size: 10px;
+  line-height: 1.6;
+}
+.gn-case {
+  color: #aaa;
+  padding: 0 2px;
+}
 
 /* Drawflow connection lines */
 .drawflow .connection .main-path {
