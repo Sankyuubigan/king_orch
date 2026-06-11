@@ -30,8 +30,9 @@ where
                 .cloned()
                 .unwrap_or(WorkflowConfig::default());
             let input = context.resolve_template(node.input.as_deref().unwrap_or(""));
+            let workflow_dir = std::path::Path::new(&workflow.parent_dir);
             let prompt =
-                super::fact_extractor::build_extractor_prompt(&config, &input);
+                super::fact_extractor::build_extractor_prompt(&config, &input, Some(workflow_dir));
 
             let llm_response = runner.call_llm_direct(&prompt, &input)?;
 
@@ -62,8 +63,9 @@ where
                 .cloned()
                 .unwrap_or(WorkflowConfig::default());
             let input = context.resolve_template(node.input.as_deref().unwrap_or("{{ user_message }}"));
+            let workflow_dir = std::path::Path::new(&workflow.parent_dir);
             let prompt =
-                super::fact_extractor::build_extractor_prompt(&config, &input);
+                super::fact_extractor::build_extractor_prompt(&config, &input, Some(workflow_dir));
 
             let llm_response = runner.call_llm_direct(&prompt, &input)?;
 

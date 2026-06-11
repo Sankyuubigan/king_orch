@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use tauri::Manager;
 
 use crate::domain::workflow_engine::parser::{
-    EdgeDef, load_workflows, NodeDef, WorkflowConfig,
+    indent_yaml, load_workflows, separate_top_level_fields, EdgeDef, NodeDef, WorkflowConfig,
 };
 
 /// Ответ для визуализатора графов
@@ -157,9 +157,12 @@ pub fn save_workflow(
     workflow: crate::domain::workflow_engine::parser::WorkflowDef,
 ) -> Result<(), String> {
     let _ = &app;
+
     let yaml_str = serde_yaml::to_string(&workflow)
         .map_err(|e| format!("Ошибка сериализации YAML: {}", e))?;
-    fs::write(&path, &yaml_str)
+    let yaml_indented = indent_yaml(&yaml_str);
+    let yaml_separated = separate_top_level_fields(&yaml_indented);
+    fs::write(&path, &yaml_separated)
         .map_err(|e| format!("Ошибка записи файла {}: {}", path, e))?;
     Ok(())
 }

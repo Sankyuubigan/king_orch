@@ -90,6 +90,8 @@ export class GraphController {
   private el: GraphElements;
   private editor: Drawflow | null = null;
   private currentFilePath: string | null = null;
+  private currentWorkflowName: string = "";
+  private currentWorkflowConfig: any = null;
 
   constructor(el: GraphElements) {
     this.el = el;
@@ -139,6 +141,8 @@ export class GraphController {
       });
 
       this.currentFilePath = selected;
+      this.currentWorkflowName = wf.name;
+      this.currentWorkflowConfig = wf.config ?? null;
       this.el.btnSaveWorkflow.disabled = false;
       this.hideSidebar();
       this.ensureEditor();
@@ -289,7 +293,7 @@ export class GraphController {
         }
       }
 
-      const workflow = { name: "", visible: true, config: null, nodes, edges };
+      const workflow = { name: this.currentWorkflowName, visible: true, config: this.currentWorkflowConfig, nodes, edges };
       await invoke("save_workflow", { path: this.currentFilePath, workflow });
       showToast("✅ Workflow сохранён", "success");
     } catch (e) {

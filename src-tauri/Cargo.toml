@@ -27,4 +27,5 @@ reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], defau
 futures-util = "0.3"
 minijinja = "1.0"
 serde_yaml = "0.9"
+indexmap = { version = "2", features = ["serde"] }
 base64 = "0.22"

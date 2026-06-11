@@ -1,3 +1,4 @@
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -11,6 +12,8 @@ pub struct WorkflowDef {
     pub visible: bool,
     #[serde(skip)]
     pub file_stem: String,
+    #[serde(skip)]
+    pub parent_dir: String,
     #[serde(default)]
     pub config: Option<WorkflowConfig>,
     pub nodes: Vec<NodeDef>,
@@ -20,19 +23,19 @@ pub struct WorkflowDef {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkflowConfig {
     // --- Новый паттерн: Fact Extractor ---
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub facts: Vec<FactDef>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facts_file: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extractor_prompt: Option<String>,
 
     // --- Старый паттерн: Status Classifier (для обратной совместимости) ---
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub statuses: Vec<StatusDef>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub statuses_file: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub classifier_prompt: Option<String>,
 }
 
@@ -58,7 +61,7 @@ pub struct StatusesFile {
 pub struct FactDef {
     pub id: String,
     pub description: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub criteria: Option<String>,
 }
 
@@ -66,7 +69,7 @@ pub struct FactDef {
 pub struct StatusDef {
     pub id: String,
     pub description: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub criteria: Option<String>,
 }
 
@@ -82,36 +85,34 @@ pub struct NodeDef {
     pub id: String,
     #[serde(rename = "type")]
     pub node_type: NodeType,
-    #[serde(default)]
-    pub agent: Option<String>,
-    #[serde(default)]
-    pub task: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
-    #[serde(default)]
-    pub statuses: Option<serde_yaml::Value>,
-    #[serde(default)]
-    pub action: Option<String>,
-    #[serde(default)]
-    pub required: Option<Vec<String>>,
-    #[serde(default)]
-    pub workflow: Option<String>,
-    #[serde(default)]
-    pub cases: Option<HashMap<String, String>>,
-    #[serde(default)]
-    pub default: Option<String>,
-    /// Для switch с приоритетной маршрутизацией (первый true = переход)
-    #[serde(default)]
-    pub cases_priority: Option<Vec<PriorityCase>>,
-    /// Для switch — ссылка на JSON-объект ({{ nodes.X.output }})
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_object: Option<String>,
-    #[serde(default)]
-    pub namespace: Option<String>,
-    #[serde(default)]
-    pub problems: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub required: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cases: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cases_priority: Option<Vec<PriorityCase>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statuses: Option<serde_yaml::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub namespace: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub problems: Option<String>,
     /// Визуальные координаты для редактора графов (x, y)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_pos: Option<HashMap<String, i32>>,
@@ -134,12 +135,12 @@ pub enum NodeType {
 pub struct EdgeDef {
     #[serde(default)]
     pub from: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub case: Option<String>,
     #[serde(default)]
     pub to: String,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub condition: Option<String>,
-    #[serde(default)]
-    pub case: Option<String>,
 }
 
 pub fn load_workflows(agents_dir: &Path) -> Result<Vec<WorkflowDef>, String> {
@@ -176,47 +177,15 @@ fn parse_workflow_file(path: &Path) -> Result<WorkflowDef, String> {
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
+    let parent_dir = path.parent().unwrap_or(Path::new("."));
     let mut wf: WorkflowDef = serde_yaml::from_str(&content)
         .map_err(|e| format!("Ошибка парсинга YAML {}: {}", path.display(), e))?;
     wf.file_stem = file_stem;
+    wf.parent_dir = parent_dir.to_string_lossy().to_string();
 
-    let parent_dir = path.parent().unwrap_or(Path::new("."));
-
-    // Загружаем внешний файл фактов (facts.yaml), если указан
-    if let Some(ref facts_file) = wf.config.as_ref().and_then(|c| c.facts_file.clone()) {
-        let ext_path = parent_dir.join(&facts_file);
-        let ext_content = fs::read_to_string(&ext_path)
-            .map_err(|e| format!("Не удалось прочитать факты {}: {}", ext_path.display(), e))?;
-        let ext: FactsFile = serde_yaml::from_str(&ext_content)
-            .map_err(|e| format!("Ошибка парсинга фактов {}: {}", ext_path.display(), e))?;
-
-        if let Some(ref mut config) = wf.config {
-            if !ext.facts.is_empty() {
-                config.facts = ext.facts;
-            }
-            if let Some(prompt) = ext.extractor_prompt {
-                config.extractor_prompt = Some(prompt);
-            }
-        }
-    }
-
-    // Загружаем внешний файл статусов (statuses.yaml) — обратная совместимость
-    if let Some(ref statuses_file) = wf.config.as_ref().and_then(|c| c.statuses_file.clone()) {
-        let ext_path = parent_dir.join(&statuses_file);
-        let ext_content = fs::read_to_string(&ext_path)
-            .map_err(|e| format!("Не удалось прочитать статусы {}: {}", ext_path.display(), e))?;
-        let ext: StatusesFile = serde_yaml::from_str(&ext_content)
-            .map_err(|e| format!("Ошибка парсинга статусов {}: {}", ext_path.display(), e))?;
-
-        if let Some(ref mut config) = wf.config {
-            if !ext.statuses.is_empty() {
-                config.statuses = ext.statuses;
-            }
-            if let Some(prompt) = ext.classifier_prompt {
-                config.classifier_prompt = Some(prompt);
-            }
-        }
-    }
+    // Внешние facts.yaml / statuses.yaml НЕ вливаются в config.facts при парсинге.
+    // Они загружаются лениво в fact_extractor::build_extractor_prompt() при выполнении.
+    // Это гарантирует, что save_workflow() не запишет дублированные facts в workflow YAML.
 
     Ok(wf)
 }
@@ -226,6 +195,94 @@ pub fn find_workflow_by_stem<'a>(
     stem: &str,
 ) -> Option<&'a WorkflowDef> {
     workflows.iter().find(|wf| wf.file_stem == stem)
+}
+
+/// Пост-обработка сериализованного YAML: добавляет 2-пробельный отступ для block sequence
+/// (serde_yaml выводит `- item` на том же уровне, что и ключ, что неудобно читать).
+///
+/// Запускается итеративно до стабилизации, чтобы корректно обработать вложенные sequence.
+pub fn indent_block_sequences(yaml: &str) -> String {
+    let lines: Vec<&str> = yaml.lines().collect();
+    let mut out = String::new();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim_start();
+
+        if !trimmed.starts_with('-') && trimmed.ends_with(':') {
+            let base_indent = line.len() - trimmed.len();
+            if let Some(next) = lines.get(i + 1) {
+                let next_trim = next.trim_start();
+                if next_trim.starts_with("- ") && (next.len() - next_trim.len()) == base_indent {
+                    out.push_str(line);
+                    out.push('\n');
+                    i += 1;
+                    while i < lines.len() {
+                        let sub = lines[i];
+                        let sub_trim = sub.trim_start();
+                        let sub_indent = sub.len() - sub_trim.len();
+                        if sub_indent < base_indent
+                            || (sub_indent == base_indent && !sub_trim.starts_with('-'))
+                        {
+                            break;
+                        }
+                        if sub_trim.is_empty() {
+                            out.push('\n');
+                        } else {
+                            out.push_str("  ");
+                            out.push_str(sub);
+                            out.push('\n');
+                        }
+                        i += 1;
+                    }
+                    continue;
+                }
+            }
+        }
+
+        out.push_str(line);
+        out.push('\n');
+        i += 1;
+    }
+    out
+}
+
+/// Обёртка: итеративно применяет indent_block_sequences до стабилизации,
+/// чтобы корректно выровнять вложенные block sequence (например, cases_priority внутри узла).
+pub fn indent_yaml(yaml: &str) -> String {
+    let mut current = yaml.to_string();
+    loop {
+        let next = indent_block_sequences(&current);
+        if next == current {
+            return current;
+        }
+        current = next;
+    }
+}
+
+/// Добавляет переносы строк между полями первого уровня YAML
+/// для визуального удобства чтения (поля не слипаются).
+pub fn separate_top_level_fields(yaml: &str) -> String {
+    let lines: Vec<&str> = yaml.lines().collect();
+    let mut result = String::new();
+
+    for (i, line) in lines.iter().enumerate() {
+        let trimmed = line.trim();
+        let is_top_level = !line.is_empty()
+            && !line.starts_with(' ')
+            && !line.starts_with('\t')
+            && trimmed.contains(':');
+
+        if i > 0 && is_top_level {
+            result.push('\n');
+        }
+
+        result.push_str(line);
+        result.push('\n');
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -297,9 +354,134 @@ mod tests {
         let case_edge_2 = wf.edges.iter().find(|e| e.from == "protocol_router" && e.case.as_deref() == Some("ready")).unwrap();
         assert_eq!(case_edge_2.to, "start_datamining");
 
-        // Проверка, что facts.yaml подгрузился
+        // Проверка конфига
         assert!(wf.config.is_some());
         let cfg = wf.config.as_ref().unwrap();
-        assert!(!cfg.facts.is_empty(), "facts.yaml должен был загрузиться");
+        // facts_file должен быть, но facts теперь не вливаются (ленивая загрузка)
+        assert_eq!(cfg.facts_file.as_deref(), Some("facts.yaml"));
+        assert!(cfg.facts.is_empty(), "facts больше не вливаются при парсинге");
+    }
+
+    /// Тест круглого стола YAML: читаем → десериализуем → сериализуем → показываем разницу.
+    /// Этот тест наглядно демонстрирует, какие поля вылезают в YAML после save_workflow().
+    #[test]
+    fn test_yaml_roundtrip_serialization() {
+        let path_str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../agents/psychotherapist/transitions/main_conversation_flow.yaml"
+        );
+        let path = Path::new(path_str);
+        assert!(path.exists(), "Файл не найден: {:?}", path);
+
+        // Читаем оригинальный YAML как строку
+        let original_yaml = std::fs::read_to_string(path)
+            .expect("Не удалось прочитать файл");
+
+        // 1) Десериализуем напрямую через serde_yaml (БЕЗ parse_workflow_file,
+        //    чтобы не было подмешивания external facts.yaml в config.facts)
+        let wf: WorkflowDef = serde_yaml::from_str(&original_yaml)
+            .expect("Ошибка парсинга YAML через serde_yaml");
+
+        // 2) Сериализуем обратно в YAML
+        let serialized = serde_yaml::to_string(&wf)
+            .expect("Ошибка сериализации YAML");
+
+        // 3) Применяем indent_yaml для человекочитаемого вывода
+        let indented = indent_yaml(&serialized);
+
+        // 4) Печатаем оба варианта
+        eprintln!("\n========== ОРИГИНАЛЬНЫЙ YAML ==========");
+        eprintln!("{}", original_yaml);
+        eprintln!("\n========== ПОСЛЕ СЕРИАЛИЗАЦИИ (indented) =========");
+        eprintln!("{}", indented);
+        eprintln!("======================================\n");
+
+        // 5) Проверяем «свежий» парсинг indented — не должны потеряться данные
+        let wf2: WorkflowDef = serde_yaml::from_str(&indented)
+            .unwrap_or_else(|e| panic!("Свежий парсинг упал: {}", e));
+
+        // Сравниваем ключевые поля
+        assert_eq!(wf.name, wf2.name, "name различается после round-trip");
+        assert_eq!(wf.visible, wf2.visible, "visible различается после round-trip");
+        assert_eq!(wf.nodes.len(), wf2.nodes.len(), "количество nodes различается");
+        assert_eq!(wf.edges.len(), wf2.edges.len(), "количество edges различается");
+
+        // Проверяем, что каждый узел сохранил id и type
+        for n in &wf.nodes {
+            let n2 = wf2.nodes.iter().find(|x| x.id == n.id)
+                .unwrap_or_else(|| panic!("Узел {} пропал после round-trip", n.id));
+            assert_eq!(n.node_type, n2.node_type, "type узла {} изменился", n.id);
+            assert_eq!(n.agent, n2.agent, "agent узла {} изменился", n.id);
+            assert_eq!(n.task, n2.task, "task узла {} изменился", n.id);
+            assert_eq!(n.input, n2.input, "input узла {} изменился", n.id);
+            assert_eq!(n.action, n2.action, "action узла {} изменился", n.id);
+            assert_eq!(n.workflow, n2.workflow, "workflow узла {} изменился", n.id);
+            assert_eq!(n.default, n2.default, "default узла {} изменился", n.id);
+            assert_eq!(n.output_type, n2.output_type, "output_type узла {} изменился", n.id);
+        }
+
+        // 6) Проверяем, что нет null/[]/~ мусора
+        let null_count = indented.matches(": null").count();
+        let empty_list_count = indented.matches(": []").count();
+        let tilde_count = indented.matches(": ~").count();
+        let total_garbage = null_count + empty_list_count + tilde_count;
+        eprintln!(
+            "🧹 null: {}, []: {}, ~: {} (всего мусора: {})",
+            null_count, empty_list_count, tilde_count, total_garbage
+        );
+        assert_eq!(
+            total_garbage, 0,
+            "В indented YAML найден мусор (null/[]/~).\n\
+             Это значит, что где-то в struct-ах не хватает skip_serializing_if.\n\
+             null={}, []= {}, ~={}",
+            null_count, empty_list_count, tilde_count
+        );
+
+        // 7) Проверяем indentation block sequence (nodes/edges имеют 2-space indent)
+        assert!(
+            indented.contains("nodes:\n  - id:"),
+            "nodes block sequence должен быть indented на 2 пробела"
+        );
+        assert!(
+            indented.contains("edges:\n  - from:"),
+            "edges block sequence должен быть indented на 2 пробела"
+        );
+        assert!(
+            indented.contains("cases_priority:\n      - key:"),
+            "nested block sequence cases_priority должен быть indented"
+        );
+    }
+
+    /// Тест round-trip через parse_workflow_file — проверяет, что внешние facts
+    /// больше не вливаются в config.facts и не дублируются в сохранённом YAML.
+    #[test]
+    fn test_yaml_roundtrip_with_external_facts() {
+        let path_str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../agents/psychotherapist/transitions/main_conversation_flow.yaml"
+        );
+        let path = Path::new(path_str);
+        assert!(path.exists());
+
+        let wf = parse_workflow_file(path).expect("Парсинг не удался");
+        let serialized = serde_yaml::to_string(&wf).expect("Сериализация не удалась");
+        let indented = indent_yaml(&serialized);
+
+        eprintln!("\n========== ПОСЛЕ parse_workflow_file + indent =========");
+        eprintln!("{}", indented);
+
+        // facts_file должен быть, но facts не должен дублироваться
+        assert!(
+            !indented.contains("\nfacts:"),
+            "config.facts не должен появляться в сохранённом YAML!\n\
+             Внешние facts должны оставаться только в facts.yaml."
+        );
+
+        // Проверяем что нет null мусора
+        let null_count = indented.matches(": null").count();
+        assert_eq!(null_count, 0, "В сериализованном YAML есть null поля!");
+
+        // Проверяем что parent_dir не попал в YAML
+        assert!(!indented.contains("parent_dir"), "parent_dir должен быть skip");
     }
 }
