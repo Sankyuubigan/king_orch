@@ -123,11 +123,21 @@ export class GraphController {
 
     this.editor.on("nodeCreated", (id: string) => {
       this.updateNodeHtml(id);
+      setTimeout(() => this.enableReverseConnection(id), 0);
     });
 
     this.editor.on("click", () => {
-      this.el.graphDetailContent.innerHTML = `<p class="graph-hint">Выберите ноду для редактирования</p>`;
-      this.el.graphDetailTitle.textContent = "Информация";
+      this.hideSidebar();
+    });
+
+    this.editor.on("connectionCreated", (...args: any[]) => {
+      const d = args[0] || {};
+      this.onSwitchConnectionChanged(d.output_id, d.input_id, d.output_class, "created");
+    });
+
+    this.editor.on("connectionRemoved", (...args: any[]) => {
+      const d = args[0] || {};
+      this.onSwitchConnectionChanged(d.output_id, d.input_id, d.output_class, "removed");
     });
   }
 
@@ -154,7 +164,11 @@ export class GraphController {
 
       this.el.currentWorkflowName.textContent = `${wf.name} (${wf.file_stem}.yaml)`;
 
-      const allEdges = [...wf.edges, ...this.getImplicitSwitchEdges(wf.nodes)];
+      const nonSwitchEdges = wf.edges.filter((e) => {
+        const fn = wf.nodes.find((n) => n.id === e.from);
+        return !fn || (fn.type !== "switch" && fn.type !== "llm_sequential_switch");
+      });
+      const allEdges = [...nonSwitchEdges, ...this.getImplicitSwitchEdges(wf.nodes)];
       const nodePositions = this.computeAutoLayout(wf.nodes, allEdges);
 
       // Build import data structure with custom IDs as keys
@@ -190,11 +204,21 @@ export class GraphController {
             ).join("") + `</div>`;
           }
         }
+        let factsLine = "";
+        if (node.type === "llm_fact_extractor") {
+          const facts = wf.config?.facts as Array<{ id: string }> | undefined;
+          if (facts && facts.length > 0) {
+            factsLine = `<div class="gn-cases">` + facts.map((f, i) =>
+              `<div class="gn-case">${i + 1}: ${this.esc(f.id)}</div>`
+            ).join("") + `</div>`;
+          }
+        }
         const html = `
           <div class="gn-title">${this.esc(node.id)}</div>
           <div class="gn-type">${typeLabel}</div>
           ${agentLine}
           ${casesLine}
+          ${factsLine}
         `;
 
         nodesData[node.id] = {
@@ -213,18 +237,21 @@ export class GraphController {
 
       this.editor!.import(importData);
 
-      for (const edge of wf.edges) {
+      // Навесить обратные соединения для всех загруженных нод
+      for (const id of Object.keys(this.editor!.drawflow.drawflow.Home.data)) {
+        setTimeout(() => this.enableReverseConnection(id), 0);
+      }
+
+      for (const edge of nonSwitchEdges) {
         if (!nodesData[edge.from] || !nodesData[edge.to]) continue;
-        const fromNode = wf.nodes.find((n) => n.id === edge.from);
-        const outIdx = (fromNode?.type === "switch" || fromNode?.type === "llm_sequential_switch") ? this.getSwitchOutputIndex(fromNode, edge.case) : 0;
         try {
-          this.editor!.addConnection(edge.from, edge.to, `output_${outIdx + 1}`, "input_1");
+          this.editor!.addConnection(edge.from, edge.to, `output_1`, "input_1");
         } catch (connErr) {
           console.error("addConnection error:", connErr);
         }
       }
 
-      // Generate implicit edges for switch nodes from cases_priority/cases/default
+      // Switch connections come from node data (source of truth)
       for (const node of wf.nodes) {
         if (node.type !== "switch" && node.type !== "llm_sequential_switch") continue;
         const targets: Array<{ to: string; caseKey?: string }> = [];
@@ -235,11 +262,7 @@ export class GraphController {
         }
         if (node.default) targets.push({ to: node.default, caseKey: "default" });
         for (const target of targets) {
-          const alreadyExists = wf.edges.some(
-            (e) => e.from === node.id && e.to === target.to && (!target.caseKey || e.case === target.caseKey)
-          );
-          if (alreadyExists) continue;
-          if (!nodesData[target.to]) continue;
+          if (!target.to || !nodesData[target.to]) continue;
           const outIdx = this.getSwitchOutputIndex(node, target.caseKey);
           try {
             this.editor!.addConnection(node.id, target.to, `output_${outIdx + 1}`, "input_1");
@@ -279,6 +302,9 @@ export class GraphController {
 
       for (const nodeId of Object.keys(drawflowNodes)) {
         const dn = drawflowNodes[nodeId];
+        if (dn.data.type === "switch" || dn.data.type === "llm_sequential_switch") {
+          this.syncSwitchNodeFromConnections(dn);
+        }
         const data = JSON.parse(JSON.stringify(dn.data));
         data.ui_pos = { x: Math.round(dn.pos_x), y: Math.round(dn.pos_y) };
         nodes.push(data);
@@ -289,38 +315,20 @@ export class GraphController {
         for (const inKey of Object.keys(dn.inputs)) {
           for (const conn of dn.inputs[inKey].connections || []) {
             const fromNode = nodes.find((n) => n.id === conn.node);
-            let caseVal: string | undefined;
             if (fromNode && (fromNode.type === "switch" || fromNode.type === "llm_sequential_switch")) {
-              caseVal = this.getCaseKeyForOutput(fromNode, parseInt(conn.input.replace("output_", ""), 10) - 1);
+              continue;
             }
-            edges.push({ from: conn.node, to: nodeId, case: caseVal });
+            edges.push({ from: conn.node, to: nodeId });
           }
         }
       }
 
-      for (const node of nodes) {
-        if (node.type !== "switch" && node.type !== "llm_sequential_switch") continue;
-        const switchEdges = edges.filter(e => e.from === node.id);
-        if (node.cases_priority) {
-          node.cases_priority = node.cases_priority.filter(cp =>
-            switchEdges.some(e => e.to === cp.to && e.case === cp.key)
-          );
-        }
-        if (node.cases) {
-          const newCases: Record<string, string> = {};
-          for (const [key, val] of Object.entries(node.cases as Record<string, string>)) {
-            if (switchEdges.some(e => e.to === val && e.case === key)) {
-              newCases[key] = val;
-            }
-          }
-          node.cases = newCases;
-        }
-        if (node.default && !switchEdges.some(e => e.to === node.default)) {
-          delete node.default;
-        }
+      const config = this.currentWorkflowConfig ? JSON.parse(JSON.stringify(this.currentWorkflowConfig)) : null;
+      if (config?.facts_file) {
+        config.facts = [];
       }
 
-      const workflow = { name: this.currentWorkflowName, visible: true, config: this.currentWorkflowConfig, nodes, edges };
+      const workflow = { name: this.currentWorkflowName, visible: true, config, nodes, edges };
       await invoke("save_workflow", { path: this.currentFilePath, workflow });
       showToast("✅ Workflow сохранён", "success");
     } catch (e) {
@@ -398,7 +406,6 @@ export class GraphController {
         const cp = data.cases_priority[i];
         html += `<div class="ge-case-row" data-index="${i}">
           <input class="ge-input ge-case-key" value="${this.esc(cp.key)}" placeholder="ключ" />
-          <input class="ge-input ge-case-to" value="${this.esc(cp.to)}" placeholder="цель (node id)" />
           <button class="ge-case-up" title="Вверх">⬆</button>
           <button class="ge-case-down" title="Вниз">⬇</button>
           <button class="ge-case-remove" title="Удалить">🗑</button>
@@ -465,6 +472,7 @@ export class GraphController {
     if (defaultInput) {
       defaultInput.addEventListener("change", () => {
         data.default = defaultInput.value || undefined;
+        this.rebuildSwitchOutputs(nodeId);
       });
     }
 
@@ -522,13 +530,6 @@ export class GraphController {
       });
     });
 
-    document.querySelectorAll(".ge-case-to").forEach((inp) => {
-      inp.addEventListener("input", () => {
-        const row = (inp as HTMLElement).closest(".ge-case-row") as HTMLElement;
-        const idx = parseInt(row.dataset.index || "0", 10);
-        data.cases_priority[idx].to = (inp as HTMLInputElement).value;
-      });
-    });
   }
 
   private hideSidebar(): void {
@@ -594,12 +595,22 @@ export class GraphController {
         ).join("") + `</div>`;
       }
     }
+    let factsLine = "";
+    if (data.type === "llm_fact_extractor") {
+      const facts = this.currentWorkflowConfig?.facts as Array<{ id: string }> | undefined;
+      if (facts && facts.length > 0) {
+        factsLine = `<div class="gn-cases">` + facts.map((f, i) =>
+          `<div class="gn-case">${i + 1}: ${this.esc(f.id)}</div>`
+        ).join("") + `</div>`;
+      }
+    }
 
     el.innerHTML = `
       <div class="gn-title">${this.esc(data.id || nodeId)}</div>
       <div class="gn-type">${typeLabel}</div>
       ${agentLine}
       ${casesLine}
+      ${factsLine}
     `;
   }
 
@@ -611,27 +622,155 @@ export class GraphController {
     const isSwitch = data.type === "switch" || data.type === "llm_sequential_switch";
     if (!isSwitch) return;
 
+    // Сохраняем данные ДО удаления, т.к. connectionRemoved занулит их
+    const targets: string[] = [];
+    if (data.cases_priority) {
+      for (const cp of data.cases_priority) targets.push(cp.to);
+    }
+    if (data.default) targets.push(data.default);
+    const savedDefault = data.default;
+
+    const oldKeys = Object.keys(dn.outputs)
+      .filter(k => /^output_\d+$/.test(k))
+      .sort((a, b) => parseInt(b.replace("output_", ""), 10) - parseInt(a.replace("output_", ""), 10));
+    for (const key of oldKeys) {
+      this.editor!.removeNodeOutput(nodeId, key);
+    }
+
+    // Восстанавливаем default, который мог быть занулён connectionRemoved
+    data.default = savedDefault;
+
     const caseKeys = this.getSwitchCaseKeys(data);
     const newCount = caseKeys.length;
 
-    // Remove old outputs beyond new count
-    const oldKeys = Object.keys(dn.outputs);
-    for (const key of oldKeys) {
-      const m = key.match(/^output_(\d+)$/);
-      if (m && parseInt(m[1], 10) > newCount) {
-        delete dn.outputs[key];
-      }
+    for (let i = 0; i < newCount; i++) {
+      this.editor!.addNodeOutput(nodeId);
     }
 
-    // Add new outputs
-    for (let i = 1; i <= newCount; i++) {
-      const key = `output_${i}`;
-      if (!dn.outputs[key]) {
-        dn.outputs[key] = { connections: [] };
+    for (let i = 0; i < targets.length; i++) {
+      const targetId = targets[i];
+      if (targetId && this.editor.drawflow.drawflow.Home.data[targetId]) {
+        try {
+          this.editor!.addConnection(nodeId, targetId, `output_${i + 1}`, "input_1");
+        } catch (_) { }
       }
     }
 
     this.updateNodeHtml(nodeId);
+  }
+
+  private syncSwitchNodeFromConnections(dn: any): void {
+    const data = dn.data;
+    const caseKeys = this.getSwitchCaseKeys(data);
+    if (data.cases_priority) {
+      for (let i = 0; i < data.cases_priority.length; i++) {
+        const outKey = `output_${i + 1}`;
+        const conns = dn.outputs[outKey]?.connections || [];
+        data.cases_priority[i].to = conns.length > 0 ? conns[0].node : "";
+      }
+    }
+    if (data.default) {
+      const defaultIdx = caseKeys.indexOf("default");
+      if (defaultIdx >= 0) {
+        const outKey = `output_${defaultIdx + 1}`;
+        const conns = dn.outputs[outKey]?.connections || [];
+        data.default = conns.length > 0 ? conns[0].node : undefined;
+      }
+    }
+  }
+
+  private onSwitchConnectionChanged(fromNodeId: string, toNodeId: string, outputKey: string, action: "created" | "removed"): void {
+    if (!this.editor || !fromNodeId || !toNodeId || !outputKey) return;
+    const dn = this.editor.drawflow.drawflow.Home.data[fromNodeId];
+    if (!dn) return;
+    const data = dn.data;
+    if (data.type !== "switch" && data.type !== "llm_sequential_switch") return;
+    const match = outputKey.match(/^output_(\d+)$/);
+    if (!match) return;
+    const outIdx = parseInt(match[1], 10) - 1;
+    const caseKeys = this.getSwitchCaseKeys(data);
+    if (outIdx < 0 || outIdx >= caseKeys.length) return;
+    const caseKey = caseKeys[outIdx];
+    if (caseKey === "default") {
+      data.default = action === "created" ? toNodeId : undefined;
+    } else if (data.cases_priority && outIdx < data.cases_priority.length) {
+      data.cases_priority[outIdx].to = action === "created" ? toNodeId : "";
+    }
+  }
+
+  private enableReverseConnection(nodeId: string): void {
+    if (!this.editor) return;
+    const nodeEl = document.querySelector(`#node-${nodeId}`);
+    if (!nodeEl) return;
+    const targetInputEl = nodeEl.querySelector<HTMLElement>('.input');
+    if (!targetInputEl) return;
+    const precanvas = this.editor.precanvas;
+    const zoom = () => this.editor!.zoom;
+
+    nodeEl.querySelectorAll<HTMLElement>('.input').forEach((inputEl) => {
+      inputEl.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+        const me = e as MouseEvent;
+
+        // Временная SVG линия
+        const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+        const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+        path.classList.add("main-path");
+        path.setAttributeNS(null, "d", "");
+        svg.classList.add("connection");
+        svg.classList.add("reverse-drag");
+        precanvas.appendChild(svg);
+        svg.appendChild(path);
+
+        // Начальная позиция — центр входного порта
+        const precanvasRect = precanvas.getBoundingClientRect();
+        const inputRect = inputEl.getBoundingClientRect();
+        const startX = (inputRect.left + inputRect.width / 2 - precanvasRect.left) / zoom();
+        const startY = (inputRect.top + inputRect.height / 2 - precanvasRect.top) / zoom();
+
+        const updateLine = (clientX: number, clientY: number) => {
+          const r = precanvas.getBoundingClientRect();
+          const z = zoom();
+          const endX = (clientX - r.left) / z;
+          const endY = (clientY - r.top) / z;
+          const dx = Math.abs(endX - startX) * 0.5;
+          const d = `M ${startX} ${startY} C ${startX + dx} ${startY} ${endX - dx} ${endY} ${endX} ${endY}`;
+          path.setAttributeNS(null, "d", d);
+        };
+
+        updateLine(me.clientX, me.clientY);
+
+        const onMouseMove = (ev: MouseEvent) => {
+          updateLine(ev.clientX, ev.clientY);
+        };
+
+        const onMouseUp = (ev: MouseEvent) => {
+          document.removeEventListener('mousemove', onMouseMove);
+          document.removeEventListener('mouseup', onMouseUp);
+          svg.remove();
+
+          const dropTarget = document.elementFromPoint(ev.clientX, ev.clientY);
+          if (!dropTarget) return;
+          const outputEl = dropTarget.classList.contains('output')
+            ? dropTarget
+            : dropTarget.closest<HTMLElement>('.output');
+          if (!outputEl) return;
+          const sourceNodeEl = outputEl.closest<HTMLElement>('.drawflow-node');
+          if (!sourceNodeEl) return;
+          const sourceNodeId = sourceNodeEl.id.slice(5);
+          if (sourceNodeId === nodeId) return;
+          const outputClass = outputEl.classList[1];
+          if (!outputClass) return;
+          try {
+            this.editor!.addConnection(sourceNodeId, nodeId, outputClass, "input_1");
+          } catch (_) { }
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+        e.preventDefault();
+      }, { capture: true });
+    });
   }
 
   // ─── Утилиты ───
@@ -658,11 +797,6 @@ export class GraphController {
     const keys = this.getSwitchCaseKeys(node);
     const idx = keys.indexOf(caseVal || "default");
     return idx >= 0 ? idx : 0;
-  }
-
-  private getCaseKeyForOutput(node: GraphNodeDef, outputIdx: number): string | undefined {
-    const keys = this.getSwitchCaseKeys(node);
-    return keys[outputIdx];
   }
 
   private getImplicitSwitchEdges(nodes: GraphNodeDef[]): GraphEdgeDef[] {

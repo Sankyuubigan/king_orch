@@ -64,9 +64,18 @@ pub fn read_workflow_file(path: String) -> Result<GraphWorkflowDef, String> {
 pub fn save_workflow(
     app: tauri::AppHandle,
     path: String,
-    workflow: crate::domain::workflow_engine::parser::WorkflowDef,
+    mut workflow: crate::domain::workflow_engine::parser::WorkflowDef,
 ) -> Result<(), String> {
     let _ = &app;
+
+    // Факты не должны дублироваться в workflow YAML — они живут в отдельном facts.yaml
+    if let Some(ref config) = workflow.config {
+        if config.facts_file.is_some() {
+            if let Some(ref mut cfg) = workflow.config {
+                cfg.facts = Vec::new();
+            }
+        }
+    }
 
     let yaml_str = serde_yaml::to_string(&workflow)
         .map_err(|e| format!("Ошибка сериализации YAML: {}", e))?;

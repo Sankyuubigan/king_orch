@@ -12,7 +12,7 @@ declare module "drawflow" {
     connections: DrawflowConnection[];
   }
 
-  interface DrawflowNode {
+  export interface DrawflowNode {
     id: string;
     name: string;
     data: any;
@@ -25,7 +25,7 @@ declare module "drawflow" {
     pos_y: number;
   }
 
-  interface DrawflowExport {
+  export interface DrawflowExport {
     drawflow: {
       Home: {
         data: Record<string, DrawflowNode>;
@@ -43,14 +43,16 @@ declare module "drawflow" {
     drawflow: {
       drawflow: {
         Home: {
-          data: Record<string, DrawflowNodeData>;
+          data: Record<string, DrawflowNode>;
         };
       };
     };
     start(): void;
     addNode(name: string, inputs: number, outputs: number, posX: number, posY: number, id?: string, data?: any, className?: string): string;
-    addNodeImport(data: DrawflowNodeData, precanvas: HTMLElement): void;
-    addConnection(fromId: string, toId: string, outputIndex: number, inputIndex: number): void;
+    addNodeImport(data: DrawflowNode, precanvas: HTMLElement): void;
+    addNodeOutput(nodeId: string): void;
+    removeNodeOutput(nodeId: string, outputKey: string): void;
+    addConnection(fromId: string, toId: string, output: string, input: string): void;
     removeNodeId(nodeId: string): void;
     removeConnection(nodeId: string, inputKey: string): void;
     export(): DrawflowExport;

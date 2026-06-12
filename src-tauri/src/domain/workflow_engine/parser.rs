@@ -277,43 +277,34 @@ mod tests {
         assert_eq!(wf.name, "Therapist");
         assert!(wf.visible);
 
-        // 12 узлов
-        assert_eq!(wf.nodes.len(), 12);
-        // 12 рёбер
-        assert_eq!(wf.edges.len(), 12);
+        // 10 узлов
+        assert_eq!(wf.nodes.len(), 10);
+        // 8 рёбер
+        assert_eq!(wf.edges.len(), 8);
 
         // LLM_FACT_EXTRACTOR
         let ef = wf.nodes.iter().find(|n| n.id == "extract_facts").unwrap();
         assert_eq!(ef.node_type, NodeType::LlmFactExtractor);
         assert_eq!(ef.input.as_deref(), Some("{{ user_message }}"));
 
-        // SWITCH с cases_priority (5 кейсов + default)
+        // SWITCH с cases_priority (3 кейса + default)
         let pr = wf.nodes.iter().find(|n| n.id == "priority_router").unwrap();
         assert_eq!(pr.node_type, NodeType::Switch);
         assert!(pr.cases_priority.is_some());
-        assert_eq!(pr.cases_priority.as_ref().unwrap().len(), 4);
+        assert_eq!(pr.cases_priority.as_ref().unwrap().len(), 3);
         assert_eq!(pr.default.as_deref(), Some("freestyle"));
 
-        // SWITCH с обычными cases
-        let pr2 = wf.nodes.iter().find(|n| n.id == "protocol_router").unwrap();
+        // SWITCH с пустыми cases (old format)
+        let pr2 = wf.nodes.iter().find(|n| n.id == "first_barrier_checker").unwrap();
         assert_eq!(pr2.node_type, NodeType::Switch);
         assert!(pr2.cases.is_some());
-        let cases = pr2.cases.as_ref().unwrap();
-        assert_eq!(cases.get("need_more_data").map(String::as_str), Some("ask_missing"));
-        assert_eq!(cases.get("ready").map(String::as_str), Some("start_datamining"));
+        assert!(pr2.cases.as_ref().unwrap().is_empty());
 
         // LLM_WORKER с agent + task
         let curator = wf.nodes.iter().find(|n| n.id == "call_curator").unwrap();
         assert_eq!(curator.node_type, NodeType::LlmWorker);
         assert_eq!(curator.agent.as_deref(), Some("curator"));
         assert_eq!(curator.output_type.as_deref(), Some("message"));
-
-        // SYSTEM_CONDITION с action + required
-        let cond = wf.nodes.iter().find(|n| n.id == "check_protocol").unwrap();
-        assert_eq!(cond.node_type, NodeType::SystemCondition);
-        assert_eq!(cond.action.as_deref(), Some("check_protocol_state"));
-        assert!(cond.required.is_some());
-        assert_eq!(cond.required.as_ref().unwrap().len(), 1);
 
         // SUB_WORKFLOW
         let sub = wf.nodes.iter().find(|n| n.id == "start_datamining").unwrap();
@@ -325,10 +316,12 @@ mod tests {
         assert_eq!(ff.node_type, NodeType::LlmFreeform);
 
         // Рёбра с case
-        let case_edge_1 = wf.edges.iter().find(|e| e.from == "protocol_router" && e.case.as_deref() == Some("need_more_data")).unwrap();
-        assert_eq!(case_edge_1.to, "ask_missing");
-        let case_edge_2 = wf.edges.iter().find(|e| e.from == "protocol_router" && e.case.as_deref() == Some("ready")).unwrap();
-        assert_eq!(case_edge_2.to, "start_datamining");
+        let case_edge_1 = wf.edges.iter().find(|e| e.from == "priority_router" && e.case.as_deref() == Some("user_doesnt_agree")).unwrap();
+        assert_eq!(case_edge_1.to, "call_curator");
+        let case_edge_2 = wf.edges.iter().find(|e| e.from == "priority_router" && e.case.as_deref() == Some("has_somatic")).unwrap();
+        assert_eq!(case_edge_2.to, "call_soma_translator");
+        let case_edge_3 = wf.edges.iter().find(|e| e.from == "priority_router" && e.case.as_deref() == Some("not_enough_data")).unwrap();
+        assert_eq!(case_edge_3.to, "check_has_grounding");
 
         // Проверка конфига
         assert!(wf.config.is_some());
@@ -394,6 +387,8 @@ mod tests {
             assert_eq!(n.workflow, n2.workflow, "workflow узла {} изменился", n.id);
             assert_eq!(n.default, n2.default, "default узла {} изменился", n.id);
             assert_eq!(n.output_type, n2.output_type, "output_type узла {} изменился", n.id);
+            assert_eq!(n.cases_priority, n2.cases_priority, "cases_priority узла {} изменился", n.id);
+            assert_eq!(n.cases, n2.cases, "cases узла {} изменился", n.id);
         }
 
         // 6) Проверяем, что нет null/[]/~ мусора

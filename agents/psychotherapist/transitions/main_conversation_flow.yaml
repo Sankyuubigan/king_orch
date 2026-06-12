@@ -21,8 +21,10 @@ nodes:
       - key: has_somatic
         to: call_soma_translator
       - key: not_enough_data
-        to: check_has_grounding
-    default: freestyle
+        to: collect_info
+      - key: grounding_dont_exist
+        to: call_grounder
+    default: call_validator
     ui_pos:
       y: 130
       x: 420
@@ -39,67 +41,45 @@ nodes:
     agent: soma_translator
     task: Пользователь описал боль. Дай ему расшифровку по НГМ.
     ui_pos:
-      y: -10
       x: 740
-  - id: freestyle
-    type: llm_freeform
-    input: '{{ user_message }}'
-    ui_pos:
-      x: 739
-      y: 315
+      y: -10
   - id: collect_info
     type: llm_worker
     agent: liaison
     task: |
       Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
     ui_pos:
-      y: 34
-      x: 1701
-  - id: first_barrier_checker
-    type: switch
-    input: '{{ nodes.extract_facts.output.not_enough_data }}'
-    cases: {}
-    ui_pos:
-      y: 165
-      x: 986
+      x: 776
+      y: 158
   - id: start_datamining
     type: sub_workflow
     workflow: treatment_flow.yaml
     ui_pos:
-      y: 200
       x: 1700
+      y: 200
   - id: output_raw_datamining
     type: system_condition
     action: aggregate_and_output
     required:
       - neuro_reprogrammer
     ui_pos:
-      y: 130
       x: 2020
+      y: 130
   - id: call_grounder
     type: llm_worker
+    agent: grounder
     ui_pos:
-      x: 1405
-      y: 388
+      x: 777
+      y: 327
+  - id: call_validator
+    type: llm_worker
+    agent: validator
+    ui_pos:
+      y: 483
+      x: 774
 
 edges:
   - from: extract_facts
     to: priority_router
-  - from: priority_router
-    case: user_doesnt_agree
-    to: call_curator
-  - from: priority_router
-    case: has_somatic
-    to: call_soma_translator
-  - from: priority_router
-    case: default
-    to: freestyle
-  - from: check_has_grounding
-    to: collect_info
-  - from: priority_router
-    case: not_enough_data
-    to: check_has_grounding
   - from: start_datamining
     to: output_raw_datamining
-  - from: check_has_grounding
-    to: llm_worker_1781277339873
