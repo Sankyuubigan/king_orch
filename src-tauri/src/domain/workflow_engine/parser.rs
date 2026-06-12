@@ -103,6 +103,7 @@ pub enum NodeType {
     SystemCondition,
     SubWorkflow,
     Switch,
+    LlmSequentialSwitch,
     Return,
 }
 

@@ -156,13 +156,21 @@ where
         workflow.edges.len()
     ));
 
-    let mut current_node_id: Option<String> = workflow.nodes.first().map(|n| n.id.clone());
+    let mut queue: Vec<String> = workflow.nodes.first().map(|n| n.id.clone()).into_iter().collect();
+    let mut visited = std::collections::HashSet::new();
     let mut last_node_output: Option<serde_json::Value> = None;
 
-    while let Some(node_id) = current_node_id {
+    while let Some(node_id) = {
+        if queue.is_empty() { None } else { Some(queue.remove(0)) }
+    } {
         if runner.cancel_flag.load(Ordering::SeqCst) {
             return Err("Прервано пользователем".to_string());
         }
+
+        if visited.contains(&node_id) {
+            continue;
+        }
+        visited.insert(node_id.clone());
 
         let node = workflow
             .nodes
@@ -179,7 +187,30 @@ where
 
         context.node_outputs.insert(node.id.clone(), result.output.clone());
         last_node_output = Some(result.output.clone());
-        current_node_id = find_next_node(&node_id, &workflow.edges, &result);
+
+        // Строим новый порядок очереди: [next_node, ...next_nodes, ...остаток очереди]
+        let next = find_next_node(&node_id, &workflow.edges, &result);
+        let mut new_queue: Vec<String> = Vec::new();
+
+        if let Some(nid) = next {
+            if nid != "__END__" && nid != "END" && !visited.contains(&nid) {
+                new_queue.push(nid);
+            }
+        }
+
+        for nid in &result.next_nodes {
+            if !visited.contains(nid) {
+                new_queue.push(nid.clone());
+            }
+        }
+
+        for nid in &queue {
+            if !visited.contains(nid) {
+                new_queue.push(nid.clone());
+            }
+        }
+
+        queue = new_queue;
     }
 
     let final_output = last_node_output

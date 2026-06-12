@@ -84,6 +84,7 @@ function initApp() {
     currentWorkflowName: $<HTMLSpanElement>("current-workflow-name"),
     btnAddWorker: $<HTMLButtonElement>("btn-add-worker"),
     btnAddSwitch: $<HTMLButtonElement>("btn-add-switch"),
+    btnAddSeqSwitch: $<HTMLButtonElement>("btn-add-seq-switch"),
     btnAddExtractor: $<HTMLButtonElement>("btn-add-extractor"),
   });
 

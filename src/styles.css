@@ -344,6 +344,62 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   line-height: 1.5;
 }
 
+/* ─── Case editor rows (switch/seqswitch) ─── */
+.ge-case-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.ge-case-key {
+  width: 100px !important;
+  flex-shrink: 0;
+}
+.ge-case-to {
+  flex: 1;
+  min-width: 0;
+}
+.ge-case-up,
+.ge-case-down {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-bg);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.ge-case-up:hover,
+.ge-case-down:hover {
+  background: var(--session-hover);
+  border-color: var(--primary);
+}
+.ge-case-remove {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #ef5350;
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.ge-case-remove:hover {
+  background: #ef535022;
+  border-color: #ef535066;
+}
+
 /* ─── Drawflow custom node styles ─── */
 .drawflow-node {
   background: var(--panel-bg) !important;

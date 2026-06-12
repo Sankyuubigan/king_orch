@@ -165,7 +165,52 @@ pub struct ChatMessage {
 - `release.bat` — релизная сборка с подписью
 - Версия: `YY.MM.PATCH` (автоинкремент при релизе)
 
-## 10. Актуализация документации
+## 10. Сборка и тестирование (команды для ИИ-агентов)
+
+**Перед любой Rust-командой — убедиться, что sccache-сервер запущен:**
+```powershell
+sccache --start-server        # если ещё не запущен
+```
+
+### Rust-сборка (через build.bat, с автопоиском MSVC через vswhere)
+```powershell
+cmd /c "cd /d `"D:\Projects\king_orch_3`" && build.bat 2>&1"
+```
+
+### Rust-сборка (быстрая, без полной пересборки фронтенда)
+```powershell
+cmd /c "cd /d `"D:\Projects\king_orch_3\src-tauri`" && cargo build 2>&1"
+```
+Работает, если VS-окружение уже настроено в текущей cmd-сессии. Если нет — сначала `build.bat` один раз.
+
+### Rust-тесты
+```powershell
+cmd /c "cd /d `"D:\Projects\king_orch_3\src-tauri`" && cargo test 2>&1"
+```
+
+### TypeScript typecheck
+```powershell
+npx --no-install tsc --noEmit
+```
+
+### Фронтенд-сборка
+```powershell
+npm run build
+```
+
+### Тесты frontend (vitest)
+```powershell
+npm test
+```
+
+**Правила:**
+- `sccache --start-server` — ОБЯЗАТЕЛЕН перед любой Rust-сборкой; иначе sccache падает с `couldn't connect to server`
+- Если `cargo build` падает с `fatal error C1034: windows.h` — VS-окружение не настроено, запусти `build.bat` один раз
+- `CXX/CC = "sccache cl"` уже стоит на уровне пользователя (`[Environment]::GetEnvironmentVariable("CXX", "User")`), поэтому cargo их подхватывает автоматически
+- После изменения Rust-кода: `cargo build` сначала собирает зависимости (долго), потом только изменённые крейты
+- Если сборка падает с CUDA/nvcc — это первая компиляция llama.cpp, может занять >10 мин
+
+## 11. Актуализация документации
 
 - После любого изменения кода — проверить актуальность файлов в `docs/`. Если изменилось поведение, архитектура, API или правила — обновить соответствующий `.md` файл.
 - Новые или изменённые механики должны быть отражены в `docs/ARCHITECTURE.md` или `docs/RULES.md` до завершения задачи.

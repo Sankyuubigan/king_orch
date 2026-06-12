@@ -8,13 +8,13 @@ config:
 nodes:
   - id: extract_facts
     type: llm_fact_extractor
-    input: "{{ user_message }}"
+    input: '{{ user_message }}'
     ui_pos:
       y: 130
       x: 100
   - id: priority_router
     type: switch
-    input_object: "{{ nodes.extract_facts.output }}"
+    input_object: '{{ nodes.extract_facts.output }}'
     cases_priority:
       - key: user_doesnt_agree
         to: call_curator
@@ -24,27 +24,26 @@ nodes:
         to: check_has_grounding
     default: freestyle
     ui_pos:
-      x: 420
       y: 130
+      x: 420
   - id: call_curator
     type: llm_worker
     agent: curator
     task: Пользователь не согласен или сопротивляется. Ответь ему.
     output_type: message
     ui_pos:
-      x: 740
       y: -150
+      x: 740
   - id: call_soma_translator
     type: llm_worker
     agent: soma_translator
     task: Пользователь описал боль. Дай ему расшифровку по НГМ.
-    output_type: message
     ui_pos:
-      x: 740
       y: -10
+      x: 740
   - id: freestyle
     type: llm_freeform
-    input: "{{ user_message }}"
+    input: '{{ user_message }}'
     ui_pos:
       x: 739
       y: 315
@@ -54,17 +53,15 @@ nodes:
     task: |
       Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
     ui_pos:
-      x: 1701
       y: 34
-  - id: check_has_grounding
+      x: 1701
+  - id: first_barrier_checker
     type: switch
-    input: "{{ nodes.extract_facts.output.not_enough_data }}"
-    cases:
-      "true": collect_info
-      "false": start_datamining
+    input: '{{ nodes.extract_facts.output.not_enough_data }}'
+    cases: {}
     ui_pos:
-      x: 986
       y: 165
+      x: 986
   - id: start_datamining
     type: sub_workflow
     workflow: treatment_flow.yaml
@@ -79,6 +76,11 @@ nodes:
     ui_pos:
       y: 130
       x: 2020
+  - id: call_grounder
+    type: llm_worker
+    ui_pos:
+      x: 1405
+      y: 388
 
 edges:
   - from: extract_facts
@@ -92,14 +94,12 @@ edges:
   - from: priority_router
     case: default
     to: freestyle
+  - from: check_has_grounding
+    to: collect_info
   - from: priority_router
     case: not_enough_data
     to: check_has_grounding
-  - from: check_has_grounding
-    case: "true"
-    to: collect_info
-  - from: check_has_grounding
-    case: "false"
-    to: start_datamining
   - from: start_datamining
     to: output_raw_datamining
+  - from: check_has_grounding
+    to: llm_worker_1781277339873

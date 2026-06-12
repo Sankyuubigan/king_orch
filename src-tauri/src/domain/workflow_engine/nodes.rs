@@ -8,6 +8,8 @@ use crate::infra::{ChatMessage, SubCall};
 pub struct NodeResult {
     pub output: serde_json::Value,
     pub next_node: Option<String>,
+    /// Дополнительные следующие узлы (для SequentialSwitch)
+    pub next_nodes: Vec<String>,
 }
 
 /// Выполняет один узел графа и возвращает результат + id следующего узла
@@ -53,6 +55,7 @@ where
             Ok(NodeResult {
                 output: parsed,
                 next_node: None,
+            next_nodes: vec![],
             })
         }
 
@@ -84,6 +87,7 @@ where
             Ok(NodeResult {
                 output: parsed,
                 next_node: None,
+            next_nodes: vec![],
             })
         }
 
@@ -131,6 +135,7 @@ where
         Ok(NodeResult {
             output: serde_json::json!({"result": result, "agent": agent_id}),
                 next_node: None,
+            next_nodes: vec![],
             })
         }
 
@@ -164,6 +169,7 @@ where
                             "missing": missing
                         }),
                         next_node: None,
+                        next_nodes: vec![],
                     })
                 }
 
@@ -183,6 +189,7 @@ where
                             "status": if all_present { "present" } else { "missing" }
                         }),
                         next_node: None,
+                        next_nodes: vec![],
                     })
                 }
 
@@ -208,6 +215,7 @@ where
                             "next_index": next_index
                         }),
                         next_node: None,
+                        next_nodes: vec![],
                     })
                 }
 
@@ -237,6 +245,7 @@ where
                     Ok(NodeResult {
                         output: serde_json::json!({"reports": reports}),
                         next_node: None,
+                        next_nodes: vec![],
                     })
                 }
 
@@ -255,6 +264,7 @@ where
                         Ok(NodeResult {
                             output: serde_json::json!({"status": "ready"}),
                             next_node: None,
+                            next_nodes: vec![],
                         })
                     } else {
                         // Проверяем, какие агенты не хватает
@@ -274,6 +284,7 @@ where
                                 "missing_points": missing
                             }),
                             next_node: None,
+                            next_nodes: vec![],
                         })
                     }
                 }
@@ -311,6 +322,7 @@ where
                     Ok(NodeResult {
                         output: serde_json::json!({"reports": reports}),
                         next_node: None,
+                        next_nodes: vec![],
                     })
                 }
 
@@ -370,6 +382,7 @@ where
             Ok(NodeResult {
                 output: serde_json::json!({"result": sub_result}),
                 next_node: None,
+            next_nodes: vec![],
             })
         }
 
@@ -379,6 +392,7 @@ where
             Ok(NodeResult {
                 output: serde_json::json!({"result": result}),
                 next_node: None,
+            next_nodes: vec![],
             })
         }
 
@@ -401,20 +415,23 @@ where
                                     return Ok(NodeResult {
                                         output: serde_json::json!({"matched_case": pc.key, "target": pc.to}),
                                         next_node: Some(pc.to.clone()),
+                                        next_nodes: vec![],
                                     });
                                 }
                             }
                         }
                         // Ни один приоритет не совпал
                         if let Some(ref default) = node.default {
-                            return Ok(NodeResult {
-                                output: serde_json::json!({"matched_case": "__default__", "target": default}),
-                                next_node: Some(default.clone()),
-                            });
+                        return Ok(NodeResult {
+                            output: serde_json::json!({"matched_case": "__default__", "target": default}),
+                            next_node: Some(default.clone()),
+                            next_nodes: vec![],
+                        });
                         }
                         return Ok(NodeResult {
                             output: serde_json::json!({"matched_case": "__none__", "target": null}),
                             next_node: None,
+                            next_nodes: vec![],
                         });
                     }
                 }
@@ -443,12 +460,66 @@ where
             Ok(NodeResult {
                 output: serde_json::json!({"matched_case": status, "target": target}),
                 next_node: target,
+                next_nodes: vec![],
             })
+        }
+
+        NodeType::LlmSequentialSwitch => {
+            let input_obj = node.input_object.as_deref().unwrap_or("{{ user_message }}");
+            let resolved = context.resolve_template(input_obj);
+            let json_val: serde_json::Value = serde_json::from_str(&resolved)
+                .unwrap_or(serde_json::Value::Null);
+
+            let mut matched: Vec<String> = vec![];
+
+            if let Some(obj) = json_val.as_object() {
+                if let Some(ref priority_cases) = node.cases_priority {
+                    for pc in priority_cases {
+                        if let Some(val) = obj.get(&pc.key) {
+                            if val.as_bool().unwrap_or(false) {
+                                (runner.log_cb)(format!(
+                                    "[seq_switch] '{}' = true → {}",
+                                    pc.key, pc.to
+                                ));
+                                matched.push(pc.to.clone());
+                            }
+                        }
+                    }
+                }
+            }
+
+            if matched.is_empty() {
+                if let Some(ref default) = node.default {
+                    (runner.log_cb)(format!(
+                        "[seq_switch] Ни одного true, default → {}",
+                        default
+                    ));
+                    matched.push(default.clone());
+                }
+            }
+
+            let output = serde_json::json!({"matched_cases": matched});
+
+            if matched.is_empty() {
+                Ok(NodeResult {
+                    output,
+                    next_node: None,
+                    next_nodes: vec![],
+                })
+            } else {
+                let first = matched.remove(0);
+                Ok(NodeResult {
+                    output,
+                    next_node: Some(first),
+                    next_nodes: matched,
+                })
+            }
         }
 
         NodeType::Return => Ok(NodeResult {
             output: serde_json::json!({"done": true}),
             next_node: Some("__END__".to_string()),
+            next_nodes: vec![],
         }),
     }
 }

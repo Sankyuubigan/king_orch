@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::domain::workflow_engine::parser::{
-    indent_yaml, separate_top_level_fields, EdgeDef, NodeDef, WorkflowConfig,
+    indent_yaml, separate_top_level_fields, EdgeDef, FactsFile, NodeDef, WorkflowConfig,
 };
 
 /// Workflow со включённым file_stem + team
@@ -32,6 +32,21 @@ pub fn read_workflow_file(path: String) -> Result<GraphWorkflowDef, String> {
         serde_yaml::from_str(&content)
             .map_err(|e| format!("Ошибка парсинга YAML: {}", e))?;
     wf.file_stem = file_stem.clone();
+
+    // Если facts пуст, но указан facts_file — загружаем факты для отображения во фронтенде
+    if let Some(ref mut config) = wf.config {
+        if config.facts.is_empty() {
+            if let Some(ref facts_file) = config.facts_file {
+                let workflow_dir = Path::new(&path).parent().unwrap_or(Path::new("."));
+                let ext_path = workflow_dir.join(facts_file);
+                if let Ok(content) = fs::read_to_string(&ext_path) {
+                    if let Ok(ext) = serde_yaml::from_str::<FactsFile>(&content) {
+                        config.facts = ext.facts;
+                    }
+                }
+            }
+        }
+    }
 
     Ok(GraphWorkflowDef {
         team: String::new(),

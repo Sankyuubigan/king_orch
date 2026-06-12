@@ -50,6 +50,7 @@ export interface GraphElements {
   currentWorkflowName: HTMLSpanElement;
   btnAddWorker: HTMLButtonElement;
   btnAddSwitch: HTMLButtonElement;
+  btnAddSeqSwitch: HTMLButtonElement;
   btnAddExtractor: HTMLButtonElement;
 }
 
@@ -61,6 +62,7 @@ const NODE_COLORS: Record<string, string> = {
   system_condition: "#ffa726",
   sub_workflow: "#ab47bc",
   switch: "#ef5350",
+  llm_sequential_switch: "#e040fb",
   return: "#78909c",
 };
 
@@ -72,6 +74,7 @@ const NODE_LABELS: Record<string, string> = {
   system_condition: "⚡ Condition",
   sub_workflow: "📦 Sub-workflow",
   switch: "🔀 Switch",
+  llm_sequential_switch: "🔀 SeqSwitch",
   return: "🏁 Return",
 };
 
@@ -83,6 +86,7 @@ const OUTPUT_COUNT: Record<string, number> = {
   system_condition: 1,
   sub_workflow: 1,
   switch: 0,
+  llm_sequential_switch: 0,
   return: 0,
 };
 
@@ -104,6 +108,7 @@ export class GraphController {
     this.el.graphSidebarClose.addEventListener("click", () => this.hideSidebar());
     this.el.btnAddWorker.addEventListener("click", () => this.addNode("llm_worker"));
     this.el.btnAddSwitch.addEventListener("click", () => this.addNode("switch"));
+    this.el.btnAddSeqSwitch.addEventListener("click", () => this.addNode("llm_sequential_switch"));
     this.el.btnAddExtractor.addEventListener("click", () => this.addNode("llm_fact_extractor"));
   }
 
@@ -164,7 +169,7 @@ export class GraphController {
 
       for (const node of wf.nodes) {
         const pos = node.ui_pos || nodePositions.get(node.id) || { x: 100, y: 100 };
-        const outs = node.type === "switch" ? this.getSwitchOutputCount(node) : OUTPUT_COUNT[node.type] ?? 1;
+        const outs = (node.type === "switch" || node.type === "llm_sequential_switch") ? this.getSwitchOutputCount(node) : OUTPUT_COUNT[node.type] ?? 1;
 
         const inputs: Record<string, { connections: any[] }> = {};
         for (let i = 1; i <= 1; i++) inputs[`input_${i}`] = { connections: [] };
@@ -177,7 +182,7 @@ export class GraphController {
           agentLine = `<div class="gn-agent">→ ${this.esc(node.agent)}</div>`;
         }
         let casesLine = "";
-        if (node.type === "switch") {
+        if (node.type === "switch" || node.type === "llm_sequential_switch") {
           const labels = this.getSwitchCaseKeys(node);
           if (labels.length > 0) {
             casesLine = `<div class="gn-cases">` + labels.map((key, i) =>
@@ -211,7 +216,7 @@ export class GraphController {
       for (const edge of wf.edges) {
         if (!nodesData[edge.from] || !nodesData[edge.to]) continue;
         const fromNode = wf.nodes.find((n) => n.id === edge.from);
-        const outIdx = fromNode?.type === "switch" ? this.getSwitchOutputIndex(fromNode, edge.case) : 0;
+        const outIdx = (fromNode?.type === "switch" || fromNode?.type === "llm_sequential_switch") ? this.getSwitchOutputIndex(fromNode, edge.case) : 0;
         try {
           this.editor!.addConnection(edge.from, edge.to, `output_${outIdx + 1}`, "input_1");
         } catch (connErr) {
@@ -221,7 +226,7 @@ export class GraphController {
 
       // Generate implicit edges for switch nodes from cases_priority/cases/default
       for (const node of wf.nodes) {
-        if (node.type !== "switch") continue;
+        if (node.type !== "switch" && node.type !== "llm_sequential_switch") continue;
         const targets: Array<{ to: string; caseKey?: string }> = [];
         if (node.cases_priority) {
           for (const cp of node.cases_priority) targets.push({ to: cp.to, caseKey: cp.key });
@@ -285,7 +290,7 @@ export class GraphController {
           for (const conn of dn.inputs[inKey].connections || []) {
             const fromNode = nodes.find((n) => n.id === conn.node);
             let caseVal: string | undefined;
-            if (fromNode && fromNode.type === "switch") {
+            if (fromNode && (fromNode.type === "switch" || fromNode.type === "llm_sequential_switch")) {
               caseVal = this.getCaseKeyForOutput(fromNode, parseInt(conn.input.replace("output_", ""), 10) - 1);
             }
             edges.push({ from: conn.node, to: nodeId, case: caseVal });
@@ -294,7 +299,7 @@ export class GraphController {
       }
 
       for (const node of nodes) {
-        if (node.type !== "switch") continue;
+        if (node.type !== "switch" && node.type !== "llm_sequential_switch") continue;
         const switchEdges = edges.filter(e => e.from === node.id);
         if (node.cases_priority) {
           node.cases_priority = node.cases_priority.filter(cp =>
@@ -350,10 +355,7 @@ export class GraphController {
     if (data.type === "llm_worker") {
       html += `<div class="graph-detail-section">
         <div class="detail-label">Агент</div>
-        <select id="ge-agent" class="ge-select">
-          <option value="">— не выбран —</option>
-          ${[].map((a: any) => `<option value="${this.esc(a.id)}" ${a.id === data.agent ? "selected" : ""}>${this.esc(a.name)}</option>`).join("")}
-        </select>
+        <input type="text" id="ge-agent" class="ge-input" placeholder="имя агента" value="${this.esc(data.agent || "")}" />
       </div>`;
       html += `<div class="graph-detail-section">
         <div class="detail-label">Задача (Task)</div>
@@ -361,29 +363,62 @@ export class GraphController {
       </div>`;
     }
 
-    if (data.type === "switch") {
-      const caseEntries = data.cases ? Object.entries(data.cases as Record<string, string>) : [];
+    if (data.type === "llm_fact_extractor") {
+      const facts = this.currentWorkflowConfig?.facts as Array<{ id: string }> | undefined;
       html += `<div class="graph-detail-section">
-        <div class="detail-label">Варианты (cases)</div>
-        <div id="ge-cases-list">`;
-      for (const [key, val] of caseEntries) {
-        html += `<div style="display:flex;gap:6px;margin-bottom:4px;">
-          <input class="ge-input" style="flex:1;" value="${this.esc(key)}" readonly />
-          <input class="ge-input" style="flex:1;" value="${this.esc(val)}" readonly />
-        </div>`;
-      }
-      if (caseEntries.length === 0) {
-        html += `<span style="color:#888;font-size:12px;">Нет вариантов</span>`;
+        <div class="detail-label">Факты (${facts?.length || 0})</div>
+        <div id="ge-facts-list">`;
+      if (facts && facts.length > 0) {
+        for (const f of facts) {
+          html += `<div class="ge-fact-item">${this.esc(f.id)}</div>`;
+        }
+      } else {
+        html += `<span style="color:#888;font-size:12px;">Нет фактов (добавьте в config workflow)</span>`;
       }
       html += `</div></div>`;
     }
 
+    if (data.type === "switch" || data.type === "llm_sequential_switch") {
+      if (!data.cases_priority) data.cases_priority = [];
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Тип свича</div>
+        <select id="ge-switch-type" class="ge-select">
+          <option value="switch" ${data.type === "switch" ? "selected" : ""}>🔀 Switch (первый true)</option>
+          <option value="llm_sequential_switch" ${data.type === "llm_sequential_switch" ? "selected" : ""}>🔀 SeqSwitch (все true)</option>
+        </select>
+      </div>`;
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Input object (JSON)</div>
+        <textarea id="ge-input-object" class="ge-textarea" rows="2">${this.esc(data.input_object || "")}</textarea>
+      </div>`;
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Кейсы</div>
+        <div id="ge-cases-list">`;
+      for (let i = 0; i < data.cases_priority.length; i++) {
+        const cp = data.cases_priority[i];
+        html += `<div class="ge-case-row" data-index="${i}">
+          <input class="ge-input ge-case-key" value="${this.esc(cp.key)}" placeholder="ключ" />
+          <input class="ge-input ge-case-to" value="${this.esc(cp.to)}" placeholder="цель (node id)" />
+          <button class="ge-case-up" title="Вверх">⬆</button>
+          <button class="ge-case-down" title="Вниз">⬇</button>
+          <button class="ge-case-remove" title="Удалить">🗑</button>
+        </div>`;
+      }
+      html += `</div>
+        <button id="ge-case-add" class="btn-secondary" style="margin-top:4px;width:100%;font-size:12px;">+ Добавить кейс</button>
+      </div>`;
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Default (цель, если ни один не true)</div>
+        <input type="text" id="ge-default" class="ge-input" value="${this.esc(data.default || "")}" placeholder="node id" />
+      </div>`;
+    }
+
     this.el.graphDetailContent.innerHTML = html;
 
-    const agentSelect = document.getElementById("ge-agent") as HTMLSelectElement;
-    if (agentSelect) {
-      agentSelect.addEventListener("change", () => {
-        this.editor!.drawflow.drawflow.Home.data[nodeId].data.agent = agentSelect.value;
+    const agentInput = document.getElementById("ge-agent") as HTMLInputElement;
+    if (agentInput) {
+      agentInput.addEventListener("input", () => {
+        this.editor!.drawflow.drawflow.Home.data[nodeId].data.agent = agentInput.value;
         this.updateNodeHtml(nodeId);
       });
     }
@@ -403,6 +438,97 @@ export class GraphController {
         this.el.graphDetailTitle.textContent = `✏️ ${nodeIdInput.value}`;
       });
     }
+
+    // ─── Switch/SeqSwitch event handlers ───
+
+    const switchTypeSelect = document.getElementById("ge-switch-type") as HTMLSelectElement;
+    if (switchTypeSelect) {
+      switchTypeSelect.addEventListener("change", () => {
+        const oldType = data.type;
+        const newType = switchTypeSelect.value;
+        if (oldType !== newType) {
+          data.type = newType;
+          this.rebuildSwitchOutputs(nodeId);
+          this.showNodeEditor(nodeId);
+        }
+      });
+    }
+
+    const inputObjectArea = document.getElementById("ge-input-object") as HTMLTextAreaElement;
+    if (inputObjectArea) {
+      inputObjectArea.addEventListener("change", () => {
+        data.input_object = inputObjectArea.value || undefined;
+      });
+    }
+
+    const defaultInput = document.getElementById("ge-default") as HTMLInputElement;
+    if (defaultInput) {
+      defaultInput.addEventListener("change", () => {
+        data.default = defaultInput.value || undefined;
+      });
+    }
+
+    const addBtn = document.getElementById("ge-case-add");
+    if (addBtn) {
+      addBtn.addEventListener("click", () => {
+        data.cases_priority.push({ key: "", to: "" });
+        this.rebuildSwitchOutputs(nodeId);
+        this.showNodeEditor(nodeId);
+      });
+    }
+
+    document.querySelectorAll(".ge-case-remove").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const row = (btn as HTMLElement).closest(".ge-case-row") as HTMLElement;
+        const idx = parseInt(row.dataset.index || "0", 10);
+        data.cases_priority.splice(idx, 1);
+        this.rebuildSwitchOutputs(nodeId);
+        this.showNodeEditor(nodeId);
+      });
+    });
+
+    document.querySelectorAll(".ge-case-up").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const row = (btn as HTMLElement).closest(".ge-case-row") as HTMLElement;
+        const idx = parseInt(row.dataset.index || "0", 10);
+        if (idx > 0) {
+          const arr = data.cases_priority;
+          [arr[idx - 1], arr[idx]] = [arr[idx], arr[idx - 1]];
+          this.rebuildSwitchOutputs(nodeId);
+          this.showNodeEditor(nodeId);
+        }
+      });
+    });
+
+    document.querySelectorAll(".ge-case-down").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const row = (btn as HTMLElement).closest(".ge-case-row") as HTMLElement;
+        const idx = parseInt(row.dataset.index || "0", 10);
+        const arr = data.cases_priority;
+        if (idx < arr.length - 1) {
+          [arr[idx], arr[idx + 1]] = [arr[idx + 1], arr[idx]];
+          this.rebuildSwitchOutputs(nodeId);
+          this.showNodeEditor(nodeId);
+        }
+      });
+    });
+
+    document.querySelectorAll(".ge-case-key").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const row = (inp as HTMLElement).closest(".ge-case-row") as HTMLElement;
+        const idx = parseInt(row.dataset.index || "0", 10);
+        data.cases_priority[idx].key = (inp as HTMLInputElement).value;
+        this.updateNodeHtml(nodeId);
+      });
+    });
+
+    document.querySelectorAll(".ge-case-to").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const row = (inp as HTMLElement).closest(".ge-case-row") as HTMLElement;
+        const idx = parseInt(row.dataset.index || "0", 10);
+        data.cases_priority[idx].to = (inp as HTMLInputElement).value;
+      });
+    });
   }
 
   private hideSidebar(): void {
@@ -417,7 +543,7 @@ export class GraphController {
     const rect = this.el.graphContainer.getBoundingClientRect();
     const cx = (rect.width / 2 - 100) * (1 / (this.editor!.zoom || 1));
     const cy = (rect.height / 2 - 50) * (1 / (this.editor!.zoom || 1));
-    const outs = type === "switch" ? 2 : OUTPUT_COUNT[type] ?? 1;
+    const outs = (type === "switch" || type === "llm_sequential_switch") ? 2 : OUTPUT_COUNT[type] ?? 1;
 
     const inputs: Record<string, { connections: any[] }> = {};
     for (let i = 1; i <= 1; i++) inputs[`input_${i}`] = { connections: [] };
@@ -460,7 +586,7 @@ export class GraphController {
       agentLine = `<div class="gn-agent">→ ${this.esc(data.agent)}</div>`;
     }
     let casesLine = "";
-    if (data.type === "switch") {
+    if (data.type === "switch" || data.type === "llm_sequential_switch") {
       const labels = this.getSwitchCaseKeys(data);
       if (labels.length > 0) {
         casesLine = `<div class="gn-cases">` + labels.map((key, i) =>
@@ -475,6 +601,37 @@ export class GraphController {
       ${agentLine}
       ${casesLine}
     `;
+  }
+
+  private rebuildSwitchOutputs(nodeId: string): void {
+    if (!this.editor) return;
+    const dn = this.editor.drawflow.drawflow.Home.data[nodeId];
+    if (!dn) return;
+    const data = dn.data;
+    const isSwitch = data.type === "switch" || data.type === "llm_sequential_switch";
+    if (!isSwitch) return;
+
+    const caseKeys = this.getSwitchCaseKeys(data);
+    const newCount = caseKeys.length;
+
+    // Remove old outputs beyond new count
+    const oldKeys = Object.keys(dn.outputs);
+    for (const key of oldKeys) {
+      const m = key.match(/^output_(\d+)$/);
+      if (m && parseInt(m[1], 10) > newCount) {
+        delete dn.outputs[key];
+      }
+    }
+
+    // Add new outputs
+    for (let i = 1; i <= newCount; i++) {
+      const key = `output_${i}`;
+      if (!dn.outputs[key]) {
+        dn.outputs[key] = { connections: [] };
+      }
+    }
+
+    this.updateNodeHtml(nodeId);
   }
 
   // ─── Утилиты ───
@@ -511,7 +668,7 @@ export class GraphController {
   private getImplicitSwitchEdges(nodes: GraphNodeDef[]): GraphEdgeDef[] {
     const implicit: GraphEdgeDef[] = [];
     for (const node of nodes) {
-      if (node.type !== "switch") continue;
+      if (node.type !== "switch" && node.type !== "llm_sequential_switch") continue;
       if (node.cases_priority) {
         for (const cp of node.cases_priority) {
           implicit.push({ from: node.id, to: cp.to });
