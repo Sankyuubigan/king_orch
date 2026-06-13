@@ -112,21 +112,10 @@ where
             all_sub_calls: &mut all_sub_calls,
             msg_counter: &mut msg_counter,
         };
-        let final_res = crate::domain::workflow_engine::run_workflow(
+        crate::domain::workflow_engine::run_workflow(
             workflow, &mut ctx, &mut runner,
         )?;
-        if ctx.output_emitted {
-            return Ok((String::new(), all_sub_calls, ctx.messages));
-        }
-        ctx.messages.push(ChatMessage {
-            id: Some(format!("msg_{}", msg_counter)),
-            msg_type: "message".to_string(),
-            content: final_res.clone(),
-            namespace: None,
-            sub_calls: None,
-            author: Some("assistant".to_string()),
-        });
-        return Ok((final_res, all_sub_calls, ctx.messages));
+        return Ok((String::new(), all_sub_calls, ctx.messages));
     }
 
     // Fallback: запуск .md агента

@@ -431,8 +431,20 @@ export class GraphController {
         if (node.type === "llm_worker" && node.agent) {
           agentLine = `<div class="gn-agent">→ ${this.esc(node.agent)}</div>`;
         }
+        if (node.type === "llm_worker" && node.output_type) {
+          agentLine += `<div class="gn-agent">${this.esc(node.output_type)}</div>`;
+        }
+        let signalLine = "";
+        if (node.type === "signal_router") {
+          const parts: string[] = [];
+          if (node.signal_name) parts.push(this.esc(node.signal_name));
+          if (node.field) parts.push(`.${this.esc(node.field)}`);
+          if (parts.length > 0) {
+            signalLine = `<div class="gn-agent" style="color:#ff9800">📡 ${parts.join("")}</div>`;
+          }
+        }
         let casesLine = "";
-        if (node.type === "switch" || node.type === "llm_sequential_switch") {
+        if (isDynamicNode(node.type)) {
           const labels = this.getSwitchCaseKeys(node);
           if (labels.length > 0) {
             casesLine = `<div class="gn-cases">` + labels.map((key, i) =>
@@ -453,6 +465,7 @@ export class GraphController {
           <div class="gn-title">${this.esc(node.id)}</div>
           <div class="gn-type">${typeLabel}</div>
           ${agentLine}
+          ${signalLine}
           ${casesLine}
           ${factsLine}
         `;
@@ -605,6 +618,13 @@ export class GraphController {
         <div class="detail-label">Задача (Task)</div>
         <textarea id="ge-task" class="ge-textarea" rows="4">${this.esc(data.task || "")}</textarea>
       </div>`;
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Тип вывода</div>
+        <select id="ge-output-type" class="ge-select">
+          <option value="message" ${data.output_type === "message" ? "selected" : ""}>message</option>
+          <option value="thought" ${!data.output_type || data.output_type === "thought" ? "selected" : ""}>thought</option>
+        </select>
+      </div>`;
     }
 
     if (data.type === "llm_fact_extractor") {
@@ -676,6 +696,14 @@ export class GraphController {
     if (taskTextarea) {
       taskTextarea.addEventListener("change", () => {
         this.editor!.drawflow.drawflow.Home.data[nodeId].data.task = taskTextarea.value;
+      });
+    }
+
+    const outputTypeSelect = document.getElementById("ge-output-type") as HTMLSelectElement;
+    if (outputTypeSelect) {
+      outputTypeSelect.addEventListener("change", () => {
+        data.output_type = outputTypeSelect.value === "thought" ? undefined : outputTypeSelect.value;
+        this.updateNodeHtml(nodeId);
       });
     }
 
@@ -841,6 +869,9 @@ export class GraphController {
     let agentLine = "";
     if (data.type === "llm_worker" && data.agent) {
       agentLine = `<div class="gn-agent">→ ${this.esc(data.agent)}</div>`;
+    }
+    if (data.type === "llm_worker" && data.output_type) {
+      agentLine += `<div class="gn-agent">${this.esc(data.output_type)}</div>`;
     }
     let signalLine = "";
     if (data.type === "signal_router") {
