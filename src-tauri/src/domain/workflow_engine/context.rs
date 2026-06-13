@@ -46,6 +46,16 @@ impl WorkflowContext {
         // {{ namespace }}
         result = result.replace("{{ namespace }}", &self.namespace);
 
+        // {{ signals }} — JSON-массив signal-сообщений из сессии
+        if result.contains("{{ signals }}") {
+            let signals: Vec<&ChatMessage> = self.messages
+                .iter()
+                .filter(|m| m.msg_type == "signal")
+                .collect();
+            let signals_json = serde_json::to_string(&signals).unwrap_or_else(|_| "[]".to_string());
+            result = result.replace("{{ signals }}", &signals_json);
+        }
+
         // {{ messages }} — сериализованный JSON последних сообщений
         if result.contains("{{ messages }}") {
             let msg_json = serde_json::to_string(&self.messages).unwrap_or_else(|_| "[]".to_string());

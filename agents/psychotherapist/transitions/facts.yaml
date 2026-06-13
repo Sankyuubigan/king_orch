@@ -1,19 +1,21 @@
 # Факты для экстрактора
 # Загружается из main_conversation_flow.yaml через config.facts_file
 
-extractor_prompt: |
-  Ты — системный анализатор. Прочитай сообщение пользователя.
-  Определи, присутствуют ли в нем следующие факты/смыслы.
-  Ответь ТОЛЬКО JSON-объектом, где ключ — ID факта, значение — true или false.
+# Кастомный промпт (опционально — если не задан, используется базовый)
+# extractor_prompt: ...
 
-  Факты:
-  {{ facts }}
+# Фазы процесса (опционально)
+phases:
+  - id: data_collection
+    criteria: "Нет сигнала phase, либо последний signals phase сигнал = data_collection"
 
-  Сообщение пользователя:
-  {{ user_message }}
+  - id: datamining
+    criteria: "Последний signals phase сигнал = datamining"
 
-  Ответь ТОЛЬКО JSON, без пояснений.
+  - id: treatment
+    criteria: "Последний signals phase сигнал = treatment"
 
+# Факты
 facts:
   - id: has_somatic
     criteria: "Есть телесные/соматические симптомы. Юзер описывает физическую боль, зажимы, болезни"

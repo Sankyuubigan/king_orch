@@ -33,13 +33,23 @@ declare module "drawflow" {
     };
   }
 
-  type DrawflowEvent = "nodeCreated" | "nodeSelected" | "nodeRemoved" | "connectionCreated" | "connectionRemoved" | "click";
+  type DrawflowEvent = "nodeCreated" | "nodeSelected" | "nodeUnselected" | "nodeMoved" | "nodeRemoved" | "nodeDataChanged" | "connectionCreated" | "connectionRemoved" | "connectionSelected" | "connectionUnselected" | "connectionStart" | "connectionCancel" | "click" | "clickEnd" | "mouseMove" | "mouseUp" | "translate" | "zoom" | "contextmenu" | "keydown" | "export" | "import" | "addReroute" | "removeReroute" | "rerouteMoved" | "moduleCreated" | "moduleChanged" | "moduleRemoved";
 
   class Drawflow {
     constructor(element: HTMLElement, render?: any, options?: any);
     zoom: number;
     precanvas: HTMLElement;
     module: string;
+    drag: boolean;
+    editor_selected: boolean;
+    ele_selected: HTMLElement | null;
+    node_selected: HTMLElement | null;
+    pos_x: number;
+    pos_y: number;
+    pos_x_start: number;
+    pos_y_start: number;
+    canvas_x: number;
+    canvas_y: number;
     drawflow: {
       drawflow: {
         Home: {
@@ -55,6 +65,7 @@ declare module "drawflow" {
     addConnection(fromId: string, toId: string, output: string, input: string): void;
     removeNodeId(nodeId: string): void;
     removeConnection(nodeId: string, inputKey: string): void;
+    updateConnectionNodes(nodeId: string): void;
     export(): DrawflowExport;
     import(data: DrawflowExport): void;
     getNodeFromId(id: string): DrawflowNode;

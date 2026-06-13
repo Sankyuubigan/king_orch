@@ -264,6 +264,20 @@ where
         }
     })));
 
+    // Built-in emit_signal tool
+    all_tools.push(("_builtin".to_string(), "emit_signal".to_string(), serde_json::json!({
+        "name": "emit_signal",
+        "description": "Сохранить сигнал/маркер в сессию. Другие агенты, экстрактор и phase_router увидят его. Принимает key (имя сигнала) и value (произвольный JSON-объект с данными).",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "key": {"type": "string", "description": "Имя сигнала, например 'validator_report' или 'phase'"},
+                "value": {"type": "object", "description": "Произвольный JSON с данными сигнала"}
+            },
+            "required": ["key", "value"]
+        }
+    })));
+
     let has_tools = !all_tools.is_empty();
     let system_prompt = build_system_prompt(agent, messages, current_namespace, has_tools, &all_tools);
 
@@ -377,6 +391,30 @@ where
                     serde_json::to_string(&results).unwrap_or_else(|_| "[]".to_string())
                 );
                 tool_output = Some(summary);
+            } else if tool_name == "emit_signal" {
+                tool_found = true;
+                consecutive_failed_tools = 0;
+                let key = arguments.get("key")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("signal")
+                    .to_string();
+                let value = arguments.get("value")
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+                let signal_msg = ChatMessage {
+                    id: Some(format!("msg_{}", msg_counter)),
+                    msg_type: "signal".to_string(),
+                    content: serde_json::json!({&key: value}).to_string(),
+                    namespace: Some(current_namespace.to_string()),
+                    sub_calls: None,
+                    author: Some(agent.id.clone()),
+                };
+                messages.push(signal_msg);
+                *msg_counter += 1;
+                tool_output = Some(format!(
+                    "[РЕЗУЛЬТАТ emit_signal]\n✅ Сигнал '{}' сохранён в сессию (ns: {}) от агента '{}'.\n\nЕсли задача выполнена — ответь ОБЫЧНЫМ ТЕКСТОМ.",
+                    key, current_namespace, agent.id
+                ));
             } else if let Some((mcp_name, _, _)) = all_tools.iter().find(|(_, name, _)| name == &tool_name) {
                 if let Some(client) = mcp_clients.get_mut(mcp_name) {
                     tool_found = true;

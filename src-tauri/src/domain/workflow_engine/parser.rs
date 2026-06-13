@@ -1,5 +1,5 @@
 use indexmap::IndexMap;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,14 +22,15 @@ pub struct WorkflowDef {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct WorkflowConfig {
-    // --- Новый паттерн: Fact Extractor ---
+    // --- Fact Extractor ---
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub facts: Vec<FactDef>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub phases: Vec<FactDef>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub facts_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extractor_prompt: Option<String>,
-
 }
 
 /// Внешний файл фактов (facts.yaml)
@@ -39,6 +40,8 @@ pub struct FactsFile {
     pub extractor_prompt: Option<String>,
     #[serde(default)]
     pub facts: Vec<FactDef>,
+    #[serde(default)]
+    pub phases: Vec<FactDef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -53,6 +56,43 @@ pub struct PriorityCase {
     pub key: String,
     #[serde(rename = "to")]
     pub to: String,
+}
+
+/// Защитный десериалайзер: принимает и массив `[{key, to}, ...]` и мапу `{key: to}`
+fn deserialize_cases_priority<'de, D>(deserializer: D) -> Result<Option<Vec<PriorityCase>>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    use serde::de::Error;
+    // Пробуем как value, чтобы потом разобрать формат
+    let val: serde_json::Value = match serde_json::Value::deserialize(deserializer) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    match val {
+        serde_json::Value::Array(arr) => {
+            let cases: Vec<PriorityCase> = arr
+                .iter()
+                .filter_map(|v| {
+                    let key = v.get("key")?.as_str()?.to_string();
+                    let to = v.get("to")?.as_str()?.to_string();
+                    Some(PriorityCase { key, to })
+                })
+                .collect();
+            Ok(Some(cases))
+        }
+        serde_json::Value::Object(map) => {
+            let cases: Vec<PriorityCase> = map
+                .iter()
+                .map(|(key, val)| PriorityCase {
+                    key: key.clone(),
+                    to: val.as_str().unwrap_or("").to_string(),
+                })
+                .collect();
+            Ok(Some(cases))
+        }
+        _ => Ok(None),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,8 +117,14 @@ pub struct NodeDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workflow: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cases: Option<IndexMap<String, String>>,
+    pub switch_field: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signal_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cases: Option<IndexMap<String, String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_cases_priority")]
     pub cases_priority: Option<Vec<PriorityCase>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
@@ -105,6 +151,8 @@ pub enum NodeType {
     Switch,
     LlmSequentialSwitch,
     Return,
+    #[serde(rename = "signal_router")]
+    SignalRouter,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -277,28 +325,31 @@ mod tests {
         assert_eq!(wf.name, "Therapist");
         assert!(wf.visible);
 
-        // 10 узлов
-        assert_eq!(wf.nodes.len(), 10);
-        // 8 рёбер
-        assert_eq!(wf.edges.len(), 8);
+        // 12 узлов (extract_facts, priority_router, facts_router + 7 агентов + 1 sub_workflow + 1 system_condition + 1 signal_router)
+        assert_eq!(wf.nodes.len(), 12);
+        // 3 ребра (extract_facts→priority_router, start_datamining→output_raw_datamining, call_validator→route_validator_signal)
+        assert_eq!(wf.edges.len(), 3);
 
         // LLM_FACT_EXTRACTOR
         let ef = wf.nodes.iter().find(|n| n.id == "extract_facts").unwrap();
         assert_eq!(ef.node_type, NodeType::LlmFactExtractor);
-        assert_eq!(ef.input.as_deref(), Some("{{ user_message }}"));
+        assert!(ef.input.is_some());
+        assert!(ef.input.as_deref().unwrap_or("").contains("{{ user_message }}"));
+        assert!(ef.input.as_deref().unwrap_or("").contains("{{ signals }}"));
 
-        // SWITCH с cases_priority (3 кейса + default)
+        // PRIORITY_ROUTER со switch_field (phase-based)
         let pr = wf.nodes.iter().find(|n| n.id == "priority_router").unwrap();
         assert_eq!(pr.node_type, NodeType::Switch);
-        assert!(pr.cases_priority.is_some());
-        assert_eq!(pr.cases_priority.as_ref().unwrap().len(), 3);
-        assert_eq!(pr.default.as_deref(), Some("freestyle"));
+        assert_eq!(pr.switch_field.as_deref(), Some("phase"));
+        assert!(pr.cases.is_some());
+        assert_eq!(pr.default.as_deref(), Some("facts_router"));
 
-        // SWITCH с пустыми cases (old format)
-        let pr2 = wf.nodes.iter().find(|n| n.id == "first_barrier_checker").unwrap();
-        assert_eq!(pr2.node_type, NodeType::Switch);
-        assert!(pr2.cases.is_some());
-        assert!(pr2.cases.as_ref().unwrap().is_empty());
+        // FACTS_ROUTER с cases_priority
+        let fr = wf.nodes.iter().find(|n| n.id == "facts_router").unwrap();
+        assert_eq!(fr.node_type, NodeType::Switch);
+        assert!(fr.cases_priority.is_some());
+        assert_eq!(fr.cases_priority.as_ref().unwrap().len(), 4);
+        assert_eq!(fr.default.as_deref(), Some("call_validator"));
 
         // LLM_WORKER с agent + task
         let curator = wf.nodes.iter().find(|n| n.id == "call_curator").unwrap();
@@ -311,22 +362,14 @@ mod tests {
         assert_eq!(sub.node_type, NodeType::SubWorkflow);
         assert_eq!(sub.workflow.as_deref(), Some("treatment_flow.yaml"));
 
-        // LLM_FREEFORM
-        let ff = wf.nodes.iter().find(|n| n.id == "freestyle").unwrap();
-        assert_eq!(ff.node_type, NodeType::LlmFreeform);
-
-        // Рёбра с case
-        let case_edge_1 = wf.edges.iter().find(|e| e.from == "priority_router" && e.case.as_deref() == Some("user_doesnt_agree")).unwrap();
-        assert_eq!(case_edge_1.to, "call_curator");
-        let case_edge_2 = wf.edges.iter().find(|e| e.from == "priority_router" && e.case.as_deref() == Some("has_somatic")).unwrap();
-        assert_eq!(case_edge_2.to, "call_soma_translator");
-        let case_edge_3 = wf.edges.iter().find(|e| e.from == "priority_router" && e.case.as_deref() == Some("not_enough_data")).unwrap();
-        assert_eq!(case_edge_3.to, "check_has_grounding");
+        // LLM_WORKER validator
+        let v = wf.nodes.iter().find(|n| n.id == "call_validator").unwrap();
+        assert_eq!(v.node_type, NodeType::LlmWorker);
+        assert_eq!(v.agent.as_deref(), Some("validator"));
 
         // Проверка конфига
         assert!(wf.config.is_some());
         let cfg = wf.config.as_ref().unwrap();
-        // facts_file должен быть, но facts теперь не вливаются (ленивая загрузка)
         assert_eq!(cfg.facts_file.as_deref(), Some("facts.yaml"));
         assert!(cfg.facts.is_empty(), "facts больше не вливаются при парсинге");
     }

@@ -228,9 +228,21 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 .graph-add-btn.add-switch:hover { border-color: #ef5350; color: #ef5350; }
 .graph-add-btn.add-extractor { border-color: #7e57c266; }
 .graph-add-btn.add-extractor:hover { border-color: #7e57c2; color: #7e57c2; }
+.graph-add-btn.add-signal-router { border-color: #ff980066; }
+.graph-add-btn.add-signal-router:hover { border-color: #ff9800; color: #ff9800; }
 
 #graph-layout { flex: 1; display: flex; overflow: hidden; position: relative; }
 #graph-container { flex: 1; height: 100%; border: none; background: #1a1a1a; position: relative; }
+
+/* Selection rectangle */
+.graph-selection-rect {
+  position: absolute;
+  z-index: 100;
+  background: rgba(76, 175, 80, 0.12);
+  border: 1.5px solid rgba(76, 175, 80, 0.7);
+  pointer-events: none;
+  box-sizing: border-box;
+}
 
 /* ─── Боковая панель редактирования ─── */
 #graph-sidebar {

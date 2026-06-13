@@ -30,6 +30,8 @@ interface GraphNodeDef {
   namespace?: string;
   output_type?: string;
   ui_pos?: { x: number; y: number };
+  signal_name?: string;
+  field?: string;
 }
 
 interface GraphEdgeDef {
@@ -51,6 +53,7 @@ export interface GraphElements {
   btnAddWorker: HTMLButtonElement;
   btnAddSwitch: HTMLButtonElement;
   btnAddSeqSwitch: HTMLButtonElement;
+  btnAddSignalRouter: HTMLButtonElement;
   btnAddExtractor: HTMLButtonElement;
 }
 
@@ -63,6 +66,7 @@ const NODE_COLORS: Record<string, string> = {
   sub_workflow: "#ab47bc",
   switch: "#ef5350",
   llm_sequential_switch: "#e040fb",
+  signal_router: "#ff9800",
   return: "#78909c",
 };
 
@@ -75,8 +79,13 @@ const NODE_LABELS: Record<string, string> = {
   sub_workflow: "📦 Sub-workflow",
   switch: "🔀 Switch",
   llm_sequential_switch: "🔀 SeqSwitch",
+  signal_router: "📡 Signal Router",
   return: "🏁 Return",
 };
+
+function isDynamicNode(t: string): boolean {
+  return t === "switch" || t === "llm_sequential_switch" || t === "signal_router";
+}
 
 const OUTPUT_COUNT: Record<string, number> = {
   llm_worker: 1,
@@ -87,6 +96,7 @@ const OUTPUT_COUNT: Record<string, number> = {
   sub_workflow: 1,
   switch: 0,
   llm_sequential_switch: 0,
+  signal_router: 0,
   return: 0,
 };
 
@@ -96,6 +106,13 @@ export class GraphController {
   private currentFilePath: string | null = null;
   private currentWorkflowName: string = "";
   private currentWorkflowConfig: any = null;
+  private selectedNodes: Set<string> = new Set();
+  private isSelecting: boolean = false;
+  private selectStart: { x: number; y: number } | null = null;
+  private selectionRectEl: HTMLDivElement | null = null;
+  private multiDragRaf: number | null = null;
+  private multiDragInitial: Map<string, { x: number; y: number }> | null = null;
+  private multiDragPrimary: string | null = null;
 
   constructor(el: GraphElements) {
     this.el = el;
@@ -109,6 +126,7 @@ export class GraphController {
     this.el.btnAddWorker.addEventListener("click", () => this.addNode("llm_worker"));
     this.el.btnAddSwitch.addEventListener("click", () => this.addNode("switch"));
     this.el.btnAddSeqSwitch.addEventListener("click", () => this.addNode("llm_sequential_switch"));
+    this.el.btnAddSignalRouter.addEventListener("click", () => this.addNode("signal_router"));
     this.el.btnAddExtractor.addEventListener("click", () => this.addNode("llm_fact_extractor"));
   }
 
@@ -139,6 +157,216 @@ export class GraphController {
       const d = args[0] || {};
       this.onSwitchConnectionChanged(d.output_id, d.input_id, d.output_class, "removed");
     });
+
+    this.setupCanvasInteraction();
+  }
+
+  // ─── Селекторное выделение (LMB box selection) + RMB pan + multi-drag ───
+
+  private setupCanvasInteraction(): void {
+    if (!this.editor) return;
+    const editor = this.editor;
+    const container = this.el.graphContainer;
+
+    // Создаём overlay для рамки выделения
+    this.selectionRectEl = document.createElement('div');
+    this.selectionRectEl.className = 'graph-selection-rect';
+    this.selectionRectEl.style.display = 'none';
+    container.appendChild(this.selectionRectEl);
+
+    // ─── Capture-phase mousedown ───
+    container.addEventListener('mousedown', (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+
+      // LMB на холсте → box selection
+      if (e.button === 0 && (target.classList.contains('drawflow') || target.classList.contains('parent-drawflow'))) {
+        e.stopPropagation();
+        e.preventDefault();
+        this.deselectAllNodes();
+        this.startBoxSelection(e);
+        return;
+      }
+
+      // LMB на ноде → управление выделением
+      if (e.button === 0) {
+        const nodeEl = target.closest('.drawflow-node') as HTMLElement | null;
+        if (nodeEl) {
+          const id = nodeEl.id.slice(5);
+          if (!this.selectedNodes.has(id)) {
+            this.deselectAllNodes();
+            this.selectNode(id);
+          }
+          // Если уже выделена — оставляем все выделенными (multi-drag)
+          return;
+        }
+      }
+    }, true);
+
+    // ─── Capture-phase mousemove ───
+    container.addEventListener('mousemove', (e: MouseEvent) => {
+      if (this.isSelecting) {
+        this.updateBoxSelection(e);
+      }
+    }, true);
+
+    // ─── Capture-phase mouseup ───
+    container.addEventListener('mouseup', (e: MouseEvent) => {
+      if (this.isSelecting) {
+        this.endBoxSelection(e);
+      }
+      // Очистка multi-drag
+      this.multiDragInitial = null;
+      this.multiDragPrimary = null;
+      if (this.multiDragRaf !== null) {
+        cancelAnimationFrame(this.multiDragRaf);
+        this.multiDragRaf = null;
+      }
+    }, true);
+
+    // ─── Multi-drag: intercept mousedown на выделенной ноде ───
+    container.addEventListener('mousedown', (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      const nodeEl = (e.target as HTMLElement).closest('.drawflow-node') as HTMLElement | null;
+      if (!nodeEl) return;
+      const id = nodeEl.id.slice(5);
+      if (!this.selectedNodes.has(id) || this.selectedNodes.size <= 1) return;
+
+      // Сохраняем начальные позиции всех выделенных нод
+      this.multiDragPrimary = id;
+      this.multiDragInitial = new Map();
+      for (const sid of this.selectedNodes) {
+        const dn = editor.drawflow.drawflow.Home.data[sid];
+        if (dn) {
+          this.multiDragInitial.set(sid, { x: dn.pos_x, y: dn.pos_y });
+        }
+      }
+
+      // Запускаем RAF-цикл синхронизации позиций
+      const animate = () => {
+        if (!editor.drag || !this.multiDragPrimary || !this.multiDragInitial) {
+          this.multiDragRaf = null;
+          return;
+        }
+        const primary = editor.drawflow.drawflow.Home.data[this.multiDragPrimary];
+        if (primary) {
+          const ini = this.multiDragInitial.get(this.multiDragPrimary);
+          if (ini) {
+            const dx = primary.pos_x - ini.x;
+            const dy = primary.pos_y - ini.y;
+            if (dx !== 0 || dy !== 0) {
+              for (const sid of this.selectedNodes) {
+                if (sid === this.multiDragPrimary) continue;
+                const sini = this.multiDragInitial.get(sid);
+                if (!sini) continue;
+                const dn = editor.drawflow.drawflow.Home.data[sid];
+                if (!dn) continue;
+                dn.pos_x = sini.x + dx;
+                dn.pos_y = sini.y + dy;
+                const el = document.getElementById('node-' + sid);
+                if (el) {
+                  el.style.top = dn.pos_y + 'px';
+                  el.style.left = dn.pos_x + 'px';
+                }
+              }
+              for (const sid of this.selectedNodes) {
+                editor.updateConnectionNodes('node-' + sid);
+              }
+            }
+          }
+        }
+        this.multiDragRaf = requestAnimationFrame(animate);
+      };
+      this.multiDragRaf = requestAnimationFrame(animate);
+    }, true);
+  }
+
+  private selectNode(id: string): void {
+    this.selectedNodes.add(id);
+    const el = document.getElementById('node-' + id);
+    if (el) el.classList.add('selected');
+  }
+
+  private deselectAllNodes(): void {
+    for (const id of this.selectedNodes) {
+      const el = document.getElementById('node-' + id);
+      if (el) el.classList.remove('selected');
+    }
+    this.selectedNodes.clear();
+  }
+
+  private startBoxSelection(e: MouseEvent): void {
+    const container = this.el.graphContainer;
+    const rect = container.getBoundingClientRect();
+    this.selectStart = {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    };
+    this.isSelecting = true;
+    if (this.selectionRectEl) {
+      this.selectionRectEl.style.display = 'block';
+      this.selectionRectEl.style.left = this.selectStart.x + 'px';
+      this.selectionRectEl.style.top = this.selectStart.y + 'px';
+      this.selectionRectEl.style.width = '0';
+      this.selectionRectEl.style.height = '0';
+    }
+  }
+
+  private updateBoxSelection(e: MouseEvent): void {
+    if (!this.selectStart || !this.selectionRectEl) return;
+    const container = this.el.graphContainer;
+    const rect = container.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+
+    const x = Math.min(this.selectStart.x, cx);
+    const y = Math.min(this.selectStart.y, cy);
+    const w = Math.abs(cx - this.selectStart.x);
+    const h = Math.abs(cy - this.selectStart.y);
+
+    this.selectionRectEl.style.left = x + 'px';
+    this.selectionRectEl.style.top = y + 'px';
+    this.selectionRectEl.style.width = w + 'px';
+    this.selectionRectEl.style.height = h + 'px';
+  }
+
+  private endBoxSelection(_e: MouseEvent): void {
+    this.isSelecting = false;
+    if (this.selectionRectEl) {
+      this.selectionRectEl.style.display = 'none';
+    }
+    if (!this.selectStart || !this.editor) return;
+
+    // Получаем границы рамки выделения (с учётом зума)
+    const containerRect = this.el.graphContainer.getBoundingClientRect();
+    const selLeft = parseFloat(this.selectionRectEl!.style.left);
+    const selTop = parseFloat(this.selectionRectEl!.style.top);
+    const selRight = selLeft + parseFloat(this.selectionRectEl!.style.width);
+    const selBottom = selTop + parseFloat(this.selectionRectEl!.style.height);
+
+    // Минимальный размер для детекта (чтобы простой клик не выделял)
+    if (selRight - selLeft < 5 && selBottom - selTop < 5) {
+      this.selectStart = null;
+      return;
+    }
+
+    const data = this.editor.drawflow.drawflow.Home.data;
+
+    for (const id of Object.keys(data)) {
+      const nodeEl = document.getElementById('node-' + id);
+      if (!nodeEl) continue;
+      const nodeRect = nodeEl.getBoundingClientRect();
+      // Проверяем пересечение ноды с рамкой (мировые координаты)
+      const nx = nodeRect.left - containerRect.left;
+      const ny = nodeRect.top - containerRect.top;
+      const nr = nx + nodeRect.width;
+      const nb = ny + nodeRect.height;
+
+      if (nx < selRight && nr > selLeft && ny < selBottom && nb > selTop) {
+        this.selectNode(id);
+      }
+    }
+
+    this.selectStart = null;
   }
 
   // ─── Системный диалог открытия ───
@@ -166,7 +394,7 @@ export class GraphController {
 
       const nonSwitchEdges = wf.edges.filter((e) => {
         const fn = wf.nodes.find((n) => n.id === e.from);
-        return !fn || (fn.type !== "switch" && fn.type !== "llm_sequential_switch");
+        return !fn || !isDynamicNode(fn.type);
       });
       const allEdges = [...nonSwitchEdges, ...this.getImplicitSwitchEdges(wf.nodes)];
       const nodePositions = this.computeAutoLayout(wf.nodes, allEdges);
@@ -181,9 +409,17 @@ export class GraphController {
       };
       const nodesData = importData.drawflow.Home.data;
 
+      // Нормализация: конвертируем старый cases → cases_priority
+      for (const node of wf.nodes) {
+        if (isDynamicNode(node.type) && node.cases && typeof node.cases === "object" && !Array.isArray(node.cases)) {
+          node.cases_priority = Object.entries(node.cases).map(([key, to]) => ({ key, to: to as string }));
+          delete node.cases;
+        }
+      }
+
       for (const node of wf.nodes) {
         const pos = node.ui_pos || nodePositions.get(node.id) || { x: 100, y: 100 };
-        const outs = (node.type === "switch" || node.type === "llm_sequential_switch") ? this.getSwitchOutputCount(node) : OUTPUT_COUNT[node.type] ?? 1;
+        const outs = isDynamicNode(node.type) ? this.getSwitchOutputCount(node) : OUTPUT_COUNT[node.type] ?? 1;
 
         const inputs: Record<string, { connections: any[] }> = {};
         for (let i = 1; i <= 1; i++) inputs[`input_${i}`] = { connections: [] };
@@ -251,9 +487,9 @@ export class GraphController {
         }
       }
 
-      // Switch connections come from node data (source of truth)
+      // Switch/SignalRouter connections come from node data (source of truth)
       for (const node of wf.nodes) {
-        if (node.type !== "switch" && node.type !== "llm_sequential_switch") continue;
+        if (!isDynamicNode(node.type)) continue;
         const targets: Array<{ to: string; caseKey?: string }> = [];
         if (node.cases_priority) {
           for (const cp of node.cases_priority) targets.push({ to: cp.to, caseKey: cp.key });
@@ -302,9 +538,9 @@ export class GraphController {
 
       for (const nodeId of Object.keys(drawflowNodes)) {
         const dn = drawflowNodes[nodeId];
-        if (dn.data.type === "switch" || dn.data.type === "llm_sequential_switch") {
-          this.syncSwitchNodeFromConnections(dn);
-        }
+    if (isDynamicNode(dn.data.type)) {
+      this.syncSwitchNodeFromConnections(dn);
+    }
         const data = JSON.parse(JSON.stringify(dn.data));
         data.ui_pos = { x: Math.round(dn.pos_x), y: Math.round(dn.pos_y) };
         nodes.push(data);
@@ -315,7 +551,7 @@ export class GraphController {
         for (const inKey of Object.keys(dn.inputs)) {
           for (const conn of dn.inputs[inKey].connections || []) {
             const fromNode = nodes.find((n) => n.id === conn.node);
-            if (fromNode && (fromNode.type === "switch" || fromNode.type === "llm_sequential_switch")) {
+            if (fromNode && isDynamicNode(fromNode.type)) {
               continue;
             }
             edges.push({ from: conn.node, to: nodeId });
@@ -386,7 +622,30 @@ export class GraphController {
       html += `</div></div>`;
     }
 
+    if (data.type === "signal_router") {
+      if (data.cases && typeof data.cases === "object" && !Array.isArray(data.cases)) {
+        data.cases_priority = Object.entries(data.cases).map(([key, to]) => ({ key, to: to as string }));
+        delete data.cases;
+      }
+      if (!data.cases_priority) data.cases_priority = [];
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Имя сигнала</div>
+        <input type="text" id="ge-signal-name" class="ge-input" placeholder="validator_report" value="${this.esc(data.signal_name || "")}" />
+      </div>
+      <div class="graph-detail-section">
+        <div class="detail-label">Поле в сигнале</div>
+        <input type="text" id="ge-field" class="ge-input" placeholder="verdict" value="${this.esc(data.field || "")}" />
+      </div>`;
+      html += this.renderCasesHtml(data);
+      html += this.renderDefaultHtml(data);
+    }
+
     if (data.type === "switch" || data.type === "llm_sequential_switch") {
+      // Конвертируем старый формат cases → cases_priority, чтобы не дублировались при сохранении
+      if (data.cases && typeof data.cases === "object" && !Array.isArray(data.cases)) {
+        data.cases_priority = Object.entries(data.cases).map(([key, to]) => ({ key, to: to as string }));
+        delete data.cases;
+      }
       if (!data.cases_priority) data.cases_priority = [];
       html += `<div class="graph-detail-section">
         <div class="detail-label">Тип свича</div>
@@ -399,25 +658,8 @@ export class GraphController {
         <div class="detail-label">Input object (JSON)</div>
         <textarea id="ge-input-object" class="ge-textarea" rows="2">${this.esc(data.input_object || "")}</textarea>
       </div>`;
-      html += `<div class="graph-detail-section">
-        <div class="detail-label">Кейсы</div>
-        <div id="ge-cases-list">`;
-      for (let i = 0; i < data.cases_priority.length; i++) {
-        const cp = data.cases_priority[i];
-        html += `<div class="ge-case-row" data-index="${i}">
-          <input class="ge-input ge-case-key" value="${this.esc(cp.key)}" placeholder="ключ" />
-          <button class="ge-case-up" title="Вверх">⬆</button>
-          <button class="ge-case-down" title="Вниз">⬇</button>
-          <button class="ge-case-remove" title="Удалить">🗑</button>
-        </div>`;
-      }
-      html += `</div>
-        <button id="ge-case-add" class="btn-secondary" style="margin-top:4px;width:100%;font-size:12px;">+ Добавить кейс</button>
-      </div>`;
-      html += `<div class="graph-detail-section">
-        <div class="detail-label">Default (цель, если ни один не true)</div>
-        <input type="text" id="ge-default" class="ge-input" value="${this.esc(data.default || "")}" placeholder="node id" />
-      </div>`;
+      html += this.renderCasesHtml(data);
+      html += this.renderDefaultHtml(data);
     }
 
     this.el.graphDetailContent.innerHTML = html;
@@ -446,7 +688,21 @@ export class GraphController {
       });
     }
 
-    // ─── Switch/SeqSwitch event handlers ───
+    const signalNameInput = document.getElementById("ge-signal-name") as HTMLInputElement;
+    if (signalNameInput) {
+      signalNameInput.addEventListener("change", () => {
+        this.editor!.drawflow.drawflow.Home.data[nodeId].data.signal_name = signalNameInput.value || undefined;
+      });
+    }
+
+    const fieldInput = document.getElementById("ge-field") as HTMLInputElement;
+    if (fieldInput) {
+      fieldInput.addEventListener("change", () => {
+        this.editor!.drawflow.drawflow.Home.data[nodeId].data.field = fieldInput.value || undefined;
+      });
+    }
+
+    // ─── Switch/SeqSwitch/SignalRouter event handlers ───
 
     const switchTypeSelect = document.getElementById("ge-switch-type") as HTMLSelectElement;
     if (switchTypeSelect) {
@@ -544,7 +800,7 @@ export class GraphController {
     const rect = this.el.graphContainer.getBoundingClientRect();
     const cx = (rect.width / 2 - 100) * (1 / (this.editor!.zoom || 1));
     const cy = (rect.height / 2 - 50) * (1 / (this.editor!.zoom || 1));
-    const outs = (type === "switch" || type === "llm_sequential_switch") ? 2 : OUTPUT_COUNT[type] ?? 1;
+    const outs = isDynamicNode(type) ? 2 : OUTPUT_COUNT[type] ?? 1;
 
     const inputs: Record<string, { connections: any[] }> = {};
     for (let i = 1; i <= 1; i++) inputs[`input_${i}`] = { connections: [] };
@@ -586,8 +842,17 @@ export class GraphController {
     if (data.type === "llm_worker" && data.agent) {
       agentLine = `<div class="gn-agent">→ ${this.esc(data.agent)}</div>`;
     }
+    let signalLine = "";
+    if (data.type === "signal_router") {
+      const parts: string[] = [];
+      if (data.signal_name) parts.push(this.esc(data.signal_name));
+      if (data.field) parts.push(`.${this.esc(data.field)}`);
+      if (parts.length > 0) {
+        signalLine = `<div class="gn-agent" style="color:#ff9800">📡 ${parts.join("")}</div>`;
+      }
+    }
     let casesLine = "";
-    if (data.type === "switch" || data.type === "llm_sequential_switch") {
+    if (isDynamicNode(data.type)) {
       const labels = this.getSwitchCaseKeys(data);
       if (labels.length > 0) {
         casesLine = `<div class="gn-cases">` + labels.map((key, i) =>
@@ -609,6 +874,7 @@ export class GraphController {
       <div class="gn-title">${this.esc(data.id || nodeId)}</div>
       <div class="gn-type">${typeLabel}</div>
       ${agentLine}
+      ${signalLine}
       ${casesLine}
       ${factsLine}
     `;
@@ -619,8 +885,7 @@ export class GraphController {
     const dn = this.editor.drawflow.drawflow.Home.data[nodeId];
     if (!dn) return;
     const data = dn.data;
-    const isSwitch = data.type === "switch" || data.type === "llm_sequential_switch";
-    if (!isSwitch) return;
+    if (!isDynamicNode(data.type)) return;
 
     // Сохраняем данные ДО удаления, т.к. connectionRemoved занулит их
     const targets: string[] = [];
@@ -684,7 +949,7 @@ export class GraphController {
     const dn = this.editor.drawflow.drawflow.Home.data[fromNodeId];
     if (!dn) return;
     const data = dn.data;
-    if (data.type !== "switch" && data.type !== "llm_sequential_switch") return;
+    if (!isDynamicNode(data.type)) return;
     const match = outputKey.match(/^output_(\d+)$/);
     if (!match) return;
     const outIdx = parseInt(match[1], 10) - 1;
@@ -773,6 +1038,34 @@ export class GraphController {
     });
   }
 
+  // ─── Рендер кейсов и дефолта (общее для switch и signal_router) ───
+
+  private renderCasesHtml(data: any): string {
+    let html = `<div class="graph-detail-section">
+      <div class="detail-label">Кейсы</div>
+      <div id="ge-cases-list">`;
+    for (let i = 0; i < data.cases_priority.length; i++) {
+      const cp = data.cases_priority[i];
+      html += `<div class="ge-case-row" data-index="${i}">
+        <input class="ge-input ge-case-key" value="${this.esc(cp.key)}" placeholder="ключ" />
+        <button class="ge-case-up" title="Вверх">⬆</button>
+        <button class="ge-case-down" title="Вниз">⬇</button>
+        <button class="ge-case-remove" title="Удалить">🗑</button>
+      </div>`;
+    }
+    html += `</div>
+      <button id="ge-case-add" class="btn-secondary" style="margin-top:4px;width:100%;font-size:12px;">+ Добавить кейс</button>
+    </div>`;
+    return html;
+  }
+
+  private renderDefaultHtml(data: any): string {
+    return `<div class="graph-detail-section">
+      <div class="detail-label">Default (цель, если не совпало)</div>
+      <input type="text" id="ge-default" class="ge-input" value="${this.esc(data.default || "")}" placeholder="node id" />
+    </div>`;
+  }
+
   // ─── Утилиты ───
 
   private getSwitchOutputCount(node: GraphNodeDef): number {
@@ -802,7 +1095,7 @@ export class GraphController {
   private getImplicitSwitchEdges(nodes: GraphNodeDef[]): GraphEdgeDef[] {
     const implicit: GraphEdgeDef[] = [];
     for (const node of nodes) {
-      if (node.type !== "switch" && node.type !== "llm_sequential_switch") continue;
+      if (!isDynamicNode(node.type)) continue;
       if (node.cases_priority) {
         for (const cp of node.cases_priority) {
           implicit.push({ from: node.id, to: cp.to });

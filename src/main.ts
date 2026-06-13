@@ -85,6 +85,7 @@ function initApp() {
     btnAddWorker: $<HTMLButtonElement>("btn-add-worker"),
     btnAddSwitch: $<HTMLButtonElement>("btn-add-switch"),
     btnAddSeqSwitch: $<HTMLButtonElement>("btn-add-seq-switch"),
+    btnAddSignalRouter: $<HTMLButtonElement>("btn-add-signal-router"),
     btnAddExtractor: $<HTMLButtonElement>("btn-add-extractor"),
   });
 

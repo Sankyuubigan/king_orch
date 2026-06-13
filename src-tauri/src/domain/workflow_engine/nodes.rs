@@ -32,9 +32,10 @@ where
                 .cloned()
                 .unwrap_or(WorkflowConfig::default());
             let input = context.resolve_template(node.input.as_deref().unwrap_or(""));
+            let signals = context.resolve_template("{{ signals }}");
             let workflow_dir = std::path::Path::new(&workflow.parent_dir);
             let prompt =
-                super::fact_extractor::build_extractor_prompt(&config, &input, Some(workflow_dir));
+                super::fact_extractor::build_extractor_prompt(&config, &input, &signals, Some(workflow_dir));
 
             let llm_response = runner.call_llm_direct(&prompt, &input)?;
 
@@ -66,9 +67,10 @@ where
                 .cloned()
                 .unwrap_or(WorkflowConfig::default());
             let input = context.resolve_template(node.input.as_deref().unwrap_or("{{ user_message }}"));
+            let signals = context.resolve_template("{{ signals }}");
             let workflow_dir = std::path::Path::new(&workflow.parent_dir);
             let prompt =
-                super::fact_extractor::build_extractor_prompt(&config, &input, Some(workflow_dir));
+                super::fact_extractor::build_extractor_prompt(&config, &input, &signals, Some(workflow_dir));
 
             let llm_response = runner.call_llm_direct(&prompt, &input)?;
 
@@ -397,12 +399,48 @@ where
         }
 
         NodeType::Switch => {
-            // Приоритетная маршрутизация по input_object + cases_priority
+            // Маршрутизация по switch_field (строгое соответствие значения)
             if let Some(ref input_obj) = node.input_object {
                 let resolved = context.resolve_template(input_obj);
                 let json_val: serde_json::Value = serde_json::from_str(&resolved)
                     .unwrap_or(serde_json::Value::Null);
 
+                if let Some(ref sf) = node.switch_field {
+                    let field_val = json_val.get(sf).and_then(|v| v.as_str());
+                    if let Some(ref cases) = node.cases {
+                        if let Some(val) = field_val {
+                            if let Some(target) = cases.get(val) {
+                                (runner.log_cb)(format!(
+                                    "[switch] switch_field '{}' = '{}' → {}",
+                                    sf, val, target
+                                ));
+                                return Ok(NodeResult {
+                                    output: serde_json::json!({"matched_case": val, "target": target}),
+                                    next_node: Some(target.clone()),
+                                    next_nodes: vec![],
+                                });
+                            }
+                        }
+                    }
+                    if let Some(ref default) = node.default {
+                        (runner.log_cb)(format!(
+                            "[switch] switch_field '{}' не совпал, default → {}",
+                            sf, default
+                        ));
+                        return Ok(NodeResult {
+                            output: serde_json::json!({"matched_case": "__default__", "target": default}),
+                            next_node: Some(default.clone()),
+                            next_nodes: vec![],
+                        });
+                    }
+                    return Ok(NodeResult {
+                        output: serde_json::json!({"matched_case": "__none__", "target": null}),
+                        next_node: None,
+                        next_nodes: vec![],
+                    });
+                }
+
+                // Приоритетная маршрутизация по input_object + cases_priority
                 if let Some(obj) = json_val.as_object() {
                     if let Some(ref priority_cases) = node.cases_priority {
                         for pc in priority_cases {
@@ -514,6 +552,59 @@ where
                     next_nodes: matched,
                 })
             }
+        }
+
+        NodeType::SignalRouter => {
+            let signal_name = node.signal_name.as_deref().unwrap_or("");
+            let field = node.field.as_deref().unwrap_or("");
+            let mut field_val: Option<String> = None;
+
+            // Ищем последний signal-месседж с нужным ключом
+            for msg in context.messages.iter().rev() {
+                if msg.msg_type != "signal" { continue; }
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg.content) {
+                    if let Some(signal) = val.get(signal_name) {
+                        if field.is_empty() {
+                            field_val = signal.as_str().map(|s| s.to_string());
+                        } else if let Some(nested) = signal.get(field) {
+                            field_val = nested.as_str().map(|s| s.to_string());
+                        }
+                        if field_val.is_some() { break; }
+                    }
+                }
+            }
+
+            let matched = field_val.as_deref().unwrap_or("");
+
+            (runner.log_cb)(format!(
+                "[signal_router] signal '{}' field '{}' = '{}'",
+                signal_name, field, matched
+            ));
+
+            // Поиск по cases (допускаем оба формата)
+            let target = node.cases.as_ref()
+                .and_then(|c| c.get(matched))
+                .or_else(|| node.cases_priority.as_ref()
+                    .and_then(|cp| cp.iter().find(|pc| pc.key == matched).map(|pc| &pc.to)))
+                .cloned()
+                .or_else(|| node.default.clone());
+
+            if let Some(ref t) = target {
+                (runner.log_cb)(format!("[signal_router] → {}", t));
+            } else {
+                (runner.log_cb)("[signal_router] → нет target".to_string());
+            }
+
+            Ok(NodeResult {
+                output: serde_json::json!({
+                    "matched": matched,
+                    "signal_name": signal_name,
+                    "field": field,
+                    "target": target
+                }),
+                next_node: target,
+                next_nodes: vec![],
+            })
         }
 
         NodeType::Return => Ok(NodeResult {
