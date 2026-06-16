@@ -7,7 +7,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use std::fs;
 
 use crate::domain;
-use crate::infra::{ChatMessage, LlamaEngine, ModelParams};
+use crate::infra::{self, ChatMessage, LlamaEngine, ModelParams};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct TestCaseDef {
@@ -50,7 +50,7 @@ pub async fn run_iterative_test(
     agent_ids: Vec<String>,
     model_paths: Vec<String>,
 ) -> Result<Vec<SingleTestResult>, String> {
-    let agents_dir = find_agents_dir(&app);
+    let agents_dir = infra::find_agents_dir(&app);
     let all_agents = domain::load_agents(&agents_dir).map_err(|e| format!("Ошибка загрузки агентов: {}", e))?;
     let cancel_flag = Arc::new(AtomicBool::new(false));
 
@@ -132,24 +132,6 @@ pub async fn run_iterative_test(
     }
 
     Ok(results)
-}
-
-fn find_agents_dir(app: &AppHandle) -> PathBuf {
-    let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
-    for dir in [
-        exe_dir.join("agents"),
-        resource_dir.join("agents"),
-        PathBuf::from("agents"),
-        exe_dir.join("..").join("..").join("agents"),
-    ] {
-        if dir.exists() {
-            return dir;
-        }
-    }
-    let default = exe_dir.join("agents");
-    let _ = fs::create_dir_all(&default);
-    default
 }
 
 fn get_results_dir(app: &AppHandle) -> PathBuf {

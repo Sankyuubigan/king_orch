@@ -30,12 +30,12 @@ fn safe_truncate(s: &str, max_len: usize) -> String {
 }
 
 // ─── Helper: централизованный вывод мысли ───
-fn log_agent_thought(log_cb: &dyn Fn(String), agent: &AgentProfile, action_type: &str, target: &str, thought: &str, thinking_sec: f32) {
+fn log_agent_thought(log_cb: &dyn Fn(String), agent: &AgentProfile, action_type: &str, target: &str, thought: &str, thinking_sec: f32, depth: usize) {
     if thought.is_empty() { return; }
     if thinking_sec > 0.0 {
-        log_cb(format!("💭 Мысль {} ({} {}) [⏱{:.1}с]: {}", agent.name, action_type, target, thinking_sec, thought));
+        log_cb(format!("💭 Мысль {} [d={}] ({} {}) [⏱{:.1}с]: {}", agent.name, depth, action_type, target, thinking_sec, thought));
     } else {
-        log_cb(format!("💭 Мысль {} ({} {}): {}", agent.name, action_type, target, thought));
+        log_cb(format!("💭 Мысль {} [d={}] ({} {}): {}", agent.name, depth, action_type, target, thought));
     }
 }
 
@@ -68,7 +68,7 @@ where
         LlamaEngine::new(&model_path, context_size, kv_quantization, &log_cb)?
     };
     let agents = load_agents(&agents_dir)?;
-    let max_gen_tokens = (context_size as usize).saturating_sub(2048).max(1024);
+    let max_gen_tokens = ((context_size as usize).saturating_sub(2048).max(1024)).min(4096);
     let recent_history: Vec<ChatMessage> = history.iter()
         .filter(|m| m.msg_type != "thought")
         .cloned()
@@ -341,7 +341,7 @@ where
         if let Some((tool_name, arguments, thought)) = parse_tool_call(&response) {
             action_found = true;
             consecutive_incomplete = 0;
-            log_agent_thought(&log_cb, agent, "инструмент", &tool_name, &thought, gen_start.elapsed().as_secs_f32());
+            log_agent_thought(&log_cb, agent, "инструмент", &tool_name, &thought, gen_start.elapsed().as_secs_f32(), depth);
             thought_logged = true;
 
             status_cb(format!("Выполнение {}...", tool_name), 60);
@@ -383,28 +383,36 @@ where
                 tool_output = Some(summary);
             } else if tool_name == "emit_signal" {
                 tool_found = true;
-                consecutive_failed_tools = 0;
                 let key = arguments.get("key")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("signal")
-                    .to_string();
+                    .filter(|s| !s.is_empty());
                 let value = arguments.get("value")
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null);
-                let signal_msg = ChatMessage {
-                    id: Some(format!("msg_{}", msg_counter)),
-                    msg_type: "signal".to_string(),
-                    content: serde_json::json!({&key: value}).to_string(),
-                    namespace: Some(current_namespace.to_string()),
-                    sub_calls: None,
-                    author: Some(agent.id.clone()),
-                };
-                messages.push(signal_msg);
-                *msg_counter += 1;
-                tool_output = Some(format!(
-                    "[РЕЗУЛЬТАТ emit_signal]\n✅ Сигнал '{}' сохранён в сессию (ns: {}) от агента '{}'.\n\nЕсли задача выполнена — ответь ОБЫЧНЫМ ТЕКСТОМ.",
-                    key, current_namespace, agent.id
-                ));
+                    .filter(|v| !v.is_null());
+
+                if let (Some(key), Some(value)) = (key, value) {
+                    consecutive_failed_tools = 0;
+                    let signal_msg = ChatMessage {
+                        id: Some(format!("msg_{}", msg_counter)),
+                        msg_type: "signal".to_string(),
+                        content: serde_json::json!({key: value}).to_string(),
+                        namespace: Some(current_namespace.to_string()),
+                        sub_calls: None,
+                        author: Some(agent.id.clone()),
+                    };
+                    messages.push(signal_msg);
+                    *msg_counter += 1;
+                    tool_output = Some(format!(
+                        "[РЕЗУЛЬТАТ emit_signal]\n✅ Сигнал '{}' сохранён в сессию (ns: {}) от агента '{}'.\n\nЕсли задача выполнена — ответь ОБЫЧНЫМ ТЕКСТОМ.",
+                        key, current_namespace, agent.id
+                    ));
+                } else {
+                    let key_str = arguments.get("key").map(|v| v.to_string()).unwrap_or_else(|| "отсутствует".to_string());
+                    let val_str = arguments.get("value").map(|v| v.to_string()).unwrap_or_else(|| "отсутствует".to_string());
+                    tool_output = Some(format!(
+                        "Ошибка: emit_signal требует 'key' (строка) и 'value' (объект). Получено: key={}, value={}. Исправь и вызови СНОВА.",
+                        key_str, val_str
+                    ));
+                }
             } else if let Some((mcp_name, _, _)) = all_tools.iter().find(|(_, name, _)| name == &tool_name) {
                 if let Some(client) = mcp_clients.get_mut(mcp_name) {
                     tool_found = true;
@@ -471,7 +479,7 @@ where
             // FIX A: Validate target BEFORE logging thought to UI
             if let Some(subagent) = agents.iter().find(|a| a.id == parsed.target) {
                 consecutive_invalid_targets = 0;
-                log_agent_thought(&log_cb, agent, "вызов", &parsed.target, &parsed.thought, gen_start.elapsed().as_secs_f32());
+                log_agent_thought(&log_cb, agent, "вызов", &parsed.target, &parsed.thought, gen_start.elapsed().as_secs_f32(), depth);
                 thought_logged = true;
 
                 // Skip if already called in this namespace
@@ -555,11 +563,11 @@ where
         if !thought_logged {
             let extracted = extract_think_content(&raw_response);
             for t in &extracted {
-                log_cb(format!("💭 Мысль {} (размышление) [⏱{:.1}с]: {}", agent.name, gen_start.elapsed().as_secs_f32(), t));
+                log_cb(format!("💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), t));
             }
             if extracted.is_empty() && !raw_response.contains("<think") {
                 if let Some(t) = extract_thought_from_partial_json(&raw_response) {
-                log_cb(format!("💭 Мысль {} (размышление) [⏱{:.1}с]: {}", agent.name, gen_start.elapsed().as_secs_f32(), t));
+                log_cb(format!("💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), t));
                 }
             }
         }

@@ -100,12 +100,11 @@ pub fn clean_thought_tags(text: &str) -> String {
         result = re.replace_all(&result, "").to_string();
     }
     result = result.replace("</start_of_turn>", "").replace("<start_of_turn>", "");
+    result = result.replace("<audio|>", "").replace("<video|>", "").replace("<image|>", "");
     result.trim().to_string()
 }
 
 pub struct ParsedOrchestratorResponse {
-    #[allow(dead_code)]
-    pub confidence: f32,
     pub target: String,
     pub content: String,
     pub thought: String,
@@ -146,9 +145,6 @@ pub fn parse_orchestrator_response(text: &str) -> Option<ParsedOrchestratorRespo
             .or_else(|_| serde_json::from_str(&json_str.replace('\n', " ").replace('\r', "")));
         if let Ok(val) = parsed {
             if val.get("target").is_some() {
-                let conf = val.get("confidence_score")
-                    .and_then(|v| v.as_f64().or_else(|| v.as_str().and_then(|s| s.parse().ok())))
-                    .unwrap_or(1.0) as f32;
                 let target = val.get("target").and_then(|v| v.as_str()).unwrap_or("user").to_string();
                 let content = val.get("task_or_response").or_else(|| val.get("response"))
                     .or_else(|| val.get("task")).or_else(|| val.get("message")).or_else(|| val.get("content"))
@@ -156,7 +152,7 @@ pub fn parse_orchestrator_response(text: &str) -> Option<ParsedOrchestratorRespo
                 let thought = val.get("thought").and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let namespace = val.get("namespace").and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty()).map(|s| s.to_string());
-                return Some(ParsedOrchestratorResponse { confidence: conf, target, content, thought, namespace });
+                return Some(ParsedOrchestratorResponse { target, content, thought, namespace });
             }
         } else {
             let target_re = regex::Regex::new(r#"(?is)"target"\s*:\s*"([^"]+)""#).ok()?;
@@ -170,7 +166,7 @@ pub fn parse_orchestrator_response(text: &str) -> Option<ParsedOrchestratorRespo
                 let thought = decode_json_escapes(&thought_raw);
                 let ns_re = regex::Regex::new(r#"(?is)"namespace"\s*:\s*"([^"]+)""#).ok()?;
                 let namespace = ns_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
-                return Some(ParsedOrchestratorResponse { confidence: 1.0, target, content, thought, namespace });
+                return Some(ParsedOrchestratorResponse { target, content, thought, namespace });
             }
         }
     }

@@ -509,59 +509,7 @@ export class GraphController {
         const outputs: Record<string, { connections: any[] }> = {};
         for (let i = 1; i <= outs; i++) outputs[`output_${i}`] = { connections: [] };
 
-        const typeLabel = NODE_LABELS[node.type] || node.type;
-        let agentLine = "";
-        if (node.type === "llm_worker" && node.agent) {
-          agentLine = `<div class="gn-agent">→ ${this.esc(node.agent)}</div>`;
-        }
-        if (node.type === "llm_worker" && node.output_type) {
-          agentLine += `<div class="gn-agent">${this.esc(node.output_type)}</div>`;
-        }
-        let signalLine = "";
-        if (node.type === "signal_router") {
-          const parts: string[] = [];
-          if (node.signal_name) parts.push(this.esc(node.signal_name));
-          if (node.field) parts.push(`.${this.esc(node.field)}`);
-          if (parts.length > 0) {
-            signalLine = `<div class="gn-agent" style="color:#ff9800">📡 ${parts.join("")}</div>`;
-          }
-        }
-        let casesLine = "";
-        if (isDynamicNode(node.type)) {
-          const labels = this.getSwitchCaseKeys(node);
-          if (labels.length > 0) {
-            casesLine = `<div class="gn-cases">` + labels.map((key, i) =>
-              `<div class="gn-case-row">
-                <span class="gn-case-idx">${i + 1}</span>
-                <span class="gn-case-key">${this.esc(key)}</span>
-                <span class="gn-case-dot"></span>
-              </div>`
-            ).join("") + `</div>`;
-          }
-        }
-        let factsLine = "";
-        if (node.type === "llm_fact_extractor") {
-          const facts = wf.config?.facts as Array<{ id: string }> | undefined;
-          if (facts && facts.length > 0) {
-            factsLine = `<div class="gn-cases">` + facts.map((f, i) =>
-              `<div class="gn-case-row">
-                <span class="gn-case-idx">${i + 1}</span>
-                <span class="gn-case-key">${this.esc(f.id)}</span>
-                <span class="gn-case-dot"></span>
-              </div>`
-            ).join("") + `</div>`;
-          }
-        }
-        const disabledBadge = node.disabled ? `<div class="gn-disabled-badge">⛔ DISABLED</div>` : "";
-        const html = `
-          <div class="gn-title">${this.esc(node.id)}</div>
-          <div class="gn-type">${typeLabel}</div>
-          ${disabledBadge}
-          ${agentLine}
-          ${signalLine}
-          ${casesLine}
-          ${factsLine}
-        `;
+        const html = this.buildNodeInnerHtml(node, node.id);
 
         let nodeClass = isDynamicNode(node.type) ? "dynamic-node" : "";
         if (node.disabled) nodeClass = nodeClass ? `${nodeClass} node-disabled` : "node-disabled";
@@ -983,61 +931,7 @@ export class GraphController {
     const el = document.querySelector(`#node-${nodeId} .drawflow_content_node`) as HTMLElement;
     if (!el) return;
 
-    const typeLabel = NODE_LABELS[data.type] || data.type;
-    let agentLine = "";
-    if (data.type === "llm_worker" && data.agent) {
-      agentLine = `<div class="gn-agent">→ ${this.esc(data.agent)}</div>`;
-    }
-    if (data.type === "llm_worker" && data.output_type) {
-      agentLine += `<div class="gn-agent">${this.esc(data.output_type)}</div>`;
-    }
-    let signalLine = "";
-    if (data.type === "signal_router") {
-      const parts: string[] = [];
-      if (data.signal_name) parts.push(this.esc(data.signal_name));
-      if (data.field) parts.push(`.${this.esc(data.field)}`);
-      if (parts.length > 0) {
-        signalLine = `<div class="gn-agent" style="color:#ff9800">📡 ${parts.join("")}</div>`;
-      }
-    }
-    let casesLine = "";
-    if (isDynamicNode(data.type)) {
-      const labels = this.getSwitchCaseKeys(data);
-      if (labels.length > 0) {
-        casesLine = `<div class="gn-cases">` + labels.map((key, i) =>
-          `<div class="gn-case-row">
-            <span class="gn-case-idx">${i + 1}</span>
-            <span class="gn-case-key">${this.esc(key)}</span>
-            <span class="gn-case-dot"></span>
-          </div>`
-        ).join("") + `</div>`;
-      }
-    }
-    let factsLine = "";
-    if (data.type === "llm_fact_extractor") {
-      const facts = this.currentWorkflowConfig?.facts as Array<{ id: string }> | undefined;
-      if (facts && facts.length > 0) {
-        factsLine = `<div class="gn-cases">` + facts.map((f, i) =>
-          `<div class="gn-case-row">
-            <span class="gn-case-idx">${i + 1}</span>
-            <span class="gn-case-key">${this.esc(f.id)}</span>
-            <span class="gn-case-dot"></span>
-          </div>`
-        ).join("") + `</div>`;
-      }
-    }
-
-    const disabledBadge = data.disabled ? `<div class="gn-disabled-badge">⛔ DISABLED</div>` : "";
-
-    el.innerHTML = `
-      <div class="gn-title">${this.esc(data.id || nodeId)}</div>
-      <div class="gn-type">${typeLabel}</div>
-      ${disabledBadge}
-      ${agentLine}
-      ${signalLine}
-      ${casesLine}
-      ${factsLine}
-    `;
+    el.innerHTML = this.buildNodeInnerHtml(data, nodeId);
 
     const nodeEl = el.closest('.drawflow-node') as HTMLElement;
     if (nodeEl) {
@@ -1363,6 +1257,62 @@ export class GraphController {
       });
     }
     return positions;
+  }
+
+  private buildNodeInnerHtml(data: any, fallbackId: string = ""): string {
+    const typeLabel = NODE_LABELS[data.type] || data.type;
+    let agentLine = "";
+    if (data.type === "llm_worker" && data.agent) {
+      agentLine = `<div class="gn-agent">→ ${this.esc(data.agent)}</div>`;
+    }
+    if (data.type === "llm_worker" && data.output_type) {
+      agentLine += `<div class="gn-agent">${this.esc(data.output_type)}</div>`;
+    }
+    let signalLine = "";
+    if (data.type === "signal_router") {
+      const parts: string[] = [];
+      if (data.signal_name) parts.push(this.esc(data.signal_name));
+      if (data.field) parts.push(`.${this.esc(data.field)}`);
+      if (parts.length > 0) {
+        signalLine = `<div class="gn-agent" style="color:#ff9800">📡 ${parts.join("")}</div>`;
+      }
+    }
+    let casesLine = "";
+    if (isDynamicNode(data.type)) {
+      const labels = this.getSwitchCaseKeys(data);
+      if (labels.length > 0) {
+        casesLine = `<div class="gn-cases">` + labels.map((key, i) =>
+          `<div class="gn-case-row">
+            <span class="gn-case-idx">${i + 1}</span>
+            <span class="gn-case-key">${this.esc(key)}</span>
+            <span class="gn-case-dot"></span>
+          </div>`
+        ).join("") + `</div>`;
+      }
+    }
+    let factsLine = "";
+    if (data.type === "llm_fact_extractor") {
+      const facts = this.currentWorkflowConfig?.facts as Array<{ id: string }> | undefined;
+      if (facts && facts.length > 0) {
+        factsLine = `<div class="gn-cases">` + facts.map((f, i) =>
+          `<div class="gn-case-row">
+            <span class="gn-case-idx">${i + 1}</span>
+            <span class="gn-case-key">${this.esc(f.id)}</span>
+            <span class="gn-case-dot"></span>
+          </div>`
+        ).join("") + `</div>`;
+      }
+    }
+    const disabledBadge = data.disabled ? `<div class="gn-disabled-badge">⛔ DISABLED</div>` : "";
+    return `
+      <div class="gn-title">${this.esc(data.id || fallbackId)}</div>
+      <div class="gn-type">${typeLabel}</div>
+      ${disabledBadge}
+      ${agentLine}
+      ${signalLine}
+      ${casesLine}
+      ${factsLine}
+    `;
   }
 
   private esc(s: string): string {

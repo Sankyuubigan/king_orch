@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager, State, Emitter};
+use tauri::{AppHandle, State, Emitter};
 
 use crate::domain;
 use crate::infra::{self, ChatMessage, ChatAttachment, ModelParams, SubCall};
@@ -36,44 +36,21 @@ pub struct ChatResponse {
     messages: Vec<ChatMessage>,
 }
 
-fn find_agents_dir(app: &AppHandle) -> std::path::PathBuf {
-    let exe_dir = app.path().executable_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    for dir in [
-        exe_dir.join("agents"),
-        resource_dir.join("agents"),
-        std::path::PathBuf::from("agents"),
-        exe_dir.join("..").join("..").join("agents"),
-    ] {
-        if dir.exists() {
-            return dir;
-        }
-    }
-    let default = exe_dir.join("agents");
-    let _ = std::fs::create_dir_all(&default);
-    default
-}
 
-fn find_mcp_servers_dir(app: &AppHandle) -> std::path::PathBuf {
-    let exe_dir = app.path().executable_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    for dir in [
-        exe_dir.join("mcp_servers"),
-        resource_dir.join("mcp_servers"),
-        std::path::PathBuf::from("src-tauri").join("mcp_servers"),
-        exe_dir.join("..").join("..").join("src-tauri").join("mcp_servers"),
-    ] {
-        if dir.exists() {
-            return dir;
-        }
-    }
-    resource_dir.join("mcp_servers")
-}
 
 fn parse_thought_from_log(msg: &str) -> Option<(String, String, f32)> {
     let rest = msg.strip_prefix("💭 Мысль ")?;
-    let paren_pos = rest.find(" (")?;
-    let agent_name = rest[..paren_pos].to_string();
+
+    // Extract depth marker: "Name [d=N] (action) [⏱time]: thought"
+    let d_start = rest.find(" [d=")?;
+    let agent_name = rest[..d_start].to_string();
+    let after_d = &rest[d_start + 4..];
+    let d_end = after_d.find(']')?;
+    let depth: usize = after_d[..d_end].parse().ok()?;
+
+    // Only primary agents (depth=0) emit agent_thought events
+    if depth != 0 { return None; }
+
     let time_sec = rest.rfind("[⏱").and_then(|start| {
         let after = &rest[start + 4..];
         let end = after.find("с]")?;
@@ -107,8 +84,8 @@ pub async fn chat_request(
     state.cancel_flag.store(false, Ordering::SeqCst);
     let cancel_flag = state.cancel_flag.clone();
 
-    let agents_dir = find_agents_dir(&app);
-    let mcp_servers_dir = find_mcp_servers_dir(&app);
+    let agents_dir = infra::find_agents_dir(&app);
+    let mcp_servers_dir = infra::find_mcp_servers_dir(&app);
 
     let app_log = app.clone();
     let log_cb = move |msg: String| {

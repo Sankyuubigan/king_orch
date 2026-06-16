@@ -92,23 +92,20 @@ if (Parser && !useFallback) {
 }
 if (!useFallback && Object.keys(grammars).length === 0) useFallback = true;
 
-// ============================================
-// MCP PROTOCOL (async)
-// ============================================
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: false });
-rl.on('line', async (line) => {
-    try { await handleRequest(JSON.parse(line)); } catch(e) { log(`Request error: ${e.message}`); }
-});
-function send(id, result) { console.log(JSON.stringify({ jsonrpc: "2.0", id, result })); }
-async function handleRequest(req) {
-    const { id, method, params } = req;
-    if (method === 'initialize') send(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "ast-map-mcp", version: "3.0.0" } });
-    else if (method === 'tools/list') send(id, { tools: [{ name: "generate_and_save_ast", description: "Полная карта: дерево файлов с токенами + AST функций. Уважает .gitignore, точный подсчёт токенов (@huggingface/transformers).", inputSchema: { type: "object", properties: { target_path: { type: "string", description: "Путь к папке проекта" }, tokenizer_model: { type: "string", description: "Модель токенизатора HuggingFace (по умолчанию: Xenova/Meta-Llama-3-8B-Instruct). Примеры: Xenova/gpt-4, Xenova/Qwen1.5-7B-Chat" } }, required: ["target_path"] } }] });
-    else if (method === 'tools/call' && params.name === 'generate_and_save_ast') {
-        try { send(id, { content: [{ type: "text", text: await processPathAndSave(params.arguments.target_path, params.arguments.tokenizer_model) }] }); }
-        catch (e) { send(id, { content: [{ type: "text", text: `❌ ${e.message}` }] }); }
+const { createMcpServer } = require('./mcp_base.cjs');
+
+createMcpServer({
+    name: "ast-map-mcp",
+    version: "3.0.0",
+    tools: [{ 
+        name: "generate_and_save_ast", 
+        description: "Полная карта: дерево файлов с токенами + AST функций.", 
+        inputSchema: { type: "object", properties: { target_path: { type: "string" }, tokenizer_model: { type: "string" } }, required: ["target_path"] } 
+    }],
+    handlers: {
+        generate_and_save_ast: async (args) => await processPathAndSave(args.target_path, args.tokenizer_model)
     }
-}
+});
 
 // ============================================
 // ПАРСЕРЫ КОДА

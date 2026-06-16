@@ -10,9 +10,9 @@ mcp_servers: ["markdown_section_reader"]
 Вам доступны Абстрактные разрывы психологических парадоксов в базе знаний.
 
 ШАГ 1 — Получи тип паттерна от специалиста
-Сначала запроси отчёт у pattern_finder_by_double_bind через инструмент batch_get_agent_report:
+Сначала запроси отчёт у pattern_finder_by_floors через инструмент batch_get_agent_report:
 ```json
-{"thought": "...", "tool": "batch_get_agent_report", "arguments": {"queries": [{"author": "pattern_finder_by_double_bind", "namespace": "main"}]}}
+{"thought": "...", "tool": "batch_get_agent_report", "arguments": {"queries": [{"author": "pattern_finder_by_floors", "namespace": "main"}]}}
 ```
 Из ответа возьми номер типа (паттерна). Не делай свой анализ — используй готовый результат.
 

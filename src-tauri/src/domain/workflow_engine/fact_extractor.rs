@@ -128,10 +128,15 @@ fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], user_message: &st
         prompt.push_str(&format!("\n\nСигналы сессии (используй для выбора фазы):\n{}", signals));
     }
 
-    prompt.push_str("\n\nФормат ответа (ТОЛЬКО JSON, без пояснений):\n{\"fact_id\": true, \"fact_id2\": false");
-    if !phases_list.is_empty() {
-        prompt.push_str(", \"phase\": \"название_фазы\"");
+    prompt.push_str("\n\nФормат ответа (ТОЛЬКО JSON, без пояснений):\n{");
+    let mut keys = Vec::new();
+    for f in facts {
+        keys.push(format!("\"{}\": boolean", f.id));
     }
+    if !phases.is_empty() {
+        keys.push("\"phase\": \"название_фазы\"".to_string());
+    }
+    prompt.push_str(&keys.join(", "));
     prompt.push_str("}\n\nСообщение пользователя:\n");
     prompt.push_str(user_message);
     prompt.push_str("\n\nОтветь ТОЛЬКО JSON, без пояснений.");

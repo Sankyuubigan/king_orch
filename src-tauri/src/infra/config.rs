@@ -116,6 +116,40 @@ pub struct CatalogEntry {
     pub default_params: ModelParams,
 }
 
+pub fn find_agents_dir(app: &AppHandle) -> PathBuf {
+    let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
+    for dir in [
+        exe_dir.join("agents"),
+        resource_dir.join("agents"),
+        PathBuf::from("agents"),
+        exe_dir.join("..").join("..").join("agents"),
+    ] {
+        if dir.exists() {
+            return dir;
+        }
+    }
+    let default = exe_dir.join("agents");
+    let _ = fs::create_dir_all(&default);
+    default
+}
+
+pub fn find_mcp_servers_dir(app: &AppHandle) -> PathBuf {
+    let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
+    for dir in [
+        exe_dir.join("mcp_servers"),
+        resource_dir.join("mcp_servers"),
+        PathBuf::from("src-tauri").join("mcp_servers"),
+        exe_dir.join("..").join("..").join("src-tauri").join("mcp_servers"),
+    ] {
+        if dir.exists() {
+            return dir;
+        }
+    }
+    resource_dir.join("mcp_servers")
+}
+
 pub fn load_catalog(app: &AppHandle) -> Vec<CatalogEntry> {
     let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
     let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));

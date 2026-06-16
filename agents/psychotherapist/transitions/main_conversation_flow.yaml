@@ -22,7 +22,7 @@ nodes:
       - key: data_collection
         to: facts_router
       - key: datamining
-        to: call_destructor_finder
+        to: call_pattern_finder
     default: facts_router
     ui_pos:
       y: 77
@@ -39,8 +39,8 @@ nodes:
         to: call_grounder
     default: call_validator
     ui_pos:
-      y: -373
       x: 406
+      y: -373
   - id: call_curator
     type: llm_worker
     agent: curator
@@ -54,8 +54,8 @@ nodes:
     agent: soma_translator
     task: Пользователь описал боль. Дай ему расшифровку по НГМ.
     ui_pos:
-      x: 813
       y: -515
+      x: 813
   - id: collect_info
     type: llm_worker
     agent: liaison
@@ -63,8 +63,8 @@ nodes:
       Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
     output_type: message
     ui_pos:
-      x: 777
       y: -415
+      x: 777
     disabled: true
   - id: call_grounder
     type: llm_worker
@@ -77,39 +77,39 @@ nodes:
     type: llm_worker
     agent: validator
     ui_pos:
-      y: -184
       x: 820
+      y: -184
   - id: route_validator_signal
     type: signal_router
     signal_name: validator_report
     field: verdict
     cases_priority:
       - key: ДАННЫХ ДОСТАТОЧНО
-        to: call_destructor_finder
+        to: call_pattern_finder
       - key: КРАШ-ТЕСТ НЕОБХОДИМ
         to: call_curator
     ui_pos:
-      x: 1542
       y: -245
+      x: 1542
   - id: call_destructor_finder
     type: llm_worker
     agent: destructor_detector
     ui_pos:
-      x: 1922
-      y: -26
+      y: 95
+      x: 2345
   - id: call_pattern_finder
     type: llm_worker
     agent: pattern_finder_by_floors
     ui_pos:
-      y: -76
-      x: 2302
+      x: 1919
+      y: 19
   - id: call_healer
     type: llm_worker
     agent: neuro_reprogrammer
     output_type: message
     ui_pos:
-      y: 40
-      x: 2624
+      x: 2737
+      y: 66
 
 edges:
   - from: extract_facts
@@ -118,7 +118,7 @@ edges:
     to: call_grounder
   - from: call_validator
     to: route_validator_signal
-  - from: call_destructor_finder
-    to: call_pattern_finder
   - from: call_pattern_finder
+    to: call_destructor_finder
+  - from: call_destructor_finder
     to: call_healer

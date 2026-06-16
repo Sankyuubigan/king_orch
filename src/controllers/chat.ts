@@ -156,12 +156,14 @@ export class ChatController {
     let thoughtsItems: HTMLElement[] = []; let lastAssistantUid: string | undefined;
     for (let i = 0; i < store.chatHistory.length; i++) {
       const msg = store.chatHistory[i]; const uid = store.msgUidList[i];
-      if (msg.type === 'thought') {
-        if (workflowSubcalls) {
+      if (msg.type === 'thought' || msg.type === 'signal') {
+        if (workflowSubcalls && msg.type === 'thought') {
           const match = workflowSubcalls.find((c: any) => c.agent_name === msg.author);
           if (match) thoughtsItems.push(createSubcallElement(match, (c) => this.showSubchat(c)));
         }
-        thoughtsItems.push(createThoughtElement(msg.author || 'Агент', msg.content, msg.time_sec));
+
+        const content = msg.type === 'signal' ? `[Сигнал] ${msg.content}` : msg.content;
+        thoughtsItems.push(createThoughtElement(msg.author || 'Система', content, msg.time_sec));
         continue;
       }
       if (msg.type === 'message' && msg.author && msg.author !== 'user' && msg.author !== 'system' && msg.sub_calls && msg.sub_calls.length > 0) {
@@ -235,7 +237,13 @@ export class ChatController {
         const oldHistory = newMessages.slice(0, preSendLength);
         const userMsg = newMessages.slice(preSendLength, preSendLength + 1);
         const afterUserMsg = newMessages.slice(preSendLength + 1);
+        
+        const oldUids = store.msgUidList.slice(0, preSendLength + 1);
+        const thoughtUids = store.msgUidList.slice(preSendLength + 1); 
+        const newUids = afterUserMsg.map(() => store.nextUid());
+        
         store.chatHistory = [...oldHistory, ...userMsg, ...thisRoundThoughts, ...afterUserMsg];
+        store.msgUidList = [...oldUids, ...thoughtUids, ...newUids];
       }
       const agentUid = store.nextUid(); store.msgUidList.push(agentUid);
       const hasRT = response.sub_calls && response.sub_calls.some((c: any) => store.realtimeSubcallKeys.has(`${c.agent_name}:${c.time_sec.toFixed(2)}`));
@@ -246,8 +254,18 @@ export class ChatController {
       }
       await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
     } catch (error) {
-      if (String(error).includes("Отменено") || String(error).includes("Прервано")) this.appendMessage('system', '⚠️ Прервано.');
-      else { showToast(`Ошибка: ${error}`, "error"); }
+      if (String(error).includes("Отменено") || String(error).includes("Прервано")) {
+          store.chatHistory.push({ type: "message", author: "system", content: "⚠️ Прервано." });
+          store.msgUidList.push(store.nextUid());
+      } else {
+          showToast(`Ошибка: ${error}`, "error");
+          store.chatHistory.push({ type: "message", author: "system", content: `⚠️ Ошибка: ${error}` });
+          store.msgUidList.push(store.nextUid());
+      }
+      this.renderChatFromHistory();
+      if (store.currentSessionId) {
+        await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
+      }
     } finally { this.setProcessingState(false); }
   }
 
@@ -396,7 +414,6 @@ export class ChatController {
       this.scrollToBottomIfNearEnd(this.el.chatHistory);
       store.chatHistory.push({ type: "thought", content: payload.thought, author: payload.author, time_sec: payload.time_sec });
       store.msgUidList.push(store.nextUid());
-      if (store.currentSessionId) saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
     });
   }
 

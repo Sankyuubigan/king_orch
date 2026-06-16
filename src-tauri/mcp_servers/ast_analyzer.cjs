@@ -19,68 +19,34 @@ const nmFound = findNm();
 if (nmFound && !module.paths.includes(nmFound)) module.paths.unshift(nmFound);
 if (!module.paths.includes(path.resolve(process.cwd(), 'node_modules'))) module.paths.push(path.resolve(process.cwd(), 'node_modules'));
 
-// === MCP Protocol ===
-const rl = readline.createInterface({ input: process.stdin, output: process.stdout, terminal: false });
-rl.on('line', async (line) => {
-    try { await handleRequest(JSON.parse(line)); } catch(e) { log(`Error: ${e.message}`); }
-});
-function send(id, result) { console.log(JSON.stringify({ jsonrpc: "2.0", id, result })); }
+const { createMcpServer } = require('./mcp_base.cjs');
 
-async function handleRequest(req) {
-    const { id, method, params } = req;
-    if (method === 'initialize') {
-        send(id, { protocolVersion: "2024-11-05", capabilities: { tools: {} }, serverInfo: { name: "ast-analyzer-mcp", version: "1.0.0" } });
-    } else if (method === 'tools/list') {
-        send(id, { tools: [
-            {
-                name: "search_code",
-                description: "Поиск кода по ключевым словам с определением функции-контейнера и окружающим контекстом. Ищет по всем файлам проекта.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        target_path: { type: "string", description: "Путь к папке проекта" },
-                        query: { type: "string", description: "Ключевые слова через пробел (например: delete session error)" }
-                    },
-                    required: ["target_path", "query"]
-                }
-            },
-            {
-                name: "analyze_file",
-                description: "Глубокий анализ файла: импорты, функции, граф вызовов, обработка ошибок, подозрительные паттерны (unwrap, пустой catch, и т.д.)",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        file_path: { type: "string", description: "Абсолютный путь к файлу для анализа" }
-                    },
-                    required: ["file_path"]
-                }
-            },
-            {
-                name: "trace_function",
-                description: "Трассировка функции: где определена, кто её вызывает, что она вызывает сама. Помогает проследить цепочку вызовов до бага.",
-                inputSchema: {
-                    type: "object",
-                    properties: {
-                        target_path: { type: "string", description: "Путь к папке проекта" },
-                        function_name: { type: "string", description: "Имя функции для трассировки" }
-                    },
-                    required: ["target_path", "function_name"]
-                }
-            }
-        ] });
-    } else if (method === 'tools/call') {
-        try {
-            let result;
-            if (params.name === 'search_code') result = searchCode(params.arguments.target_path, params.arguments.query);
-            else if (params.name === 'analyze_file') result = analyzeFile(params.arguments.file_path);
-            else if (params.name === 'trace_function') result = traceFunction(params.arguments.target_path, params.arguments.function_name);
-            else result = `Неизвестный инструмент: ${params.name}`;
-            send(id, { content: [{ type: "text", text: result }] });
-        } catch(e) {
-            send(id, { content: [{ type: "text", text: `❌ ${e.message}` }] });
+createMcpServer({
+    name: "ast-analyzer-mcp",
+    version: "1.0.0",
+    tools: [
+        {
+            name: "search_code",
+            description: "Поиск кода по ключевым словам с определением функции-контейнера и окружающим контекстом. Ищет по всем файлам проекта.",
+            inputSchema: { type: "object", properties: { target_path: { type: "string" }, query: { type: "string" } }, required: ["target_path", "query"] }
+        },
+        {
+            name: "analyze_file",
+            description: "Глубокий анализ файла: импорты, функции, граф вызовов, обработка ошибок, подозрительные паттерны",
+            inputSchema: { type: "object", properties: { file_path: { type: "string" } }, required: ["file_path"] }
+        },
+        {
+            name: "trace_function",
+            description: "Трассировка функции: где определена, кто её вызывает, что она вызывает сама.",
+            inputSchema: { type: "object", properties: { target_path: { type: "string" }, function_name: { type: "string" } }, required: ["target_path", "function_name"] }
         }
+    ],
+    handlers: {
+        search_code: (args) => searchCode(args.target_path, args.query),
+        analyze_file: (args) => analyzeFile(args.file_path),
+        trace_function: (args) => traceFunction(args.target_path, args.function_name)
     }
-}
+});
 
 // === Gitignore ===
 function loadGitignore(rootDir) {

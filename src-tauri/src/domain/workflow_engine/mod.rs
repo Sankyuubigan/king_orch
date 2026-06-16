@@ -124,11 +124,17 @@ where
         ];
         (self.log_cb)("[direct] LLM вызов (fact_extractor)...".to_string());
         let start = std::time::Instant::now();
+        
+        let mut params = self.model_params.clone();
+        params.temperature = 0.0;
+        params.top_p = 1.0;
+        params.min_p = 0.0;
+
         let result = self.engine
             .generate_chat(
                 &msgs,
                 self.max_gen_tokens,
-                self.model_params,
+                &params,
                 self.format_type,
                 self.cancel_flag.clone(),
                 |_, _| {},

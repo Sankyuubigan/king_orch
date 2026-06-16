@@ -169,7 +169,7 @@ fn skip_gguf_value(data: &[u8], mut offset: usize, val_type: u32) -> Option<usiz
     }
 }
 
-pub fn extract_string_from_gguf(path: &str, target_key: &str) -> Option<String> {
+fn find_gguf_value(path: &str, target_key: &str, expected_type: u32) -> Option<Vec<u8>> {
     let data = read_gguf_header(path)?;
     let kv_count = u64::from_le_bytes(data[16..24].try_into().unwrap());
     let mut offset = 24;
@@ -183,59 +183,39 @@ pub fn extract_string_from_gguf(path: &str, target_key: &str) -> Option<String> 
         if offset + 4 > data.len() { break; }
         let val_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
         offset += 4;
-        if key == target_key && val_type == 8 {
-            if offset + 8 > data.len() { break; }
-            let val_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
-            offset += 8;
-            if offset + val_len > data.len() { break; }
-            return String::from_utf8(data[offset..offset+val_len].to_vec()).ok();
-        } else { offset = skip_gguf_value(&data, offset, val_type)?; }
+
+        if key == target_key && val_type == expected_type {
+            match val_type {
+                4 | 6 => {
+                    if offset + 4 > data.len() { break; }
+                    return Some(data[offset..offset+4].to_vec());
+                },
+                8 => {
+                    if offset + 8 > data.len() { break; }
+                    let val_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
+                    offset += 8;
+                    if offset + val_len > data.len() { break; }
+                    return Some(data[offset..offset+val_len].to_vec());
+                },
+                _ => return None,
+            }
+        } else {
+            offset = skip_gguf_value(&data, offset, val_type)?;
+        }
     }
     None
+}
+
+pub fn extract_string_from_gguf(path: &str, target_key: &str) -> Option<String> {
+    String::from_utf8(find_gguf_value(path, target_key, 8)?).ok()
 }
 
 pub fn extract_f32_from_gguf(path: &str, target_key: &str) -> Option<f32> {
-    let data = read_gguf_header(path)?;
-    let kv_count = u64::from_le_bytes(data[16..24].try_into().unwrap());
-    let mut offset = 24;
-    for _ in 0..kv_count {
-        if offset + 8 > data.len() { break; }
-        let key_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
-        offset += 8;
-        if offset + key_len > data.len() { break; }
-        let key = String::from_utf8_lossy(&data[offset..offset+key_len]);
-        offset += key_len;
-        if offset + 4 > data.len() { break; }
-        let val_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
-        offset += 4;
-        if key == target_key && val_type == 6 {
-            if offset + 4 > data.len() { break; }
-            return Some(f32::from_le_bytes(data[offset..offset+4].try_into().unwrap()));
-        } else { offset = skip_gguf_value(&data, offset, val_type)?; }
-    }
-    None
+    Some(f32::from_le_bytes(find_gguf_value(path, target_key, 6)?.try_into().unwrap()))
 }
 
 pub fn extract_u32_from_gguf(path: &str, target_key: &str) -> Option<u32> {
-    let data = read_gguf_header(path)?;
-    let kv_count = u64::from_le_bytes(data[16..24].try_into().unwrap());
-    let mut offset = 24;
-    for _ in 0..kv_count {
-        if offset + 8 > data.len() { break; }
-        let key_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
-        offset += 8;
-        if offset + key_len > data.len() { break; }
-        let key = String::from_utf8_lossy(&data[offset..offset+key_len]);
-        offset += key_len;
-        if offset + 4 > data.len() { break; }
-        let val_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
-        offset += 4;
-        if key == target_key && val_type == 4 {
-            if offset + 4 > data.len() { break; }
-            return Some(u32::from_le_bytes(data[offset..offset+4].try_into().unwrap()));
-        } else { offset = skip_gguf_value(&data, offset, val_type)?; }
-    }
-    None
+    Some(u32::from_le_bytes(find_gguf_value(path, target_key, 4)?.try_into().unwrap()))
 }
 
 fn render_jinja_template(template_str: &str, messages: &[ChatMessage]) -> Result<String, String> {
@@ -387,7 +367,10 @@ impl LlamaEngine {
         let mut stop_reason = "MAX_TOKENS";
 
         while n_cur < self.n_ctx as i32 && generated_tokens < max_tokens {
-            if cancel_flag.load(Ordering::SeqCst) { return Err("Прервано пользователем".to_string()); }
+            if cancel_flag.load(Ordering::SeqCst) {
+                stop_reason = "CANCELLED";
+                break;
+            }
 
             let candidates_array = ctx.candidates_ith(batch.n_tokens() - 1);
             let candidates = LlamaTokenDataArray::from_iter(candidates_array, false);
@@ -619,6 +602,7 @@ impl LlamaEngine {
         let mut generated_tokens = 0;
         let mut result_text = String::new();
         let mut past_tokens: Vec<llama_cpp_2::token::LlamaToken> = Vec::new();
+        let mut stop_reason = "MAX_TOKENS";
 
         let mut stop_words = vec![
             "<|im_end|>", "<end_of_turn>", "</s>", "<|eot_id|>",
@@ -635,7 +619,10 @@ impl LlamaEngine {
         }
 
         while n_cur < self.n_ctx as i32 && generated_tokens < max_tokens as usize {
-            if cancel_flag.load(Ordering::SeqCst) { return Err("Прервано пользователем".to_string()); }
+            if cancel_flag.load(Ordering::SeqCst) {
+                stop_reason = "CANCELLED";
+                break;
+            }
 
             let candidates_array = ctx.candidates_ith(0);
             let candidates = LlamaTokenDataArray::from_iter(candidates_array, false);
