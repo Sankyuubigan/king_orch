@@ -2,6 +2,7 @@
 name: Therapist Curator
 description: Психотерапевт
 destiny: Получить от юзера минимальные необходимые данные для начала анализа
+visible: false
 tools:
   write: false
   bash: false
