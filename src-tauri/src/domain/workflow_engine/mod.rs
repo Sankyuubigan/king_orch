@@ -183,10 +183,24 @@ where
             node.id, node.node_type
         ));
 
-        let result = nodes::execute_node(node, workflow, context, runner)?;
+        let result = if node.disabled {
+            (runner.log_cb)(format!(
+                "[workflow] Узел '{}' отключён (disabled), пропускаем",
+                node.id
+            ));
+            nodes::NodeResult {
+                output: serde_json::Value::Null,
+                next_node: None,
+                next_nodes: vec![],
+            }
+        } else {
+            nodes::execute_node(node, workflow, context, runner)?
+        };
 
-        context.node_outputs.insert(node.id.clone(), result.output.clone());
-        last_node_output = Some(result.output.clone());
+        if !node.disabled {
+            context.node_outputs.insert(node.id.clone(), result.output.clone());
+            last_node_output = Some(result.output.clone());
+        }
 
         // Строим новый порядок очереди: [next_node, ...next_nodes, ...остаток очереди]
         let next = find_next_node(&node_id, &workflow.edges, &result);

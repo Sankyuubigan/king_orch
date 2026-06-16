@@ -32,6 +32,7 @@ interface GraphNodeDef {
   ui_pos?: { x: number; y: number };
   signal_name?: string;
   field?: string;
+  disabled?: boolean;
 }
 
 interface GraphEdgeDef {
@@ -113,6 +114,7 @@ export class GraphController {
   private multiDragRaf: number | null = null;
   private multiDragInitial: Map<string, { x: number; y: number }> | null = null;
   private multiDragPrimary: string | null = null;
+  private ctxMenu: HTMLDivElement | null = null;
 
   constructor(el: GraphElements) {
     this.el = el;
@@ -144,6 +146,13 @@ export class GraphController {
       setTimeout(() => this.enableReverseConnection(id), 0);
     });
 
+    this.editor.on("import", () => {
+      if (!this.editor) return;
+      for (const id of Object.keys(this.editor.drawflow.drawflow.Home.data)) {
+        this.alignOutputsWithCases(id);
+      }
+    });
+
     this.editor.on("click", () => {
       this.hideSidebar();
     });
@@ -159,6 +168,7 @@ export class GraphController {
     });
 
     this.setupCanvasInteraction();
+    this.setupContextMenu();
   }
 
   // ─── Селекторное выделение (LMB box selection) + RMB pan + multi-drag ───
@@ -369,6 +379,79 @@ export class GraphController {
     this.selectStart = null;
   }
 
+  // ─── Контекстное меню (ПКМ) на нодах ───
+
+  private setupContextMenu(): void {
+    // Создаём элемент меню
+    this.ctxMenu = document.createElement('div');
+    this.ctxMenu.className = 'graph-context-menu';
+    document.body.appendChild(this.ctxMenu);
+
+    // Закрытие по клику вне меню
+    document.addEventListener('mousedown', (e) => {
+      if (this.ctxMenu && !this.ctxMenu.contains(e.target as Node)) {
+        this.ctxMenu.classList.remove('open');
+      }
+    });
+
+    // Закрытие по Escape
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && this.ctxMenu) {
+        this.ctxMenu.classList.remove('open');
+      }
+    });
+
+    // ПКМ на холсте графа
+    this.el.graphContainer.addEventListener('contextmenu', (e) => {
+      const nodeEl = (e.target as HTMLElement).closest('.drawflow-node') as HTMLElement;
+      if (!nodeEl) {
+        // Клик вне ноды — закрываем меню
+        if (this.ctxMenu) this.ctxMenu.classList.remove('open');
+        return;
+      }
+      e.preventDefault();
+      e.stopPropagation();
+
+      const nodeId = nodeEl.id.slice(5); // "node-xxx" → "xxx"
+
+      const dn = this.editor?.drawflow.drawflow.Home.data[nodeId];
+      const isDisabled = dn?.data?.disabled ? true : false;
+
+      this.ctxMenu!.innerHTML = `
+        <div class="ctx-item" data-action="toggle-disabled">
+          <span class="ctx-icon">${isDisabled ? "✅" : "⛔"}</span>
+          ${isDisabled ? "Включить ноду" : "Отключить ноду"}
+        </div>
+      `;
+
+      // Позиционируем меню
+      this.ctxMenu!.style.left = Math.min(e.clientX, window.innerWidth - 200) + 'px';
+      this.ctxMenu!.style.top = Math.min(e.clientY, window.innerHeight - 100) + 'px';
+      this.ctxMenu!.classList.add('open');
+
+      // Обработчик клика по пункту меню
+      this.ctxMenu!.querySelector('[data-action="toggle-disabled"]')?.addEventListener('click', () => {
+        this.toggleNodeDisabled(nodeId);
+        this.ctxMenu?.classList.remove('open');
+      });
+    });
+  }
+
+  private toggleNodeDisabled(nodeId: string): void {
+    if (!this.editor) return;
+    const dn = this.editor.drawflow.drawflow.Home.data[nodeId];
+    if (!dn) return;
+    dn.data.disabled = !dn.data.disabled || undefined;
+    this.updateNodeHtml(nodeId);
+    // Обновляем сайдбар, если он открыт для этой ноды
+    if (this.el.graphSidebar.classList.contains('open')) {
+      const titleEl = this.el.graphDetailTitle;
+      if (titleEl.textContent?.includes(nodeId)) {
+        this.showNodeEditor(nodeId);
+      }
+    }
+  }
+
   // ─── Системный диалог открытия ───
 
   private async handleOpen(): Promise<void> {
@@ -448,7 +531,11 @@ export class GraphController {
           const labels = this.getSwitchCaseKeys(node);
           if (labels.length > 0) {
             casesLine = `<div class="gn-cases">` + labels.map((key, i) =>
-              `<div class="gn-case">${i + 1}: ${this.esc(key)}</div>`
+              `<div class="gn-case-row">
+                <span class="gn-case-idx">${i + 1}</span>
+                <span class="gn-case-key">${this.esc(key)}</span>
+                <span class="gn-case-dot"></span>
+              </div>`
             ).join("") + `</div>`;
           }
         }
@@ -457,24 +544,33 @@ export class GraphController {
           const facts = wf.config?.facts as Array<{ id: string }> | undefined;
           if (facts && facts.length > 0) {
             factsLine = `<div class="gn-cases">` + facts.map((f, i) =>
-              `<div class="gn-case">${i + 1}: ${this.esc(f.id)}</div>`
+              `<div class="gn-case-row">
+                <span class="gn-case-idx">${i + 1}</span>
+                <span class="gn-case-key">${this.esc(f.id)}</span>
+                <span class="gn-case-dot"></span>
+              </div>`
             ).join("") + `</div>`;
           }
         }
+        const disabledBadge = node.disabled ? `<div class="gn-disabled-badge">⛔ DISABLED</div>` : "";
         const html = `
           <div class="gn-title">${this.esc(node.id)}</div>
           <div class="gn-type">${typeLabel}</div>
+          ${disabledBadge}
           ${agentLine}
           ${signalLine}
           ${casesLine}
           ${factsLine}
         `;
 
+        let nodeClass = isDynamicNode(node.type) ? "dynamic-node" : "";
+        if (node.disabled) nodeClass += " node-disabled";
+
         nodesData[node.id] = {
           id: node.id,
           name: node.id,
           data: JSON.parse(JSON.stringify(node)),
-          class: "",
+          class: nodeClass,
           html,
           typenode: false,
           inputs,
@@ -600,6 +696,8 @@ export class GraphController {
     const color = NODE_COLORS[data.type] || "#666";
     const typeLabel = NODE_LABELS[data.type] || data.type;
 
+    const isDisabled = !!data.disabled;
+
     let html = `<div class="graph-detail-section">
       <div class="detail-label">ID ноды</div>
       <input type="text" id="ge-node-id" class="ge-input" value="${this.esc(data.id || nodeId)}" />
@@ -607,6 +705,14 @@ export class GraphController {
     <div class="graph-detail-section">
       <div class="detail-label">Тип</div>
       <div class="detail-value" style="border-left:4px solid ${color};padding-left:8px;">${typeLabel}</div>
+    </div>
+    <div class="graph-detail-section ge-disabled-row">
+      <div class="detail-label">Состояние</div>
+      <label class="ge-toggle">
+        <input type="checkbox" id="ge-disabled" ${isDisabled ? "checked" : ""} />
+        <span class="ge-toggle-slider"></span>
+        <span class="ge-toggle-label">${isDisabled ? "⛔ Отключена" : "✅ Включена"}</span>
+      </label>
     </div>`;
 
     if (data.type === "llm_worker") {
@@ -713,6 +819,18 @@ export class GraphController {
         this.editor!.drawflow.drawflow.Home.data[nodeId].data.id = nodeIdInput.value;
         this.updateNodeHtml(nodeId);
         this.el.graphDetailTitle.textContent = `✏️ ${nodeIdInput.value}`;
+      });
+    }
+
+    const disabledToggle = document.getElementById("ge-disabled") as HTMLInputElement;
+    if (disabledToggle) {
+      disabledToggle.addEventListener("change", () => {
+        const isNowDisabled = disabledToggle.checked;
+        data.disabled = isNowDisabled || undefined;
+        // обновляем текст рядом с переключателем
+        const label = disabledToggle.parentElement?.querySelector('.ge-toggle-label');
+        if (label) label.textContent = isNowDisabled ? "⛔ Отключена" : "✅ Включена";
+        this.updateNodeHtml(nodeId);
       });
     }
 
@@ -839,7 +957,7 @@ export class GraphController {
       id,
       name: id,
       data: { id, type },
-      class: "",
+      class: isDynamicNode(type) ? "dynamic-node" : "",
       html: "",
       typenode: false,
       inputs,
@@ -887,7 +1005,11 @@ export class GraphController {
       const labels = this.getSwitchCaseKeys(data);
       if (labels.length > 0) {
         casesLine = `<div class="gn-cases">` + labels.map((key, i) =>
-          `<div class="gn-case">${i + 1}: ${this.esc(key)}</div>`
+          `<div class="gn-case-row">
+            <span class="gn-case-idx">${i + 1}</span>
+            <span class="gn-case-key">${this.esc(key)}</span>
+            <span class="gn-case-dot"></span>
+          </div>`
         ).join("") + `</div>`;
       }
     }
@@ -896,19 +1018,33 @@ export class GraphController {
       const facts = this.currentWorkflowConfig?.facts as Array<{ id: string }> | undefined;
       if (facts && facts.length > 0) {
         factsLine = `<div class="gn-cases">` + facts.map((f, i) =>
-          `<div class="gn-case">${i + 1}: ${this.esc(f.id)}</div>`
+          `<div class="gn-case-row">
+            <span class="gn-case-idx">${i + 1}</span>
+            <span class="gn-case-key">${this.esc(f.id)}</span>
+            <span class="gn-case-dot"></span>
+          </div>`
         ).join("") + `</div>`;
       }
     }
 
+    const disabledBadge = data.disabled ? `<div class="gn-disabled-badge">⛔ DISABLED</div>` : "";
+
     el.innerHTML = `
       <div class="gn-title">${this.esc(data.id || nodeId)}</div>
       <div class="gn-type">${typeLabel}</div>
+      ${disabledBadge}
       ${agentLine}
       ${signalLine}
       ${casesLine}
       ${factsLine}
     `;
+
+    const nodeEl = el.closest('.drawflow-node') as HTMLElement;
+    if (nodeEl) {
+      nodeEl.classList.toggle('node-disabled', !!data.disabled);
+    }
+
+    this.alignOutputsWithCases(nodeId);
   }
 
   private rebuildSwitchOutputs(nodeId: string): void {
@@ -1095,6 +1231,48 @@ export class GraphController {
       <div class="detail-label">Default (цель, если не совпало)</div>
       <input type="text" id="ge-default" class="ge-input" value="${this.esc(data.default || "")}" placeholder="node id" />
     </div>`;
+  }
+
+  // ─── Выравнивание выходов напротив строк кейсов ───
+
+  private alignOutputsWithCases(nodeId: string): void {
+    if (!this.editor) return;
+    const dn = this.editor.drawflow.drawflow.Home.data[nodeId];
+    if (!dn || !isDynamicNode(dn.data.type)) return;
+    const nodeEl = document.getElementById('node-' + nodeId);
+    if (!nodeEl) return;
+    const caseRows = nodeEl.querySelectorAll('.gn-case-row');
+    if (caseRows.length === 0) return;
+    const outputsContainer = nodeEl.querySelector('.outputs') as HTMLElement;
+    if (!outputsContainer) return;
+    const outputs = nodeEl.querySelectorAll('.output') as NodeListOf<HTMLElement>;
+    if (outputs.length === 0) return;
+
+    // Контейнер выходов — абсолютно, не участвует в flex-раскладке
+    outputsContainer.style.position = 'absolute';
+    outputsContainer.style.right = '0';
+    outputsContainer.style.top = '0';
+    outputsContainer.style.height = '100%';
+    outputsContainer.style.width = '20px';
+    outputsContainer.style.pointerEvents = 'none';
+    outputsContainer.style.paddingTop = '0';
+
+    // Каждый выход — абсолютно напротив своей строки кейса
+    const zoom = this.editor.zoom || 1;
+    const nodeRect = nodeEl.getBoundingClientRect();
+    const borderTop = parseFloat(getComputedStyle(nodeEl).borderTopWidth) || 0;
+    for (let i = 0; i < Math.min(caseRows.length, outputs.length); i++) {
+      const row = caseRows[i] as HTMLElement;
+      const out = outputs[i] as HTMLElement;
+      const rowRect = row.getBoundingClientRect();
+      const outHeight = out.offsetHeight || 18;
+      const rowCenter = (rowRect.top + rowRect.height / 2 - nodeRect.top - borderTop) / zoom;
+      out.style.position = 'absolute';
+      out.style.top = (rowCenter - outHeight / 2) + 'px';
+      out.style.right = '-3px';
+      out.style.marginBottom = '0';
+      out.style.pointerEvents = 'auto';
+    }
   }
 
   // ─── Утилиты ───

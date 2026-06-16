@@ -137,7 +137,12 @@ pub struct NodeDef {
     /// Визуальные координаты для редактора графов (x, y)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_pos: Option<HashMap<String, i32>>,
+    /// Нода отключена (не выполняется при активации workflow)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub disabled: bool,
 }
+
+fn is_false(b: &bool) -> bool { !b }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]

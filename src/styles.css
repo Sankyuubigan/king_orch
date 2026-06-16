@@ -412,6 +412,55 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   border-color: #ef535066;
 }
 
+/* ─── Disabled toggle in sidebar ─── */
+.ge-disabled-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+}
+.ge-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.ge-toggle input[type="checkbox"] {
+  display: none;
+}
+.ge-toggle-slider {
+  width: 36px;
+  height: 20px;
+  background: #555;
+  border-radius: 10px;
+  position: relative;
+  transition: background 0.2s;
+  flex-shrink: 0;
+}
+.ge-toggle-slider::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #ccc;
+  transition: transform 0.2s;
+}
+.ge-toggle input:checked + .ge-toggle-slider {
+  background: var(--primary);
+}
+.ge-toggle input:checked + .ge-toggle-slider::after {
+  transform: translateX(16px);
+  background: #fff;
+}
+.ge-toggle-label {
+  font-size: 13px;
+  color: var(--text);
+}
+
 /* ─── Drawflow custom node styles ─── */
 .drawflow-node {
   background: var(--panel-bg) !important;
@@ -469,15 +518,109 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   color: #4caf50;
   margin-top: 2px;
 }
+/* Dynamic node: content starts from top */
+.drawflow-node.dynamic-node {
+  align-items: flex-start !important;
+}
+
+/* Disabled node: dimmed, no pointer events */
+.drawflow-node.node-disabled {
+  opacity: 0.5;
+  filter: grayscale(0.6);
+  border-color: #555 !important;
+}
+.drawflow-node.node-disabled .drawflow_content_node {
+  pointer-events: none;
+}
+.drawflow-node.node-disabled .output,
+.drawflow-node.node-disabled .input {
+  pointer-events: none;
+  background: #555 !important;
+  border-color: #666 !important;
+}
+
+.gn-disabled-badge {
+  font-size: 9px;
+  color: #ef5350;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  margin-top: 2px;
+}
+
+/* ─── Graph context menu ─── */
+.graph-context-menu {
+  position: fixed;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  z-index: 10000;
+  min-width: 180px;
+  padding: 4px;
+  display: none;
+}
+.graph-context-menu.open {
+  display: block;
+}
+.graph-context-menu .ctx-item {
+  padding: 8px 14px;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 13px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.1s;
+}
+.graph-context-menu .ctx-item:hover {
+  background: var(--session-hover);
+}
+.graph-context-menu .ctx-item.danger {
+  color: #ef5350;
+}
+.graph-context-menu .ctx-item .ctx-icon {
+  width: 18px;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+/* Case rows for switch / signal_router */
 .gn-cases {
   margin-top: 4px;
-  text-align: left;
-  font-size: 10px;
-  line-height: 1.6;
 }
-.gn-case {
-  color: #aaa;
-  padding: 0 2px;
+.gn-case-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  padding: 1px 4px;
+  border-bottom: 1px solid rgba(255,255,255,0.04);
+}
+.gn-case-row:last-child {
+  border-bottom: none;
+}
+.gn-case-idx {
+  color: #666;
+  font-size: 10px;
+  min-width: 18px;
+  text-align: right;
+  flex-shrink: 0;
+}
+.gn-case-key {
+  color: #ddd;
+  font-size: 11px;
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gn-case-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #546e7a;
+  flex-shrink: 0;
 }
 
 /* Drawflow connection lines */

@@ -16,6 +16,7 @@
 > ### 2. Запрет на мусор в корне проекта
 > **ЗАПРЕЩЕНО создавать файлы в корне `D:\Projects\king_orch_3\` (кроме `test.bat`, `build.bat`, `release.bat`).**
 > Все временные файлы (логи сборки, тестовый вывод, дампы) — ТОЛЬКО в `test/`.
+> **Тестовые файлы (`.test.ts`) — ТОЛЬКО в `test/`. Запрещено создавать тесты в `src/`.**
 >
 > **История:** агент насрал 14 файлов (`build_out.txt`, `test_out.txt`, `check_out.txt` и т.д.) в корень проекта, засоряя репозиторий.
 >
@@ -229,8 +230,19 @@ npm run build
 
 ### Тесты frontend (vitest)
 ```powershell
-npm test
+npm test            # все тесты
+npm run test:watch  # watch-режим
 ```
+
+#### Правила написания тестов
+
+- **Расположение**: все тесты в `test/*.test.ts` (настроено в `vitest.config.ts`)
+- **Окружение**: `jsdom` (без layout-движка). `getBoundingClientRect()` возвращает нули, `offsetHeight` = 0
+- **Мокание DOM-метрик**: Использовать `vi.spyOn(el, "getBoundingClientRect").mockReturnValue(...)` и `Object.defineProperty(el, "offsetHeight", { value: N })`
+- **Мокание Tauri API**: `vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }))` (см. `src/controllers/chat.test.ts`)
+- **Доступ к private-методам**: через `(ctrl as any).methodName()` или `// @ts-expect-error`
+- **jsdom особенности**: `style.marginBottom = '0'` возвращается как `'0px'`, а не `'0'`
+- **Шаблон**: создать DOM через `document.body.innerHTML = ...`, создать инстанс контроллера, замокать зависимости, вызвать метод, проверить inline-стили/атрибуты (см. `src/controllers/graph.align.test.ts`)
 
 **Правила:**
 - `sccache --start-server` — ОБЯЗАТЕЛЕН перед любой Rust-сборкой; иначе sccache падает с `couldn't connect to server`
