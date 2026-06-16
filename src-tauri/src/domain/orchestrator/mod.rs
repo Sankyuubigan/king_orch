@@ -129,12 +129,13 @@ where
             cancel_flag, 0, &mut all_sub_calls, None, &mcp_servers_dir,
             &mut messages_store, &mut msg_counter,
         )?;
+        let sub_calls_opt = if all_sub_calls.is_empty() { None } else { Some(all_sub_calls.clone()) };
         messages_store.push(ChatMessage {
             id: Some(format!("msg_{}", msg_counter)),
             msg_type: "message".to_string(),
             content: final_res.clone(),
             namespace: None,
-            sub_calls: None,
+            sub_calls: sub_calls_opt,
             author: Some("assistant".to_string()),
         });
         msg_counter += 1;
@@ -495,6 +496,7 @@ where
                 let child_ns = parsed.namespace.as_deref().unwrap_or(current_namespace);
                 log_cb(format!("📞 {} вызывает сабагента: {} (ns: {})", agent.name, subagent.name, child_ns));
 
+                let start_len = all_sub_calls.len();
                 let sub_result = run_agent_node(
                     log_cb.clone(), status_cb.clone(), subcall_cb.clone(),
                     engine, subagent, agents, parsed.content.clone(), vec![],
@@ -504,6 +506,12 @@ where
                     cancel_flag.clone(), depth + 1, all_sub_calls, Some(agent.name.clone()), mcp_servers_dir,
                     messages, msg_counter,
                 )?;
+                let end_len = all_sub_calls.len();
+                let node_sub_calls = if start_len < end_len {
+                    Some(all_sub_calls[start_len..end_len].to_vec())
+                } else {
+                    None
+                };
 
                 // ─── FOLD: ошибка сабагента — мгновенный проброс наверх ───
                 if sub_result.starts_with(AGENT_ERROR_PREFIX) {
@@ -514,7 +522,7 @@ where
                         msg_type: "thought".to_string(),
                         content: sub_result.clone(),
                         namespace: Some(child_ns.to_string()),
-                        sub_calls: None,
+                        sub_calls: node_sub_calls.clone(),
                         author: Some(subagent.id.clone()),
                     };
                     messages.push(err_msg);
@@ -528,7 +536,7 @@ where
                     msg_type: "thought".to_string(),
                     content: sub_result.clone(),
                     namespace: Some(child_ns.to_string()),
-                    sub_calls: None,
+                    sub_calls: node_sub_calls.clone(),
                     author: Some(subagent.id.clone()),
                 };
                 messages.push(msg);

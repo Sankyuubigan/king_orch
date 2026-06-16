@@ -151,19 +151,18 @@ export class ChatController {
     this.el.chatHistory.appendChild(msgEl); this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
   }
 
-  renderChatFromHistory(workflowSubcalls?: any[]) {
+  renderChatFromHistory() {
     this.el.chatHistory.innerHTML = ''; store.activeThoughtsBlock = null;
     let thoughtsItems: HTMLElement[] = []; let lastAssistantUid: string | undefined;
     for (let i = 0; i < store.chatHistory.length; i++) {
       const msg = store.chatHistory[i]; const uid = store.msgUidList[i];
       if (msg.type === 'thought' || msg.type === 'signal') {
-        if (workflowSubcalls && msg.type === 'thought') {
-          const match = workflowSubcalls.find((c: any) => c.agent_name === msg.author);
-          if (match) thoughtsItems.push(createSubcallElement(match, (c) => this.showSubchat(c)));
-        }
-
         const content = msg.type === 'signal' ? `[Сигнал] ${msg.content}` : msg.content;
         thoughtsItems.push(createThoughtElement(msg.author || 'Система', content, msg.time_sec));
+
+        if (msg.sub_calls && msg.sub_calls.length > 0) {
+          msg.sub_calls.forEach((call: any) => thoughtsItems.push(createSubcallElement(call, (c) => this.showSubchat(c))));
+        }
         continue;
       }
       if (msg.type === 'message' && msg.author && msg.author !== 'user' && msg.author !== 'system' && msg.sub_calls && msg.sub_calls.length > 0) {
@@ -250,7 +249,7 @@ export class ChatController {
       if (response.text) {
         this.appendMessage('agent', response.text, displayName, `⏱ ${dur} сек`, response.sub_calls, hasRT, agentUid);
       } else if (newMessages.length > 0) {
-        this.renderChatFromHistory(response.sub_calls);
+        this.renderChatFromHistory();
       }
       await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
     } catch (error) {

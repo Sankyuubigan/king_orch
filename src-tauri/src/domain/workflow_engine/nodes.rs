@@ -83,7 +83,15 @@ where
                 task.chars().take(200).collect::<String>()
             ));
 
+            let start_len = runner.all_sub_calls.len();
             let result = runner.call_agent(agent, &task, &ns, &mut context.messages)?;
+            let end_len = runner.all_sub_calls.len();
+
+            let node_sub_calls = if start_len < end_len {
+                Some(runner.all_sub_calls[start_len..end_len].to_vec())
+            } else {
+                None
+            };
 
             // Тип сохранения: message (в чат юзеру) или thought (внутренний отчёт)
             let msg_type = node.output_type.as_deref().unwrap_or("thought");
@@ -92,7 +100,7 @@ where
                 msg_type: msg_type.to_string(),
                 content: result.clone(),
             namespace: Some(ns),
-            sub_calls: None,
+            sub_calls: node_sub_calls,
             author: Some(agent_id.to_string()),
         };
         context.messages.push(msg);
