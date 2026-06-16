@@ -1,4 +1,3 @@
-use indexmap::IndexMap;
 use serde::{Deserialize, Deserializer, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -51,7 +50,7 @@ pub struct FactDef {
     pub criteria: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PriorityCase {
     pub key: String,
     #[serde(rename = "to")]
@@ -122,8 +121,6 @@ pub struct NodeDef {
     pub signal_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cases: Option<IndexMap<String, String>>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_cases_priority")]
     pub cases_priority: Option<Vec<PriorityCase>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -148,7 +145,6 @@ fn is_false(b: &bool) -> bool { !b }
 #[serde(rename_all = "snake_case")]
 pub enum NodeType {
     LlmWorker,
-    LlmClassifier,
     LlmFactExtractor,
     LlmFreeform,
     SystemCondition,
@@ -346,14 +342,14 @@ mod tests {
         let pr = wf.nodes.iter().find(|n| n.id == "priority_router").unwrap();
         assert_eq!(pr.node_type, NodeType::Switch);
         assert_eq!(pr.switch_field.as_deref(), Some("phase"));
-        assert!(pr.cases.is_some());
+        assert!(pr.cases_priority.is_some());
         assert_eq!(pr.default.as_deref(), Some("facts_router"));
 
         // FACTS_ROUTER с cases_priority
         let fr = wf.nodes.iter().find(|n| n.id == "facts_router").unwrap();
         assert_eq!(fr.node_type, NodeType::Switch);
         assert!(fr.cases_priority.is_some());
-        assert_eq!(fr.cases_priority.as_ref().unwrap().len(), 4);
+        assert_eq!(fr.cases_priority.as_ref().unwrap().len(), 3);
         assert_eq!(fr.default.as_deref(), Some("call_validator"));
 
         // LLM_WORKER с agent + task
@@ -436,7 +432,6 @@ mod tests {
             assert_eq!(n.default, n2.default, "default узла {} изменился", n.id);
             assert_eq!(n.output_type, n2.output_type, "output_type узла {} изменился", n.id);
             assert_eq!(n.cases_priority, n2.cases_priority, "cases_priority узла {} изменился", n.id);
-            assert_eq!(n.cases, n2.cases, "cases узла {} изменился", n.id);
         }
 
         // 6) Проверяем, что нет null/[]/~ мусора

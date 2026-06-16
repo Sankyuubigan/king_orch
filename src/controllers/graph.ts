@@ -564,7 +564,7 @@ export class GraphController {
         `;
 
         let nodeClass = isDynamicNode(node.type) ? "dynamic-node" : "";
-        if (node.disabled) nodeClass += " node-disabled";
+        if (node.disabled) nodeClass = nodeClass ? `${nodeClass} node-disabled` : "node-disabled";
 
         nodesData[node.id] = {
           id: node.id,

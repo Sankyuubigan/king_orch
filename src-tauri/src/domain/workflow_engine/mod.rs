@@ -122,7 +122,9 @@ where
                 author: Some("user".to_string()),
             },
         ];
-        self.engine
+        (self.log_cb)("[direct] LLM вызов (fact_extractor)...".to_string());
+        let start = std::time::Instant::now();
+        let result = self.engine
             .generate_chat(
                 &msgs,
                 self.max_gen_tokens,
@@ -132,7 +134,9 @@ where
                 |_, _| {},
                 self.log_cb.clone(),
             )
-            .map_err(|e| format!("Ошибка LLM: {}", e))
+            .map_err(|e| format!("Ошибка LLM: {}", e));
+        (self.log_cb)(format!("[direct] LLM ответ за {:.1}с", start.elapsed().as_secs_f32()));
+        result
     }
 }
 
@@ -178,6 +182,7 @@ where
             .find(|n| n.id == node_id)
             .ok_or_else(|| format!("Узел '{}' не найден в workflow", node_id))?;
 
+        let node_start = Instant::now();
         (runner.log_cb)(format!(
             "[workflow] Узел: {} (тип: {:?})",
             node.id, node.node_type
@@ -198,6 +203,7 @@ where
         };
 
         if !node.disabled {
+            (runner.log_cb)(format!("[workflow] Узел '{}' выполнен за {:.1}с", node.id, node_start.elapsed().as_secs_f32()));
             context.node_outputs.insert(node.id.clone(), result.output.clone());
             last_node_output = Some(result.output.clone());
         }

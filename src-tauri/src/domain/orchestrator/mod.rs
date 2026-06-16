@@ -312,6 +312,7 @@ where
 
         // ── 3a. LLM GENERATION ──
         let gen_start = Instant::now();
+        log_cb(format!(">>> [{}] LLM вызов #{}, msgs={}, max_gen={}, глубина={}", agent.name, iter, llm_messages.len(), max_gen_tokens, depth));
         let raw_response = if !attachments.is_empty() && engine.is_multimodal() {
             engine.generate_chat_multimodal(
                 &llm_messages, &attachments, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
@@ -326,7 +327,7 @@ where
             )?
         };
 
-        log_cb(format!("⏱ Генерация {}: {:.1}с, сырой ответ {} символов", agent.name, gen_start.elapsed().as_secs_f32(), raw_response.len()));
+        log_cb(format!("<<< [{}] LLM за {:.1}с, ответ {} символов", agent.name, gen_start.elapsed().as_secs_f32(), raw_response.len()));
 
         let response = clean_thought_tags(&raw_response);
         let cleaned_len = response.len();

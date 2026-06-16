@@ -382,6 +382,9 @@ impl LlamaEngine {
             "</start_of_turn>", "<|channel|>"
         ];
         stop_words.extend_from_slice(custom_stop_words);
+        log_cb(format!("🛑 Стоп-слова ({}): {:?}", stop_words.len(), stop_words));
+
+        let mut stop_reason = "MAX_TOKENS";
 
         while n_cur < self.n_ctx as i32 && generated_tokens < max_tokens {
             if cancel_flag.load(Ordering::SeqCst) { return Err("Прервано пользователем".to_string()); }
@@ -442,7 +445,7 @@ impl LlamaEngine {
             let mut new_token = probs.last().map(|(id, _)| *id).unwrap_or_else(|| self.model.token_eos());
             for (id, p) in probs.iter() { cumulative += *p; if r <= cumulative { new_token = *id; break; } }
 
-            if new_token == self.model.token_eos() { break; }
+            if new_token == self.model.token_eos() { stop_reason = "EOS"; break; }
             past_tokens.push(new_token);
 
             if let Ok(bytes) = self.model.token_to_bytes(new_token, Special::Tokenize) {
@@ -450,10 +453,11 @@ impl LlamaEngine {
             }
 
             let mut should_stop = false;
+            let mut matched_word = String::new();
             for word in stop_words.iter() {
-                if result_text.contains(word) { result_text = result_text.replace(word, "").trim().to_string(); should_stop = true; break; }
+                if result_text.contains(word) { matched_word = word.to_string(); result_text = result_text.replace(word, "").trim().to_string(); should_stop = true; break; }
             }
-            if should_stop { break; }
+            if should_stop { log_cb(format!("🛑 Стоп-слово '{}' на токене {}", matched_word, generated_tokens)); stop_reason = "STOP_WORD"; break; }
 
             batch.clear();
             batch.add(new_token, n_cur, &[0], true).map_err(|e| e.to_string())?;
@@ -461,15 +465,19 @@ impl LlamaEngine {
             
             n_cur += 1; generated_tokens += 1;
             if generated_tokens % 20 == 0 {
+                let gen_elapsed_sofar = gen_start.elapsed().as_secs_f64();
+                let speed_sofar = if gen_elapsed_sofar > 0.0 { generated_tokens as f64 / gen_elapsed_sofar } else { 0.0 };
+                let eta = if speed_sofar > 0.0 { (max_tokens - generated_tokens) as f64 / speed_sofar } else { 0.0 };
                 let gen_p = (generated_tokens as f32 / max_tokens as f32) * 50.0;
                 progress_cb(50.0 + gen_p, &format!("Генерация: {} токенов...", generated_tokens));
+                log_cb(format!("🔨 Токен {}/{} ({:.0} tok/s, ETA {:.0}s)", generated_tokens, max_tokens, speed_sofar, eta));
             }
         }
         progress_cb(100.0, &format!("Готово ({} токенов)", generated_tokens));
 
         let gen_elapsed = gen_start.elapsed().as_secs_f64();
         let speed = if gen_elapsed > 0.0 { generated_tokens as f64 / gen_elapsed } else { 0.0 };
-        log_cb(format!("⚙️ Сгенерировано {} токенов за {:.1}с ({:.0} tok/s)", generated_tokens, gen_elapsed, speed));
+        log_cb(format!("⚙️ Сгенерировано {} токенов за {:.1}с ({:.0} tok/s). Причина: {}", generated_tokens, gen_elapsed, speed, stop_reason));
 
         if generated_tokens > 50 {
             let char_count: usize = result_text.chars().count();
@@ -500,8 +508,7 @@ impl LlamaEngine {
     where F: FnMut(f32, &str), L: Fn(String) {
         let mut pf = PromptFormat::from_str(format_type);
         let mut full_prompt = String::new();
-        let mut stop_words: Vec<String> = Vec::new();
-
+        let mut stop_words: Vec<String>;
         if pf == PromptFormat::Auto {
             if let Some(template_str) = extract_string_from_gguf(&self.model_path, "tokenizer.chat_template") {
                 if let Ok(rendered) = render_jinja_template(&template_str, messages) { full_prompt = rendered; }

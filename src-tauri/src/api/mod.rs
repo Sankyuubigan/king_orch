@@ -8,6 +8,7 @@ pub mod agents;
 pub mod chat;
 pub mod graph;
 pub mod test;
+pub mod version;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

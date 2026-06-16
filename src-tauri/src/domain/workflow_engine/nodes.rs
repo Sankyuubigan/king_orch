@@ -25,41 +25,6 @@ where
     C: Fn(&SubCall) + Clone + Send + Sync + 'static,
 {
     match node.node_type {
-        NodeType::LlmClassifier => {
-            let config = workflow
-                .config
-                .as_ref()
-                .cloned()
-                .unwrap_or(WorkflowConfig::default());
-            let input = context.resolve_template(node.input.as_deref().unwrap_or(""));
-            let signals = context.resolve_template("{{ signals }}");
-            let workflow_dir = std::path::Path::new(&workflow.parent_dir);
-            let prompt =
-                super::fact_extractor::build_extractor_prompt(&config, &input, &signals, Some(workflow_dir));
-
-            let llm_response = runner.call_llm_direct(&prompt, &input)?;
-
-            let parsed: serde_json::Value =
-                serde_json::from_str(&llm_response).unwrap_or_else(|_| {
-                    extract_json(&llm_response)
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .unwrap_or_else(|| serde_json::json!({"status": "greeting"}))
-                });
-
-            let status = parsed.get("status").and_then(|v| v.as_str()).unwrap_or("unknown");
-            (runner.log_cb)(format!(
-                "[classifier] Статус: {}, сырой ответ: {}",
-                status,
-                llm_response.chars().take(500).collect::<String>()
-            ));
-
-            Ok(NodeResult {
-                output: parsed,
-                next_node: None,
-            next_nodes: vec![],
-            })
-        }
-
         NodeType::LlmFactExtractor => {
             let config = workflow
                 .config
@@ -407,16 +372,16 @@ where
 
                 if let Some(ref sf) = node.switch_field {
                     let field_val = json_val.get(sf).and_then(|v| v.as_str());
-                    if let Some(ref cases) = node.cases {
-                        if let Some(val) = field_val {
-                            if let Some(target) = cases.get(val) {
+                    if let Some(val) = field_val {
+                        if let Some(ref priority_cases) = node.cases_priority {
+                            if let Some(pc) = priority_cases.iter().find(|pc| pc.key == val) {
                                 (runner.log_cb)(format!(
                                     "[switch] switch_field '{}' = '{}' → {}",
-                                    sf, val, target
+                                    sf, val, pc.to
                                 ));
                                 return Ok(NodeResult {
-                                    output: serde_json::json!({"matched_case": val, "target": target}),
-                                    next_node: Some(target.clone()),
+                                    output: serde_json::json!({"matched_case": val, "target": &pc.to}),
+                                    next_node: Some(pc.to.clone()),
                                     next_nodes: vec![],
                                 });
                             }
@@ -475,7 +440,7 @@ where
                 }
             }
 
-            // Стандартная маршрутизация по input + cases
+            // Стандартная маршрутизация по input
             let input = context.resolve_template(node.input.as_deref().unwrap_or(""));
             let status = serde_json::from_str::<serde_json::Value>(&input)
                 .ok()
@@ -486,14 +451,10 @@ where
                 })
                 .unwrap_or_else(|| input.trim_matches('"').to_string());
 
-            let cases = node
-                .cases
-                .as_ref()
-                .ok_or_else(|| "Switch node без cases".to_string())?;
-            let target = cases
-                .get(&status)
-                .or_else(|| node.default.as_ref())
-                .cloned();
+            let target = node.cases_priority.as_ref()
+                .and_then(|cp| cp.iter().find(|pc| pc.key == status).map(|pc| &pc.to))
+                .cloned()
+                .or_else(|| node.default.clone());
 
             Ok(NodeResult {
                 output: serde_json::json!({"matched_case": status, "target": target}),
@@ -581,11 +542,9 @@ where
                 signal_name, field, matched
             ));
 
-            // Поиск по cases (допускаем оба формата)
-            let target = node.cases.as_ref()
-                .and_then(|c| c.get(matched))
-                .or_else(|| node.cases_priority.as_ref()
-                    .and_then(|cp| cp.iter().find(|pc| pc.key == matched).map(|pc| &pc.to)))
+            // Поиск по cases_priority
+            let target = node.cases_priority.as_ref()
+                .and_then(|cp| cp.iter().find(|pc| pc.key == matched).map(|pc| &pc.to))
                 .cloned()
                 .or_else(|| node.default.clone());
 

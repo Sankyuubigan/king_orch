@@ -25,8 +25,8 @@ nodes:
         to: call_destructor_finder
     default: facts_router
     ui_pos:
-      x: 70
       y: 77
+      x: 70
   - id: facts_router
     type: switch
     input_object: '{{ nodes.extract_facts.output }}'
@@ -35,14 +35,12 @@ nodes:
         to: call_curator
       - key: has_somatic
         to: call_soma_translator
-      - key: not_enough_data
-        to: collect_info
       - key: grounding_dont_exist
         to: call_grounder
     default: call_validator
     ui_pos:
-      x: 407
-      y: -361
+      y: -373
+      x: 406
   - id: call_curator
     type: llm_worker
     agent: curator
@@ -56,8 +54,8 @@ nodes:
     agent: soma_translator
     task: Пользователь описал боль. Дай ему расшифровку по НГМ.
     ui_pos:
-      y: -515
       x: 813
+      y: -515
   - id: collect_info
     type: llm_worker
     agent: liaison
@@ -65,8 +63,9 @@ nodes:
       Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
     output_type: message
     ui_pos:
-      y: -415
       x: 777
+      y: -415
+    disabled: true
   - id: call_grounder
     type: llm_worker
     agent: grounder
@@ -96,21 +95,21 @@ nodes:
     type: llm_worker
     agent: destructor_detector
     ui_pos:
-      y: 55
-      x: 1672
+      x: 1922
+      y: -26
   - id: call_pattern_finder
     type: llm_worker
     agent: pattern_finder_by_floors
     ui_pos:
-      x: 1995
-      y: 171
+      y: -76
+      x: 2302
   - id: call_healer
     type: llm_worker
     agent: neuro_reprogrammer
     output_type: message
     ui_pos:
-      y: 60
-      x: 2330
+      y: 40
+      x: 2624
 
 edges:
   - from: extract_facts

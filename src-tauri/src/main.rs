@@ -52,6 +52,7 @@ fn main() {
             api::test::run_iterative_test,
             api::test::read_test_file,
             api::test::write_test_results,
+            api::version::get_app_version,
             infra::downloader::download_model,
         ])
         .run(tauri::generate_context!())

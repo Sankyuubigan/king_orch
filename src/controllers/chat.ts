@@ -151,12 +151,19 @@ export class ChatController {
     this.el.chatHistory.appendChild(msgEl); this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
   }
 
-  renderChatFromHistory() {
+  renderChatFromHistory(workflowSubcalls?: any[]) {
     this.el.chatHistory.innerHTML = ''; store.activeThoughtsBlock = null;
     let thoughtsItems: HTMLElement[] = []; let lastAssistantUid: string | undefined;
     for (let i = 0; i < store.chatHistory.length; i++) {
       const msg = store.chatHistory[i]; const uid = store.msgUidList[i];
-      if (msg.type === 'thought') { thoughtsItems.push(createThoughtElement(msg.author || 'Агент', msg.content, msg.time_sec)); continue; }
+      if (msg.type === 'thought') {
+        if (workflowSubcalls) {
+          const match = workflowSubcalls.find((c: any) => c.agent_name === msg.author);
+          if (match) thoughtsItems.push(createSubcallElement(match, (c) => this.showSubchat(c)));
+        }
+        thoughtsItems.push(createThoughtElement(msg.author || 'Агент', msg.content, msg.time_sec));
+        continue;
+      }
       if (msg.type === 'message' && msg.author && msg.author !== 'user' && msg.author !== 'system' && msg.sub_calls && msg.sub_calls.length > 0) {
         lastAssistantUid = uid;
         msg.sub_calls.forEach(call => thoughtsItems.push(createSubcallElement(call, (c) => this.showSubchat(c))));
@@ -235,7 +242,7 @@ export class ChatController {
       if (response.text) {
         this.appendMessage('agent', response.text, displayName, `⏱ ${dur} сек`, response.sub_calls, hasRT, agentUid);
       } else if (newMessages.length > 0) {
-        this.renderChatFromHistory();
+        this.renderChatFromHistory(response.sub_calls);
       }
       await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
     } catch (error) {

@@ -64,6 +64,9 @@ export class SettingsController {
     bus.emit("log", "Загрузка конфигурации...");
     try {
       const config: any = await invoke("get_config");
+      const version: string = await invoke("get_app_version") as string;
+      const verEl = document.getElementById("app-version");
+      if (verEl) verEl.textContent = version;
       this.updateModelSelect(config);
       if (config.context_size) { this.el.contextSlider.value = config.context_size.toString(); this.el.contextValue.innerText = config.context_size.toString(); }
       if (config.kv_quantization !== undefined) this.el.chkKvQuant.checked = config.kv_quantization;

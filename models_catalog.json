@@ -1,7 +1,7 @@
 [
   {
     "name": "gemma-4-8b",
-    "download_url": "https://huggingface.co/mradermacher/gemma-4-E4B-it-heretic-i1-GGUF/resolve/main/gemma-4-E4B-it-heretic.i1-Q4_K_M.gguf?download=true",
+    "download_url": "https://huggingface.co/SC117/gemma-4-E4B-it-heretic-QAT-GGUF/resolve/main/gemma-4-E4B-it-heretic-QAT-UD-Q4_K_XL.gguf?download=true",
     "default_params": {
       "temperature": 1.0,
       "top_k": 64,
@@ -13,7 +13,7 @@
   },
   {
     "name": "gemma-4-12b",
-    "download_url": "https://huggingface.co/mradermacher/gemma-4-E4B-it-heretic-i1-GGUF/resolve/main/gemma-4-E4B-it-heretic.i1-Q4_K_M.gguf?download=true",
+    "download_url": "https://huggingface.co/SC117/gemma-4-12B-it-heretic-QAT-GGUF/resolve/main/gemma-4-12B-it-heretic-QAT-UD-Q4_K_XL.gguf?download=true",
     "mmproj_url": "https://huggingface.co/mradermacher/gemma-4-12B-it-abliterated-uncensored-GGUF/resolve/main/gemma-4-12B-it-abliterated-uncensored.mmproj-f16.gguf?download=true",
     "default_params": {
       "temperature": 1.0,
