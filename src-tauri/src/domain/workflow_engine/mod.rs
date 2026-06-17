@@ -49,7 +49,6 @@ where
         &mut self,
         agent: &AgentProfile,
         task: &str,
-        namespace: &str,
         messages: &mut Vec<ChatMessage>,
     ) -> Result<String, String> {
         orchestrator::run_agent_node(
@@ -62,7 +61,6 @@ where
             task.to_string(),
             vec![],
             &[],
-            namespace,
             self.max_gen_tokens,
             self.model_params,
             self.format_type,
@@ -83,7 +81,6 @@ where
             id: None,
             msg_type: "message".to_string(),
             content: user_text.to_string(),
-            namespace: None,
             sub_calls: None,
             author: Some("user".to_string()),
         });
@@ -109,7 +106,6 @@ where
                 id: None,
                 msg_type: "message".to_string(),
                 content: system_prompt.to_string(),
-                namespace: None,
                 sub_calls: None,
                 author: Some("system".to_string()),
             },
@@ -117,7 +113,6 @@ where
                 id: None,
                 msg_type: "message".to_string(),
                 content: user_text.to_string(),
-                namespace: None,
                 sub_calls: None,
                 author: Some("user".to_string()),
             },

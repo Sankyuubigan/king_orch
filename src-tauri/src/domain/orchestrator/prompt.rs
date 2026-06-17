@@ -9,21 +9,9 @@ fn get_user_query_from_messages(messages: &[ChatMessage]) -> Option<&str> {
         .map(|m| m.content.as_str())
 }
 
-fn render_report_tool_instruction() -> String {
-    r#"
-[ИНСТРУМЕНТ batch_get_agent_report]
-Для получения одного или нескольких отчётов за один вызов:
-```json
-{"thought": "...", "tool": "batch_get_agent_report", "arguments": {"queries": [{"author": "ИМЯ_АГЕНТА", "namespace": "problem_1"}, {"author": "user", "namespace": "main"}]}}
-```
-author='user' для запроса пользователя. Инструмент вернёт самый свежий отчёт каждого указанного агента в указанном неймспейсе. Если нужен всего один отчёт — передай один запрос в queries.
-"#.to_string()
-}
-
 pub fn build_system_prompt(
     agent: &AgentProfile,
     messages: &[ChatMessage],
-    _namespace: &str,
     has_tools: bool,
     all_tools: &[(String, String, serde_json::Value)],
 ) -> String {
@@ -36,9 +24,6 @@ pub fn build_system_prompt(
     if let Some(uq) = get_user_query_from_messages(messages) {
         sp.push_str(&format!("\n\n[ЗАПРОС ПОЛЬЗОВАТЕЛЯ]\n{}\n", uq));
     }
-
-    // Инструкция по batch_get_agent_report — для всех агентов
-    sp.push_str(&render_report_tool_instruction());
 
     if has_tools {
         sp.push_str("\n\n[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]\nЕсли нужен инструмент — верни ОДИН JSON-блок (```json ... ```).\nВ JSON обязательно поле \"thought\".\n\n⚠️ ВАЖНО: Если задача ВЫПОЛНЕНА — пиши ОБЫЧНЫЙ ТЕКСТ без JSON!\n");

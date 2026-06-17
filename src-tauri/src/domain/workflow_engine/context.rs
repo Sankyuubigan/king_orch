@@ -7,8 +7,6 @@ use std::collections::HashMap;
 pub struct WorkflowContext {
     /// Оригинальный запрос пользователя
     pub user_message: String,
-    /// Текущий неймспейс
-    pub namespace: String,
     /// Выводы всех узлов (id узла → JSON значение)
     pub node_outputs: HashMap<String, serde_json::Value>,
     /// Все сообщения сессии
@@ -22,13 +20,11 @@ pub struct WorkflowContext {
 impl WorkflowContext {
     pub fn new(
         user_message: String,
-        namespace: String,
         messages: Vec<ChatMessage>,
         history: Vec<ChatMessage>,
     ) -> Self {
         Self {
             user_message,
-            namespace,
             node_outputs: HashMap::new(),
             messages,
             history,
@@ -42,9 +38,6 @@ impl WorkflowContext {
 
         // {{ user_message }}
         result = result.replace("{{ user_message }}", &self.user_message);
-
-        // {{ namespace }}
-        result = result.replace("{{ namespace }}", &self.namespace);
 
         // {{ signals }} — JSON-массив signal-сообщений из сессии
         if result.contains("{{ signals }}") {

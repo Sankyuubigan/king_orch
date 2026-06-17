@@ -62,7 +62,6 @@ fn deserialize_cases_priority<'de, D>(deserializer: D) -> Result<Option<Vec<Prio
 where
     D: Deserializer<'de>,
 {
-    use serde::de::Error;
     // Пробуем как value, чтобы потом разобрать формат
     let val: serde_json::Value = match serde_json::Value::deserialize(deserializer) {
         Ok(v) => v,
@@ -128,7 +127,7 @@ pub struct NodeDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub statuses: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
+    pub inject_reports: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub problems: Option<String>,
     /// Визуальные координаты для редактора графов (x, y)
@@ -351,6 +350,12 @@ mod tests {
         assert!(fr.cases_priority.is_some());
         assert_eq!(fr.cases_priority.as_ref().unwrap().len(), 3);
         assert_eq!(fr.default.as_deref(), Some("call_validator"));
+
+        // LLM_WORKER grounder с inject_reports
+        let grounder = wf.nodes.iter().find(|n| n.id == "call_grounder").unwrap();
+        assert_eq!(grounder.node_type, NodeType::LlmWorker);
+        assert!(grounder.inject_reports.is_some());
+        assert_eq!(grounder.inject_reports.as_ref().unwrap(), &["soma_translator"]);
 
         // LLM_WORKER с agent + task
         let curator = wf.nodes.iter().find(|n| n.id == "call_curator").unwrap();

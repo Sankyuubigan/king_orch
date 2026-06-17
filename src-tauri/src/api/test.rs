@@ -73,7 +73,6 @@ pub async fn run_iterative_test(
                     let system_prompt = domain::build_system_prompt(
                         agent,
                         &[],
-                        "main",
                         false,
                         &[],
                     );
@@ -83,7 +82,7 @@ pub async fn run_iterative_test(
                             id: None,
                             msg_type: "message".to_string(),
                             content: system_prompt,
-                            namespace: None,
+
                             sub_calls: None,
                             author: Some("system".to_string()),
                         },
@@ -91,7 +90,7 @@ pub async fn run_iterative_test(
                             id: None,
                             msg_type: "message".to_string(),
                             content: tc.input_data.clone(),
-                            namespace: None,
+
                             sub_calls: None,
                             author: Some("user".to_string()),
                         },

@@ -2,7 +2,6 @@ export interface ChatMessage {
     id?: string;
     type: 'message' | 'thought';
     content: string;
-    namespace?: string;
     sub_calls?: SubCall[];
     author?: string;
     time_sec?: number;

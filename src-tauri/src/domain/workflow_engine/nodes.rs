@@ -69,22 +69,31 @@ where
                 .find(|a| a.id == agent_id)
                 .ok_or_else(|| format!("llm_worker: агент '{}' не найден", agent_id))?;
 
-            let task = context.resolve_template(node.task.as_deref().unwrap_or(""));
-            let ns = node
-                .namespace
-                .as_deref()
-                .map(|ns| context.resolve_template(ns))
-                .unwrap_or_else(|| context.namespace.clone());
+            let mut task = context.resolve_template(node.task.as_deref().unwrap_or(""));
+
+            // ── inject_reports: Push отчётов коллег ──
+            if let Some(ref reports_to_inject) = node.inject_reports {
+                if !reports_to_inject.is_empty() {
+                    let mut injected = String::from("\n\n### [ОТЧЕТЫ КОЛЛЕГ ДЛЯ АНАЛИЗА]\n");
+                    for aid in reports_to_inject {
+                        let report = context.messages.iter().rev()
+                            .find(|m| m.msg_type == "thought" && m.author.as_deref() == Some(aid.as_str()))
+                            .map(|m| m.content.clone())
+                            .unwrap_or_else(|| "[Отчет не найден]".to_string());
+                        injected.push_str(&format!("--- Отчет от {} ---\n{}\n\n", aid, report));
+                    }
+                    task.push_str(&injected);
+                }
+            }
 
             (runner.log_cb)(format!(
-                "[worker] Вызов '{}' (ns: {}): {}",
+                "[worker] Вызов '{}': {}",
                 agent_id,
-                ns,
                 task.chars().take(200).collect::<String>()
             ));
 
             let start_len = runner.all_sub_calls.len();
-            let result = runner.call_agent(agent, &task, &ns, &mut context.messages)?;
+            let result = runner.call_agent(agent, &task, &mut context.messages)?;
             let end_len = runner.all_sub_calls.len();
 
             let node_sub_calls = if start_len < end_len {
@@ -99,7 +108,6 @@ where
                 id: Some(format!("msg_{}", runner.msg_counter)),
                 msg_type: msg_type.to_string(),
                 content: result.clone(),
-            namespace: Some(ns),
             sub_calls: node_sub_calls,
             author: Some(agent_id.to_string()),
         };
@@ -116,11 +124,6 @@ where
 
         NodeType::SystemCondition => {
             let action = node.action.as_deref().unwrap_or("check");
-            let ns = node
-                .namespace
-                .as_deref()
-                .map(|ns| context.resolve_template(ns))
-                .unwrap_or_else(|| context.namespace.clone());
 
             match action {
                 "get_missing_reports" => {
@@ -132,7 +135,6 @@ where
                         .filter(|agent_id| {
                             !context.messages.iter().any(|m| {
                                 m.author.as_deref() == Some(agent_id.as_str())
-                                    && m.namespace.as_deref() == Some(ns.as_str())
                             })
                         })
                         .cloned()
@@ -156,7 +158,6 @@ where
                     let all_present = required.iter().all(|agent_id| {
                         context.messages.iter().any(|m| {
                             m.author.as_deref() == Some(agent_id.as_str())
-                                && m.namespace.as_deref() == Some(ns.as_str())
                         })
                     });
                     Ok(NodeResult {
@@ -169,25 +170,12 @@ where
                 }
 
                 "all_problems_analyzed" => {
-                    // Пробегаем по problem_1, problem_2... пока не найдём перерыв
-                    let mut next_index = 1;
-                    loop {
-                        let ns_check = format!("problem_{}", next_index);
-                        let has_report = context.messages.iter().any(|m| {
-                            m.author.as_deref() == Some("pattern_finder_by_double_bind")
-                                && m.namespace.as_deref() == Some(&ns_check)
-                        });
-                        if !has_report {
-                            break;
-                        }
-                        next_index += 1;
-                    }
-                    // Если problem_1 не существует — значит ни одной проблемы нет
-                    let all_done = next_index == 1;
+                    let has_report = context.messages.iter().any(|m| {
+                        m.author.as_deref() == Some("pattern_finder_by_double_bind")
+                    });
                     Ok(NodeResult {
                         output: serde_json::json!({
-                            "status": if all_done { "all_done" } else { "has_unanalyzed" },
-                            "next_index": next_index
+                            "status": if has_report { "all_done" } else { "has_unanalyzed" },
                         }),
                         next_node: None,
                         next_nodes: vec![],
@@ -200,10 +188,8 @@ where
                     })?;
                     let mut reports = String::new();
                     for agent_id in required {
-                        let ns_check = if ns.is_empty() { "main" } else { &ns };
                         if let Some(msg) = context.messages.iter().rev()
-                            .find(|m| m.author.as_deref() == Some(agent_id.as_str())
-                                && m.namespace.as_deref() == Some(ns_check))
+                            .find(|m| m.author.as_deref() == Some(agent_id.as_str()))
                         {
                             reports.push_str(&format!(
                                 "--- {} ---\n{}\n\n",
@@ -231,7 +217,6 @@ where
                     let all_present = required.iter().all(|agent_id| {
                         context.messages.iter().any(|m| {
                             m.author.as_deref() == Some(agent_id.as_str())
-                                && m.namespace.as_deref() == Some(ns.as_str())
                         })
                     });
 
@@ -242,13 +227,11 @@ where
                             next_nodes: vec![],
                         })
                     } else {
-                        // Проверяем, какие агенты не хватает
                         let missing: Vec<String> = required
                             .iter()
                             .filter(|agent_id| {
                                 !context.messages.iter().any(|m| {
                                     m.author.as_deref() == Some(agent_id.as_str())
-                                        && m.namespace.as_deref() == Some(ns.as_str())
                                 })
                             })
                             .cloned()
@@ -270,10 +253,8 @@ where
                     })?;
                     let mut reports = String::new();
                     for agent_id in required {
-                        let ns_check = if ns.is_empty() { "main" } else { &ns };
                         if let Some(msg) = context.messages.iter().rev()
-                            .find(|m| m.author.as_deref() == Some(agent_id.as_str())
-                                && m.namespace.as_deref() == Some(ns_check))
+                            .find(|m| m.author.as_deref() == Some(agent_id.as_str()))
                         {
                             if !reports.is_empty() {
                                 reports.push_str("\n\n");
@@ -286,7 +267,6 @@ where
                         id: Some(format!("msg_{}", runner.msg_counter)),
                         msg_type: "message".to_string(),
                         content: reports.clone(),
-                        namespace: Some(ns.clone()),
                         sub_calls: None,
                         author: Some("system".to_string()),
                     };
@@ -331,20 +311,13 @@ where
                     )
                 })?;
 
-            let ns = node
-                .namespace
-                .as_deref()
-                .map(|ns| context.resolve_template(ns))
-                .unwrap_or_else(|| context.namespace.clone());
-
             (runner.log_cb)(format!(
-                "[sub_workflow] Запуск '{}' (ns: {})",
-                sub_wf.name, ns
+                "[sub_workflow] Запуск '{}'",
+                sub_wf.name
             ));
 
             let mut sub_ctx = WorkflowContext::new(
                 context.user_message.clone(),
-                ns,
                 context.messages.clone(),
                 context.history.clone(),
             );

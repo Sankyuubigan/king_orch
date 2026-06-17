@@ -108,7 +108,6 @@ pub struct ParsedOrchestratorResponse {
     pub target: String,
     pub content: String,
     pub thought: String,
-    pub namespace: Option<String>,
 }
 
 pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)> {
@@ -150,9 +149,7 @@ pub fn parse_orchestrator_response(text: &str) -> Option<ParsedOrchestratorRespo
                     .or_else(|| val.get("task")).or_else(|| val.get("message")).or_else(|| val.get("content"))
                     .and_then(|v| v.as_str()).unwrap_or("").to_string();
                 let thought = val.get("thought").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                let namespace = val.get("namespace").and_then(|v| v.as_str())
-                    .filter(|s| !s.is_empty()).map(|s| s.to_string());
-                return Some(ParsedOrchestratorResponse { target, content, thought, namespace });
+                return Some(ParsedOrchestratorResponse { target, content, thought });
             }
         } else {
             let target_re = regex::Regex::new(r#"(?is)"target"\s*:\s*"([^"]+)""#).ok()?;
@@ -164,9 +161,7 @@ pub fn parse_orchestrator_response(text: &str) -> Option<ParsedOrchestratorRespo
                 let thought_re = regex::Regex::new(r#"(?is)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok()?;
                 let thought_raw = thought_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
                 let thought = decode_json_escapes(&thought_raw);
-                let ns_re = regex::Regex::new(r#"(?is)"namespace"\s*:\s*"([^"]+)""#).ok()?;
-                let namespace = ns_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string());
-                return Some(ParsedOrchestratorResponse { target, content, thought, namespace });
+                return Some(ParsedOrchestratorResponse { target, content, thought });
             }
         }
     }

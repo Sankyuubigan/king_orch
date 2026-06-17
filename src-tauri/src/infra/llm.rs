@@ -44,8 +44,6 @@ pub struct ChatMessage {
     pub msg_type: String,
     pub content: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub namespace: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub sub_calls: Option<Vec<SubCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,

@@ -27,7 +27,7 @@ interface GraphNodeDef {
   default?: string;
   cases_priority?: Array<{ key: string; to: string }>;
   input_object?: string;
-  namespace?: string;
+  inject_reports?: string[];
   output_type?: string;
   ui_pos?: { x: number; y: number };
   signal_name?: string;
@@ -679,6 +679,10 @@ export class GraphController {
           <option value="thought" ${!data.output_type || data.output_type === "thought" ? "selected" : ""}>thought</option>
         </select>
       </div>`;
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Прикрепить отчеты (ID агентов)</div>
+        <input type="text" id="ge-inject-reports" class="ge-input" placeholder="через запятую: soma_translator, curator" value="${this.esc((data.inject_reports || []).join(', '))}" />
+      </div>`;
     }
 
     if (data.type === "llm_fact_extractor") {
@@ -757,6 +761,15 @@ export class GraphController {
     if (outputTypeSelect) {
       outputTypeSelect.addEventListener("change", () => {
         data.output_type = outputTypeSelect.value === "thought" ? undefined : outputTypeSelect.value;
+        this.updateNodeHtml(nodeId);
+      });
+    }
+
+    const injectInput = document.getElementById("ge-inject-reports") as HTMLInputElement;
+    if (injectInput) {
+      injectInput.addEventListener("change", () => {
+        const val = injectInput.value.trim();
+        data.inject_reports = val ? val.split(',').map((s: string) => s.trim()) : undefined;
         this.updateNodeHtml(nodeId);
       });
     }
@@ -1267,6 +1280,9 @@ export class GraphController {
     }
     if (data.type === "llm_worker" && data.output_type) {
       agentLine += `<div class="gn-agent">${this.esc(data.output_type)}</div>`;
+    }
+    if (data.type === "llm_worker" && data.inject_reports && data.inject_reports.length > 0) {
+      agentLine += `<div class="gn-agent" style="color:#2196f3">📎 Отчеты: ${data.inject_reports.length}</div>`;
     }
     let signalLine = "";
     if (data.type === "signal_router") {
