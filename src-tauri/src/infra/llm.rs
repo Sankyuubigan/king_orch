@@ -446,12 +446,8 @@ impl LlamaEngine {
             
             n_cur += 1; generated_tokens += 1;
             if generated_tokens % 20 == 0 {
-                let gen_elapsed_sofar = gen_start.elapsed().as_secs_f64();
-                let speed_sofar = if gen_elapsed_sofar > 0.0 { generated_tokens as f64 / gen_elapsed_sofar } else { 0.0 };
-                let eta = if speed_sofar > 0.0 { (max_tokens - generated_tokens) as f64 / speed_sofar } else { 0.0 };
                 let gen_p = (generated_tokens as f32 / max_tokens as f32) * 50.0;
                 progress_cb(50.0 + gen_p, &format!("Генерация: {} токенов...", generated_tokens));
-                log_cb(format!("🔨 Токен {}/{} ({:.0} tok/s, ETA {:.0}s)", generated_tokens, max_tokens, speed_sofar, eta));
             }
         }
         progress_cb(100.0, &format!("Готово ({} токенов)", generated_tokens));

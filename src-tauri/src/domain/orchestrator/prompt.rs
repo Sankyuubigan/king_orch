@@ -33,8 +33,26 @@ pub fn build_system_prompt(
         let mut td = String::new();
         for (_, name, tool) in all_tools {
             let desc = tool.get("description").and_then(|d| d.as_str()).unwrap_or("");
-            let schema = tool.get("inputSchema").cloned().unwrap_or(serde_json::Value::Null);
-            td.push_str(&format!("- \"{}\": {} | Параметры: {}\n\n", name, desc, serde_json::to_string(&schema).unwrap_or_default()));
+            td.push_str(&format!("- \"{}\": {}\n", name, desc));
+            if let Some(input_schema) = tool.get("inputSchema") {
+                let type_name = input_schema.get("type").and_then(|t| t.as_str()).unwrap_or("object");
+                td.push_str(&format!("  Тип: {}\n", type_name));
+                if let Some(props) = input_schema.get("properties").and_then(|p| p.as_object()) {
+                    td.push_str("  Параметры (arguments):\n  {\n");
+                    let required = input_schema.get("required")
+                        .and_then(|r| r.as_array())
+                        .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    for (prop_name, prop_schema) in props {
+                        let prop_type = prop_schema.get("type").and_then(|t| t.as_str()).unwrap_or("any");
+                        let prop_desc = prop_schema.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                        let is_required = if required.contains(&prop_name.as_str()) { " [ОБЯЗАТЕЛЬНО]" } else { "" };
+                        td.push_str(&format!("    \"{}\" (type: {}){} - {}\n", prop_name, prop_type, is_required, prop_desc));
+                    }
+                    td.push_str("  }\n");
+                }
+            }
+            td.push('\n');
         }
         if !td.is_empty() {
             sp.push_str("\n\n[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]\nДля вызова:\n```json\n{\"thought\": \"...\", \"tool\": \"ИМЯ\", \"arguments\": {}}\n```\n\n");

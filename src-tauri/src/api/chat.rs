@@ -12,8 +12,8 @@ use crate::api::AppState;
 static LAST_LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
 pub fn init_log_file() {
-    let path = std::path::PathBuf::from("temp").join("last_logs.txt");
-    let _ = std::fs::create_dir_all("temp");
+    let path = std::path::PathBuf::from("test").join("last_logs.txt");
+    let _ = std::fs::create_dir_all("test");
     if let Ok(file) = std::fs::File::create(&path) {
         if let Ok(mut guard) = LAST_LOG_FILE.lock() {
             *guard = Some(file);

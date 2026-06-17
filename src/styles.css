@@ -230,6 +230,8 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 .graph-add-btn.add-extractor:hover { border-color: #7e57c2; color: #7e57c2; }
 .graph-add-btn.add-signal-router { border-color: #ff980066; }
 .graph-add-btn.add-signal-router:hover { border-color: #ff9800; color: #ff9800; }
+.graph-add-btn.add-condition-check { border-color: #26a69a66; }
+.graph-add-btn.add-condition-check:hover { border-color: #26a69a; color: #26a69a; }
 
 #graph-layout { flex: 1; display: flex; overflow: hidden; position: relative; }
 #graph-container { flex: 1; height: 100%; border: none; background: #1a1a1a; position: relative; }

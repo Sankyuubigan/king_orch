@@ -32,6 +32,9 @@ interface GraphNodeDef {
   ui_pos?: { x: number; y: number };
   signal_name?: string;
   field?: string;
+  sequential_to?: string;
+  true_to?: string;
+  false_to?: string;
   disabled?: boolean;
 }
 
@@ -56,6 +59,7 @@ export interface GraphElements {
   btnAddSeqSwitch: HTMLButtonElement;
   btnAddSignalRouter: HTMLButtonElement;
   btnAddExtractor: HTMLButtonElement;
+  btnAddConditionCheck: HTMLButtonElement;
 }
 
 const NODE_COLORS: Record<string, string> = {
@@ -68,6 +72,7 @@ const NODE_COLORS: Record<string, string> = {
   switch: "#ef5350",
   llm_sequential_switch: "#e040fb",
   signal_router: "#ff9800",
+  condition_check: "#26a69a",
   return: "#78909c",
 };
 
@@ -81,11 +86,12 @@ const NODE_LABELS: Record<string, string> = {
   switch: "🔀 Switch",
   llm_sequential_switch: "🔀 SeqSwitch",
   signal_router: "📡 Signal Router",
+  condition_check: "🎯 Condition Check",
   return: "🏁 Return",
 };
 
 function isDynamicNode(t: string): boolean {
-  return t === "switch" || t === "llm_sequential_switch" || t === "signal_router";
+  return t === "switch" || t === "llm_sequential_switch" || t === "signal_router" || t === "condition_check";
 }
 
 const OUTPUT_COUNT: Record<string, number> = {
@@ -98,6 +104,7 @@ const OUTPUT_COUNT: Record<string, number> = {
   switch: 0,
   llm_sequential_switch: 0,
   signal_router: 0,
+  condition_check: 0,
   return: 0,
 };
 
@@ -130,6 +137,7 @@ export class GraphController {
     this.el.btnAddSeqSwitch.addEventListener("click", () => this.addNode("llm_sequential_switch"));
     this.el.btnAddSignalRouter.addEventListener("click", () => this.addNode("signal_router"));
     this.el.btnAddExtractor.addEventListener("click", () => this.addNode("llm_fact_extractor"));
+    this.el.btnAddConditionCheck.addEventListener("click", () => this.addNode("condition_check"));
   }
 
   private ensureEditor(): void {
@@ -544,11 +552,15 @@ export class GraphController {
         }
       }
 
-      // Switch/SignalRouter connections come from node data (source of truth)
+      // Switch/SignalRouter/ConditionCheck connections come from node data (source of truth)
       for (const node of wf.nodes) {
         if (!isDynamicNode(node.type)) continue;
         const targets: Array<{ to: string; caseKey?: string }> = [];
-        if (node.cases_priority) {
+        if (node.type === "condition_check") {
+          if (node.sequential_to) targets.push({ to: node.sequential_to, caseKey: "seq" });
+          if (node.true_to) targets.push({ to: node.true_to, caseKey: "true" });
+          if (node.false_to) targets.push({ to: node.false_to, caseKey: "false" });
+        } else if (node.cases_priority) {
           for (const cp of node.cases_priority) targets.push({ to: cp.to, caseKey: cp.key });
         } else if (node.cases) {
           for (const [key, val] of Object.entries(node.cases)) targets.push({ to: val, caseKey: key });
@@ -718,6 +730,29 @@ export class GraphController {
       html += this.renderDefaultHtml(data);
     }
 
+    if (data.type === "condition_check") {
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Input object (JSON)</div>
+        <textarea id="ge-input-object" class="ge-textarea" rows="2">${this.esc(data.input_object || "{{ nodes.extract_facts.output }}")}</textarea>
+      </div>
+      <div class="graph-detail-section">
+        <div class="detail-label">Поле для проверки</div>
+        <input type="text" id="ge-field" class="ge-input" placeholder="has_somatic" value="${this.esc(data.field || "")}" />
+      </div>
+      <div class="graph-detail-section">
+        <div class="detail-label">Sequential → цель (всегда)</div>
+        <input type="text" id="ge-sequential-to" class="ge-input" placeholder="node id" value="${this.esc(data.sequential_to || "")}" />
+      </div>
+      <div class="graph-detail-section">
+        <div class="detail-label">True → цель</div>
+        <input type="text" id="ge-true-to" class="ge-input" placeholder="node id" value="${this.esc(data.true_to || "")}" />
+      </div>
+      <div class="graph-detail-section">
+        <div class="detail-label">False → цель</div>
+        <input type="text" id="ge-false-to" class="ge-input" placeholder="node id" value="${this.esc(data.false_to || "")}" />
+      </div>`;
+    }
+
     if (data.type === "switch" || data.type === "llm_sequential_switch") {
       // Конвертируем старый формат cases → cases_priority, чтобы не дублировались при сохранении
       if (data.cases && typeof data.cases === "object" && !Array.isArray(data.cases)) {
@@ -806,6 +841,31 @@ export class GraphController {
     if (fieldInput) {
       fieldInput.addEventListener("change", () => {
         this.editor!.drawflow.drawflow.Home.data[nodeId].data.field = fieldInput.value || undefined;
+        this.updateNodeHtml(nodeId);
+      });
+    }
+
+    const sequentialToInput = document.getElementById("ge-sequential-to") as HTMLInputElement;
+    if (sequentialToInput) {
+      sequentialToInput.addEventListener("change", () => {
+        data.sequential_to = sequentialToInput.value || undefined;
+        this.updateNodeHtml(nodeId);
+      });
+    }
+
+    const trueToInput = document.getElementById("ge-true-to") as HTMLInputElement;
+    if (trueToInput) {
+      trueToInput.addEventListener("change", () => {
+        data.true_to = trueToInput.value || undefined;
+        this.updateNodeHtml(nodeId);
+      });
+    }
+
+    const falseToInput = document.getElementById("ge-false-to") as HTMLInputElement;
+    if (falseToInput) {
+      falseToInput.addEventListener("change", () => {
+        data.false_to = falseToInput.value || undefined;
+        this.updateNodeHtml(nodeId);
       });
     }
 
@@ -907,7 +967,7 @@ export class GraphController {
     const rect = this.el.graphContainer.getBoundingClientRect();
     const cx = (rect.width / 2 - 100) * (1 / (this.editor!.zoom || 1));
     const cy = (rect.height / 2 - 50) * (1 / (this.editor!.zoom || 1));
-    const outs = isDynamicNode(type) ? 2 : OUTPUT_COUNT[type] ?? 1;
+    const outs = type === "condition_check" ? 3 : (isDynamicNode(type) ? 2 : OUTPUT_COUNT[type] ?? 1);
 
     const inputs: Record<string, { connections: any[] }> = {};
     for (let i = 1; i <= 1; i++) inputs[`input_${i}`] = { connections: [] };
@@ -1000,6 +1060,15 @@ export class GraphController {
 
   private syncSwitchNodeFromConnections(dn: any): void {
     const data = dn.data;
+    if (data.type === "condition_check") {
+      const out1 = dn.outputs["output_1"]?.connections || [];
+      const out2 = dn.outputs["output_2"]?.connections || [];
+      const out3 = dn.outputs["output_3"]?.connections || [];
+      data.sequential_to = out1.length > 0 ? out1[0].node : undefined;
+      data.true_to = out2.length > 0 ? out2[0].node : undefined;
+      data.false_to = out3.length > 0 ? out3[0].node : undefined;
+      return;
+    }
     const caseKeys = this.getSwitchCaseKeys(data);
     if (data.cases_priority) {
       for (let i = 0; i < data.cases_priority.length; i++) {
@@ -1027,6 +1096,18 @@ export class GraphController {
     const match = outputKey.match(/^output_(\d+)$/);
     if (!match) return;
     const outIdx = parseInt(match[1], 10) - 1;
+
+    if (data.type === "condition_check") {
+      if (outIdx === 0) {
+        data.sequential_to = action === "created" ? toNodeId : undefined;
+      } else if (outIdx === 1) {
+        data.true_to = action === "created" ? toNodeId : undefined;
+      } else if (outIdx === 2) {
+        data.false_to = action === "created" ? toNodeId : undefined;
+      }
+      return;
+    }
+
     const caseKeys = this.getSwitchCaseKeys(data);
     if (outIdx < 0 || outIdx >= caseKeys.length) return;
     const caseKey = caseKeys[outIdx];
@@ -1185,6 +1266,7 @@ export class GraphController {
   // ─── Утилиты ───
 
   private getSwitchOutputCount(node: GraphNodeDef): number {
+    if (node.type === "condition_check") return 3;
     if (node.cases) return Object.keys(node.cases).length;
     if (node.cases_priority) return node.cases_priority.length + (node.default ? 1 : 0);
     if (node.default) return 1;
@@ -1192,6 +1274,7 @@ export class GraphController {
   }
 
   private getSwitchCaseKeys(node: GraphNodeDef): string[] {
+    if (node.type === "condition_check") return ["seq", "true", "false"];
     if (node.cases) return Object.keys(node.cases);
     if (node.cases_priority) {
       const keys = node.cases_priority.map((c) => c.key);
@@ -1212,6 +1295,12 @@ export class GraphController {
     const implicit: GraphEdgeDef[] = [];
     for (const node of nodes) {
       if (!isDynamicNode(node.type)) continue;
+      if (node.type === "condition_check") {
+        if (node.sequential_to) implicit.push({ from: node.id, to: node.sequential_to });
+        if (node.true_to) implicit.push({ from: node.id, to: node.true_to });
+        if (node.false_to) implicit.push({ from: node.id, to: node.false_to });
+        continue;
+      }
       if (node.cases_priority) {
         for (const cp of node.cases_priority) {
           implicit.push({ from: node.id, to: cp.to });
@@ -1292,6 +1381,15 @@ export class GraphController {
       if (parts.length > 0) {
         signalLine = `<div class="gn-agent" style="color:#ff9800">📡 ${parts.join("")}</div>`;
       }
+    }
+    if (data.type === "condition_check") {
+      const parts: string[] = [];
+      if (data.field) parts.push(this.esc(data.field));
+      if (data.input_object) parts.push(`← ${this.esc(data.input_object)}`);
+      if (data.sequential_to) parts.push(`→ ${this.esc(data.sequential_to)}`);
+      if (data.true_to) parts.push(`✓ ${this.esc(data.true_to)}`);
+      if (data.false_to) parts.push(`✗ ${this.esc(data.false_to)}`);
+      signalLine = `<div class="gn-agent" style="color:#26a69a">🎯 ${parts.join(" | ")}</div>`;
     }
     let casesLine = "";
     if (isDynamicNode(data.type)) {

@@ -547,6 +547,50 @@ where
             })
         }
 
+        NodeType::ConditionCheck => {
+            let input_obj = node.input_object.as_deref().unwrap_or("{{ nodes.extract_facts.output }}");
+            let resolved = context.resolve_template(input_obj);
+            let json_val: serde_json::Value = serde_json::from_str(&resolved)
+                .unwrap_or(serde_json::Value::Null);
+
+            let field = node.field.as_deref().unwrap_or("");
+            let is_true = json_val.get(field).and_then(|v| v.as_bool()).unwrap_or(false);
+
+            let branch_target = if is_true {
+                node.true_to.clone()
+            } else {
+                node.false_to.clone()
+            };
+
+            // Порядок: сначала branch (true/false), потом sequential
+            let mut next_nodes: Vec<String> = Vec::new();
+            if let Some(ref seq) = node.sequential_to {
+                // sequential не должен дублироваться с branch_target
+                if branch_target.as_ref().map_or(true, |bt| bt != seq) {
+                    next_nodes.push(seq.clone());
+                }
+            }
+
+            (runner.log_cb)(format!(
+                "[condition_check] {} = {} → {} | sequential: {}",
+                field,
+                is_true,
+                branch_target.as_deref().unwrap_or("-"),
+                node.sequential_to.as_deref().unwrap_or("-")
+            ));
+
+            Ok(NodeResult {
+                output: serde_json::json!({
+                    "field": field,
+                    "value": is_true,
+                    "sequential_to": node.sequential_to,
+                    "branch_target": branch_target
+                }),
+                next_node: branch_target,
+                next_nodes,
+            })
+        }
+
         NodeType::Return => Ok(NodeResult {
             output: serde_json::json!({"done": true}),
             next_node: Some("__END__".to_string()),

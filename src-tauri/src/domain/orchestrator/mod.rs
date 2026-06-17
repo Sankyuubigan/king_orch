@@ -312,10 +312,19 @@ where
 
             if tool_name == "emit_signal" {
                 tool_found = true;
-                let key = arguments.get("key")
+                // Фолбэк: если LLM засунула аргументы в "properties"
+                let mut key_val = arguments.get("key");
+                let mut val_val = arguments.get("value");
+                if key_val.is_none() && val_val.is_none() {
+                    if let Some(props) = arguments.get("properties") {
+                        key_val = props.get("key");
+                        val_val = props.get("value");
+                    }
+                }
+                let key = key_val
                     .and_then(|v| v.as_str())
                     .filter(|s| !s.is_empty());
-                let value = arguments.get("value")
+                let value = val_val
                     .filter(|v| !v.is_null());
 
                 if let (Some(key), Some(value)) = (key, value) {

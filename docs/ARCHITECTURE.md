@@ -174,11 +174,12 @@ User → Entry point (выбор в UI: .md с visible: true или YAML с visi
     run_chat() проверяет: есть ли YAML workflow с file_stem == agent_id?
          ↓
      [Да] → workflow_engine::run_workflow()
-         │          ├→ llm_fact_extractor → fact_extractor.rs (built-in, возвращает JSON фактов)
-         │          ├→ switch → приоритетная (cases_priority) или стандартная маршрутизация
-         │          ├→ sub_workflow → рекурсивный вызов другого YAML
-         │          ├→ llm_worker → run_agent_node() для .md агента (без авто-истории)
-         │          └→ system_condition → Rust-side проверка (aggregate_and_output для вывода)
+          │          ├→ llm_fact_extractor → fact_extractor.rs (built-in, возвращает JSON фактов)
+          │          ├→ switch → приоритетная (cases_priority) или стандартная маршрутизация
+          │          ├→ condition_check → бинарная проверка поля (true/false)
+          │          ├→ sub_workflow → рекурсивный вызов другого YAML
+          │          ├→ llm_worker → run_agent_node() для .md агента (без авто-истории)
+          │          └→ system_condition → Rust-side проверка (aggregate_and_output для вывода)
          │
     [Нет] → orchestrator::run_agent_node()
          │          └→ вся история non-thought сообщений inject'ится в llm_messages

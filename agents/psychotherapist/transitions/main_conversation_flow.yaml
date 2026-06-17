@@ -12,50 +12,36 @@ nodes:
       User: {{ user_message }}
       Session signals: {{ signals }}
     ui_pos:
-      x: -275
-      y: -56
+      y: 509
+      x: -611
   - id: priority_router
     type: switch
-    input_object: "{{ nodes.extract_facts.output }}"
+    input_object: '{{ nodes.extract_facts.output }}'
     switch_field: phase
     cases_priority:
       - key: data_collection
-        to: facts_router
+        to: condition_check_1781669155440
       - key: datamining
         to: call_pattern_finder
-    default: facts_router
+    default: condition_check_1781669155440
     ui_pos:
-      x: 38
-      y: -25
-  - id: facts_router
-    type: llm_sequential_switch
-    input_object: "{{ nodes.extract_facts.output }}"
-    cases_priority:
-      - key: user_doesnt_agree
-        to: call_curator
-      - key: has_somatic
-        to: call_soma_translator
-      - key: grounding_dont_exist
-        to: call_grounder
-    default: call_validator
-    ui_pos:
-      x: 385
-      y: -393
+      y: 480
+      x: -253
   - id: call_curator
     type: llm_worker
     agent: curator
     task: Пользователь не согласен или сопротивляется. Ответь ему.
     output_type: message
     ui_pos:
-      y: -998
-      x: 843
+      y: 372
+      x: 1531
   - id: call_soma_translator
     type: llm_worker
     agent: soma_translator
     task: Пользователь описал боль. Дай ему расшифровку по НГМ.
     ui_pos:
-      x: 795
-      y: -512
+      y: 329
+      x: 480
   - id: collect_info
     type: llm_worker
     agent: liaison
@@ -63,8 +49,8 @@ nodes:
       Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
     output_type: message
     ui_pos:
-      x: 294
-      y: -755
+      y: 40
+      x: 12
     disabled: true
   - id: call_grounder
     type: llm_worker
@@ -73,14 +59,14 @@ nodes:
     inject_reports:
       - soma_translator
     ui_pos:
-      x: 777
-      y: -377
+      y: 176
+      x: 885
   - id: call_validator
     type: llm_worker
     agent: validator
     ui_pos:
-      x: 820
-      y: -184
+      y: 330
+      x: 898
   - id: route_validator_signal
     type: signal_router
     signal_name: validator_report
@@ -91,31 +77,51 @@ nodes:
       - key: КРАШ-ТЕСТ НЕОБХОДИМ
         to: call_curator
     ui_pos:
-      x: 1542
-      y: -245
+      y: 166
+      x: 1236
   - id: call_destructor_finder
     type: llm_worker
     agent: destructor_detector
+    inject_reports:
+      - soma_translator
+      - pattern_finder_by_floors
     ui_pos:
-      x: 2345
-      y: 95
+      y: 596
+      x: 2540
   - id: call_pattern_finder
     type: llm_worker
     agent: pattern_finder_by_floors
     inject_reports:
       - soma_translator
     ui_pos:
-      y: 19
-      x: 1919
+      y: 491
+      x: 2270
   - id: call_healer
     type: llm_worker
     agent: neuro_reprogrammer
     output_type: message
     inject_reports:
       - pattern_finder_by_floors
+      - destructor_detector
     ui_pos:
-      y: 66
-      x: 2737
+      y: 599
+      x: 2811
+  - id: condition_check_1781669155440
+    type: condition_check
+    field: has_somatic
+    sequential_to: condition_check_1781669297812
+    true_to: call_soma_translator
+    ui_pos:
+      x: 184
+      y: 243
+  - id: condition_check_1781669297812
+    type: condition_check
+    field: grounding_dont_exist
+    true_to: call_grounder
+    false_to: call_validator
+    ui_pos:
+      y: 85
+      x: 546
 
 edges:
   - from: extract_facts

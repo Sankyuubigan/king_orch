@@ -87,6 +87,7 @@ function initApp() {
     btnAddSeqSwitch: $<HTMLButtonElement>("btn-add-seq-switch"),
     btnAddSignalRouter: $<HTMLButtonElement>("btn-add-signal-router"),
     btnAddExtractor: $<HTMLButtonElement>("btn-add-extractor"),
+    btnAddConditionCheck: $<HTMLButtonElement>("btn-add-condition-check"),
   });
 
   // ─── Контроллер теста агентов (суб-вкладка в студии агентов) ───

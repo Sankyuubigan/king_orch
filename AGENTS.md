@@ -137,7 +137,7 @@ pub struct ChatMessage {
 
 ### Workflow графы (YAML)
 - Каждый граф — это `nodes` (узлы) и `edges` (рёбра).
-- Типы узлов: `llm_worker` (вызов .md), `llm_classifier` (built-in), `system_condition` (Rust), `sub_workflow` (рекурсия), `switch` (условие), `return` (конец).
+- Типы узлов: `llm_worker` (вызов .md), `llm_classifier` (built-in), `system_condition` (Rust), `sub_workflow` (рекурсия), `switch` (условие), `condition_check` (бинарная проверка поля), `return` (конец).
 - `visible: true` в корне YAML — граф отображается в UI как entry point.
 
 ### Агенты (.md)

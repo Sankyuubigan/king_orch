@@ -120,6 +120,12 @@ pub struct NodeDef {
     pub signal_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub field: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sequential_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub true_to: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub false_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_cases_priority")]
     pub cases_priority: Option<Vec<PriorityCase>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -150,6 +156,7 @@ pub enum NodeType {
     SubWorkflow,
     Switch,
     LlmSequentialSwitch,
+    ConditionCheck,
     Return,
     #[serde(rename = "signal_router")]
     SignalRouter,

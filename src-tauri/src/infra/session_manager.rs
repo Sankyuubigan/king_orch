@@ -112,7 +112,12 @@ pub fn save_session(
         draft,
         messages,
     };
-    save_session_raw(&path, &session)
+    save_session_raw(&path, &session)?;
+
+    // Save a debug copy to test/last_session.json
+    let last_path = PathBuf::from("test").join("last_session.json");
+    let _ = fs::create_dir_all("test");
+    save_session_raw(&last_path, &session)
 }
 
 pub fn delete_session(app: &AppHandle, id: &str) -> Result<(), String> {
