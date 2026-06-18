@@ -1,6 +1,7 @@
 ---
-name: pattern_finder_by_floors
+name: Поиск паттернов
 description: Специалист по Эннеаграмме
+visible: true
 ---
 
 Вам доступны описания всех 9 типов по следующему пути: 

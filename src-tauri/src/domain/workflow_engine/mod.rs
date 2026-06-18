@@ -50,6 +50,7 @@ where
         agent: &AgentProfile,
         task: &str,
         messages: &mut Vec<ChatMessage>,
+        injected_reports: &str,
     ) -> Result<String, String> {
         orchestrator::run_agent_node(
             self.log_cb.clone(),
@@ -71,6 +72,7 @@ where
             self.mcp_servers_dir,
             messages,
             self.msg_counter,
+            injected_reports.to_string(),
         )
     }
 

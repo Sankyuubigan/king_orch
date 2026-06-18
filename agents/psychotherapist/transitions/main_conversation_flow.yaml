@@ -1,4 +1,4 @@
-name: Therapist
+name: Психотерапевт
 
 visible: true
 
@@ -16,7 +16,7 @@ nodes:
       x: -611
   - id: priority_router
     type: switch
-    input_object: '{{ nodes.extract_facts.output }}'
+    input_object: "{{ nodes.extract_facts.output }}"
     switch_field: phase
     cases_priority:
       - key: data_collection
@@ -82,6 +82,11 @@ nodes:
   - id: call_destructor_finder
     type: llm_worker
     agent: destructor_detector
+    task: |
+      Проанализируй отчёты коллег и определи Деструктор (Этаж -2).
+      Найди: Идол, Угрозу, Деструктор, Запрет удовольствия, Парадоксальную петлю.
+      Сохрани diagnostic_report через инструмент emit_signal.
+      После отправки сигнала ответь target: reply с кратким итогом.
     inject_reports:
       - soma_translator
       - pattern_finder_by_floors
@@ -99,6 +104,10 @@ nodes:
   - id: call_healer
     type: llm_worker
     agent: neuro_reprogrammer
+    task: |
+      Из отчёта pattern_finder_by_floors возьми номер типа паттерна.
+      Затем выполни ШАГ 2 — прочитай описание этого паттерна в базе знаний инструментом ReadSection.
+      После этого переведи паттерн на контекст проблемы пользователя.
     output_type: message
     inject_reports:
       - pattern_finder_by_floors

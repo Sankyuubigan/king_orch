@@ -1,8 +1,7 @@
 ---
-name: Therapist Curator
-description: Психотерапевт
+name: Провокатор
 destiny: Получить от юзера минимальные необходимые данные для начала анализа
-visible: false
+visible: true
 tools:
   write: false
   bash: false

@@ -92,8 +92,9 @@ export class SettingsController {
         if (!e.is_hidden) {
           const o = document.createElement("option");
           o.value = e.id;
-          const prefix = e.entry_type === 'workflow' ? '📊' : '📁';
-          o.text = `${prefix} ${e.name} (${e.id})`;
+          const prefix = e.entry_type === 'workflow' ? '📁' : '📊';
+          const folderPart = e.folder ? `${e.folder} - ` : '';
+          o.text = `${prefix} ${folderPart}${e.name} (${e.id})`;
           this.el.agentSelect.appendChild(o);
         }
       }

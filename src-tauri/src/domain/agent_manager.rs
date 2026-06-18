@@ -17,6 +17,8 @@ pub struct AgentProfile {
     pub mcp_servers: Vec<String>,
     #[serde(default)]
     pub subagents: Vec<String>,
+    #[serde(default)]
+    pub folder: Option<String>,
 }
 
 /// Единая точка входа в UI — может быть .md агентом или YAML графом
@@ -27,6 +29,7 @@ pub struct AgentEntry {
     pub description: String,
     pub entry_type: String,
     pub is_hidden: bool,
+    pub folder: Option<String>,
 }
 
 fn collect_md_files(dir: &Path, files: &mut Vec<PathBuf>) {
@@ -66,12 +69,16 @@ pub fn load_agents(agents_dir: &Path) -> Result<Vec<AgentProfile>, String> {
     Ok(agents)
 }
 
-fn parse_agent_file(path: &Path, _agents_dir: &Path) -> Option<AgentProfile> {
+fn parse_agent_file(path: &Path, agents_dir: &Path) -> Option<AgentProfile> {
     if let Ok(content) = fs::read_to_string(path) {
         let base_dir = path.parent().unwrap_or_else(|| Path::new(""));
         let processed_content = process_includes(base_dir, &content);
         if let Some(mut agent) = parse_agent_markdown(&processed_content) {
             agent.id = path.file_stem().unwrap().to_string_lossy().to_string();
+            agent.folder = path.strip_prefix(agents_dir).ok()
+                .and_then(|rel| rel.parent()
+                    .and_then(|p| p.components().next())
+                    .map(|c| c.as_os_str().to_string_lossy().to_string()));
             return Some(agent);
         }
     }
@@ -95,7 +102,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 else if line.starts_with("visible:") { visible = line["visible:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("mcp_servers:") { if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["mcp_servers:".len()..].trim()) { mcp_servers = parsed; } }
             }
-            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new() }); }
+            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None }); }
         }
     }
     None
@@ -114,6 +121,7 @@ pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
                 description: a.description,
                 entry_type: "agent".to_string(),
                 is_hidden: a.is_hidden,
+                folder: a.folder.clone(),
             });
         }
     }
@@ -127,6 +135,7 @@ pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
                 description: String::new(),
                 entry_type: "workflow".to_string(),
                 is_hidden: !wf.visible,
+                folder: None,
             });
         }
     }

@@ -127,6 +127,7 @@ where
             max_gen_tokens, &model_params, &format_type,
             cancel_flag, 0, &mut all_sub_calls, None, &mcp_servers_dir,
             &mut messages_store, &mut msg_counter,
+            String::new(),
         )?;
         let sub_calls_opt = if all_sub_calls.is_empty() { None } else { Some(all_sub_calls.clone()) };
         messages_store.push(ChatMessage {
@@ -200,6 +201,7 @@ pub(crate) fn run_agent_node<L, S, C>(
     all_sub_calls: &mut Vec<SubCall>, _caller_name: Option<String>,
     mcp_servers_dir: &Path,
     messages: &mut Vec<ChatMessage>, msg_counter: &mut u32,
+    injected_reports: String,
 ) -> Result<String, String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -231,7 +233,11 @@ where
     })));
 
     let has_tools = !all_tools.is_empty();
-    let system_prompt = build_system_prompt(agent, messages, has_tools, &all_tools);
+    let mut system_prompt = build_system_prompt(agent, messages, has_tools, &all_tools);
+    if !injected_reports.is_empty() {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&injected_reports);
+    }
 
     let mut llm_messages = vec![ChatMessage { id: None, msg_type: "message".to_string(), content: system_prompt.clone(), sub_calls: None, author: Some("system".to_string()) }];
 
@@ -253,7 +259,7 @@ where
 
     llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: user_text.clone(), sub_calls: None, author: Some("user".to_string()) });
 
-    let initial_dump = format!("### [SYSTEM PROMPT]\n{}", agent.system_prompt);
+    let initial_dump = format!("### [SYSTEM PROMPT]\n{}", system_prompt);
 
     // ═══════════════════════════════════════
     //  PHASE 2: LOOP STATE
@@ -400,12 +406,7 @@ where
 
             if parsed.target == "reply" || parsed.target == "user" {
                 if parsed.content.is_empty() {
-                    let fallback = messages.iter().rev()
-                        .find(|m| m.msg_type == "thought" && m.author.as_deref() == Some("visualizer_agent"))
-                        .or_else(|| messages.iter().rev().find(|m| m.msg_type == "thought" && !m.content.is_empty() && m.content.len() > 10))
-                        .map(|m| m.content.clone())
-                        .unwrap_or_else(|| format!("{} Анализ завершен, но данных для ответа нет.", AGENT_ERROR_PREFIX));
-                    final_response = fallback;
+                    final_response = response.clone();
                 } else {
                     final_response = parsed.content;
                 }
@@ -429,6 +430,7 @@ where
                     max_gen_tokens, model_params, format_type,
                     cancel_flag.clone(), depth + 1, all_sub_calls, Some(agent.name.clone()), mcp_servers_dir,
                     messages, msg_counter,
+                    String::new(),
                 )?;
                 let end_len = all_sub_calls.len();
                 let node_sub_calls = if start_len < end_len {

@@ -69,20 +69,20 @@ where
                 .find(|a| a.id == agent_id)
                 .ok_or_else(|| format!("llm_worker: агент '{}' не найден", agent_id))?;
 
-            let mut task = context.resolve_template(node.task.as_deref().unwrap_or(""));
+            let task = context.resolve_template(node.task.as_deref().unwrap_or(""));
 
-            // ── inject_reports: Push отчётов коллег ──
+            // ── inject_reports: Отчёты коллег в system prompt ──
+            let mut injected_reports = String::new();
             if let Some(ref reports_to_inject) = node.inject_reports {
                 if !reports_to_inject.is_empty() {
-                    let mut injected = String::from("\n\n### [ОТЧЕТЫ КОЛЛЕГ ДЛЯ АНАЛИЗА]\n");
+                    injected_reports.push_str("### [ОТЧЕТЫ КОЛЛЕГ ДЛЯ АНАЛИЗА]\n");
                     for aid in reports_to_inject {
                         let report = context.messages.iter().rev()
                             .find(|m| m.msg_type == "thought" && m.author.as_deref() == Some(aid.as_str()))
                             .map(|m| m.content.clone())
                             .unwrap_or_else(|| "[Отчет не найден]".to_string());
-                        injected.push_str(&format!("--- Отчет от {} ---\n{}\n\n", aid, report));
+                        injected_reports.push_str(&format!("--- Отчет от {} ---\n{}\n\n", aid, report));
                     }
-                    task.push_str(&injected);
                 }
             }
 
@@ -93,7 +93,7 @@ where
             ));
 
             let start_len = runner.all_sub_calls.len();
-            let result = runner.call_agent(agent, &task, &mut context.messages)?;
+            let result = runner.call_agent(agent, &task, &mut context.messages, &injected_reports)?;
             let end_len = runner.all_sub_calls.len();
 
             let node_sub_calls = if start_len < end_len {

@@ -36,6 +36,7 @@ export interface AgentEntry {
     description: string;
     entry_type: 'agent' | 'workflow';
     is_hidden: boolean;
+    folder?: string;
 }
 
 export interface ChatResponse {
