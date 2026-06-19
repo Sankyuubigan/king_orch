@@ -1,6 +1,6 @@
 ---
-name: Validator
-description: Психотерапевт
+name: Валидатор данных
+visible: true
 tools:
   write: false
   bash: false

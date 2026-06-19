@@ -8,7 +8,7 @@ use crate::domain::workflow_engine::{
 use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, ToolCallInfo};
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
-    has_incomplete_json_action, parse_orchestrator_response, parse_tool_call,
+    has_incomplete_json_action, parse_orchestrator_response, parse_tool_call, strip_tool_call,
 };
 use prompt::build_system_prompt;
 use std::collections::HashMap;
@@ -257,7 +257,12 @@ where
         });
     }
 
-    llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: user_text.clone(), sub_calls: None, author: Some("user".to_string()) });
+    let user_text_dup = llm_messages.last()
+        .map(|m| m.author.as_deref() == Some("user") && m.content == user_text)
+        .unwrap_or(false);
+    if !user_text_dup {
+        llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: user_text.clone(), sub_calls: None, author: Some("user".to_string()) });
+    }
 
     let initial_dump = format!("### [SYSTEM PROMPT]\n{}", system_prompt);
 
@@ -344,10 +349,31 @@ where
                     };
                     messages.push(signal_msg);
                     *msg_counter += 1;
-                    tool_output = Some(format!(
-                        "[РЕЗУЛЬТАТ emit_signal]\n✅ Сигнал '{}' сохранён в сессию от агента '{}'.\n\nЕсли задача выполнена — ответь ОБЫЧНЫМ ТЕКСТОМ.",
-                        key, agent.id
-                    ));
+
+                    let (analysis, _) = strip_tool_call(&response);
+                    let analysis = if analysis.trim().is_empty() {
+                        if thought.is_empty() { response.clone() } else { thought.clone() }
+                    } else {
+                        analysis
+                    };
+                    let analysis_msg = ChatMessage {
+                        id: Some(format!("msg_{}", msg_counter)),
+                        msg_type: "thought".to_string(),
+                        content: analysis.clone(),
+                        sub_calls: None,
+                        author: Some(agent.id.clone()),
+                    };
+                    messages.push(analysis_msg);
+                    *msg_counter += 1;
+
+                    log_cb(format!("💭 Мысль {} [d={}] (сигнал + анализ) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), safe_truncate(&analysis, 500)));
+                    tool_calls.push(ToolCallInfo {
+                        tool_name: "emit_signal".to_string(),
+                        arguments: args_str.clone(),
+                        result: format!("✅ Сигнал '{}' сохранён", key),
+                    });
+                    final_response = analysis;
+                    break;
                 } else {
                     let key_str = arguments.get("key").map(|v| v.to_string()).unwrap_or_else(|| "отсутствует".to_string());
                     let val_str = arguments.get("value").map(|v| v.to_string()).unwrap_or_else(|| "отсутствует".to_string());

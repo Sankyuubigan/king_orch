@@ -101,6 +101,7 @@ pub fn clean_thought_tags(text: &str) -> String {
     }
     result = result.replace("</start_of_turn>", "").replace("<start_of_turn>", "");
     result = result.replace("<audio|>", "").replace("<video|>", "").replace("<image|>", "");
+    result = result.replace("<|channel>", "").replace("<channel|>", "");
     result.trim().to_string()
 }
 
@@ -110,32 +111,55 @@ pub struct ParsedOrchestratorResponse {
     pub thought: String,
 }
 
-pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)> {
-    if let Some(json_str) = extract_json_block(text) {
-        let parsed = serde_json::from_str::<serde_json::Value>(&json_str)
-            .or_else(|_| serde_json::from_str(&json_str.replace('\n', " ").replace('\r', "")));
-        if let Ok(val) = parsed {
-            if let Some(tool) = val.get("tool").and_then(|v| v.as_str()) {
-                if !is_valid_tool_name(tool) { return None; }
-                let args = val.get("arguments").cloned().unwrap_or_else(|| val.get("arg").cloned().unwrap_or(serde_json::Value::Null));
-                let thought = val.get("thought").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                return Some((tool.to_string(), args, thought));
-            }
-        } else {
-            let tool_re = regex::Regex::new(r#"(?is)"tool"\s*:\s*"([^"]+)""#).ok()?;
-            if let Some(tool_cap) = tool_re.captures(&json_str) {
-                let tool = tool_cap.get(1)?.as_str().to_string();
-                if !is_valid_tool_name(&tool) { return None; }
-                let args_re = regex::Regex::new(r#"(?is)"arguments"\s*:\s*(\{.*?\})"#).ok()?;
-                let args_str = args_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or("{}".to_string());
-                let args = serde_json::from_str(&args_str).unwrap_or(serde_json::Value::Null);
-                let thought_re = regex::Regex::new(r#"(?is)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok()?;
-                let thought_raw = thought_re.captures(&json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
-                return Some((tool, args, decode_json_escapes(&thought_raw)));
-            }
+fn parse_tool_call_from_json(json_str: &str) -> Option<(String, serde_json::Value, String)> {
+    let parsed = serde_json::from_str::<serde_json::Value>(json_str)
+        .or_else(|_| serde_json::from_str(&json_str.replace('\n', " ").replace('\r', "")));
+    if let Ok(val) = parsed {
+        if let Some(tool) = val.get("tool").and_then(|v| v.as_str()) {
+            if !is_valid_tool_name(tool) { return None; }
+            let args = val.get("arguments").cloned().unwrap_or_else(|| val.get("arg").cloned().unwrap_or(serde_json::Value::Null));
+            let thought = val.get("thought").and_then(|v| v.as_str()).unwrap_or("").to_string();
+            return Some((tool.to_string(), args, thought));
+        }
+    } else {
+        let tool_re = regex::Regex::new(r#"(?is)"tool"\s*:\s*"([^"]+)""#).ok()?;
+        if let Some(tool_cap) = tool_re.captures(json_str) {
+            let tool = tool_cap.get(1)?.as_str().to_string();
+            if !is_valid_tool_name(&tool) { return None; }
+            let args_re = regex::Regex::new(r#"(?is)"arguments"\s*:\s*(\{.*?\})"#).ok()?;
+            let args_str = args_re.captures(json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or("{}".to_string());
+            let args = serde_json::from_str(&args_str).unwrap_or(serde_json::Value::Null);
+            let thought_re = regex::Regex::new(r#"(?is)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok()?;
+            let thought_raw = thought_re.captures(json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
+            return Some((tool, args, decode_json_escapes(&thought_raw)));
         }
     }
     None
+}
+
+pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)> {
+    if let Some(json_str) = extract_json_block(text) {
+        return parse_tool_call_from_json(&json_str);
+    }
+    None
+}
+
+pub fn strip_tool_call(text: &str) -> (String, Option<(String, serde_json::Value, String)>) {
+    if let Some(json_str) = extract_json_block(text) {
+        if let Some(tool_info) = parse_tool_call_from_json(&json_str) {
+            let cleaned = remove_fenced_json_blocks(text);
+            return (cleaned, Some(tool_info));
+        }
+    }
+    (text.to_string(), None)
+}
+
+fn remove_fenced_json_blocks(text: &str) -> String {
+    if let Ok(re) = regex::Regex::new(r"(?s)```json\s*.*?```") {
+        re.replace_all(text, "").to_string().trim().to_string()
+    } else {
+        text.to_string()
+    }
 }
 
 pub fn parse_orchestrator_response(text: &str) -> Option<ParsedOrchestratorResponse> {
