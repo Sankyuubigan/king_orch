@@ -12,11 +12,11 @@ nodes:
       User: {{ user_message }}
       Session signals: {{ signals }}
     ui_pos:
-      y: 509
       x: -611
+      y: 509
   - id: priority_router
     type: switch
-    input_object: "{{ nodes.extract_facts.output }}"
+    input_object: '{{ nodes.extract_facts.output }}'
     switch_field: phase
     cases_priority:
       - key: data_collection
@@ -25,16 +25,16 @@ nodes:
         to: call_pattern_finder
     default: condition_check_1781669155440
     ui_pos:
-      y: 480
       x: -253
+      y: 480
   - id: call_curator
     type: llm_worker
     agent: curator
     task: Пользователь не согласен или сопротивляется. Ответь ему.
     output_type: message
     ui_pos:
-      y: 372
-      x: 1531
+      y: -30
+      x: 2235
   - id: call_soma_translator
     type: llm_worker
     agent: soma_translator
@@ -49,8 +49,8 @@ nodes:
       Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
     output_type: message
     ui_pos:
-      y: 40
-      x: 12
+      x: 105
+      y: -545
     disabled: true
   - id: call_grounder
     type: llm_worker
@@ -59,15 +59,15 @@ nodes:
     inject_reports:
       - soma_translator
     ui_pos:
-      y: 176
-      x: 885
+      x: 896
+      y: -537
   - id: call_validator
     type: llm_worker
     agent: validator
     ui_pos:
-      y: 330
-      x: 898
-  - id: route_validator_signal
+      y: 3
+      x: 1575
+  - id: check_validator_signal
     type: signal_router
     signal_name: validator_report
     field: verdict
@@ -77,8 +77,8 @@ nodes:
       - key: КРАШ-ТЕСТ НЕОБХОДИМ
         to: call_curator
     ui_pos:
-      y: 166
-      x: 1236
+      x: 1913
+      y: -161
   - id: call_destructor_finder
     type: llm_worker
     agent: destructor_detector
@@ -93,14 +93,15 @@ nodes:
     ui_pos:
       y: 596
       x: 2540
+    disabled: true
   - id: call_pattern_finder
     type: llm_worker
     agent: pattern_finder_by_floors
     inject_reports:
       - soma_translator
     ui_pos:
-      y: 491
       x: 2270
+      y: 491
   - id: call_healer
     type: llm_worker
     agent: neuro_reprogrammer
@@ -113,31 +114,78 @@ nodes:
       - pattern_finder_by_floors
       - destructor_detector
     ui_pos:
-      y: 599
       x: 2811
-  - id: condition_check_1781669155440
+      y: 599
+  - id: check_somatic
     type: condition_check
     field: has_somatic
-    sequential_to: condition_check_1781669297812
+    sequential_to: llm_worker_1782103106237
     true_to: call_soma_translator
     ui_pos:
-      x: 184
       y: 243
-  - id: condition_check_1781669297812
+      x: 184
+  - id: check_grounding
     type: condition_check
     field: grounding_dont_exist
     true_to: call_grounder
     false_to: call_validator
     ui_pos:
-      y: 85
-      x: 546
+      x: 590
+      y: -592
+  - id: call_cluster_checker
+    type: llm_worker
+    agent: cluster_checker
+    ui_pos:
+      y: 28
+      x: 430
+  - id: check_cluster_signal
+    type: signal_router
+    signal_name: cluster_checker
+    cases_priority:
+      - key: Конкретная проблема
+        to: ''
+      - key: Кластер
+        to: llm_worker_1782103516271
+    ui_pos:
+      x: 685
+      y: 18
+  - id: call_decomposer
+    type: llm_worker
+    agent: decomposer
+    ui_pos:
+      y: 107
+      x: 936
+  - id: synchronize_with_user
+    type: llm_worker
+    agent: synchronizer
+    ui_pos:
+      y: 116
+      x: 1187
 
 edges:
   - from: extract_facts
     to: priority_router
+  - from: route_validator_signal
+    to: call_curator
+  - from: condition_check_1781669155440
+    to: call_soma_translator
+  - from: condition_check_1781669297812
+    to: call_grounder
+  - from: condition_check_1781669297812
+    to: call_validator
   - from: call_validator
     to: route_validator_signal
   - from: call_pattern_finder
     to: call_destructor_finder
+  - from: route_validator_signal
+    to: call_pattern_finder
   - from: call_destructor_finder
     to: call_healer
+  - from: condition_check_1781669155440
+    to: llm_worker_1782103106237
+  - from: llm_worker_1782103106237
+    to: signal_router_1782103260985
+  - from: signal_router_1782103260985
+    to: llm_worker_1782103516271
+  - from: llm_worker_1782103516271
+    to: llm_worker_1782103918900
