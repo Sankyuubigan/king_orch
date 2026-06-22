@@ -123,6 +123,12 @@ export class GraphController {
   private multiDragPrimary: string | null = null;
   private ctxMenu: HTMLDivElement | null = null;
 
+  private static readonly CONDITION_CHECK_CASES = [
+    { key: "true", field: "true_to" as const },
+    { key: "false", field: "false_to" as const },
+    { key: "seq", field: "sequential_to" as const },
+  ];
+
   constructor(el: GraphElements) {
     this.el = el;
     this.bindEvents();
@@ -196,25 +202,26 @@ export class GraphController {
     container.addEventListener('mousedown', (e: MouseEvent) => {
       const target = e.target as HTMLElement;
 
-      // LMB на холсте → box selection
-      if (e.button === 0 && (target.classList.contains('drawflow') || target.classList.contains('parent-drawflow'))) {
-        e.stopPropagation();
-        e.preventDefault();
-        this.deselectAllNodes();
-        this.startBoxSelection(e);
-        return;
-      }
-
-      // LMB на ноде → управление выделением
       if (e.button === 0) {
         const nodeEl = target.closest('.drawflow-node') as HTMLElement | null;
+        const canvasEl = target.closest('.drawflow') || target.closest('.parent-drawflow');
+
         if (nodeEl) {
           const id = nodeEl.id.slice(5);
           if (!this.selectedNodes.has(id)) {
             this.deselectAllNodes();
             this.selectNode(id);
           }
-          // Если уже выделена — оставляем все выделенными (multi-drag)
+          return;
+        }
+
+        if (canvasEl) {
+          this.deselectAllNodes();
+          if (e.ctrlKey || e.metaKey) {
+            e.stopPropagation();
+            e.preventDefault();
+            this.startBoxSelection(e);
+          }
           return;
         }
       }
@@ -557,9 +564,9 @@ export class GraphController {
         if (!isDynamicNode(node.type)) continue;
         const targets: Array<{ to: string; caseKey?: string }> = [];
         if (node.type === "condition_check") {
-          if (node.sequential_to) targets.push({ to: node.sequential_to, caseKey: "seq" });
           if (node.true_to) targets.push({ to: node.true_to, caseKey: "true" });
           if (node.false_to) targets.push({ to: node.false_to, caseKey: "false" });
+          if (node.sequential_to) targets.push({ to: node.sequential_to, caseKey: "seq" });
         } else if (node.cases_priority) {
           for (const cp of node.cases_priority) targets.push({ to: cp.to, caseKey: cp.key });
         } else if (node.cases) {
@@ -620,12 +627,22 @@ export class GraphController {
         for (const inKey of Object.keys(dn.inputs)) {
           for (const conn of dn.inputs[inKey].connections || []) {
             const fromNode = nodes.find((n) => n.id === conn.node);
+            if (!fromNode) {
+              console.warn(`[handleSave] fromNode не найден для conn.node="${conn.node}" (target="${nodeId}"). drawflow-ключ расходится с data.id — это баг renameNode`);
+            }
             if (fromNode && isDynamicNode(fromNode.type)) {
               continue;
             }
             edges.push({ from: conn.node, to: nodeId });
           }
         }
+      }
+
+      // Валидация: каждое ребро должно ссылаться на существующий node.id
+      const badEdges = edges.filter(e => !nodes.find(n => n.id === e.from) || !nodes.find(n => n.id === e.to));
+      if (badEdges.length > 0) {
+        console.error("[handleSave] Битые рёбра (ссылаются на несуществующие node.id):", JSON.stringify(badEdges));
+        showToast(`⚠️ ${badEdges.length} ребер имеют неверные ID нод — данные могут потеряться`, "error");
       }
 
       const config = this.currentWorkflowConfig ? JSON.parse(JSON.stringify(this.currentWorkflowConfig)) : null;
@@ -812,9 +829,14 @@ export class GraphController {
     const nodeIdInput = document.getElementById("ge-node-id") as HTMLInputElement;
     if (nodeIdInput) {
       nodeIdInput.addEventListener("change", () => {
-        this.editor!.drawflow.drawflow.Home.data[nodeId].data.id = nodeIdInput.value;
-        this.updateNodeHtml(nodeId);
-        this.el.graphDetailTitle.textContent = `✏️ ${nodeIdInput.value}`;
+        const newId = nodeIdInput.value.trim();
+        if (newId && newId !== nodeId) {
+          if (this.renameNode(nodeId, newId)) {
+            this.showNodeEditor(newId);
+          } else {
+            nodeIdInput.value = nodeId;
+          }
+        }
       });
     }
 
@@ -994,6 +1016,100 @@ export class GraphController {
     this.updateNodeHtml(id);
   }
 
+  // ─── Переименование ноды (drawflow-ключ + data.id) ───
+
+  private renameNode(oldKey: string, newKey: string): boolean {
+    if (!this.editor) return false;
+    if (oldKey === newKey) return true;
+    const trimmed = newKey.trim();
+    if (!trimmed) return false;
+
+    const data = this.editor.drawflow.drawflow.Home.data;
+
+    if (data[trimmed]) {
+      showToast(`❌ Узел с ID "${trimmed}" уже существует`, "error");
+      return false;
+    }
+
+    const nodeData = data[oldKey];
+    if (!nodeData) {
+      console.error(`[renameNode] oldKey "${oldKey}" не найден`);
+      return false;
+    }
+
+    // 1. Перемещаем запись под новый ключ
+    data[trimmed] = nodeData;
+    delete data[oldKey];
+
+    // 2. Обновляем identity-поля ноды
+    data[trimmed].id = trimmed;
+    data[trimmed].name = trimmed;
+    data[trimmed].data.id = trimmed;
+
+    // 3. Обновляем conn.node во всех inputs/outputs всех нод
+    for (const nodeId of Object.keys(data)) {
+      const dn = data[nodeId];
+      for (const inKey of Object.keys(dn.inputs)) {
+        for (const conn of dn.inputs[inKey].connections) {
+          if (conn.node === oldKey) conn.node = trimmed;
+        }
+      }
+      for (const outKey of Object.keys(dn.outputs)) {
+        for (const conn of dn.outputs[outKey].connections) {
+          if (conn.node === oldKey) conn.node = trimmed;
+        }
+      }
+    }
+
+    // 4. Обновляем target-ссылки в data динамических нод
+    for (const nodeId of Object.keys(data)) {
+      const nd = data[nodeId].data;
+      if (!isDynamicNode(nd.type)) continue;
+      if (nd.type === "condition_check") {
+        if (nd.sequential_to === oldKey) nd.sequential_to = trimmed;
+        if (nd.true_to === oldKey) nd.true_to = trimmed;
+        if (nd.false_to === oldKey) nd.false_to = trimmed;
+      } else {
+        if (nd.cases_priority) {
+          for (const cp of nd.cases_priority) {
+            if (cp.to === oldKey) cp.to = trimmed;
+          }
+        }
+        if (nd.default === oldKey) nd.default = trimmed;
+      }
+    }
+
+    // 5. Обновляем DOM-атрибут id ноды
+    const domEl = document.getElementById(`node-${oldKey}`);
+    if (domEl) domEl.id = `node-${trimmed}`;
+
+    // 6. Обновляем CSS-классы на SVG-соединениях
+    const svgParent = this.editor.precanvas;
+    if (svgParent) {
+      const inNodes = svgParent.querySelectorAll(`.node_in_node-${oldKey}`);
+      for (const el of inNodes) {
+        el.classList.remove(`node_in_node-${oldKey}`);
+        el.classList.add(`node_in_node-${trimmed}`);
+      }
+      const outNodes = svgParent.querySelectorAll(`.node_out_node-${oldKey}`);
+      for (const el of outNodes) {
+        el.classList.remove(`node_out_node-${oldKey}`);
+        el.classList.add(`node_out_node-${trimmed}`);
+      }
+    }
+
+    // 7. Перерисовываем SVG-пути
+    this.editor.updateConnectionNodes(`node-${trimmed}`);
+
+    // 8. Перерендериваем HTML ноды
+    this.updateNodeHtml(trimmed);
+
+    // 9. Обновляем заголовок сайдбара
+    this.el.graphDetailTitle.textContent = `✏️ ${trimmed}`;
+
+    return true;
+  }
+
   // ─── Обновление HTML ноды ───
 
   private updateNodeHtml(nodeId: string): void {
@@ -1061,12 +1177,12 @@ export class GraphController {
   private syncSwitchNodeFromConnections(dn: any): void {
     const data = dn.data;
     if (data.type === "condition_check") {
-      const out1 = dn.outputs["output_1"]?.connections || [];
-      const out2 = dn.outputs["output_2"]?.connections || [];
-      const out3 = dn.outputs["output_3"]?.connections || [];
-      data.sequential_to = out1.length > 0 ? out1[0].node : undefined;
-      data.true_to = out2.length > 0 ? out2[0].node : undefined;
-      data.false_to = out3.length > 0 ? out3[0].node : undefined;
+      for (let i = 0; i < GraphController.CONDITION_CHECK_CASES.length; i++) {
+        const cc = GraphController.CONDITION_CHECK_CASES[i];
+        const outKey = `output_${i + 1}`;
+        const conns = dn.outputs[outKey]?.connections || [];
+        data[cc.field] = conns.length > 0 ? conns[0].node : undefined;
+      }
       return;
     }
     const caseKeys = this.getSwitchCaseKeys(data);
@@ -1098,13 +1214,8 @@ export class GraphController {
     const outIdx = parseInt(match[1], 10) - 1;
 
     if (data.type === "condition_check") {
-      if (outIdx === 0) {
-        data.sequential_to = action === "created" ? toNodeId : undefined;
-      } else if (outIdx === 1) {
-        data.true_to = action === "created" ? toNodeId : undefined;
-      } else if (outIdx === 2) {
-        data.false_to = action === "created" ? toNodeId : undefined;
-      }
+      const cc = GraphController.CONDITION_CHECK_CASES[outIdx];
+      if (cc) data[cc.field] = action === "created" ? toNodeId : undefined;
       return;
     }
 
@@ -1274,7 +1385,7 @@ export class GraphController {
   }
 
   private getSwitchCaseKeys(node: GraphNodeDef): string[] {
-    if (node.type === "condition_check") return ["seq", "true", "false"];
+    if (node.type === "condition_check") return GraphController.CONDITION_CHECK_CASES.map(c => c.key);
     if (node.cases) return Object.keys(node.cases);
     if (node.cases_priority) {
       const keys = node.cases_priority.map((c) => c.key);
@@ -1296,9 +1407,9 @@ export class GraphController {
     for (const node of nodes) {
       if (!isDynamicNode(node.type)) continue;
       if (node.type === "condition_check") {
-        if (node.sequential_to) implicit.push({ from: node.id, to: node.sequential_to });
         if (node.true_to) implicit.push({ from: node.id, to: node.true_to });
         if (node.false_to) implicit.push({ from: node.id, to: node.false_to });
+        if (node.sequential_to) implicit.push({ from: node.id, to: node.sequential_to });
         continue;
       }
       if (node.cases_priority) {

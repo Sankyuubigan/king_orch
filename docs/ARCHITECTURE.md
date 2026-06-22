@@ -62,7 +62,16 @@
 Список сессий, удаление, переименование. Работает через `../services` (дверь).
 
 ### GraphController (`src/controllers/graph.ts`)
-Визуализация workflow-графов. Загружает данные с бэкенда через `invoke("get_workflow_graphs")` и рендерит их через vis-network (canvas).
+Визуализация workflow-графов на Drawflow. Загружает/сохраняет YAML workflow через Tauri-команды.
+
+**Node ID lifecycle:** Узлы Drawflow имеют единственный идентификатор — `data.id`, который совпадает с ключом в `drawflow.Home.data`. При переименовании ноды через сайдбар (`ge-node-id`) вызывается `renameNode(oldKey, newKey)`:
+- Запись перемещается под новый ключ в хеше
+- Обновляются все `conn.node` в `inputs[]`/`outputs[]` всех нод
+- Обновляются target-ссылки в data динамических нод (`cases_priority[].to`, `default`, `sequential_to`, `true_to`, `false_to`)
+- Обновляются DOM `id` и SVG CSS-классы соединений
+- Вызывается `updateConnectionNodes` для перерисовки путей
+
+В `handleSave()` добавлена валидация: если `edge.from` или `edge.to` не существует среди `nodes[].id` — показывается **красный тост** и `console.error` с JSON битых рёбер.
 
 ---
 
