@@ -660,12 +660,17 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 .drawflow .connection .main-path {
   stroke: #78909c !important;
   stroke-width: 2.5 !important;
+  cursor: grab !important;
 }
 .drawflow .connection .main-path:hover {
   stroke: var(--primary) !important;
 }
 .drawflow .connection .main-path.selected {
   stroke: var(--primary) !important;
+}
+body.edge-reconnecting {
+  cursor: grabbing !important;
+  user-select: none !important;
 }
 .drawflow .connection-point {
   fill: var(--primary) !important;

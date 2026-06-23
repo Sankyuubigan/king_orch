@@ -12,8 +12,8 @@ nodes:
       User: {{ user_message }}
       Session signals: {{ signals }}
     ui_pos:
-      x: -1307
       y: 489
+      x: -1307
   - id: priority_router
     type: switch
     input_object: '{{ nodes.extract_facts.output }}'
@@ -25,23 +25,23 @@ nodes:
         to: call_pattern_finder
     default: check_somatic
     ui_pos:
-      y: 460
       x: -949
+      y: 460
   - id: call_curator
     type: llm_worker
     agent: curator
     task: Пользователь не согласен или сопротивляется. Ответь ему.
     output_type: message
     ui_pos:
-      y: 152
-      x: 2726
+      x: 3075
+      y: 153
   - id: call_soma_translator
     type: llm_worker
     agent: soma_translator
     task: Пользователь описал боль. Дай ему расшифровку по НГМ.
     ui_pos:
-      y: 139
       x: -21
+      y: 139
   - id: collect_info
     type: llm_worker
     agent: liaison
@@ -49,8 +49,8 @@ nodes:
       Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
     output_type: message
     ui_pos:
-      x: 105
       y: -545
+      x: 105
     disabled: true
   - id: call_grounder
     type: llm_worker
@@ -59,8 +59,8 @@ nodes:
     inject_reports:
       - soma_translator
     ui_pos:
-      x: 1527
-      y: 247
+      x: 1509
+      y: 121
   - id: call_validator
     type: llm_worker
     agent: validator
@@ -77,8 +77,8 @@ nodes:
       - key: ДАННЫХ ДОСТАТОЧНО
         to: call_pattern_finder
     ui_pos:
-      y: 179
       x: 2422
+      y: 179
   - id: call_destructor_finder
     type: llm_worker
     agent: destructor_detector
@@ -100,8 +100,8 @@ nodes:
     inject_reports:
       - soma_translator
     ui_pos:
-      y: 537
       x: 2984
+      y: 537
   - id: call_healer
     type: llm_worker
     agent: neuro_reprogrammer
@@ -114,8 +114,8 @@ nodes:
       - pattern_finder_by_floors
       - destructor_detector
     ui_pos:
-      y: 645
       x: 3525
+      y: 645
   - id: check_somatic
     type: condition_check
     field: has_somatic
@@ -127,7 +127,7 @@ nodes:
   - id: check_grounding
     type: condition_check
     field: grounding_dont_exist
-    sequential_to: synchronize_with_user
+    sequential_to: call_validator
     true_to: call_grounder
     ui_pos:
       y: 274
@@ -136,8 +136,8 @@ nodes:
     type: llm_worker
     agent: cluster_checker
     ui_pos:
-      y: 272
       x: 91
+      y: 272
   - id: check_cluster_signal
     type: signal_router
     signal_name: cluster_checker
@@ -147,57 +147,55 @@ nodes:
       - key: Кластер
         to: call_decomposer
     ui_pos:
-      x: 346
       y: 262
+      x: 346
   - id: call_decomposer
     type: llm_worker
     agent: decomposer
     ui_pos:
-      y: 385
       x: 611
+      y: 385
   - id: synchronize_with_user
     type: llm_worker
     agent: synchronizer
     ui_pos:
-      x: 1742
-      y: 424
+      x: 3367
+      y: 162
   - id: note_1782220193985
     type: note
     input: |
       проверка данных. развилка на доработку данных или отправку на лечение
     ui_pos:
-      y: 855
-      x: 1922
+      x: 1674
+      y: 285
   - id: note_1782220533024
     type: note
     input: уточнение данных у юзера
     ui_pos:
-      y: 765
-      x: 2325
+      y: 119
+      x: 2687
   - id: note_1782220629095
     type: note
     input: лечение анализ
     ui_pos:
-      x: 2329
-      y: 1007
+      y: 530
+      x: 2597
   - id: note_1782221436115
     type: note
     input: пересчитываем данные с учетом новых данных от юзера
     ui_pos:
-      x: -661
       y: 292
+      x: -661
   - id: note_1782224256075
     type: note
     input: проверяем абстрактный ли запрос
     ui_pos:
-      x: 880
       y: 285
+      x: 880
 
 edges:
   - from: extract_facts
     to: priority_router
-  - from: synchronize_with_user
-    to: call_validator
   - from: call_validator
     to: check_validator_signal
   - from: call_pattern_finder
@@ -208,3 +206,5 @@ edges:
     to: check_grounding
   - from: call_cluster_checker
     to: check_cluster_signal
+  - from: call_curator
+    to: synchronize_with_user
