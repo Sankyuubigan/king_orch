@@ -160,6 +160,7 @@ pub enum NodeType {
     Return,
     #[serde(rename = "signal_router")]
     SignalRouter,
+    Note,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -509,5 +510,45 @@ mod tests {
 
         // Проверяем что parent_dir не попал в YAML
         assert!(!indented.contains("parent_dir"), "parent_dir должен быть skip");
+    }
+
+    #[test]
+    fn test_note_node_yaml_roundtrip() {
+        let yaml = r#"
+name: Test Note
+nodes:
+  - id: note_1
+    type: note
+    input: "Важная заметка о соматике"
+    ui_pos:
+      x: 100
+      y: 200
+edges: []
+"#;
+        let wf: WorkflowDef = serde_yaml::from_str(yaml)
+            .expect("Парсинг YAML с note нодой не удался");
+        assert_eq!(wf.nodes.len(), 1);
+        let note = &wf.nodes[0];
+        assert_eq!(note.id, "note_1");
+        assert_eq!(note.node_type, NodeType::Note);
+        assert_eq!(note.input.as_deref(), Some("Важная заметка о соматике"));
+        assert!(note.ui_pos.is_some());
+        assert_eq!(note.ui_pos.as_ref().unwrap().get("x"), Some(&100));
+        assert_eq!(note.ui_pos.as_ref().unwrap().get("y"), Some(&200));
+
+        // Сериализация (проверяем через десериализацию обратно)
+        let serialized = serde_yaml::to_string(&wf).expect("Сериализация не удалась");
+        let indented = indent_yaml(&serialized);
+
+        eprintln!("=== Serialized note YAML ===\n{}", indented);
+
+        let wf2: WorkflowDef = serde_yaml::from_str(&indented)
+            .expect("Повторный парсинг note YAML не удался");
+        let note2 = &wf2.nodes[0];
+        assert_eq!(note2.input.as_deref(), Some("Важная заметка о соматике"));
+
+        // Проверяем отсутствие неиспользуемых полей
+        assert!(!indented.contains("agent:"), "agent не должно быть в note ноде");
+        assert!(!indented.contains("task:"), "task не должно быть в note ноде");
     }
 }

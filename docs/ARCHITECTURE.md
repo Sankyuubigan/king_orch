@@ -130,7 +130,7 @@
 | `orchestrator/runtime.rs` | Загрузка и запуск MCP-серверов |
 | `workflow_engine/mod.rs` | **Графовый движок маршрутизации.** Исполняет YAML-графы (workflows). Точка входа — `run_workflow()` |
 | `workflow_engine/parser.rs` | Парсинг YAML workflow файлов, структуры `WorkflowDef`, `NodeDef`, `EdgeDef`, поиск по `file_stem` |
-| `workflow_engine/nodes.rs` | Исполнение узлов графа: `llm_worker`, `llm_fact_extractor`, `system_condition`, `sub_workflow`, `switch`, `return` |
+| `workflow_engine/nodes.rs` | Исполнение узлов графа: `llm_worker`, `llm_fact_extractor`, `system_condition`, `sub_workflow`, `switch`, `note` (pass-through), `return` |
 | `workflow_engine/context.rs` | Контекст выполнения: проход `{{ template }}` переменных, хранение outputs узлов |
 | `workflow_engine/fact_extractor.rs` | **Built-in** fact-экстрактор (не требует отдельного .md файла). Факты инжектятся runtime из YAML |
 | `parsers.rs` | Распаковка JSON от LLM, очистка think-тегов |
@@ -183,12 +183,13 @@ User → Entry point (выбор в UI: .md с visible: true или YAML с visi
     run_chat() проверяет: есть ли YAML workflow с file_stem == agent_id?
          ↓
      [Да] → workflow_engine::run_workflow()
-          │          ├→ llm_fact_extractor → fact_extractor.rs (built-in, возвращает JSON фактов)
-          │          ├→ switch → приоритетная (cases_priority) или стандартная маршрутизация
-          │          ├→ condition_check → бинарная проверка поля (true/false)
-          │          ├→ sub_workflow → рекурсивный вызов другого YAML
-          │          ├→ llm_worker → run_agent_node() для .md агента (без авто-истории)
-          │          └→ system_condition → Rust-side проверка (aggregate_and_output для вывода)
+           │          ├→ llm_fact_extractor → fact_extractor.rs (built-in, возвращает JSON фактов)
+           │          ├→ switch → приоритетная (cases_priority) или стандартная маршрутизация
+           │          ├→ condition_check → бинарная проверка поля (true/false)
+           │          ├→ sub_workflow → рекурсивный вызов другого YAML
+           │          ├→ llm_worker → run_agent_node() для .md агента (без авто-истории)
+           │          ├→ note → pass-through (визуальная заметка, не влияет на выполнение)
+           │          └→ system_condition → Rust-side проверка (aggregate_and_output для вывода)
          │
     [Нет] → orchestrator::run_agent_node()
          │          └→ вся история non-thought сообщений inject'ится в llm_messages

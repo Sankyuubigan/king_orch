@@ -60,6 +60,7 @@ export interface GraphElements {
   btnAddSignalRouter: HTMLButtonElement;
   btnAddExtractor: HTMLButtonElement;
   btnAddConditionCheck: HTMLButtonElement;
+  btnAddNote: HTMLButtonElement;
 }
 
 const NODE_COLORS: Record<string, string> = {
@@ -74,6 +75,7 @@ const NODE_COLORS: Record<string, string> = {
   signal_router: "#ff9800",
   condition_check: "#26a69a",
   return: "#78909c",
+  note: "#e53935",
 };
 
 const NODE_LABELS: Record<string, string> = {
@@ -88,6 +90,7 @@ const NODE_LABELS: Record<string, string> = {
   signal_router: "📡 Signal Router",
   condition_check: "🎯 Condition Check",
   return: "🏁 Return",
+  note: "📝 Note",
 };
 
 function isDynamicNode(t: string): boolean {
@@ -106,6 +109,7 @@ const OUTPUT_COUNT: Record<string, number> = {
   signal_router: 0,
   condition_check: 0,
   return: 0,
+  note: 1,
 };
 
 export class GraphController {
@@ -144,6 +148,7 @@ export class GraphController {
     this.el.btnAddSignalRouter.addEventListener("click", () => this.addNode("signal_router"));
     this.el.btnAddExtractor.addEventListener("click", () => this.addNode("llm_fact_extractor"));
     this.el.btnAddConditionCheck.addEventListener("click", () => this.addNode("condition_check"));
+    this.el.btnAddNote.addEventListener("click", () => this.addNode("note"));
   }
 
   private ensureEditor(): void {
@@ -526,7 +531,9 @@ export class GraphController {
 
         const html = this.buildNodeInnerHtml(node, node.id);
 
-        let nodeClass = isDynamicNode(node.type) ? "dynamic-node" : "";
+        let nodeClass = "";
+        if (node.type === "note") nodeClass = "node-type-note";
+        else if (isDynamicNode(node.type)) nodeClass = "dynamic-node";
         if (node.disabled) nodeClass = nodeClass ? `${nodeClass} node-disabled` : "node-disabled";
 
         nodesData[node.id] = {
@@ -792,6 +799,13 @@ export class GraphController {
       html += this.renderDefaultHtml(data);
     }
 
+    if (data.type === "note") {
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Текст заметки</div>
+        <textarea id="ge-note-content" class="ge-textarea" rows="6" style="font-size:16px;font-weight:600;">${this.esc(data.input || "")}</textarea>
+      </div>`;
+    }
+
     this.el.graphDetailContent.innerHTML = html;
 
     const agentInput = document.getElementById("ge-agent") as HTMLInputElement;
@@ -921,6 +935,14 @@ export class GraphController {
       });
     }
 
+    const noteContent = document.getElementById("ge-note-content") as HTMLTextAreaElement;
+    if (noteContent) {
+      noteContent.addEventListener("change", () => {
+        this.editor!.drawflow.drawflow.Home.data[nodeId].data.input = noteContent.value || undefined;
+        this.updateNodeHtml(nodeId);
+      });
+    }
+
     const addBtn = document.getElementById("ge-case-add");
     if (addBtn) {
       addBtn.addEventListener("click", () => {
@@ -996,11 +1018,15 @@ export class GraphController {
     const outputs: Record<string, { connections: any[] }> = {};
     for (let i = 1; i <= outs; i++) outputs[`output_${i}`] = { connections: [] };
 
+    let nodeClass = "";
+    if (type === "note") nodeClass = "node-type-note";
+    else if (isDynamicNode(type)) nodeClass = "dynamic-node";
+
     const nodeData: import("drawflow").DrawflowNode = {
       id,
       name: id,
       data: { id, type },
-      class: isDynamicNode(type) ? "dynamic-node" : "",
+      class: nodeClass,
       html: "",
       typenode: false,
       inputs,
@@ -1528,6 +1554,10 @@ export class GraphController {
         ).join("") + `</div>`;
       }
     }
+    if (data.type === "note") {
+      return `<div class="gn-note-content">${this.esc(data.input || "")}</div>`;
+    }
+
     const disabledBadge = data.disabled ? `<div class="gn-disabled-badge">⛔ DISABLED</div>` : "";
     return `
       <div class="gn-title">${this.esc(data.id || fallbackId)}</div>

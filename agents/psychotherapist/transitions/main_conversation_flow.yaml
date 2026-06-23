@@ -12,8 +12,8 @@ nodes:
       User: {{ user_message }}
       Session signals: {{ signals }}
     ui_pos:
-      y: 509
-      x: -611
+      x: -1307
+      y: 489
   - id: priority_router
     type: switch
     input_object: '{{ nodes.extract_facts.output }}'
@@ -25,8 +25,8 @@ nodes:
         to: call_pattern_finder
     default: check_somatic
     ui_pos:
-      x: -253
-      y: 480
+      y: 460
+      x: -949
   - id: call_curator
     type: llm_worker
     agent: curator
@@ -40,8 +40,8 @@ nodes:
     agent: soma_translator
     task: Пользователь описал боль. Дай ему расшифровку по НГМ.
     ui_pos:
-      x: 397
-      y: 153
+      y: 139
+      x: -21
   - id: collect_info
     type: llm_worker
     agent: liaison
@@ -59,14 +59,14 @@ nodes:
     inject_reports:
       - soma_translator
     ui_pos:
-      y: 247
       x: 1527
+      y: 247
   - id: call_validator
     type: llm_worker
     agent: validator
     ui_pos:
-      x: 2069
-      y: 270
+      x: 2075
+      y: 278
   - id: check_validator_signal
     type: signal_router
     signal_name: validator_report
@@ -77,8 +77,8 @@ nodes:
       - key: ДАННЫХ ДОСТАТОЧНО
         to: call_pattern_finder
     ui_pos:
-      x: 2422
       y: 179
+      x: 2422
   - id: call_destructor_finder
     type: llm_worker
     agent: destructor_detector
@@ -91,8 +91,8 @@ nodes:
       - soma_translator
       - pattern_finder_by_floors
     ui_pos:
-      x: 3254
       y: 642
+      x: 3254
     disabled: true
   - id: call_pattern_finder
     type: llm_worker
@@ -114,30 +114,30 @@ nodes:
       - pattern_finder_by_floors
       - destructor_detector
     ui_pos:
-      x: 3525
       y: 645
+      x: 3525
   - id: check_somatic
     type: condition_check
     field: has_somatic
     sequential_to: call_cluster_checker
     true_to: call_soma_translator
     ui_pos:
-      x: 149
-      y: 218
+      x: -269
+      y: 204
   - id: check_grounding
     type: condition_check
     field: grounding_dont_exist
     sequential_to: synchronize_with_user
     true_to: call_grounder
     ui_pos:
-      x: 1247
       y: 274
+      x: 1247
   - id: call_cluster_checker
     type: llm_worker
     agent: cluster_checker
     ui_pos:
-      x: 465
-      y: 292
+      y: 272
+      x: 91
   - id: check_cluster_signal
     type: signal_router
     signal_name: cluster_checker
@@ -147,20 +147,51 @@ nodes:
       - key: Кластер
         to: call_decomposer
     ui_pos:
-      y: 282
-      x: 720
+      x: 346
+      y: 262
   - id: call_decomposer
     type: llm_worker
     agent: decomposer
     ui_pos:
-      x: 985
-      y: 405
+      y: 385
+      x: 611
   - id: synchronize_with_user
     type: llm_worker
     agent: synchronizer
     ui_pos:
-      y: 424
       x: 1742
+      y: 424
+  - id: note_1782220193985
+    type: note
+    input: |
+      проверка данных. развилка на доработку данных или отправку на лечение
+    ui_pos:
+      y: 855
+      x: 1922
+  - id: note_1782220533024
+    type: note
+    input: уточнение данных у юзера
+    ui_pos:
+      y: 765
+      x: 2325
+  - id: note_1782220629095
+    type: note
+    input: лечение анализ
+    ui_pos:
+      x: 2329
+      y: 1007
+  - id: note_1782221436115
+    type: note
+    input: пересчитываем данные с учетом новых данных от юзера
+    ui_pos:
+      x: -661
+      y: 292
+  - id: note_1782224256075
+    type: note
+    input: проверяем абстрактный ли запрос
+    ui_pos:
+      x: 880
+      y: 285
 
 edges:
   - from: extract_facts

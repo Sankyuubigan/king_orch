@@ -596,6 +596,12 @@ where
             next_node: Some("__END__".to_string()),
             next_nodes: vec![],
         }),
+
+        NodeType::Note => Ok(NodeResult {
+            output: serde_json::json!({"note": true, "content": node.input.as_deref().unwrap_or("")}),
+            next_node: None,
+            next_nodes: vec![],
+        }),
     }
 }
 
