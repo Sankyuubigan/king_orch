@@ -1478,16 +1478,12 @@ export class GraphController {
 
       const isSourceHalf = Math.hypot(mx - x1, my - y1) < Math.hypot(mx - xN, my - yN);
 
-      // Находим outputKey
-      const allData = this.editor!.drawflow.drawflow.Home.data;
+      // Находим outputKey из CSS-классов SVG (всегда отражает актуальное состояние)
       let outputKey = 'output_1';
-      const targetInput = allData[targetId]?.inputs?.['input_1'];
-      if (targetInput) {
-        for (const conn of targetInput.connections) {
-          if (conn.node === sourceId) {
-            outputKey = conn.output || 'output_1';
-            break;
-          }
+      for (const cls of svg.classList) {
+        if (/^output_\d+$/.test(cls)) {
+          outputKey = cls;
+          break;
         }
       }
 

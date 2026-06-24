@@ -1,7 +1,8 @@
 declare module "drawflow" {
   interface DrawflowConnection {
     node: string;
-    output: string;
+    output?: string;
+    input?: string;
   }
 
   interface DrawflowInput {

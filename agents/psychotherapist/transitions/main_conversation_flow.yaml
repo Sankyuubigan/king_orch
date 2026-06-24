@@ -20,13 +20,12 @@ nodes:
     switch_field: phase
     cases_priority:
       - key: data_collection
-        to: check_somatic
+        to: note_1782221436115
       - key: datamining
-        to: call_pattern_finder
-    default: check_somatic
+        to: note_1782220629095
     ui_pos:
-      x: -949
       y: 460
+      x: -949
   - id: call_curator
     type: llm_worker
     agent: curator
@@ -59,26 +58,26 @@ nodes:
     inject_reports:
       - soma_translator
     ui_pos:
-      x: 1509
       y: 121
+      x: 1509
   - id: call_validator
     type: llm_worker
     agent: validator
     ui_pos:
-      x: 2075
       y: 278
+      x: 2075
   - id: check_validator_signal
     type: signal_router
     signal_name: validator_report
     field: verdict
     cases_priority:
       - key: КРАШ-ТЕСТ НЕОБХОДИМ
-        to: call_curator
+        to: note_1782220533024
       - key: ДАННЫХ ДОСТАТОЧНО
-        to: call_pattern_finder
+        to: note_1782220629095
     ui_pos:
-      x: 2422
       y: 179
+      x: 2422
   - id: call_destructor_finder
     type: llm_worker
     agent: destructor_detector
@@ -91,8 +90,8 @@ nodes:
       - soma_translator
       - pattern_finder_by_floors
     ui_pos:
-      y: 642
-      x: 3254
+      x: 3754
+      y: 678
     disabled: true
   - id: call_pattern_finder
     type: llm_worker
@@ -100,8 +99,8 @@ nodes:
     inject_reports:
       - soma_translator
     ui_pos:
-      x: 2984
-      y: 537
+      y: 573
+      x: 3484
   - id: call_healer
     type: llm_worker
     agent: neuro_reprogrammer
@@ -114,8 +113,8 @@ nodes:
       - pattern_finder_by_floors
       - destructor_detector
     ui_pos:
-      x: 3525
-      y: 645
+      x: 4025
+      y: 681
   - id: check_somatic
     type: condition_check
     field: has_somatic
@@ -127,7 +126,7 @@ nodes:
   - id: check_grounding
     type: condition_check
     field: grounding_dont_exist
-    sequential_to: call_validator
+    sequential_to: note_1782220193985
     true_to: call_grounder
     ui_pos:
       y: 274
@@ -143,7 +142,7 @@ nodes:
     signal_name: cluster_checker
     cases_priority:
       - key: Конкретная проблема
-        to: check_grounding
+        to: note_1782224256075
       - key: Кластер
         to: call_decomposer
     ui_pos:
@@ -153,58 +152,68 @@ nodes:
     type: llm_worker
     agent: decomposer
     ui_pos:
-      x: 611
       y: 385
+      x: 611
   - id: synchronize_with_user
     type: llm_worker
     agent: synchronizer
     ui_pos:
-      x: 3367
       y: 162
+      x: 3367
   - id: note_1782220193985
     type: note
     input: |
       проверка данных. развилка на доработку данных или отправку на лечение
     ui_pos:
-      x: 1674
-      y: 285
+      x: 1638
+      y: 287
   - id: note_1782220533024
     type: note
     input: уточнение данных у юзера
     ui_pos:
-      y: 119
-      x: 2687
+      y: 98
+      x: 2678
   - id: note_1782220629095
     type: note
     input: лечение анализ
     ui_pos:
-      y: 530
-      x: 2597
+      y: 566
+      x: 3097
   - id: note_1782221436115
     type: note
     input: пересчитываем данные с учетом новых данных от юзера
     ui_pos:
-      y: 292
-      x: -661
+      x: -682
+      y: 241
   - id: note_1782224256075
     type: note
     input: проверяем абстрактный ли запрос
     ui_pos:
-      y: 285
-      x: 880
+      y: 244
+      x: 852
 
 edges:
   - from: extract_facts
     to: priority_router
+  - from: note_1782220533024
+    to: call_curator
+  - from: note_1782220193985
+    to: call_validator
   - from: call_validator
     to: check_validator_signal
   - from: call_pattern_finder
     to: call_destructor_finder
+  - from: note_1782220629095
+    to: call_pattern_finder
   - from: call_destructor_finder
     to: call_healer
-  - from: call_decomposer
+  - from: note_1782221436115
+    to: check_somatic
+  - from: note_1782224256075
     to: check_grounding
   - from: call_cluster_checker
     to: check_cluster_signal
   - from: call_curator
     to: synchronize_with_user
+  - from: call_decomposer
+    to: note_1782224256075
