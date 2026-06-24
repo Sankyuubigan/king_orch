@@ -69,6 +69,7 @@
             <span class="toolbar-label">Файл:</span>
             <button id="btn-open-workflow" class="btn-secondary" style="padding:6px 14px;">📂 Открыть</button>
             <span id="current-workflow-name" style="margin-left:6px; font-weight:600; color:var(--primary); font-size:13px;">Файл не выбран</span>
+            <span id="dirty-indicator" style="font-size:16px; line-height:1;"></span>
             <div class="toolbar-separator"></div>
             <span class="toolbar-label">Добавить:</span>
             <button id="btn-add-worker" class="graph-add-btn add-worker" title="Добавить LLM Worker">🤖 Worker</button>
@@ -78,6 +79,9 @@
             <button id="btn-add-condition-check" class="graph-add-btn add-condition-check" title="Добавить Condition Check">🎯 Condition</button>
             <button id="btn-add-extractor" class="graph-add-btn add-extractor" title="Добавить Fact Extractor">📋 Extractor</button>
             <button id="btn-add-note" class="graph-add-btn add-note" title="Добавить заметку">📝 Note</button>
+            <div class="toolbar-separator"></div>
+            <button id="btn-undo" class="graph-add-btn" disabled title="Отменить (Ctrl+Z)">↩</button>
+            <button id="btn-redo" class="graph-add-btn" disabled title="Повторить (Ctrl+Shift+Z)">↪</button>
             <div style="flex:1;"></div>
             <button id="btn-save-workflow" class="btn-primary" disabled style="padding:6px 16px;">💾 Сохранить</button>
           </div>

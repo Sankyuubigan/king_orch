@@ -235,8 +235,13 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 .graph-add-btn.add-note { border-color: #e5393566; }
 .graph-add-btn.add-note:hover { border-color: #e53935; color: #e53935; }
 
-#graph-layout { flex: 1; display: flex; overflow: hidden; position: relative; }
-#graph-container { flex: 1; height: 100%; border: none; background: #1a1a1a; position: relative; }
+#graph-toolbar .graph-add-btn[disabled] {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+#graph-layout { flex: 1; position: relative; overflow: hidden; }
+#graph-container { width: 100%; height: 100%; border: none; background: #1a1a1a; }
 
 /* Selection rectangle */
 .graph-selection-rect {
@@ -248,17 +253,22 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   box-sizing: border-box;
 }
 
-/* ─── Боковая панель редактирования ─── */
+/* ─── Боковая панель редактирования (поверх холста) ─── */
 #graph-sidebar {
-  width: 0;
-  overflow: hidden;
+  position: absolute;
+  top: 0;
+  right: -360px;
+  width: 360px;
+  height: 100%;
+  z-index: 20;
   background: var(--panel-bg);
   border-left: 1px solid var(--border);
-  transition: width 0.25s ease;
+  transition: right 0.25s ease;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
 }
-#graph-sidebar.open { width: 360px; min-width: 360px; }
+#graph-sidebar.open { right: 0; }
 
 .graph-sidebar-header {
   display: flex;

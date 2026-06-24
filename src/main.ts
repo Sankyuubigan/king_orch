@@ -89,6 +89,9 @@ function initApp() {
     btnAddExtractor: $<HTMLButtonElement>("btn-add-extractor"),
     btnAddConditionCheck: $<HTMLButtonElement>("btn-add-condition-check"),
     btnAddNote: $<HTMLButtonElement>("btn-add-note"),
+    btnUndo: $<HTMLButtonElement>("btn-undo"),
+    btnRedo: $<HTMLButtonElement>("btn-redo"),
+    dirtyIndicator: $<HTMLSpanElement>("dirty-indicator"),
   });
 
   // ─── Контроллер теста агентов (суб-вкладка в студии агентов) ───

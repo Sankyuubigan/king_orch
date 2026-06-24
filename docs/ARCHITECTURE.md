@@ -64,6 +64,10 @@
 ### GraphController (`src/controllers/graph.ts`)
 Визуализация workflow-графов на Drawflow. Загружает/сохраняет YAML workflow через Tauri-команды.
 
+**Undo/Redo (Snapshot-based):** Перед каждой мутацией (`addNode`, `renameNode`, `toggleNodeDisabled`, `clearEditor`, `beginEdgeReconnect`, sidebar `change`-обработчики, закрытие сайдбара, начало Drawflow-native connection drag, начало перетаскивания одной ноды (mousedown на теле ноды), multi-drag, успешный edge reconnect) вызывается `saveCheckpoint()`, которая сохраняет глубокую копию `drawflow.Home.data` в `undoStack[]` (макс 50). Snapshots содержат только `.data` — zoom/pan viewport не участвует. Undo (Ctrl+Z) и Redo (Ctrl+Shift+Z) очищают редактор и пересоздают состояние через `editor.import()` с флагом `isRestoring: true` для подавления лишних событий.
+
+**Dirty state:** Флаг `isDirty` — `true` при любой мутации (там же где snapshot), `false` после `handleSave()` или `handleOpen()`. После Undo/Redo сравнивается JSON текущего состояния с `pristineSnapshot` (слепок при последнем save/load) для корректного определения изменений. Визуально: зелёный/красный кружок рядом с именем файла в тулбаре.
+
 **Node ID lifecycle:** Узлы Drawflow имеют единственный идентификатор — `data.id`, который совпадает с ключом в `drawflow.Home.data`. При переименовании ноды через сайдбар (`ge-node-id`) вызывается `renameNode(oldKey, newKey)`:
 - Запись перемещается под новый ключ в хеше
 - Обновляются все `conn.node` в `inputs[]`/`outputs[]` всех нод

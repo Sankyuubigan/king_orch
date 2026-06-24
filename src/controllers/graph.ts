@@ -4,6 +4,10 @@ import Drawflow from "drawflow";
 import "drawflow/dist/drawflow.min.css";
 import { showToast } from "../ui";
 
+interface GraphSnapshot {
+  data: Record<string, any>;
+}
+
 interface WorkflowGraphDef {
   team: string;
   name: string;
@@ -61,6 +65,9 @@ export interface GraphElements {
   btnAddExtractor: HTMLButtonElement;
   btnAddConditionCheck: HTMLButtonElement;
   btnAddNote: HTMLButtonElement;
+  btnUndo: HTMLButtonElement;
+  btnRedo: HTMLButtonElement;
+  dirtyIndicator: HTMLSpanElement;
 }
 
 const NODE_COLORS: Record<string, string> = {
@@ -126,6 +133,11 @@ export class GraphController {
   private multiDragInitial: Map<string, { x: number; y: number }> | null = null;
   private multiDragPrimary: string | null = null;
   private ctxMenu: HTMLDivElement | null = null;
+  private undoStack: GraphSnapshot[] = [];
+  private redoStack: GraphSnapshot[] = [];
+  private isRestoring: boolean = false;
+  private isDirty: boolean = false;
+  private pristineSnapshot: GraphSnapshot | null = null;
 
   private static readonly CONDITION_CHECK_CASES = [
     { key: "true", field: "true_to" as const },
@@ -149,6 +161,23 @@ export class GraphController {
     this.el.btnAddExtractor.addEventListener("click", () => this.addNode("llm_fact_extractor"));
     this.el.btnAddConditionCheck.addEventListener("click", () => this.addNode("condition_check"));
     this.el.btnAddNote.addEventListener("click", () => this.addNode("note"));
+    this.el.btnUndo.addEventListener("click", () => this.undo());
+    this.el.btnRedo.addEventListener("click", () => this.redo());
+    this.setupKeyboardShortcuts();
+  }
+
+  private setupKeyboardShortcuts(): void {
+    document.addEventListener("keydown", (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z") {
+        if (e.shiftKey) {
+          e.preventDefault();
+          this.redo();
+        } else {
+          e.preventDefault();
+          this.undo();
+        }
+      }
+    });
   }
 
   private ensureEditor(): void {
@@ -177,11 +206,13 @@ export class GraphController {
     });
 
     this.editor.on("connectionCreated", (...args: any[]) => {
+      if (this.isRestoring) return;
       const d = args[0] || {};
       this.onSwitchConnectionChanged(d.output_id, d.input_id, d.output_class, "created");
     });
 
     this.editor.on("connectionRemoved", (...args: any[]) => {
+      if (this.isRestoring) return;
       const d = args[0] || {};
       this.onSwitchConnectionChanged(d.output_id, d.input_id, d.output_class, "removed");
     });
@@ -254,6 +285,28 @@ export class GraphController {
       }
     }, true);
 
+    // ─── Совместный снапшот для Drawflow-native connection + multi-drag ───
+    container.addEventListener('mousedown', (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      const outputEl = (e.target as HTMLElement).closest('.output');
+      if (outputEl && this.editor && !this.isRestoring) {
+        this.saveCheckpoint();
+      }
+    }, true);
+
+    // ─── Снапшот для перетаскивания одной ноды ───
+    container.addEventListener('mousedown', (e: MouseEvent) => {
+      if (e.button !== 0) return;
+      if (this.isRestoring) return;
+      if (!this.editor) return;
+      const outputEl = (e.target as HTMLElement).closest('.output');
+      if (outputEl) return;
+      const nodeEl = (e.target as HTMLElement).closest('.drawflow-node');
+      if (nodeEl) {
+        this.saveCheckpoint();
+      }
+    }, true);
+
     // ─── Multi-drag: intercept mousedown на выделенной ноде ───
     container.addEventListener('mousedown', (e: MouseEvent) => {
       if (e.button !== 0) return;
@@ -261,6 +314,8 @@ export class GraphController {
       if (!nodeEl) return;
       const id = nodeEl.id.slice(5);
       if (!this.selectedNodes.has(id) || this.selectedNodes.size <= 1) return;
+
+      this.saveCheckpoint();
 
       // Сохраняем начальные позиции всех выделенных нод
       this.multiDragPrimary = id;
@@ -462,6 +517,7 @@ export class GraphController {
     if (!this.editor) return;
     const dn = this.editor.drawflow.drawflow.Home.data[nodeId];
     if (!dn) return;
+    this.saveCheckpoint();
     dn.data.disabled = !dn.data.disabled || undefined;
     this.updateNodeHtml(nodeId);
     // Обновляем сайдбар, если он открыт для этой ноды
@@ -551,7 +607,9 @@ export class GraphController {
         };
       }
 
+      this.isRestoring = true;
       this.editor!.import(importData);
+      this.isRestoring = false;
 
       // Навесить обратные соединения для всех загруженных нод
       for (const id of Object.keys(this.editor!.drawflow.drawflow.Home.data)) {
@@ -593,6 +651,7 @@ export class GraphController {
       }
 
       this.editor!.zoom_reset();
+      this.resetHistory();
     } catch (e) {
       console.error("handleOpen error:", e);
       showToast(`Ошибка загрузки: ${e}`, "error");
@@ -601,6 +660,7 @@ export class GraphController {
 
   private clearEditor(): void {
     if (!this.editor) return;
+    this.saveCheckpoint();
     const exportData = this.editor.export();
     const nodes = exportData.drawflow.Home.data;
     for (const id of Object.keys(nodes)) {
@@ -660,6 +720,8 @@ export class GraphController {
 
       const workflow = { name: this.currentWorkflowName, visible: true, config, nodes, edges };
       await invoke("save_workflow", { path: this.currentFilePath, workflow });
+      this.pristineSnapshot = this.captureSnapshot();
+      this.markClean();
       showToast("✅ Workflow сохранён", "success");
     } catch (e) {
       console.error("handleSave error:", e);
@@ -820,6 +882,7 @@ export class GraphController {
     const taskTextarea = document.getElementById("ge-task") as HTMLTextAreaElement;
     if (taskTextarea) {
       taskTextarea.addEventListener("change", () => {
+        this.saveCheckpoint();
         this.editor!.drawflow.drawflow.Home.data[nodeId].data.task = taskTextarea.value;
       });
     }
@@ -827,6 +890,7 @@ export class GraphController {
     const outputTypeSelect = document.getElementById("ge-output-type") as HTMLSelectElement;
     if (outputTypeSelect) {
       outputTypeSelect.addEventListener("change", () => {
+        this.saveCheckpoint();
         data.output_type = outputTypeSelect.value === "thought" ? undefined : outputTypeSelect.value;
         this.updateNodeHtml(nodeId);
       });
@@ -835,6 +899,7 @@ export class GraphController {
     const injectInput = document.getElementById("ge-inject-reports") as HTMLInputElement;
     if (injectInput) {
       injectInput.addEventListener("change", () => {
+        this.saveCheckpoint();
         const val = injectInput.value.trim();
         data.inject_reports = val ? val.split(',').map((s: string) => s.trim()) : undefined;
         this.updateNodeHtml(nodeId);
@@ -858,6 +923,7 @@ export class GraphController {
     const disabledToggle = document.getElementById("ge-disabled") as HTMLInputElement;
     if (disabledToggle) {
       disabledToggle.addEventListener("change", () => {
+        this.saveCheckpoint();
         const isNowDisabled = disabledToggle.checked;
         data.disabled = isNowDisabled || undefined;
         // обновляем текст рядом с переключателем
@@ -870,6 +936,7 @@ export class GraphController {
     const signalNameInput = document.getElementById("ge-signal-name") as HTMLInputElement;
     if (signalNameInput) {
       signalNameInput.addEventListener("change", () => {
+        this.saveCheckpoint();
         this.editor!.drawflow.drawflow.Home.data[nodeId].data.signal_name = signalNameInput.value || undefined;
       });
     }
@@ -877,6 +944,7 @@ export class GraphController {
     const fieldInput = document.getElementById("ge-field") as HTMLInputElement;
     if (fieldInput) {
       fieldInput.addEventListener("change", () => {
+        this.saveCheckpoint();
         this.editor!.drawflow.drawflow.Home.data[nodeId].data.field = fieldInput.value || undefined;
         this.updateNodeHtml(nodeId);
       });
@@ -885,6 +953,7 @@ export class GraphController {
     const sequentialToInput = document.getElementById("ge-sequential-to") as HTMLInputElement;
     if (sequentialToInput) {
       sequentialToInput.addEventListener("change", () => {
+        this.saveCheckpoint();
         data.sequential_to = sequentialToInput.value || undefined;
         this.updateNodeHtml(nodeId);
       });
@@ -893,6 +962,7 @@ export class GraphController {
     const trueToInput = document.getElementById("ge-true-to") as HTMLInputElement;
     if (trueToInput) {
       trueToInput.addEventListener("change", () => {
+        this.saveCheckpoint();
         data.true_to = trueToInput.value || undefined;
         this.updateNodeHtml(nodeId);
       });
@@ -901,6 +971,7 @@ export class GraphController {
     const falseToInput = document.getElementById("ge-false-to") as HTMLInputElement;
     if (falseToInput) {
       falseToInput.addEventListener("change", () => {
+        this.saveCheckpoint();
         data.false_to = falseToInput.value || undefined;
         this.updateNodeHtml(nodeId);
       });
@@ -914,6 +985,7 @@ export class GraphController {
         const oldType = data.type;
         const newType = switchTypeSelect.value;
         if (oldType !== newType) {
+          this.saveCheckpoint();
           data.type = newType;
           this.rebuildSwitchOutputs(nodeId);
           this.showNodeEditor(nodeId);
@@ -924,6 +996,7 @@ export class GraphController {
     const inputObjectArea = document.getElementById("ge-input-object") as HTMLTextAreaElement;
     if (inputObjectArea) {
       inputObjectArea.addEventListener("change", () => {
+        this.saveCheckpoint();
         data.input_object = inputObjectArea.value || undefined;
       });
     }
@@ -931,6 +1004,7 @@ export class GraphController {
     const defaultInput = document.getElementById("ge-default") as HTMLInputElement;
     if (defaultInput) {
       defaultInput.addEventListener("change", () => {
+        this.saveCheckpoint();
         data.default = defaultInput.value || undefined;
         this.rebuildSwitchOutputs(nodeId);
       });
@@ -939,6 +1013,7 @@ export class GraphController {
     const noteContent = document.getElementById("ge-note-content") as HTMLTextAreaElement;
     if (noteContent) {
       noteContent.addEventListener("change", () => {
+        this.saveCheckpoint();
         this.editor!.drawflow.drawflow.Home.data[nodeId].data.input = noteContent.value || undefined;
         this.updateNodeHtml(nodeId);
       });
@@ -947,6 +1022,7 @@ export class GraphController {
     const addBtn = document.getElementById("ge-case-add");
     if (addBtn) {
       addBtn.addEventListener("click", () => {
+        this.saveCheckpoint();
         data.cases_priority.push({ key: "", to: "" });
         this.rebuildSwitchOutputs(nodeId);
         this.showNodeEditor(nodeId);
@@ -955,6 +1031,7 @@ export class GraphController {
 
     document.querySelectorAll(".ge-case-remove").forEach((btn) => {
       btn.addEventListener("click", () => {
+        this.saveCheckpoint();
         const row = (btn as HTMLElement).closest(".ge-case-row") as HTMLElement;
         const idx = parseInt(row.dataset.index || "0", 10);
         data.cases_priority.splice(idx, 1);
@@ -965,6 +1042,7 @@ export class GraphController {
 
     document.querySelectorAll(".ge-case-up").forEach((btn) => {
       btn.addEventListener("click", () => {
+        this.saveCheckpoint();
         const row = (btn as HTMLElement).closest(".ge-case-row") as HTMLElement;
         const idx = parseInt(row.dataset.index || "0", 10);
         if (idx > 0) {
@@ -978,6 +1056,7 @@ export class GraphController {
 
     document.querySelectorAll(".ge-case-down").forEach((btn) => {
       btn.addEventListener("click", () => {
+        this.saveCheckpoint();
         const row = (btn as HTMLElement).closest(".ge-case-row") as HTMLElement;
         const idx = parseInt(row.dataset.index || "0", 10);
         const arr = data.cases_priority;
@@ -1001,6 +1080,9 @@ export class GraphController {
   }
 
   private hideSidebar(): void {
+    if (this.el.graphSidebar.classList.contains("open")) {
+      this.saveCheckpoint();
+    }
     this.el.graphSidebar.classList.remove("open");
   }
 
@@ -1008,6 +1090,7 @@ export class GraphController {
 
   private addNode(type: string): void {
     this.ensureEditor();
+    this.saveCheckpoint();
     const id = `${type}_${Date.now()}`;
     const rect = this.el.graphContainer.getBoundingClientRect();
     const cx = (rect.width / 2 - 100) * (1 / (this.editor!.zoom || 1));
@@ -1063,6 +1146,8 @@ export class GraphController {
       console.error(`[renameNode] oldKey "${oldKey}" не найден`);
       return false;
     }
+
+    this.saveCheckpoint();
 
     // 1. Перемещаем запись под новый ключ
     data[trimmed] = nodeData;
@@ -1267,6 +1352,7 @@ export class GraphController {
 
     nodeEl.querySelectorAll<HTMLElement>('.input').forEach((inputEl) => {
       inputEl.addEventListener('mousedown', (e) => {
+        this.saveCheckpoint();
         e.stopPropagation();
         const me = e as MouseEvent;
 
@@ -1407,6 +1493,7 @@ export class GraphController {
     clickX: number; clickY: number; outputKey: string;
   }, _ev: MouseEvent): void {
     if (!this.editor) return;
+    this.saveCheckpoint();
     const editor = this.editor;
     const precanvas = editor.precanvas;
     const allData = editor.drawflow.drawflow.Home.data;
@@ -1511,7 +1598,10 @@ export class GraphController {
         const newOutputClass = outputEl.classList[1];
         if (!newOutputClass) { this.restoreEdge(originalConn); return; }
         if (allData[newSourceId]?.data?.disabled) { this.restoreEdge(originalConn); return; }
-        try { editor.addConnection(newSourceId, targetId, newOutputClass, "input_1"); }
+        try {
+          editor.addConnection(newSourceId, targetId, newOutputClass, "input_1");
+          this.saveCheckpoint();
+        }
         catch (_) { this.restoreEdge(originalConn); }
       } else {
         const inputEl = dropTarget.classList.contains('input')
@@ -1524,7 +1614,10 @@ export class GraphController {
         const inputClass = inputEl.classList[1];
         if (!inputClass) { this.restoreEdge(originalConn); return; }
         if (allData[newTargetId]?.data?.disabled) { this.restoreEdge(originalConn); return; }
-        try { editor.addConnection(sourceId, newTargetId, outputKey, inputClass); }
+        try {
+          editor.addConnection(sourceId, newTargetId, outputKey, inputClass);
+          this.saveCheckpoint();
+        }
         catch (_) { this.restoreEdge(originalConn); }
       }
     };
@@ -1789,6 +1882,209 @@ export class GraphController {
 
   private esc(s: string): string {
     return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  // ─── Undo/Redo + Dirty State ───
+
+  private static readonly MAX_HISTORY = 50;
+
+  private captureSnapshot(): GraphSnapshot {
+    const editor = this.editor;
+    if (!editor) return { data: {} };
+    return {
+      data: JSON.parse(JSON.stringify(editor.drawflow.drawflow.Home.data)),
+    };
+  }
+
+  private applySnapshot(snap: GraphSnapshot): void {
+    if (!this.editor) return;
+    this.isRestoring = true;
+
+    const editor = this.editor;
+
+    // 1. Собираем все соединения из снапшота ДО очистки
+    const snapDataRaw = JSON.parse(JSON.stringify(snap.data));
+    const connectionsToRestore: Array<{ from: string; to: string; output: string; input: string }> = [];
+    for (const nodeId of Object.keys(snapDataRaw)) {
+      const dn = snapDataRaw[nodeId];
+      for (const inKey of Object.keys(dn.inputs || {})) {
+        for (const conn of dn.inputs[inKey].connections || []) {
+          if (snapDataRaw[conn.node]) {
+            connectionsToRestore.push({
+              from: conn.node,
+              to: nodeId,
+              output: conn.input || "output_1",
+              input: inKey,
+            });
+          }
+        }
+      }
+    }
+
+    // 2. Удаляем все текущие ноды (isRestoring=true — подавляем connectionRemoved)
+    const currentNodes = Object.keys(editor.drawflow.drawflow.Home.data);
+    for (const id of currentNodes) {
+      editor.removeNodeId("node-" + id);
+    }
+
+    // 3. Собираем import-данные (с ПУСТЫМИ connections — Drawflow не умеет создавать их из данных)
+    const importData: import("drawflow").DrawflowExport = {
+      drawflow: { Home: { data: {} } },
+    };
+    const snapData = JSON.parse(JSON.stringify(snap.data));
+
+    for (const id of Object.keys(snapData)) {
+      const dn = snapData[id];
+      // Обнуляем connections — создадим их вручную после import
+      for (const inKey of Object.keys(dn.inputs || {})) {
+        dn.inputs[inKey].connections = [];
+      }
+      for (const outKey of Object.keys(dn.outputs || {})) {
+        dn.outputs[outKey].connections = [];
+      }
+      // Обновляем HTML и class
+      dn.html = this.buildNodeInnerHtml(dn.data, id);
+      let nodeClass = "";
+      const t = dn.data.type;
+      if (t === "note") nodeClass = "node-type-note";
+      else if (isDynamicNode(t)) nodeClass = "dynamic-node";
+      if (dn.data.disabled) nodeClass = nodeClass ? `${nodeClass} node-disabled` : "node-disabled";
+      dn.class = nodeClass;
+    }
+    importData.drawflow.Home.data = snapData;
+
+    // 5. Импортируем (isRestoring=true — подавляем connectionCreated/Removed)
+    editor.import(importData);
+
+    // 6. Вручную создаём все соединения (Drawflow import их не восстанавливает)
+    for (const conn of connectionsToRestore) {
+      try {
+        editor.addConnection(conn.from, conn.to, conn.output, conn.input);
+      } catch (_) { }
+    }
+
+    // 7. Ждём кадр для пост-обработки (выравнивание + SVG + reverse)
+    requestAnimationFrame(() => {
+      if (!this.editor) return;
+      this.isRestoring = true;
+
+      // Drawflow import() сбрасывает transform precanvas — восстанавливаем
+      const transform = `translate(${this.editor.canvas_x}px, ${this.editor.canvas_y}px) scale(${this.editor.zoom})`;
+      this.editor.precanvas.style.transform = transform;
+
+      for (const id of Object.keys(this.editor.drawflow.drawflow.Home.data)) {
+        this.alignOutputsWithCases(id);
+      }
+
+      for (const id of Object.keys(this.editor.drawflow.drawflow.Home.data)) {
+        this.editor.updateConnectionNodes("node-" + id);
+      }
+
+      for (const id of Object.keys(this.editor.drawflow.drawflow.Home.data)) {
+        this.enableReverseConnection(id);
+      }
+
+      this.hideSidebar();
+      this.deselectAllNodes();
+      this.isRestoring = false;
+    });
+  }
+
+  private saveCheckpoint(): void {
+    if (this.isRestoring) return;
+    this.undoStack.push(this.captureSnapshot());
+    if (this.undoStack.length > GraphController.MAX_HISTORY) {
+      this.undoStack.shift();
+    }
+    this.redoStack = [];
+    this.markDirty();
+    this.updateUndoButtons();
+  }
+
+  private undo(): void {
+    if (this.undoStack.length === 0 || !this.editor) return;
+    this.redoStack.push(this.captureSnapshot());
+    const snap = this.undoStack.pop()!;
+    this.applySnapshot(snap);
+    this.syncDirtyAfterRestore();
+    this.updateUndoButtons();
+  }
+
+  private redo(): void {
+    if (this.redoStack.length === 0 || !this.editor) return;
+    this.undoStack.push(this.captureSnapshot());
+    const snap = this.redoStack.pop()!;
+    this.applySnapshot(snap);
+    this.syncDirtyAfterRestore();
+    this.updateUndoButtons();
+  }
+
+  private syncDirtyAfterRestore(): void {
+    if (!this.pristineSnapshot) return;
+    const current = this.captureSnapshot();
+    if (this.isNodesEqual(current.data, this.pristineSnapshot.data)) {
+      this.markClean();
+    } else {
+      this.markDirty();
+    }
+  }
+
+  // Сравнение только значимых полей нод (игнорируем служебные поля Drawflow)
+  private isNodesEqual(a: Record<string, any>, b: Record<string, any>): boolean {
+    const aKeys = Object.keys(a);
+    const bKeys = Object.keys(b);
+    if (aKeys.length !== bKeys.length) return false;
+    for (const key of aKeys) {
+      const an = a[key];
+      const bn = b[key];
+      if (!bn) return false;
+      if (JSON.stringify(an.data) !== JSON.stringify(bn.data)) return false;
+      if (JSON.stringify(an.inputs) !== JSON.stringify(bn.inputs)) return false;
+      if (JSON.stringify(an.outputs) !== JSON.stringify(bn.outputs)) return false;
+      if (an.pos_x !== bn.pos_x || an.pos_y !== bn.pos_y) return false;
+    }
+    return true;
+  }
+
+  private resetHistory(): void {
+    this.undoStack = [];
+    this.redoStack = [];
+    this.pristineSnapshot = this.captureSnapshot();
+    this.markClean();
+    this.updateUndoButtons();
+  }
+
+  private markDirty(): void {
+    this.isDirty = true;
+    this.updateDirtyIndicator();
+  }
+
+  private markClean(): void {
+    this.isDirty = false;
+    this.updateDirtyIndicator();
+  }
+
+  private updateDirtyIndicator(): void {
+    const el = this.el.dirtyIndicator;
+    if (!this.currentFilePath) {
+      el.textContent = "";
+      el.title = "";
+      return;
+    }
+    if (this.isDirty) {
+      el.textContent = " ●";
+      el.style.color = "#e53935";
+      el.title = "Есть несохранённые изменения";
+    } else {
+      el.textContent = " ●";
+      el.style.color = "#4caf50";
+      el.title = "Сохранено";
+    }
+  }
+
+  private updateUndoButtons(): void {
+    this.el.btnUndo.disabled = this.undoStack.length === 0;
+    this.el.btnRedo.disabled = this.redoStack.length === 0;
   }
 
   onTabActivated(): void {
