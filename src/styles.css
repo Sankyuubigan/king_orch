@@ -202,14 +202,6 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   background: var(--border);
   margin: 0 4px;
 }
-#graph-toolbar .toolbar-label {
-  font-weight: 600;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: #999;
-  margin-right: 4px;
-}
 .graph-add-btn {
   padding: 4px 10px;
   font-size: 11px;
@@ -222,18 +214,6 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   transition: all 0.15s;
 }
 .graph-add-btn:hover { background: var(--session-hover); border-color: var(--primary); color: var(--primary); }
-.graph-add-btn.add-worker { border-color: #4caf5066; }
-.graph-add-btn.add-worker:hover { border-color: #4caf50; color: #4caf50; }
-.graph-add-btn.add-switch { border-color: #ef535066; }
-.graph-add-btn.add-switch:hover { border-color: #ef5350; color: #ef5350; }
-.graph-add-btn.add-extractor { border-color: #7e57c266; }
-.graph-add-btn.add-extractor:hover { border-color: #7e57c2; color: #7e57c2; }
-.graph-add-btn.add-signal-router { border-color: #ff980066; }
-.graph-add-btn.add-signal-router:hover { border-color: #ff9800; color: #ff9800; }
-.graph-add-btn.add-condition-check { border-color: #26a69a66; }
-.graph-add-btn.add-condition-check:hover { border-color: #26a69a; color: #26a69a; }
-.graph-add-btn.add-note { border-color: #e5393566; }
-.graph-add-btn.add-note:hover { border-color: #e53935; color: #e53935; }
 
 #graph-toolbar .graph-add-btn[disabled] {
   opacity: 0.35;
@@ -626,6 +606,35 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   width: 18px;
   text-align: center;
   flex-shrink: 0;
+}
+
+/* Submenu for "Создать" */
+.ctx-item.has-submenu {
+  position: relative;
+}
+.ctx-submenu-arrow {
+  margin-left: auto;
+  font-size: 10px;
+  color: #888;
+}
+.ctx-submenu-list {
+  display: none;
+  position: absolute;
+  left: 100%;
+  top: 0;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.5);
+  z-index: 10001;
+  min-width: 180px;
+  padding: 4px;
+}
+.ctx-item.has-submenu:hover .ctx-submenu-list {
+  display: block;
+}
+.ctx-submenu-list .ctx-item {
+  white-space: nowrap;
 }
 
 /* Case rows for switch / signal_router */

@@ -58,13 +58,6 @@ export interface GraphElements {
   btnOpenWorkflow: HTMLButtonElement;
   btnSaveWorkflow: HTMLButtonElement;
   currentWorkflowName: HTMLSpanElement;
-  btnAddWorker: HTMLButtonElement;
-  btnAddSwitch: HTMLButtonElement;
-  btnAddSeqSwitch: HTMLButtonElement;
-  btnAddSignalRouter: HTMLButtonElement;
-  btnAddExtractor: HTMLButtonElement;
-  btnAddConditionCheck: HTMLButtonElement;
-  btnAddNote: HTMLButtonElement;
   btnUndo: HTMLButtonElement;
   btnRedo: HTMLButtonElement;
   dirtyIndicator: HTMLSpanElement;
@@ -154,13 +147,6 @@ export class GraphController {
     this.el.btnOpenWorkflow.addEventListener("click", () => this.handleOpen());
     this.el.btnSaveWorkflow.addEventListener("click", () => this.handleSave());
     this.el.graphSidebarClose.addEventListener("click", () => this.hideSidebar());
-    this.el.btnAddWorker.addEventListener("click", () => this.addNode("llm_worker"));
-    this.el.btnAddSwitch.addEventListener("click", () => this.addNode("switch"));
-    this.el.btnAddSeqSwitch.addEventListener("click", () => this.addNode("llm_sequential_switch"));
-    this.el.btnAddSignalRouter.addEventListener("click", () => this.addNode("signal_router"));
-    this.el.btnAddExtractor.addEventListener("click", () => this.addNode("llm_fact_extractor"));
-    this.el.btnAddConditionCheck.addEventListener("click", () => this.addNode("condition_check"));
-    this.el.btnAddNote.addEventListener("click", () => this.addNode("note"));
     this.el.btnUndo.addEventListener("click", () => this.undo());
     this.el.btnRedo.addEventListener("click", () => this.redo());
     this.setupKeyboardShortcuts();
@@ -480,11 +466,45 @@ export class GraphController {
     // ПКМ на холсте графа
     this.el.graphContainer.addEventListener('contextmenu', (e) => {
       const nodeEl = (e.target as HTMLElement).closest('.drawflow-node') as HTMLElement;
+
       if (!nodeEl) {
-        // Клик вне ноды — закрываем меню
-        if (this.ctxMenu) this.ctxMenu.classList.remove('open');
+        // Клик вне ноды — меню создания
+        e.preventDefault();
+        e.stopPropagation();
+        this.ctxMenu!.innerHTML = `
+          <div class="ctx-item has-submenu" data-action="create">
+            <span class="ctx-icon">➕</span>
+            Создать
+            <span class="ctx-submenu-arrow">▶</span>
+            <div class="ctx-submenu-list">
+              <div class="ctx-item" data-type="llm_worker">🤖 Worker</div>
+              <div class="ctx-item" data-type="switch">🔀 Switch</div>
+              <div class="ctx-item" data-type="llm_sequential_switch">🔀 SeqSwitch</div>
+              <div class="ctx-item" data-type="signal_router">📡 Signal Router</div>
+              <div class="ctx-item" data-type="condition_check">🎯 Condition</div>
+              <div class="ctx-item" data-type="llm_fact_extractor">📋 Extractor</div>
+              <div class="ctx-item" data-type="note">📝 Note</div>
+            </div>
+          </div>
+        `;
+        this.ctxMenu!.style.left = Math.min(e.clientX, window.innerWidth - 220) + 'px';
+        this.ctxMenu!.style.top = Math.min(e.clientY, window.innerHeight - 200) + 'px';
+        this.ctxMenu!.classList.add('open');
+
+        // Клик по подпункту подменю
+        const cmX = e.clientX;
+        const cmY = e.clientY;
+        this.ctxMenu!.querySelectorAll('.ctx-submenu-list .ctx-item').forEach((item) => {
+          item.addEventListener('click', (ev) => {
+            ev.stopPropagation();
+            const type = (item as HTMLElement).dataset.type!;
+            this.addNode(type, cmX, cmY);
+            this.ctxMenu?.classList.remove('open');
+          });
+        });
         return;
       }
+
       e.preventDefault();
       e.stopPropagation();
 
@@ -1088,13 +1108,21 @@ export class GraphController {
 
   // ─── Добавление ноды ───
 
-  private addNode(type: string): void {
+  private addNode(type: string, clientX?: number, clientY?: number): void {
     this.ensureEditor();
     this.saveCheckpoint();
     const id = `${type}_${Date.now()}`;
-    const rect = this.el.graphContainer.getBoundingClientRect();
-    const cx = (rect.width / 2 - 100) * (1 / (this.editor!.zoom || 1));
-    const cy = (rect.height / 2 - 50) * (1 / (this.editor!.zoom || 1));
+    const zoom = this.editor!.zoom || 1;
+    let cx: number, cy: number;
+    if (clientX !== undefined && clientY !== undefined) {
+      const preRect = this.editor!.precanvas.getBoundingClientRect();
+      cx = (clientX - preRect.left) / zoom;
+      cy = (clientY - preRect.top) / zoom;
+    } else {
+      const preRect = this.editor!.precanvas.getBoundingClientRect();
+      cx = (preRect.width / 2 - 100) * (1 / zoom);
+      cy = (preRect.height / 2 - 50) * (1 / zoom);
+    }
     const outs = type === "condition_check" ? 3 : (isDynamicNode(type) ? 2 : OUTPUT_COUNT[type] ?? 1);
 
     const inputs: Record<string, { connections: any[] }> = {};
