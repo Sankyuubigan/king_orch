@@ -16,7 +16,7 @@ nodes:
       x: -1307
   - id: priority_router
     type: switch
-    input_object: '{{ nodes.extract_facts.output }}'
+    input_object: "{{ nodes.extract_facts.output }}"
     switch_field: phase
     cases_priority:
       - key: data_collection
@@ -26,9 +26,9 @@ nodes:
     ui_pos:
       y: 460
       x: -949
-  - id: call_curator
+  - id: call_provocateur
     type: llm_worker
-    agent: curator
+    agent: provocateur
     task: Пользователь не согласен или сопротивляется. Ответь ему.
     output_type: message
     ui_pos:
@@ -196,7 +196,7 @@ edges:
   - from: extract_facts
     to: priority_router
   - from: note_1782220533024
-    to: call_curator
+    to: call_provocateur
   - from: note_1782220193985
     to: call_validator
   - from: call_validator
@@ -213,7 +213,7 @@ edges:
     to: check_grounding
   - from: call_cluster_checker
     to: check_cluster_signal
-  - from: call_curator
+  - from: call_provocateur
     to: synchronize_with_user
   - from: call_decomposer
     to: note_1782224256075
