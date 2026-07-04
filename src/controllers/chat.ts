@@ -4,8 +4,8 @@ import { store } from "../store";
 import { bus } from "../events";
 import { createMessageElement, createSubcallElement, createToolCallElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, showToast } from "../ui";
 import type { Role, MessageMenuCallbacks } from "../ui";
-import type { ThoughtMenuCallbacks, Attachment } from "../types";
-import { saveSession, loadSession } from "../services";
+import type { ThoughtMenuCallbacks, Attachment, CatalogEntry } from "../types";
+import { saveSession, loadSession, countTokens } from "../services";
 import mermaid from "mermaid";
 
 mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
@@ -51,6 +51,7 @@ export interface ChatElements {
   btnAttach: HTMLButtonElement;
   fileInput: HTMLInputElement;
   filePreview: HTMLDivElement;
+  tokenCounter: HTMLDivElement;
 }
 
 export class ChatController {
@@ -58,6 +59,7 @@ export class ChatController {
   private menuCallbacks: MessageMenuCallbacks;
   private thoughtMenuCallbacks: ThoughtMenuCallbacks;
   private attachments: Attachment[] = [];
+  private countTimer: number | null = null;
 
   constructor(el: ChatElements) {
     this.el = el;
@@ -74,7 +76,10 @@ export class ChatController {
     this.bindDomEvents();
     this.bindTauriEvents();
     this.bindBusEvents();
-    setTimeout(() => this.updateAttachButtonState(), 100);
+    setTimeout(() => {
+      this.updateAttachButtonState();
+      this.triggerTokenCount();
+    }, 100);
   }
 
   // ─── Скролл ───
@@ -94,12 +99,64 @@ export class ChatController {
     }
   }
 
+  // ─── Подсчет токенов (Live) ───
+  private triggerTokenCount() {
+    if (this.countTimer) clearTimeout(this.countTimer);
+    this.countTimer = window.setTimeout(() => this.updateTokenCounter(), 400);
+  }
+
+  private async updateTokenCounter() {
+    if (store.isProcessing) return;
+    const modelPath = this.el.modelSelect?.value;
+    const agentId = this.el.agentSelect?.value;
+    const text = this.el.chatInput?.value || "";
+    const contextSize = parseInt(this.el.contextSlider?.value || "8192", 10);
+
+    if (!modelPath || !agentId) return;
+
+    let hfModelId = "Xenova/Meta-Llama-3-8B-Instruct"; // Дефолт
+    const catalogModel = store.modelsCatalog.find((m: CatalogEntry) => modelPath.includes(m.name) || m.name === modelPath);
+    if (catalogModel && catalogModel.hf_model_id) {
+        hfModelId = catalogModel.hf_model_id;
+    }
+
+    try {
+        // Запрашиваем собранный промпт у Rust (без тяжелой инициализации MCP-инструментов, для скорости)
+        const promptText: string = await invoke("get_prompt_preview", {
+            modelPath, 
+            agentId, 
+            message: text, 
+            history: store.chatHistory
+        });
+        
+        // Считаем токены через HuggingFace Transformers
+        const tokens = await countTokens(promptText, hfModelId);
+
+        if (this.el.tokenCounter) {
+            this.el.tokenCounter.innerText = `${tokens} / ${contextSize}`;
+            this.el.tokenCounter.classList.remove("warning", "danger");
+            if (tokens > contextSize) {
+                this.el.tokenCounter.classList.add("danger");
+                this.el.tokenCounter.title = "Внимание: Лимит превышен! При отправке старые сообщения будут удалены из контекста.";
+            } else if (tokens > contextSize * 0.8) {
+                this.el.tokenCounter.classList.add("warning");
+                this.el.tokenCounter.title = "Контекст заполняется. Близко к лимиту.";
+            } else {
+                this.el.tokenCounter.title = "Токены: Текущие / Лимит контекста";
+            }
+        }
+    } catch (e) {
+        console.error("Ошибка обновления счетчика токенов:", e);
+    }
+  }
+
   // ─── Меню сообщений ───
   private async onDeleteMessage(uid: string) {
     const idx = store.msgUidList.indexOf(uid); if (idx === -1) return;
     store.chatHistory.splice(idx, 1); store.msgUidList.splice(idx, 1);
     this.renderChatFromHistory();
     if (store.currentSessionId) await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
+    this.triggerTokenCount();
     showToast("Сообщение удалено.", "success");
   }
 
@@ -188,6 +245,7 @@ export class ChatController {
 
       this.renderChatFromHistory();
       await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
+      this.triggerTokenCount();
 
     } catch (error) {
       if (String(error).includes("Отменено") || String(error).includes("Прервано")) {
@@ -361,7 +419,10 @@ export class ChatController {
       if (store.currentSessionId) {
         await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
       }
-    } finally { this.setProcessingState(false); }
+    } finally { 
+        this.setProcessingState(false); 
+        this.triggerTokenCount(); // Обновляем счетчик после завершения
+    }
   }
 
   // ─── Автосохранение черновика ───
@@ -385,6 +446,7 @@ export class ChatController {
     this.updateAttachButtonState();
     this.appendMessage('system', 'Новая сессия. Выберите агента и напишите запрос.');
     bus.emit("session:changed"); bus.emit("tab:switch", 'chat');
+    this.triggerTokenCount();
   }
 
   async openSession(id: string) {
@@ -396,6 +458,7 @@ export class ChatController {
       setTimeout(() => { this.el.chatInput.style.height = "auto"; this.el.chatInput.style.height = `${this.el.chatInput.scrollHeight}px`; }, 0);
       store.uidCounter = 0; store.msgUidList = store.chatHistory.map(() => store.nextUid());
       this.renderChatFromHistory(); bus.emit("session:changed"); bus.emit("tab:switch", 'chat');
+      this.triggerTokenCount();
     } catch(e) { showToast(`Ошибка: ${e}`, "error"); }
   }
 
@@ -430,6 +493,7 @@ export class ChatController {
       this.addFilePreview(file.name, file.type, dataBase64);
     }
     this.el.fileInput.value = '';
+    this.triggerTokenCount();
   }
 
   private fileToBase64(file: File): Promise<string> {
@@ -464,6 +528,7 @@ export class ChatController {
       const idx = this.attachments.findIndex(a => a.file_name === fileName);
       if (idx !== -1) this.attachments.splice(idx, 1);
       div.remove();
+      this.triggerTokenCount();
     });
     div.appendChild(remove);
     this.el.filePreview.appendChild(div);
@@ -475,11 +540,17 @@ export class ChatController {
     this.el.chatInput?.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.handleSend(); } });
     this.el.btnStop?.addEventListener("click", async () => { if (this.el.btnStop.disabled) return; this.el.btnStop.disabled = true; this.el.btnStop.innerText = "Стоп..."; this.appendMessage('system', 'Остановка...'); await invoke("stop_processing"); this.el.btnStop.innerText = "⏹ Стоп"; });
     this.el.btnBackChat?.addEventListener("click", () => { this.el.viewSubchat.classList.remove('active'); this.el.viewChat.classList.add('active'); });
-    this.el.chatInput.addEventListener("input", () => { this.el.chatInput.style.height = "auto"; this.el.chatInput.style.height = `${this.el.chatInput.scrollHeight}px`; this.triggerDraftSave(); });
+    this.el.chatInput.addEventListener("input", () => { 
+        this.el.chatInput.style.height = "auto"; 
+        this.el.chatInput.style.height = `${this.el.chatInput.scrollHeight}px`; 
+        this.triggerDraftSave(); 
+        this.triggerTokenCount();
+    });
     this.el.chatInput.addEventListener("blur", () => { if (store.currentSessionId && !store.isProcessing) { clearTimeout(store.draftTimeout); saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value); } });
     this.el.btnAttach?.addEventListener("click", () => { if (!this.el.btnAttach.disabled) this.el.fileInput.click(); });
     this.el.fileInput?.addEventListener("change", (e) => this.handleFileSelect((e.target as HTMLInputElement).files));
-    this.el.modelSelect?.addEventListener("change", () => this.updateAttachButtonState());
+    this.el.modelSelect?.addEventListener("change", () => { this.updateAttachButtonState(); this.triggerTokenCount(); });
+    this.el.agentSelect?.addEventListener("change", () => { this.triggerTokenCount(); });
   }
 
   // ─── Привязка Tauri-событий ───
@@ -516,6 +587,6 @@ export class ChatController {
   private bindBusEvents() {
     bus.on("session:new", () => this.startNewSession());
     bus.on("session:open", (id: string) => this.openSession(id));
-    bus.on("config:loaded", () => this.updateAttachButtonState());
+    bus.on("config:loaded", () => { this.updateAttachButtonState(); this.triggerTokenCount(); });
   }
 }

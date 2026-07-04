@@ -94,6 +94,22 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .chat-input-controls-right { display: flex; gap: 10px; }
 #chat-input { width: 100%; resize: none; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit; font-size: 14px; min-height: 80px; max-height: 600px; overflow-y: auto; box-sizing: border-box; background: var(--input-bg); color: var(--text); }
 
+/* --- Token Counter Styles --- */
+.token-counter {
+  font-family: 'Consolas', monospace;
+  font-size: 12px;
+  color: #888;
+  padding: 4px 8px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  white-space: nowrap;
+  user-select: none;
+  transition: color 0.3s, border-color 0.3s;
+}
+.token-counter.warning { color: #e65100; border-color: #ff9800; }
+.token-counter.danger { color: #c62828; border-color: #e53935; }
+
 .group-box { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
 .group-title { font-weight: bold; margin-bottom: 10px; font-size: 14px; }
 .input-row { display: flex; gap: 10px; align-items: center; }

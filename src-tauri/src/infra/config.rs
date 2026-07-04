@@ -114,6 +114,8 @@ pub struct CatalogEntry {
     pub name: String,
     pub download_url: String,
     pub default_params: ModelParams,
+    #[serde(default)]
+    pub hf_model_id: Option<String>,
 }
 
 pub fn find_agents_dir(app: &AppHandle) -> PathBuf {

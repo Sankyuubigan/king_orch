@@ -145,3 +145,45 @@ pub async fn stop_processing(state: State<'_, AppState>) -> Result<(), String> {
     state.cancel_flag.store(true, Ordering::SeqCst);
     Ok(())
 }
+
+/// Для Live-превью токенов: возвращает сырую строку промпта, как она будет выглядеть для LLM
+#[tauri::command]
+pub fn get_prompt_preview(
+    app: AppHandle,
+    model_path: String,
+    agent_id: String,
+    message: String,
+    history: Vec<ChatMessage>,
+) -> Result<String, String> {
+    let agents_dir = crate::infra::find_agents_dir(&app);
+    let agents = crate::domain::load_agents(&agents_dir)?;
+    let agent = agents.iter().find(|a| a.id == agent_id).ok_or("Агент не найден")?;
+
+    // Строим системный промпт (без загрузки реальных MCP инструментов для скорости)
+    let system_prompt = crate::domain::build_system_prompt(agent, &history, false, &[]);
+
+    let mut llm_messages = vec![ChatMessage {
+        id: None,
+        msg_type: "message".to_string(),
+        content: system_prompt,
+        sub_calls: None,
+        author: Some("system".to_string()),
+    }];
+    
+    for msg in history.iter().filter(|m| m.msg_type != "thought") {
+        llm_messages.push(msg.clone());
+    }
+    
+    if !message.is_empty() {
+        llm_messages.push(ChatMessage {
+            id: None,
+            msg_type: "message".to_string(),
+            content: message,
+            sub_calls: None,
+            author: Some("user".to_string()),
+        });
+    }
+
+    let pf = crate::infra::llm::PromptFormat::detect_from_path(&model_path);
+    Ok(pf.format_messages(&llm_messages))
+}

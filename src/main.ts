@@ -70,6 +70,7 @@ function initApp() {
     btnAttach: $<HTMLButtonElement>("btn-attach"),
     fileInput: $<HTMLInputElement>("file-input"),
     filePreview: $<HTMLDivElement>("file-preview"),
+    tokenCounter: $<HTMLDivElement>("token-counter"),
   });
 
   // ─── Контроллер графа (вкладка 🔀 в студии агентов) ───

@@ -73,3 +73,11 @@ export interface Attachment {
     mime_type: string;
     data_base64: string;
 }
+
+export interface CatalogEntry {
+    name: string;
+    download_url: string;
+    mmproj_url?: string;
+    hf_model_id?: string;
+    default_params: ModelParams;
+}

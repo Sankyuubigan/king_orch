@@ -47,6 +47,7 @@ fn main() {
             api::models::get_mmproj_path,
             api::chat::chat_request,
             api::chat::stop_processing,
+            api::chat::get_prompt_preview,
             api::graph::read_workflow_file,
             api::graph::save_workflow,
             api::test::run_iterative_test,

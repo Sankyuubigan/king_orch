@@ -292,6 +292,23 @@ where
     for iter in 1..=30 {
         if cancel_flag.load(Ordering::SeqCst) { return Err("Прервано пользователем".to_string()); }
 
+        // --- ТОЧНЫЙ КОНТРОЛЬ КОНТЕКСТА: АВТО-ОБРЕЗКА ---
+        loop {
+            let current_tokens = engine.get_tokens_count(&llm_messages, format_type).unwrap_or(0);
+            let reserve = max_gen_tokens;
+            if current_tokens + reserve <= engine.n_ctx() as usize || llm_messages.len() <= 2 {
+                log_cb(format!("📊 Токены: {} / {} (Бюджет контекста). Резерв генерации: {}", current_tokens, engine.n_ctx(), reserve));
+                break;
+            }
+            // Удаляем самое старое сообщение (индекс 1, т.к. 0 — это системный промпт)
+            if llm_messages.len() > 2 {
+                llm_messages.remove(1);
+                log_cb("⚠️ Превышен лимит контекста! Удалено самое старое сообщение из памяти LLM.".to_string());
+            } else {
+                break;
+            }
+        }
+
         // ── 3a. LLM GENERATION ──
         let gen_start = Instant::now();
         log_cb(format!(">>> [{}] LLM вызов #{}, msgs={}, max_gen={}, глубина={}", agent.name, iter, llm_messages.len(), max_gen_tokens, depth));

@@ -281,6 +281,29 @@ impl LlamaEngine {
         })
     }
 
+    pub fn n_ctx(&self) -> u32 {
+        self.n_ctx
+    }
+
+    /// Точный подсчет токенов прямо через встроенный токенизатор загруженной модели
+    pub fn get_tokens_count(&self, messages: &[ChatMessage], format_type: &str) -> Result<usize, String> {
+        let mut pf = PromptFormat::from_str(format_type);
+        let mut full_prompt = String::new();
+        if pf == PromptFormat::Auto {
+            if let Some(template_str) = extract_string_from_gguf(&self.model_path, "tokenizer.chat_template") {
+                if let Ok(rendered) = render_jinja_template(&template_str, messages) { full_prompt = rendered; }
+            }
+        }
+        if full_prompt.is_empty() {
+            if pf == PromptFormat::Auto { pf = PromptFormat::detect_from_path(&self.model_path); }
+            full_prompt = pf.format_messages(messages);
+        }
+
+        let tokens = self.model.str_to_token(&full_prompt, AddBos::Always)
+            .map_err(|e| format!("Ошибка токенизации: {}", e))?;
+        Ok(tokens.len())
+    }
+
     fn run_generation<F, L>(
         &self,
         full_prompt: &str,
