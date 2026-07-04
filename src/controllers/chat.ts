@@ -64,6 +64,8 @@ export class ChatController {
     this.menuCallbacks = {
       onDelete: (uid) => this.onDeleteMessage(uid),
       onClone: (uid) => this.onCloneMessage(uid),
+      onRunFrom: (uid) => this.onRunFromMessage(uid),
+      onCopy: (uid) => this.onCopyMessage(uid),
     };
     this.thoughtMenuCallbacks = {
       onDeleteThoughts: (uid) => this.onDeleteThoughts(uid),
@@ -109,6 +111,100 @@ export class ChatController {
     showToast("Клон сессии создан!", "success");
     bus.emit("session:changed");
     bus.emit("session:open", newId);
+  }
+
+  private async onCopyMessage(uid: string) {
+    const idx = store.msgUidList.indexOf(uid);
+    if (idx === -1) return;
+    const msg = store.chatHistory[idx];
+    try {
+      await navigator.clipboard.writeText(msg.content);
+      showToast("Сообщение скопировано в буфер обмена", "success");
+    } catch (err) {
+      showToast(`Ошибка копирования: ${err}`, "error");
+    }
+  }
+
+  private async onRunFromMessage(uid: string) {
+    if (store.isProcessing) return;
+    const idx = store.msgUidList.indexOf(uid);
+    if (idx === -1) return;
+
+    const activeAgent = this.el.agentSelect.value;
+    const modelPath = this.el.modelSelect.value;
+    if (!modelPath) { showToast("Выберите модель!", "error"); return; }
+
+    this.logToGUI(`Нажата кнопка 'Отправить и запустить' для сообщения: ${uid}`);
+
+    // Оставляем историю до выбранного сообщения (включительно)
+    store.chatHistory = store.chatHistory.slice(0, idx + 1);
+    store.msgUidList = store.msgUidList.slice(0, idx + 1);
+    this.renderChatFromHistory();
+
+    this.setProcessingState(true);
+
+    if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
+    await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
+    bus.emit("session:changed");
+
+    const startTime = performance.now();
+    const preSendLength = store.chatHistory.length;
+
+    try {
+      const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value) };
+      const allHistory = store.chatHistory.slice();
+
+      let mmprojPath: string | null = null;
+      try { mmprojPath = await invoke("get_mmproj_path", { modelPath }); } catch (_) {}
+
+      // Отправляем пустое сообщение, Rust подхватит user_message из истории и продолжит
+      const response: any = await invoke("chat_request", {
+        modelPath,
+        agentId: activeAgent,
+        message: "",
+        history: allHistory,
+        contextSize: parseInt(this.el.contextSlider.value, 10),
+        kvQuantization: this.el.chkKvQuant.checked,
+        modelParams: params,
+        attachments: [],
+        mmprojPath
+      });
+
+      const newMessages = response.messages || [];
+      const thisRoundThoughts = store.chatHistory.slice(preSendLength).filter((m: any) => m.type === 'thought');
+
+      if (newMessages.length > 0) {
+        const oldHistory = newMessages.slice(0, preSendLength);
+        const afterOldHistory = newMessages.slice(preSendLength);
+
+        const oldUids = store.msgUidList.slice(0, preSendLength);
+        const thoughtUids = store.msgUidList.slice(preSendLength, preSendLength + thisRoundThoughts.length);
+        const remainingMessages = afterOldHistory.slice(thisRoundThoughts.length);
+        const newUids = remainingMessages.map(() => store.nextUid());
+
+        store.chatHistory = [...oldHistory, ...thisRoundThoughts, ...remainingMessages];
+        store.msgUidList = [...oldUids, ...thoughtUids, ...newUids];
+      }
+
+      this.renderChatFromHistory();
+      await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
+
+    } catch (error) {
+      if (String(error).includes("Отменено") || String(error).includes("Прервано")) {
+        store.chatHistory.push({ type: "message", author: "system", content: "⚠️ Прервано." });
+        store.msgUidList.push(store.nextUid());
+      } else {
+        showToast(`Ошибка: ${error}`, "error");
+        store.chatHistory.push({ type: "message", author: "system", content: `⚠️ Ошибка: ${error}` });
+        store.msgUidList.push(store.nextUid());
+      }
+      this.renderChatFromHistory();
+      if (store.currentSessionId) {
+        await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
+      }
+    } finally {
+      this.setProcessingState(false);
+    }
   }
 
   private async onDeleteThoughts(assistantUid: string) {

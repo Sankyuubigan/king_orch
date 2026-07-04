@@ -69,7 +69,7 @@ impl ChatMessage {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum PromptFormat {
     Auto,
     ChatML,
@@ -295,6 +295,16 @@ impl LlamaEngine {
         F: FnMut(f32, &str),
         L: Fn(String),
     {
+        // --- ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ПАРАМЕТРОВ ---
+        log_cb(format!(
+            "🎛 Параметры сэмплинга: Temp={:.2}, Top_K={}, Top_P={:.2}, Min_P={:.2}, Rep_Pen={:.2}, Pres_Pen={:.2}",
+            params.temperature, params.top_k, params.top_p, params.min_p, params.repetition_penalty, params.presence_penalty
+        ));
+
+        if params.repetition_penalty <= 1.0 {
+            log_cb("⚠️ ВНИМАНИЕ: repetition_penalty <= 1.0. Высокий риск зацикливания и деградации текста (галлюцинаций)!".to_string());
+        }
+
         let batch_size = 512; 
         let logical_cores = std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(8);
         let threads = (logical_cores / 2).max(4);
@@ -317,11 +327,15 @@ impl LlamaEngine {
             .map_err(|e| format!("Ошибка токенизации: {}", e))?;
 
         if tokens.is_empty() { return Err("Промпт пуст".to_string()); }
-        if tokens.len() as u32 >= self.n_ctx {
-            return Err(format!("Текст слишком большой ({} токенов) для контекста ({}).", tokens.len(), self.n_ctx));
-        }
+        
+        let total_expected = tokens.len() + max_tokens;
+        log_cb(format!("📐 Промпт: {} токенов, max_gen={}, ожидаемый финал: {}/{} (n_ctx)", tokens.len(), max_tokens, total_expected, self.n_ctx));
 
-        log_cb(format!("📐 Промпт: {} токенов, max_gen={}", tokens.len(), max_tokens));
+        if tokens.len() as u32 >= self.n_ctx {
+            let err_msg = format!("Текст слишком большой ({} токенов) для текущего контекста ({}).", tokens.len(), self.n_ctx);
+            log_cb(format!("❌ ОШИБКА КОНТЕКСТА: {}", err_msg));
+            return Err(err_msg);
+        }
 
         let prompt_start = Instant::now();
 
@@ -498,6 +512,9 @@ impl LlamaEngine {
         } else {
             if pf == PromptFormat::Auto { pf = PromptFormat::detect_from_path(&self.model_path); }
         }
+        
+        log_cb(format!("🔤 Определен формат промпта: {:?}", pf));
+        
         let words = pf.get_stop_words(); stop_words = words.into_iter().map(|s| s.to_string()).collect();
         
         let stop_words_refs: Vec<&str> = stop_words.iter().map(|s| s.as_str()).collect();
@@ -535,6 +552,8 @@ impl LlamaEngine {
             if pf == PromptFormat::Auto { pf = PromptFormat::detect_from_path(&self.model_path); }
             full_prompt = pf.format_messages(messages);
         }
+        
+        log_cb(format!("🔤 Определен формат промпта (мультимодальный): {:?}", pf));
 
         // Append media markers so mtmd can replace them
         let marker = mtmd_default_marker();
@@ -589,6 +608,15 @@ impl LlamaEngine {
             .map_err(|e| format!("Ошибка eval_chunks: {:?}", e))?;
 
         progress_cb(50.0, "Генерация ответа...");
+
+        log_cb(format!(
+            "🎛 Параметры сэмплинга: Temp={:.2}, Top_K={}, Top_P={:.2}, Min_P={:.2}, Rep_Pen={:.2}, Pres_Pen={:.2}",
+            model_params.temperature, model_params.top_k, model_params.top_p, model_params.min_p, model_params.repetition_penalty, model_params.presence_penalty
+        ));
+
+        if model_params.repetition_penalty <= 1.0 {
+            log_cb("⚠️ ВНИМАНИЕ: repetition_penalty <= 1.0. Высокий риск зацикливания и деградации текста (галлюцинаций)!".to_string());
+        }
 
         // Now run the generation loop
         let gen_start = std::time::Instant::now();

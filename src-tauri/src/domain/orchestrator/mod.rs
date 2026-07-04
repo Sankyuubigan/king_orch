@@ -84,6 +84,16 @@ where
     }
     let mut msg_counter = messages_store.len() as u32;
 
+    let actual_user_text = if user_text.is_empty() {
+        history.iter()
+            .rev()
+            .find(|m| m.author.as_deref() == Some("user") && m.msg_type == "message")
+            .map(|m| m.content.clone())
+            .unwrap_or_default()
+    } else {
+        user_text.clone()
+    };
+
     // Определяем entry type: если agent_id совпадает с file_stem YAML workflow — запускаем граф
     let mut all_sub_calls = Vec::new();
     let workflows = load_workflows(&agents_dir).unwrap_or_default();
@@ -92,7 +102,7 @@ where
     if let Some(workflow) = workflow_match {
         log_cb(format!("▶ Запуск workflow '{}' (entry: {})", workflow.name, agent_id));
         let mut ctx = WorkflowContext::new(
-            user_text.clone(),
+            actual_user_text.clone(),
             messages_store.clone(),
             recent_history.clone(),
         );
@@ -260,7 +270,7 @@ where
     let user_text_dup = llm_messages.last()
         .map(|m| m.author.as_deref() == Some("user") && m.content == user_text)
         .unwrap_or(false);
-    if !user_text_dup {
+    if !user_text_dup && !user_text.is_empty() {
         llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: user_text.clone(), sub_calls: None, author: Some("user".to_string()) });
     }
 

@@ -3,6 +3,8 @@ import { confirmDialog } from "./confirm";
 export interface MessageMenuCallbacks {
   onDelete: (msgUid: string) => void;
   onClone: (msgUid: string) => void;
+  onRunFrom: (msgUid: string) => void;
+  onCopy: (msgUid: string) => void;
 }
 
 let activeMenu: HTMLDivElement | null = null;
@@ -26,6 +28,36 @@ export function createMessageMenu(msgUid: string, callbacks: MessageMenuCallback
   const dropdown = document.createElement("div");
   dropdown.className = "msg-menu-dropdown";
 
+  const runFromItem = document.createElement("button");
+  runFromItem.className = "msg-menu-item";
+  runFromItem.textContent = "▶️ Отправить и запустить";
+  runFromItem.addEventListener("click", (e) => {
+    e.stopPropagation();
+    dropdown.classList.remove("show");
+    activeMenu = null;
+    callbacks.onRunFrom(msgUid);
+  });
+
+  const copyItem = document.createElement("button");
+  copyItem.className = "msg-menu-item";
+  copyItem.textContent = "📋 Копировать";
+  copyItem.addEventListener("click", (e) => {
+    e.stopPropagation();
+    dropdown.classList.remove("show");
+    activeMenu = null;
+    callbacks.onCopy(msgUid);
+  });
+
+  const cloneItem = document.createElement("button");
+  cloneItem.className = "msg-menu-item";
+  cloneItem.textContent = "📋 Создать Клон сессии";
+  cloneItem.addEventListener("click", (e) => {
+    e.stopPropagation();
+    dropdown.classList.remove("show");
+    activeMenu = null;
+    callbacks.onClone(msgUid);
+  });
+
   const deleteItem = document.createElement("button");
   deleteItem.className = "msg-menu-item danger";
   deleteItem.textContent = "🗑️ Удалить";
@@ -42,18 +74,10 @@ export function createMessageMenu(msgUid: string, callbacks: MessageMenuCallback
     }
   });
 
-  const cloneItem = document.createElement("button");
-  cloneItem.className = "msg-menu-item";
-  cloneItem.textContent = "📋 Создать Клон сессии";
-  cloneItem.addEventListener("click", (e) => {
-    e.stopPropagation();
-    dropdown.classList.remove("show");
-    activeMenu = null;
-    callbacks.onClone(msgUid);
-  });
-
-  dropdown.appendChild(deleteItem);
+  dropdown.appendChild(runFromItem);
+  dropdown.appendChild(copyItem);
   dropdown.appendChild(cloneItem);
+  dropdown.appendChild(deleteItem);
   wrapper.appendChild(btn);
   wrapper.appendChild(dropdown);
 
