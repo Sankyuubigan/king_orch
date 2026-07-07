@@ -10,39 +10,47 @@ pub fn get_models_catalog(app: AppHandle) -> Vec<infra::CatalogEntry> {
 #[tauri::command]
 pub fn get_model_params(app: AppHandle, model_path: String) -> infra::ModelParams {
     let mut cfg = infra::load_config(&app);
+    // Если пользователь уже сохранял параметры для этой модели - отдаем их
     if let Some(params) = cfg.model_params.get(&model_path) {
         return params.clone();
     }
+
     let catalog = infra::load_catalog(&app);
     let file_name = std::path::Path::new(&model_path)
         .file_name()
         .unwrap_or_default()
         .to_string_lossy();
+    
     let mut params = infra::ModelParams::default();
-    let mut found = false;
+
+    // 1. Берем базовые параметры из каталога
     for entry in catalog {
         if file_name.contains(&entry.name) || entry.download_url.contains(&file_name.to_string()) {
             params = entry.default_params.clone();
-            found = true;
             break;
         }
     }
-    if !found {
-        if let Some(temp) = infra::extract_f32_from_gguf(&model_path, "tokenizer.ggml.temp") {
-            params.temperature = temp;
-        }
-        if let Some(top_k) = infra::extract_u32_from_gguf(&model_path, "tokenizer.ggml.top_k") {
-            params.top_k = top_k;
-        }
-        if let Some(top_p) = infra::extract_f32_from_gguf(&model_path, "tokenizer.ggml.top_p") {
-            params.top_p = top_p;
-        }
-        if let Some(min_p) = infra::extract_f32_from_gguf(&model_path, "tokenizer.ggml.min_p") {
-            params.min_p = min_p;
-        }
+
+    // 2. УМНОЕ ЧТЕНИЕ (Ground Truth): Перезаписываем настройки тем, что ВШИТО в сам файл .gguf.
+    if let Some(temp) = infra::extract_f32_from_gguf(&model_path, "tokenizer.ggml.temp") {
+        params.temperature = temp;
     }
+    if let Some(top_k) = infra::extract_u32_from_gguf(&model_path, "tokenizer.ggml.top_k") {
+        params.top_k = top_k;
+    }
+    if let Some(top_p) = infra::extract_f32_from_gguf(&model_path, "tokenizer.ggml.top_p") {
+        params.top_p = top_p;
+    }
+    if let Some(min_p) = infra::extract_f32_from_gguf(&model_path, "tokenizer.ggml.min_p") {
+        params.min_p = min_p;
+    }
+    if let Some(rep_pen) = infra::extract_f32_from_gguf(&model_path, "tokenizer.ggml.repetition_penalty") {
+        params.repetition_penalty = rep_pen;
+    }
+
     cfg.model_params.insert(model_path.clone(), params.clone());
     infra::save_config(&app, &cfg);
+    
     params
 }
 
@@ -58,7 +66,7 @@ pub fn reset_model_params(app: AppHandle, model_path: String) -> infra::ModelPar
     let mut cfg = infra::load_config(&app);
     cfg.model_params.remove(&model_path);
     infra::save_config(&app, &cfg);
-    get_model_params(app, model_path)
+    get_model_params(app, model_path) // Пересчитает параметры из GGUF заново
 }
 
 #[tauri::command]
@@ -69,7 +77,6 @@ pub fn add_model(app: AppHandle, path: String) -> infra::AppConfig {
     }
     cfg.last_model = Some(path.clone());
 
-    // Auto-detect mmproj file
     if let Some(mmp) = infra::auto_detect_mmproj(&path) {
         cfg.mmproj_files.insert(path.clone(), mmp);
     }
@@ -84,7 +91,6 @@ pub fn get_mmproj_path(app: AppHandle, model_path: String) -> Option<String> {
     if let Some(path) = cfg.mmproj_files.get(&model_path) {
         return Some(path.clone());
     }
-    // Fall back to auto-detect and save for next time
     if let Some(mmp) = infra::auto_detect_mmproj(&model_path) {
         let mut cfg = infra::load_config(&app);
         cfg.mmproj_files.insert(model_path.clone(), mmp.clone());

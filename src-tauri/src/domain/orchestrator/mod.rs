@@ -145,7 +145,7 @@ where
             msg_type: "message".to_string(),
             content: final_res.clone(),
             sub_calls: sub_calls_opt,
-            author: Some("assistant".to_string()),
+            author: Some(primary_agent.id.clone()), // Исправление Бага №1: Сохраняем реальный ID агента вместо жесткого "assistant"
         });
         Ok((final_res, all_sub_calls, messages_store))
     } else {
@@ -253,15 +253,32 @@ where
 
     for msg in messages.iter() {
         if msg.msg_type == "thought" { continue; }
-        let role = match msg.author.as_deref() {
-            Some("user") => "user",
-            Some("system") => "system",
-            _ => "assistant",
-        };
+        
+        let actual_author = msg.author.as_deref().unwrap_or("user");
+        let role;
+        let mut content = msg.content.clone();
+
+        if actual_author == "user" {
+            role = "user";
+        } else if actual_author == "system" {
+            role = "system";
+        } else if actual_author == agent.id || actual_author == agent.name {
+            role = "assistant";
+        } else if actual_author == "assistant" {
+            // Для совместимости со старыми сессиями, где ID агента не был сохранен
+            role = "assistant";
+        } else {
+            // Исправление Бага №2: Предотвращение Role Leakage (галлюцинаций)
+            // Сообщения от ДРУГИХ агентов передаются в роли 'user' как внешний контекст,
+            // иначе текущий агент решит, что это его собственные слова, и начнет им подражать.
+            role = "user";
+            content = format!("[Контекст из чата. Предыдущий ответ от агента '{}']:\n{}", actual_author, content);
+        }
+
         llm_messages.push(ChatMessage {
             id: None,
             msg_type: "message".to_string(),
-            content: msg.content.clone(),
+            content,
             sub_calls: None,
             author: Some(role.to_string()),
         });

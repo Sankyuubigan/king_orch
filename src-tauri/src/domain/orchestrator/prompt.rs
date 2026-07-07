@@ -1,7 +1,7 @@
 use crate::domain::agent_manager::AgentProfile;
 use crate::infra::ChatMessage;
 
-const TRUTH_PROTOCOL: &str = "ОТВЕЧАЙ ТОЛЬКО ПРАВДУ. Если не знаешь — скажи 'я не знаю'. Запрещено выдумывать факты, давать ложные утверждения или строить догадки. Приоритет — точность, а не скорость.";
+const TRUTH_PROTOCOL: &str = "ОТВЕЧАЙ ТОЛЬКО ПРАВДУ. Если не знаешь — скажи 'я не знаю'. Запрещено выдумывать факты, давать ложные утверждения или строить догадки. Приоритет — точность, а не скорость.\nRespond strictly based on verified facts. If you do not have sufficient information to answer confidently, you must output exactly 'я не знаю' or 'I lack the data' without any guessing.";
 
 fn get_user_query_from_messages(messages: &[ChatMessage]) -> Option<&str> {
     messages.iter()

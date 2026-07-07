@@ -74,6 +74,7 @@ pub enum PromptFormat {
     Auto,
     ChatML,
     Gemma,
+    Gemma4,
     Llama3,
 }
 
@@ -81,6 +82,7 @@ impl PromptFormat {
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "gemma" => PromptFormat::Gemma,
+            "gemma4" | "gemma-4" => PromptFormat::Gemma4,
             "llama3" | "llama-3" => PromptFormat::Llama3,
             "chatml" => PromptFormat::ChatML,
             _ => PromptFormat::Auto,
@@ -89,9 +91,20 @@ impl PromptFormat {
 
     pub fn detect_from_path(path: &str) -> Self {
         let lower = path.to_lowercase();
-        if lower.contains("gemma") { PromptFormat::Gemma }
+        if lower.contains("gemma-4") || lower.contains("gemma4") { PromptFormat::Gemma4 }
+        else if lower.contains("gemma") { PromptFormat::Gemma }
         else if lower.contains("llama-3") || lower.contains("llama3") { PromptFormat::Llama3 }
         else { PromptFormat::ChatML }
+    }
+
+    pub fn detect_from_gguf(path: &str) -> Self {
+        if let Some(template) = crate::infra::extract_string_from_gguf(path, "tokenizer.chat_template") {
+            if template.contains("<|im_start|>") { return PromptFormat::ChatML; }
+            if template.contains("<|start_header_id|>") { return PromptFormat::Llama3; }
+            if template.contains("<|turn>") || template.contains("<turn|>") { return PromptFormat::Gemma4; }
+            if template.contains("<start_of_turn>") { return PromptFormat::Gemma; }
+        }
+        Self::detect_from_path(path)
     }
 
     pub fn format_messages(&self, messages: &[ChatMessage]) -> String {
@@ -104,14 +117,66 @@ impl PromptFormat {
                 full_prompt.push_str("<|im_start|>assistant\n");
             },
             PromptFormat::Gemma => {
+                let mut system_text = String::new();
                 for msg in messages {
-                    let role = match msg.llm_role() {
+                    let role = msg.llm_role();
+                    if role == "system" {
+                        if !system_text.is_empty() { system_text.push_str("\n\n"); }
+                        system_text.push_str(&msg.content);
+                        continue;
+                    }
+                    
+                    let content = if role == "user" && !system_text.is_empty() {
+                        let combined = format!("{}\n\n{}", system_text, msg.content);
+                        system_text.clear();
+                        combined
+                    } else {
+                        msg.content.clone()
+                    };
+
+                    let out_role = match role {
                         "assistant" => "model",
                         r => r,
                     };
-                    full_prompt.push_str(&format!("<start_of_turn>{}\n{}<end_of_turn>\n", role, msg.content));
+                    full_prompt.push_str(&format!("<start_of_turn>{}\n{}<end_of_turn>\n", out_role, content));
                 }
+                
+                if !system_text.is_empty() {
+                    full_prompt.push_str(&format!("<start_of_turn>user\n{}<end_of_turn>\n", system_text));
+                }
+                
                 full_prompt.push_str("<start_of_turn>model\n");
+            },
+            PromptFormat::Gemma4 => {
+                let mut system_text = String::new();
+                for msg in messages {
+                    let role = msg.llm_role();
+                    if role == "system" {
+                        if !system_text.is_empty() { system_text.push_str("\n\n"); }
+                        system_text.push_str(&msg.content);
+                        continue;
+                    }
+                    
+                    let content = if role == "user" && !system_text.is_empty() {
+                        let combined = format!("{}\n\n{}", system_text, msg.content);
+                        system_text.clear();
+                        combined
+                    } else {
+                        msg.content.clone()
+                    };
+
+                    let out_role = match role {
+                        "assistant" => "model",
+                        r => r,
+                    };
+                    full_prompt.push_str(&format!("<|turn>{}\n{}<turn|>\n", out_role, content));
+                }
+                
+                if !system_text.is_empty() {
+                    full_prompt.push_str(&format!("<|turn>user\n{}<turn|>\n", system_text));
+                }
+                
+                full_prompt.push_str("<|turn>model\n");
             },
             PromptFormat::Llama3 => {
                 for msg in messages {
@@ -126,7 +191,8 @@ impl PromptFormat {
     pub fn get_stop_words(&self) -> Vec<&'static str> {
         match self {
             PromptFormat::ChatML | PromptFormat::Auto => vec!["<|im_end|>", "<|im_start|>"],
-            PromptFormat::Gemma => vec!["<end_of_turn>", "<start_of_turn>"],
+            PromptFormat::Gemma => vec!["<end_of_turn>", "<start_of_turn>", "<|turn|>"],
+            PromptFormat::Gemma4 => vec!["<turn|>", "<|turn|>"],
             PromptFormat::Llama3 => vec!["<|eot_id|>", "<|start_header_id|>"],
         }
     }
@@ -216,21 +282,6 @@ pub fn extract_u32_from_gguf(path: &str, target_key: &str) -> Option<u32> {
     Some(u32::from_le_bytes(find_gguf_value(path, target_key, 4)?.try_into().unwrap()))
 }
 
-fn render_jinja_template(template_str: &str, messages: &[ChatMessage]) -> Result<String, String> {
-    use minijinja::{Environment, context};
-    let mut env = Environment::new();
-    env.add_function("raise_exception", |msg: String| -> Result<String, minijinja::Error> {
-        Err(minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, msg))
-    });
-    let safe_template = template_str.replace(".strip()", "|trim").replace(".upper()", "|upper").replace(".lower()", "|lower");
-    env.add_template("chat", &safe_template).map_err(|e| e.to_string())?;
-    let tmpl = env.get_template("chat").map_err(|e| e.to_string())?;
-    let messages_val: Vec<serde_json::Value> = messages.iter().map(|m| {
-        serde_json::json!({ "role": m.llm_role(), "content": m.content })
-    }).collect();
-    tmpl.render(context! { messages => messages_val, add_generation_prompt => true, bos_token => "<s>", eos_token => "</s>" }).map_err(|e| e.to_string())
-}
-
 pub struct LlamaEngine {
     backend: LlamaBackend,
     model: LlamaModel,
@@ -256,7 +307,20 @@ impl LlamaEngine {
         log_cb(format!("⚙️ GPU слоёв: {} (попытка полного оффлоуда)", gpu_layers));
         let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
             .map_err(|e| format!("Ошибка загрузки модели: {}", e))?;
-        log_cb("✅ Модель загружена успешно".to_string());
+        log_cb(format!("✅ Модель загружена успешно: {}", model_path));
+
+        let mut gguf_params = Vec::new();
+        if let Some(v) = extract_f32_from_gguf(model_path, "tokenizer.ggml.temp") { gguf_params.push(format!("Temp={:.2}", v)); }
+        if let Some(v) = extract_u32_from_gguf(model_path, "tokenizer.ggml.top_k") { gguf_params.push(format!("Top_K={}", v)); }
+        if let Some(v) = extract_f32_from_gguf(model_path, "tokenizer.ggml.top_p") { gguf_params.push(format!("Top_P={:.2}", v)); }
+        if let Some(v) = extract_f32_from_gguf(model_path, "tokenizer.ggml.min_p") { gguf_params.push(format!("Min_P={:.2}", v)); }
+        if let Some(v) = extract_f32_from_gguf(model_path, "tokenizer.ggml.repetition_penalty") { gguf_params.push(format!("Rep_Pen={:.2}", v)); }
+
+        if !gguf_params.is_empty() {
+            log_cb(format!("📦 Вшитые параметры GGUF: {}", gguf_params.join(", ")));
+        } else {
+            log_cb("📦 Вшитые параметры GGUF: отсутствуют".to_string());
+        }
 
         #[cfg(feature = "mtmd")]
         let mtmd_ctx = if let Some(mmp) = mmproj_path {
@@ -285,19 +349,15 @@ impl LlamaEngine {
         self.n_ctx
     }
 
-    /// Точный подсчет токенов прямо через встроенный токенизатор загруженной модели
     pub fn get_tokens_count(&self, messages: &[ChatMessage], format_type: &str) -> Result<usize, String> {
-        let mut pf = PromptFormat::from_str(format_type);
-        let mut full_prompt = String::new();
-        if pf == PromptFormat::Auto {
-            if let Some(template_str) = extract_string_from_gguf(&self.model_path, "tokenizer.chat_template") {
-                if let Ok(rendered) = render_jinja_template(&template_str, messages) { full_prompt = rendered; }
-            }
-        }
-        if full_prompt.is_empty() {
-            if pf == PromptFormat::Auto { pf = PromptFormat::detect_from_path(&self.model_path); }
-            full_prompt = pf.format_messages(messages);
-        }
+        let pf = PromptFormat::from_str(format_type);
+        let actual_format = if pf == PromptFormat::Auto {
+            PromptFormat::detect_from_gguf(&self.model_path)
+        } else {
+            pf.clone()
+        };
+
+        let full_prompt = actual_format.format_messages(messages);
 
         let tokens = self.model.str_to_token(&full_prompt, AddBos::Always)
             .map_err(|e| format!("Ошибка токенизации: {}", e))?;
@@ -318,15 +378,14 @@ impl LlamaEngine {
         F: FnMut(f32, &str),
         L: Fn(String),
     {
-        // --- ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ПАРАМЕТРОВ ---
-        log_cb(format!(
-            "🎛 Параметры сэмплинга: Temp={:.2}, Top_K={}, Top_P={:.2}, Min_P={:.2}, Rep_Pen={:.2}, Pres_Pen={:.2}",
-            params.temperature, params.top_k, params.top_p, params.min_p, params.repetition_penalty, params.presence_penalty
-        ));
+        let actual_min_p = params.min_p.max(0.0);
+        let actual_rep_pen = params.repetition_penalty.max(1.0);
+        let actual_temp = params.temperature.max(0.01);
 
-        if params.repetition_penalty <= 1.0 {
-            log_cb("⚠️ ВНИМАНИЕ: repetition_penalty <= 1.0. Высокий риск зацикливания и деградации текста (галлюцинаций)!".to_string());
-        }
+        log_cb(format!(
+            "🎛 Фактические параметры сэмплинга: Temp={:.2}, Top_K={}, Top_P={:.2}, Min_P={:.2}, Rep_Pen={:.2}, Pres_Pen={:.2}",
+            actual_temp, params.top_k, params.top_p, actual_min_p, actual_rep_pen, params.presence_penalty
+        ));
 
         let batch_size = 512; 
         let logical_cores = std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(8);
@@ -388,22 +447,28 @@ impl LlamaEngine {
 
         let mut n_cur = n_past;
         let mut result_text = String::new();
+        let mut generated_bytes: Vec<u8> = Vec::new();
         let mut generated_tokens = 0;
+        let mut gen_tokens: Vec<llama_cpp_2::token::LlamaToken> = Vec::new();
 
-        let mut stop_words = vec![
+        let mut stop_words: Vec<&str> = vec![
             "<|im_end|>", "<end_of_turn>", "</s>", "<|eot_id|>", 
             "<turn>", "<|eot|>", "User:", "System:", "<eos>", "Yes",
             "<turn|>", "/end_of_turn>", "<step>", "<|end_of_text|>", "<｜end of sentence｜>",
             "</start_of_turn>", "<|channel|>"
         ];
-        stop_words.extend_from_slice(custom_stop_words);
-        log_cb(format!("🛑 Стоп-слова ({}): {:?}", stop_words.len(), stop_words));
-
-        let mut stop_reason = "MAX_TOKENS";
+        
+        for &w in custom_stop_words {
+            if !stop_words.contains(&w) {
+                stop_words.push(w);
+            }
+        }
+        
+        let mut _stop_reason = "MAX_TOKENS";
 
         while n_cur < self.n_ctx as i32 && generated_tokens < max_tokens {
             if cancel_flag.load(Ordering::SeqCst) {
-                stop_reason = "CANCELLED";
+                _stop_reason = "CANCELLED";
                 break;
             }
 
@@ -414,18 +479,18 @@ impl LlamaEngine {
             let penalty_last_n = 256.min(past_tokens.len());
             let last_tokens_slice = if past_tokens.len() > penalty_last_n { &past_tokens[past_tokens.len() - penalty_last_n..] } else { &past_tokens };
             let mut penalty_tokens = last_tokens_slice.to_vec();
-            penalty_tokens.sort(); penalty_tokens.dedup();
+            penalty_tokens.sort_unstable(); 
+            penalty_tokens.dedup();
 
             for (id, logit) in candidates_vec.iter_mut() {
                 if penalty_tokens.binary_search(id).is_ok() {
                     *logit -= params.presence_penalty;
-                    if *logit <= 0.0 { *logit *= params.repetition_penalty; } 
-                    else { *logit /= params.repetition_penalty; }
+                    if *logit <= 0.0 { *logit *= actual_rep_pen; } 
+                    else { *logit /= actual_rep_pen; }
                 }
             }
 
-            let temp = params.temperature.max(0.01);
-            for (_, logit) in candidates_vec.iter_mut() { *logit /= temp; }
+            for (_, logit) in candidates_vec.iter_mut() { *logit /= actual_temp; }
 
             let max_logit = candidates_vec.iter().map(|(_, l)| *l).fold(f32::NEG_INFINITY, f32::max);
             let mut sum_exp = 0.0;
@@ -435,17 +500,19 @@ impl LlamaEngine {
             for (_, p) in probs.iter_mut() { *p /= sum_exp; }
             probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-            let k = (params.top_k as usize).min(probs.len()).max(1);
+            let k = if actual_min_p >= 0.05 { probs.len() } else { (params.top_k as usize).min(probs.len()).max(1) };
             probs.truncate(k);
             let max_prob = probs.first().map(|(_, p)| *p).unwrap_or(1.0);
-            let min_p_thresh = max_prob * params.min_p;
+            
+            let min_p_thresh = max_prob * actual_min_p;
             probs.retain(|(_, p)| *p >= min_p_thresh);
 
+            let top_p_thresh = if actual_min_p >= 0.05 { 1.0 } else { params.top_p };
             let mut cumulative_prob = 0.0;
             let mut top_p_idx = probs.len();
             for (i, (_, p)) in probs.iter().enumerate() {
                 cumulative_prob += *p;
-                if cumulative_prob >= params.top_p { top_p_idx = i + 1; break; }
+                if cumulative_prob >= top_p_thresh { top_p_idx = i + 1; break; }
             }
             probs.truncate(top_p_idx);
 
@@ -463,19 +530,61 @@ impl LlamaEngine {
             let mut new_token = probs.last().map(|(id, _)| *id).unwrap_or_else(|| self.model.token_eos());
             for (id, p) in probs.iter() { cumulative += *p; if r <= cumulative { new_token = *id; break; } }
 
-            if new_token == self.model.token_eos() { stop_reason = "EOS"; break; }
+            if new_token == self.model.token_eos() { _stop_reason = "EOS"; break; }
             past_tokens.push(new_token);
+            gen_tokens.push(new_token);
+
+            // ++ АППАРАТНАЯ ЗАЩИТА: ИНТЕЛЛЕКТУАЛЬНЫЙ N-GRAM ДЕТЕКТОР ЦИКЛОВ ++
+            let mut loop_detected = false;
+            let g_len = gen_tokens.len();
+            for l in 1..=32 {
+                let required_repeats = match l {
+                    1 => 15,
+                    2 => 6,
+                    _ => 4,
+                };
+                
+                if g_len >= l * required_repeats {
+                    let mut is_loop = true;
+                    let suffix = &gen_tokens[g_len - l..g_len];
+                    
+                    for i in 1..required_repeats {
+                        let start = g_len - l * (i + 1);
+                        let end = g_len - l * i;
+                        if &gen_tokens[start..end] != suffix {
+                            is_loop = false;
+                            break;
+                        }
+                    }
+                    if is_loop {
+                        loop_detected = true;
+                        break;
+                    }
+                }
+            }
+
+            if loop_detected {
+                log_cb("🛑 Сработала аппаратная защита N-Gram: обнаружено зацикливание фразы. Жесткое прерывание.".to_string());
+                _stop_reason = "LOOP_DETECTED";
+                break; 
+            }
 
             if let Ok(bytes) = self.model.token_to_bytes(new_token, Special::Tokenize) {
-                result_text.push_str(&String::from_utf8_lossy(&bytes));
+                generated_bytes.extend_from_slice(&bytes);
+                result_text = String::from_utf8_lossy(&generated_bytes).into_owned();
             }
 
             let mut should_stop = false;
             let mut matched_word = String::new();
             for word in stop_words.iter() {
-                if result_text.contains(word) { matched_word = word.to_string(); result_text = result_text.replace(word, "").trim().to_string(); should_stop = true; break; }
+                if result_text.contains(word) { 
+                    matched_word = word.to_string(); 
+                    result_text = result_text.replace(word, "").trim().to_string(); 
+                    should_stop = true; 
+                    break; 
+                }
             }
-            if should_stop { log_cb(format!("🛑 Стоп-слово '{}' на токене {}", matched_word, generated_tokens)); stop_reason = "STOP_WORD"; break; }
+            if should_stop { log_cb(format!("🛑 Стоп-слово '{}' на токене {}", matched_word, generated_tokens)); _stop_reason = "STOP_WORD"; break; }
 
             batch.clear();
             batch.add(new_token, n_cur, &[0], true).map_err(|e| e.to_string())?;
@@ -491,7 +600,7 @@ impl LlamaEngine {
 
         let gen_elapsed = gen_start.elapsed().as_secs_f64();
         let speed = if gen_elapsed > 0.0 { generated_tokens as f64 / gen_elapsed } else { 0.0 };
-        log_cb(format!("⚙️ Сгенерировано {} токенов за {:.1}с ({:.0} tok/s). Причина: {}", generated_tokens, gen_elapsed, speed, stop_reason));
+        log_cb(format!("⚙️ Сгенерировано {} токенов за {:.1}с ({:.0} tok/s). Причина: {}", generated_tokens, gen_elapsed, speed, _stop_reason));
 
         if generated_tokens > 50 {
             let char_count: usize = result_text.chars().count();
@@ -520,28 +629,20 @@ impl LlamaEngine {
         log_cb: L,
     ) -> Result<String, String>
     where F: FnMut(f32, &str), L: Fn(String) {
-        let mut pf = PromptFormat::from_str(format_type);
-        let mut full_prompt = String::new();
-        let mut stop_words: Vec<String>;
-        if pf == PromptFormat::Auto {
-            if let Some(template_str) = extract_string_from_gguf(&self.model_path, "tokenizer.chat_template") {
-                if let Ok(rendered) = render_jinja_template(&template_str, messages) { full_prompt = rendered; }
-            }
-        }
-
-        if full_prompt.is_empty() {
-            if pf == PromptFormat::Auto { pf = PromptFormat::detect_from_path(&self.model_path); }
-            full_prompt = pf.format_messages(messages);
+        let pf = PromptFormat::from_str(format_type);
+        let actual_format = if pf == PromptFormat::Auto {
+            PromptFormat::detect_from_gguf(&self.model_path)
         } else {
-            if pf == PromptFormat::Auto { pf = PromptFormat::detect_from_path(&self.model_path); }
-        }
+            pf.clone()
+        };
+
+        let full_prompt = actual_format.format_messages(messages);
         
-        log_cb(format!("🔤 Определен формат промпта: {:?}", pf));
+        log_cb(format!("🔤 Определен формат промпта: {:?}", actual_format));
         
-        let words = pf.get_stop_words(); stop_words = words.into_iter().map(|s| s.to_string()).collect();
+        let words = actual_format.get_stop_words(); 
         
-        let stop_words_refs: Vec<&str> = stop_words.iter().map(|s| s.as_str()).collect();
-        self.run_generation(&full_prompt, max_tokens, model_params, &stop_words_refs, cancel_flag, progress_cb, log_cb)
+        self.run_generation(&full_prompt, max_tokens, model_params, &words, cancel_flag, progress_cb, log_cb)
     }
 
     #[cfg(feature = "mtmd")]
@@ -559,26 +660,17 @@ impl LlamaEngine {
     where F: FnMut(f32, &str), L: Fn(String) {
         let mtmd_ctx = self.mtmd_ctx.as_ref().ok_or("mmproj не загружен")?;
 
-        // Build prompt text with media markers
-        let mut pf = PromptFormat::from_str(format_type);
-        let mut full_prompt = String::new();
+        let pf = PromptFormat::from_str(format_type);
+        let actual_format = if pf == PromptFormat::Auto {
+            PromptFormat::detect_from_gguf(&self.model_path)
+        } else {
+            pf.clone()
+        };
 
-        if pf == PromptFormat::Auto {
-            if let Some(template_str) = extract_string_from_gguf(&self.model_path, "tokenizer.chat_template") {
-                if let Ok(rendered) = render_jinja_template(&template_str, messages) {
-                    full_prompt = rendered;
-                }
-            }
-        }
-
-        if full_prompt.is_empty() {
-            if pf == PromptFormat::Auto { pf = PromptFormat::detect_from_path(&self.model_path); }
-            full_prompt = pf.format_messages(messages);
-        }
+        let mut full_prompt = actual_format.format_messages(messages);
         
-        log_cb(format!("🔤 Определен формат промпта (мультимодальный): {:?}", pf));
+        log_cb(format!("🔤 Определен формат промпта (мультимодальный): {:?}", actual_format));
 
-        // Append media markers so mtmd can replace them
         let marker = mtmd_default_marker();
         for _ in attachments.iter() {
             full_prompt.push_str(marker);
@@ -586,7 +678,6 @@ impl LlamaEngine {
 
         log_cb(format!("📐 Мультимодальный промпт: {} символов, {} вложений", full_prompt.len(), attachments.len()));
 
-        // Load all attachments as MtmdBitmaps
         let mut bitmaps = Vec::new();
         for att in attachments {
             let data = base64_decode(&att.data_base64)
@@ -598,7 +689,6 @@ impl LlamaEngine {
 
         let bitmap_refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
 
-        // Tokenize
         let input_text = llama_cpp_2::mtmd::MtmdInputText {
             text: full_prompt.clone(),
             add_special: true,
@@ -626,38 +716,38 @@ impl LlamaEngine {
         let mut ctx = self.model.new_context(&self.backend, ctx_params)
             .map_err(|e| format!("Ошибка создания контекста: {}", e))?;
 
-        // Evaluate multimodal chunks
         let n_past = chunks.eval_chunks(mtmd_ctx, &ctx, 0, 0, batch_size, true)
             .map_err(|e| format!("Ошибка eval_chunks: {:?}", e))?;
 
         progress_cb(50.0, "Генерация ответа...");
 
+        let actual_min_p = model_params.min_p.max(0.0);
+        let actual_rep_pen = model_params.repetition_penalty.max(1.0);
+        let actual_temp = model_params.temperature.max(0.01);
+
         log_cb(format!(
-            "🎛 Параметры сэмплинга: Temp={:.2}, Top_K={}, Top_P={:.2}, Min_P={:.2}, Rep_Pen={:.2}, Pres_Pen={:.2}",
-            model_params.temperature, model_params.top_k, model_params.top_p, model_params.min_p, model_params.repetition_penalty, model_params.presence_penalty
+            "🎛 Фактические параметры сэмплинга: Temp={:.2}, Top_K={}, Top_P={:.2}, Min_P={:.2}, Rep_Pen={:.2}, Pres_Pen={:.2}",
+            actual_temp, model_params.top_k, model_params.top_p, actual_min_p, actual_rep_pen, model_params.presence_penalty
         ));
 
-        if model_params.repetition_penalty <= 1.0 {
-            log_cb("⚠️ ВНИМАНИЕ: repetition_penalty <= 1.0. Высокий риск зацикливания и деградации текста (галлюцинаций)!".to_string());
-        }
-
-        // Now run the generation loop
         let gen_start = std::time::Instant::now();
         let mut n_cur = n_past as i32;
         let mut generated_tokens = 0;
         let mut result_text = String::new();
+        let mut generated_bytes: Vec<u8> = Vec::new();
         let mut past_tokens: Vec<llama_cpp_2::token::LlamaToken> = Vec::new();
-        let mut stop_reason = "MAX_TOKENS";
+        let mut gen_tokens: Vec<llama_cpp_2::token::LlamaToken> = Vec::new();
+        let mut _stop_reason = "MAX_TOKENS";
 
-        let mut stop_words = vec![
+        let mut stop_words: Vec<&str> = vec![
             "<|im_end|>", "<end_of_turn>", "</s>", "<|eot_id|>",
             "<turn>", "<|eot|>", "User:", "System:", "<eos>", "Yes",
             "<turn|>", "/end_of_turn>", "<step>", "<|end_of_text|>", "<｜end of sentence｜>",
             "</start_of_turn>"
         ];
-        // Also add format-specific stop words
-        let pf_stop = PromptFormat::from_str(format_type);
-        for w in pf_stop.get_stop_words() {
+        
+        let words = actual_format.get_stop_words();
+        for &w in &words {
             if !stop_words.contains(&w) {
                 stop_words.push(w);
             }
@@ -665,7 +755,7 @@ impl LlamaEngine {
 
         while n_cur < self.n_ctx as i32 && generated_tokens < max_tokens as usize {
             if cancel_flag.load(Ordering::SeqCst) {
-                stop_reason = "CANCELLED";
+                _stop_reason = "CANCELLED";
                 break;
             }
 
@@ -676,18 +766,18 @@ impl LlamaEngine {
             let penalty_last_n = 256.min(past_tokens.len());
             let last_tokens_slice = if past_tokens.len() > penalty_last_n { &past_tokens[past_tokens.len() - penalty_last_n..] } else { &past_tokens };
             let mut penalty_tokens = last_tokens_slice.to_vec();
-            penalty_tokens.sort(); penalty_tokens.dedup();
+            penalty_tokens.sort_unstable(); 
+            penalty_tokens.dedup();
 
             for (id, logit) in candidates_vec.iter_mut() {
                 if penalty_tokens.binary_search(id).is_ok() {
                     *logit -= model_params.presence_penalty;
-                    if *logit <= 0.0 { *logit *= model_params.repetition_penalty; }
-                    else { *logit /= model_params.repetition_penalty; }
+                    if *logit <= 0.0 { *logit *= actual_rep_pen; }
+                    else { *logit /= actual_rep_pen; }
                 }
             }
 
-            let temp = model_params.temperature.max(0.01);
-            for (_, logit) in candidates_vec.iter_mut() { *logit /= temp; }
+            for (_, logit) in candidates_vec.iter_mut() { *logit /= actual_temp; }
 
             let max_logit = candidates_vec.iter().map(|(_, l)| *l).fold(f32::NEG_INFINITY, f32::max);
             let mut sum_exp = 0.0;
@@ -697,17 +787,19 @@ impl LlamaEngine {
             for (_, p) in probs.iter_mut() { *p /= sum_exp; }
             probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
-            let k = (model_params.top_k as usize).min(probs.len()).max(1);
+            let k = if actual_min_p >= 0.05 { probs.len() } else { (model_params.top_k as usize).min(probs.len()).max(1) };
             probs.truncate(k);
             let max_prob = probs.first().map(|(_, p)| *p).unwrap_or(1.0);
-            let min_p_thresh = max_prob * model_params.min_p;
+            
+            let min_p_thresh = max_prob * actual_min_p;
             probs.retain(|(_, p)| *p >= min_p_thresh);
 
+            let top_p_thresh = if actual_min_p >= 0.05 { 1.0 } else { model_params.top_p };
             let mut cumulative_prob = 0.0;
             let mut top_p_idx = probs.len();
             for (i, (_, p)) in probs.iter().enumerate() {
                 cumulative_prob += *p;
-                if cumulative_prob >= model_params.top_p { top_p_idx = i + 1; break; }
+                if cumulative_prob >= top_p_thresh { top_p_idx = i + 1; break; }
             }
             probs.truncate(top_p_idx);
 
@@ -725,18 +817,60 @@ impl LlamaEngine {
             let mut new_token = probs.last().map(|(id, _)| *id).unwrap_or_else(|| self.model.token_eos());
             for (id, p) in probs.iter() { cumulative += *p; if r <= cumulative { new_token = *id; break; } }
 
-            if new_token == self.model.token_eos() { break; }
+            if new_token == self.model.token_eos() { _stop_reason = "EOS"; break; }
             past_tokens.push(new_token);
+            gen_tokens.push(new_token);
+
+            // ++ АППАРАТНАЯ ЗАЩИТА: ИНТЕЛЛЕКТУАЛЬНЫЙ N-GRAM ДЕТЕКТОР ЦИКЛОВ ++
+            let mut loop_detected = false;
+            let g_len = gen_tokens.len();
+            for l in 1..=32 {
+                let required_repeats = match l {
+                    1 => 15,
+                    2 => 6,
+                    _ => 4,
+                };
+                
+                if g_len >= l * required_repeats {
+                    let mut is_loop = true;
+                    let suffix = &gen_tokens[g_len - l..g_len];
+                    for i in 1..required_repeats {
+                        let start = g_len - l * (i + 1);
+                        let end = g_len - l * i;
+                        if &gen_tokens[start..end] != suffix {
+                            is_loop = false;
+                            break;
+                        }
+                    }
+                    if is_loop {
+                        loop_detected = true;
+                        break;
+                    }
+                }
+            }
+
+            if loop_detected {
+                log_cb("🛑 Сработала аппаратная защита N-Gram: обнаружено зацикливание фразы. Жесткое прерывание.".to_string());
+                _stop_reason = "LOOP_DETECTED";
+                break;
+            }
 
             if let Ok(bytes) = self.model.token_to_bytes(new_token, Special::Tokenize) {
-                result_text.push_str(&String::from_utf8_lossy(&bytes));
+                generated_bytes.extend_from_slice(&bytes);
+                result_text = String::from_utf8_lossy(&generated_bytes).into_owned();
             }
 
             let mut should_stop = false;
+            let mut matched_word = String::new();
             for word in stop_words.iter() {
-                if result_text.contains(word) { result_text = result_text.replace(word, "").trim().to_string(); should_stop = true; break; }
+                if result_text.contains(word) { 
+                    matched_word = word.to_string();
+                    result_text = result_text.replace(word, "").trim().to_string(); 
+                    should_stop = true; 
+                    break; 
+                }
             }
-            if should_stop { break; }
+            if should_stop { log_cb(format!("🛑 Стоп-слово '{}' на токене {}", matched_word, generated_tokens)); _stop_reason = "STOP_WORD"; break; }
 
             let mut batch = LlamaBatch::new(batch_size as usize, 1);
             batch.add(new_token, n_cur, &[0], true).map_err(|e| e.to_string())?;
@@ -752,7 +886,7 @@ impl LlamaEngine {
 
         let gen_elapsed = gen_start.elapsed().as_secs_f64();
         let speed = if gen_elapsed > 0.0 { generated_tokens as f64 / gen_elapsed } else { 0.0 };
-        log_cb(format!("⚙️ Сгенерировано {} токенов за {:.1}с ({:.0} tok/s)", generated_tokens, gen_elapsed, speed));
+        log_cb(format!("⚙️ Сгенерировано {} токенов за {:.1}с ({:.0} tok/s). Причина: {}", generated_tokens, gen_elapsed, speed, _stop_reason));
 
         Ok(result_text)
     }
