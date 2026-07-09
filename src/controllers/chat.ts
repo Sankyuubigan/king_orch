@@ -120,17 +120,31 @@ export class ChatController {
     }
 
     try {
-        const promptText: string = await invoke("get_prompt_preview", {
-            modelPath, 
-            agentId, 
-            message: text, 
+        const kvQuantKeys = this.el.chkKvQuantK?.checked ?? false;
+        const kvQuantValues = this.el.chkKvQuantV?.checked ?? false;
+        const maxGen = parseInt(this.el.maxGenSlider?.value || "2048", 10);
+
+        const promptText = await invoke<string>("get_prompt_preview", {
+            modelPath,
+            agentId,
+            message: text,
             history: store.chatHistory
         });
-        
+
         const tokens = await countTokens(promptText, hfModelId);
 
+        const vramMb = await invoke<number>("get_prompt_memory", {
+            modelPath,
+            contextSize,
+            kvQuantKeys,
+            kvQuantValues,
+            promptTokens: tokens,
+            maxGen
+        });
+
         if (this.el.tokenCounter) {
-            this.el.tokenCounter.innerText = `${tokens} / ${contextSize}`;
+            const memStr = isFinite(vramMb) && vramMb > 0 ? ` (~${vramMb.toFixed(1)} МБ)` : "";
+            this.el.tokenCounter.innerText = `${tokens} / ${contextSize}${memStr}`;
             this.el.tokenCounter.classList.remove("warning", "danger");
             if (tokens > contextSize) {
                 this.el.tokenCounter.classList.add("danger");

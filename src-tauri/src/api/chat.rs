@@ -199,3 +199,21 @@ pub fn get_prompt_preview(
     let pf = crate::infra::llm::PromptFormat::detect_from_path(&model_path);
     Ok(pf.format_messages(&llm_messages))
 }
+
+/// Для Live-превью: прогноз потребления VRAM (модель + KV-кэш) для заданного размера контекста.
+#[tauri::command]
+pub fn get_prompt_memory(
+    model_path: String,
+    context_size: u32,
+    kv_quant_keys: bool,
+    kv_quant_values: bool,
+    prompt_tokens: u32,
+    max_gen: u32,
+) -> Result<f64, String> {
+    // Движок выделяет KV-кэш не на весь лимит контекста, а на реально
+    // необходимый объём: (промпт + запас на генерацию + 128).min(лимит).
+    // Иначе оценка всегда завышена и не зависит от длины промпта.
+    const CTX_RESERVE: u32 = 128;
+    let effective_ctx = (prompt_tokens + max_gen + CTX_RESERVE).min(context_size);
+    Ok(crate::infra::llm::estimate_vram_mb(&model_path, effective_ctx, kv_quant_keys, kv_quant_values))
+}

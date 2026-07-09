@@ -48,6 +48,7 @@ fn main() {
             api::chat::chat_request,
             api::chat::stop_processing,
             api::chat::get_prompt_preview,
+            api::chat::get_prompt_memory,
             api::graph::read_workflow_file,
             api::graph::save_workflow,
             api::test::run_iterative_test,

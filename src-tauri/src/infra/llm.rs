@@ -24,6 +24,26 @@ use crate::infra::config::ModelParams;
 pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat};
 pub use super::llm_gguf::{extract_string_from_gguf, extract_f32_from_gguf, extract_u32_from_gguf};
 
+/// Прогноз потребления VRAM для заданного размера контекста:
+/// размер файла модели + KV-кэш (зависит от архитектуры и n_ctx).
+pub fn estimate_vram_mb(model_path: &str, ctx_size: u32, kv_quant_keys: bool, kv_quant_values: bool) -> f64 {
+    let model_size_mb = std::fs::metadata(model_path).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+
+    let layers = extract_u32_from_gguf(model_path, "llama.block_count").unwrap_or(32);
+    let heads = extract_u32_from_gguf(model_path, "llama.attention.head_count").unwrap_or(32);
+    let heads_kv = extract_u32_from_gguf(model_path, "llama.attention.head_count_kv").unwrap_or(heads);
+    let embd = extract_u32_from_gguf(model_path, "llama.embedding_length").unwrap_or(4096);
+    let head_dim = embd / heads.max(1);
+
+    let b_k = if kv_quant_keys { 1.06 } else { 2.0 };
+    let b_v = if kv_quant_values { 1.06 } else { 2.0 };
+
+    let kv_bytes = (layers as f64 * head_dim as f64 * ctx_size as f64) * (heads as f64 * b_k + heads_kv as f64 * b_v);
+    let kv_mb = kv_bytes / (1024.0 * 1024.0);
+
+    model_size_mb + kv_mb
+}
+
 pub struct LlamaEngine {
     pub backend: LlamaBackend,
     pub model: LlamaModel,
@@ -243,18 +263,8 @@ impl LlamaEngine {
         let total_expected = tokens.len() + max_tokens;
         log_cb(format!("📐 Промпт: {} токенов, max_gen={}, ожидаемый финал: {}/{} (n_ctx)", tokens.len(), max_tokens, total_expected, ideal_ctx_size));
 
-        let layers = extract_u32_from_gguf(&self.model_path, "llama.block_count").unwrap_or(32);
-        let heads = extract_u32_from_gguf(&self.model_path, "llama.attention.head_count").unwrap_or(32);
-        let heads_kv = extract_u32_from_gguf(&self.model_path, "llama.attention.head_count_kv").unwrap_or(heads);
-        let embd = extract_u32_from_gguf(&self.model_path, "llama.embedding_length").unwrap_or(4096);
-        let head_dim = embd / heads;
-
-        let b_k = if self.kv_quant_keys { 1.06 } else { 2.0 };
-        let b_v = if self.kv_quant_values { 1.06 } else { 2.0 };
-
-        let kv_bytes = (layers as f64 * head_dim as f64 * ideal_ctx_size as f64) * (heads as f64 * b_k + heads_kv as f64 * b_v);
-        let kv_mb = kv_bytes / (1024.0 * 1024.0);
-        let total_mb = self.model_size_mb + kv_mb;
+        let total_mb = estimate_vram_mb(&self.model_path, ideal_ctx_size, self.kv_quant_keys, self.kv_quant_values);
+        let kv_mb = total_mb - self.model_size_mb;
 
         log_cb(format!("💾 Ожидаемое потребление VRAM (GPU): Модель ~{:.1} МБ + Кэш ~{:.1} МБ = Итого ~{:.1} МБ", self.model_size_mb, kv_mb, total_mb));
 
@@ -323,8 +333,6 @@ impl LlamaEngine {
                 break;
             }
 
-            let sample_start = Instant::now();
-
             let candidates_array = ctx.candidates_ith(batch.n_tokens() - 1);
             let candidates = LlamaTokenDataArray::from_iter(candidates_array, false);
             let mut candidates_vec: Vec<(llama_cpp_2::token::LlamaToken, f32)> = candidates.data.iter().map(|d| (d.id(), d.logit())).collect();
@@ -386,10 +394,6 @@ impl LlamaEngine {
             let mut cumulative = 0.0;
             let mut new_token = probs.last().map(|(id, _)| *id).unwrap_or_else(|| self.model.token_eos());
             for (id, p) in probs.iter() { cumulative += *p; if r <= cumulative { new_token = *id; break; } }
-
-            if generated_tokens == 0 || generated_tokens % 50 == 0 {
-                log_cb(format!("⏱ Сэмплер отработал за {:.2} мс", sample_start.elapsed().as_millis()));
-            }
 
             if new_token == self.model.token_eos() { _stop_reason = "EOS"; break; }
             past_tokens.push(new_token);

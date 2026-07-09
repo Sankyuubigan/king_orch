@@ -74,9 +74,9 @@ export function createMessageMenu(msgUid: string, callbacks: MessageMenuCallback
     }
   });
 
-  dropdown.appendChild(runFromItem);
   dropdown.appendChild(copyItem);
   dropdown.appendChild(cloneItem);
+  dropdown.appendChild(runFromItem);
   dropdown.appendChild(deleteItem);
   wrapper.appendChild(btn);
   wrapper.appendChild(dropdown);
