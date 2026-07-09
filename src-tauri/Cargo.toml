@@ -29,3 +29,5 @@ minijinja = "1.0"
 serde_yaml = "0.9"
 indexmap = { version = "2", features = ["serde"] }
 base64 = "0.22"
+sysinfo = "0.30.0"
+nvml-wrapper = "0.10.0"

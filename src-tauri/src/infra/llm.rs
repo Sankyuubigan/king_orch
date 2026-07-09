@@ -1,5 +1,7 @@
 #![allow(deprecated)]
 
+//! LlamaEngine — загрузка модели и генерация текста
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::num::NonZeroU32;
@@ -13,301 +15,107 @@ use llama_cpp_2::model::AddBos;
 use llama_cpp_2::model::Special;
 use llama_cpp_2::token::data_array::LlamaTokenDataArray;
 use llama_cpp_2::llama_batch::LlamaBatch;
-use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "mtmd")]
-use llama_cpp_2::mtmd::{MtmdContext, MtmdContextParams, MtmdBitmap, mtmd_default_marker};
+use llama_cpp_2::mtmd::{MtmdContext, MtmdContextParams};
 
 use crate::infra::config::ModelParams;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ToolCallInfo {
-    pub tool_name: String,
-    pub arguments: String,
-    pub result: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubCall {
-    pub agent_name: String,
-    pub prompt: String,
-    pub response: String,
-    pub time_sec: f32,
-    pub tool_calls: Vec<ToolCallInfo>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatMessage {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    #[serde(rename = "type")]
-    pub msg_type: String,
-    pub content: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sub_calls: Option<Vec<SubCall>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub author: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ChatAttachment {
-    pub file_name: String,
-    pub mime_type: String,
-    pub data_base64: String,
-}
-
-impl ChatMessage {
-    pub fn llm_role(&self) -> &str {
-        match (self.msg_type.as_str(), self.author.as_deref()) {
-            ("message", Some("user")) => "user",
-            ("message", Some("system")) => "system",
-            ("message", Some(_)) => "assistant",
-            ("message", None) => "user",
-            ("thought", _) => "user",
-            _ => "user",
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub enum PromptFormat {
-    Auto,
-    ChatML,
-    Gemma,
-    Gemma4,
-    Llama3,
-}
-
-impl PromptFormat {
-    pub fn from_str(s: &str) -> Self {
-        match s.to_lowercase().as_str() {
-            "gemma" => PromptFormat::Gemma,
-            "gemma4" | "gemma-4" => PromptFormat::Gemma4,
-            "llama3" | "llama-3" => PromptFormat::Llama3,
-            "chatml" => PromptFormat::ChatML,
-            _ => PromptFormat::Auto,
-        }
-    }
-
-    pub fn detect_from_path(path: &str) -> Self {
-        let lower = path.to_lowercase();
-        if lower.contains("gemma-4") || lower.contains("gemma4") { PromptFormat::Gemma4 }
-        else if lower.contains("gemma") { PromptFormat::Gemma }
-        else if lower.contains("llama-3") || lower.contains("llama3") { PromptFormat::Llama3 }
-        else { PromptFormat::ChatML }
-    }
-
-    pub fn detect_from_gguf(path: &str) -> Self {
-        if let Some(template) = crate::infra::extract_string_from_gguf(path, "tokenizer.chat_template") {
-            if template.contains("<|im_start|>") { return PromptFormat::ChatML; }
-            if template.contains("<|start_header_id|>") { return PromptFormat::Llama3; }
-            if template.contains("<|turn>") || template.contains("<turn|>") { return PromptFormat::Gemma4; }
-            if template.contains("<start_of_turn>") { return PromptFormat::Gemma; }
-        }
-        Self::detect_from_path(path)
-    }
-
-    pub fn format_messages(&self, messages: &[ChatMessage]) -> String {
-        let mut full_prompt = String::new();
-        match self {
-            PromptFormat::ChatML | PromptFormat::Auto => {
-                for msg in messages {
-                    full_prompt.push_str(&format!("<|im_start|>{}\n{}<|im_end|>\n", msg.llm_role(), msg.content));
-                }
-                full_prompt.push_str("<|im_start|>assistant\n");
-            },
-            PromptFormat::Gemma => {
-                let mut system_text = String::new();
-                for msg in messages {
-                    let role = msg.llm_role();
-                    if role == "system" {
-                        if !system_text.is_empty() { system_text.push_str("\n\n"); }
-                        system_text.push_str(&msg.content);
-                        continue;
-                    }
-                    
-                    let content = if role == "user" && !system_text.is_empty() {
-                        let combined = format!("{}\n\n{}", system_text, msg.content);
-                        system_text.clear();
-                        combined
-                    } else {
-                        msg.content.clone()
-                    };
-
-                    let out_role = match role {
-                        "assistant" => "model",
-                        r => r,
-                    };
-                    full_prompt.push_str(&format!("<start_of_turn>{}\n{}<end_of_turn>\n", out_role, content));
-                }
-                
-                if !system_text.is_empty() {
-                    full_prompt.push_str(&format!("<start_of_turn>user\n{}<end_of_turn>\n", system_text));
-                }
-                
-                full_prompt.push_str("<start_of_turn>model\n");
-            },
-            PromptFormat::Gemma4 => {
-                let mut system_text = String::new();
-                for msg in messages {
-                    let role = msg.llm_role();
-                    if role == "system" {
-                        if !system_text.is_empty() { system_text.push_str("\n\n"); }
-                        system_text.push_str(&msg.content);
-                        continue;
-                    }
-                    
-                    let content = if role == "user" && !system_text.is_empty() {
-                        let combined = format!("{}\n\n{}", system_text, msg.content);
-                        system_text.clear();
-                        combined
-                    } else {
-                        msg.content.clone()
-                    };
-
-                    let out_role = match role {
-                        "assistant" => "model",
-                        r => r,
-                    };
-                    full_prompt.push_str(&format!("<|turn>{}\n{}<turn|>\n", out_role, content));
-                }
-                
-                if !system_text.is_empty() {
-                    full_prompt.push_str(&format!("<|turn>user\n{}<turn|>\n", system_text));
-                }
-                
-                full_prompt.push_str("<|turn>model\n");
-            },
-            PromptFormat::Llama3 => {
-                for msg in messages {
-                    full_prompt.push_str(&format!("<|start_header_id|>{}<|end_header_id|>\n\n{}<|eot_id|>", msg.llm_role(), msg.content));
-                }
-                full_prompt.push_str("<|start_header_id|>assistant<|end_header_id|>\n\n");
-            }
-        }
-        full_prompt
-    }
-    
-    pub fn get_stop_words(&self) -> Vec<&'static str> {
-        match self {
-            PromptFormat::ChatML | PromptFormat::Auto => vec!["<|im_end|>", "<|im_start|>"],
-            PromptFormat::Gemma => vec!["<end_of_turn>", "<start_of_turn>", "<|turn|>"],
-            PromptFormat::Gemma4 => vec!["<turn|>", "<|turn|>"],
-            PromptFormat::Llama3 => vec!["<|eot_id|>", "<|start_header_id|>"],
-        }
-    }
-}
-
-fn read_gguf_header(path: &str) -> Option<Vec<u8>> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path).ok()?;
-    let mut buffer = vec![0; 5 * 1024 * 1024];
-    let bytes_read = file.read(&mut buffer).ok()?;
-    let data = &buffer[..bytes_read];
-    if data.len() < 24 || &data[0..4] != b"GGUF" { return None; }
-    Some(data.to_vec())
-}
-
-fn skip_gguf_value(data: &[u8], mut offset: usize, val_type: u32) -> Option<usize> {
-    match val_type {
-        0 | 1 | 7 => Some(offset + 1), 
-        2 | 3 => Some(offset + 2), 
-        4 | 5 | 6 => Some(offset + 4), 
-        10 | 11 | 12 => Some(offset + 8), 
-        8 => { 
-            if offset + 8 > data.len() { return None; }
-            let len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
-            Some(offset + 8 + len)
-        },
-        9 => { 
-            if offset + 4 > data.len() { return None; }
-            let arr_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
-            offset += 4;
-            if offset + 8 > data.len() { return None; }
-            let arr_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
-            offset += 8;
-            for _ in 0..arr_len { offset = skip_gguf_value(data, offset, arr_type)?; }
-            Some(offset)
-        },
-        _ => None
-    }
-}
-
-fn find_gguf_value(path: &str, target_key: &str, expected_type: u32) -> Option<Vec<u8>> {
-    let data = read_gguf_header(path)?;
-    let kv_count = u64::from_le_bytes(data[16..24].try_into().unwrap());
-    let mut offset = 24;
-    for _ in 0..kv_count {
-        if offset + 8 > data.len() { break; }
-        let key_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
-        offset += 8;
-        if offset + key_len > data.len() { break; }
-        let key = String::from_utf8_lossy(&data[offset..offset+key_len]);
-        offset += key_len;
-        if offset + 4 > data.len() { break; }
-        let val_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
-        offset += 4;
-
-        if key == target_key && val_type == expected_type {
-            match val_type {
-                4 | 6 => {
-                    if offset + 4 > data.len() { break; }
-                    return Some(data[offset..offset+4].to_vec());
-                },
-                8 => {
-                    if offset + 8 > data.len() { break; }
-                    let val_len = u64::from_le_bytes(data[offset..offset+8].try_into().unwrap()) as usize;
-                    offset += 8;
-                    if offset + val_len > data.len() { break; }
-                    return Some(data[offset..offset+val_len].to_vec());
-                },
-                _ => return None,
-            }
-        } else {
-            offset = skip_gguf_value(&data, offset, val_type)?;
-        }
-    }
-    None
-}
-
-pub fn extract_string_from_gguf(path: &str, target_key: &str) -> Option<String> {
-    String::from_utf8(find_gguf_value(path, target_key, 8)?).ok()
-}
-
-pub fn extract_f32_from_gguf(path: &str, target_key: &str) -> Option<f32> {
-    Some(f32::from_le_bytes(find_gguf_value(path, target_key, 6)?.try_into().unwrap()))
-}
-
-pub fn extract_u32_from_gguf(path: &str, target_key: &str) -> Option<u32> {
-    Some(u32::from_le_bytes(find_gguf_value(path, target_key, 4)?.try_into().unwrap()))
-}
+pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat};
+pub use super::llm_gguf::{extract_string_from_gguf, extract_f32_from_gguf, extract_u32_from_gguf};
 
 pub struct LlamaEngine {
-    backend: LlamaBackend,
-    model: LlamaModel,
-    n_ctx: u32,
-    kv_quant: bool,
-    model_path: String,
+    pub backend: LlamaBackend,
+    pub model: LlamaModel,
+    pub global_ctx_limit: u32,
+    pub kv_quant_keys: bool,
+    pub kv_quant_values: bool,
+    pub model_path: String,
+    pub model_size_mb: f64,
     pub mmproj_path: Option<String>,
+    pub stream_cb: Arc<dyn Fn(String) + Send + Sync>,
     #[cfg(feature = "mtmd")]
-    mtmd_ctx: Option<MtmdContext>,
+    pub mtmd_ctx: Option<MtmdContext>,
 }
 
 impl LlamaEngine {
-    pub fn new<L: Fn(String)>(model_path: &str, n_ctx: u32, kv_quant: bool, log_cb: L) -> Result<Self, String> {
-        Self::new_with_mmproj(model_path, None, n_ctx, kv_quant, log_cb)
+    pub fn new<L, S>(model_path: &str, global_ctx_limit: u32, kv_quant_keys: bool, kv_quant_values: bool, log_cb: L, stream_cb: S) -> Result<Self, String>
+    where L: Fn(String), S: Fn(String) + Send + Sync + 'static
+    {
+        Self::new_with_mmproj(model_path, None, global_ctx_limit, kv_quant_keys, kv_quant_values, log_cb, stream_cb)
     }
 
-    pub fn new_with_mmproj<L: Fn(String)>(model_path: &str, mmproj_path: Option<&str>, n_ctx: u32, kv_quant: bool, log_cb: L) -> Result<Self, String> {
+    pub fn new_with_mmproj<L, S>(model_path: &str, mmproj_path: Option<&str>, global_ctx_limit: u32, kv_quant_keys: bool, kv_quant_values: bool, log_cb: L, stream_cb: S) -> Result<Self, String>
+    where L: Fn(String), S: Fn(String) + Send + Sync + 'static
+    {
         log_cb("⚡ Инициализация llama.cpp...".to_string());
+
+        // ── Логирование аппаратного обеспечения ──
+        log_cb("🖥️ Аппаратное обеспечение:".to_string());
+        let sys = sysinfo::System::new_all();
+        if let Some(cpu) = sys.cpus().first() {
+            let total_ram_mb = sys.total_memory() / 1024 / 1024;
+            log_cb(format!("   CPU: {} | RAM: {} MB", cpu.brand(), total_ram_mb));
+        }
+
+        let vram_before = match nvml_wrapper::Nvml::init() {
+            Ok(nvml) => {
+                match nvml.device_by_index(0) {
+                    Ok(device) => {
+                        match device.memory_info() {
+                            Ok(mem) => {
+                                let total_vram_mb = mem.total / 1024 / 1024;
+                                let used_vram_mb = mem.used / 1024 / 1024;
+                                let free_vram_mb = total_vram_mb - used_vram_mb;
+                                log_cb(format!("   GPU: NVIDIA | VRAM: {} MB (Свободно: {} MB)", total_vram_mb, free_vram_mb));
+                                mem.used
+                            },
+                            Err(e) => { log_cb(format!("   GPU: NVML memory_info error: {}", e)); 0 }
+                        }
+                    },
+                    Err(e) => { log_cb(format!("   GPU: NVML device error: {}", e)); 0 }
+                }
+            },
+            Err(e) => {
+                log_cb(format!("   GPU: NVIDIA драйверы не найдены (NVML ошибка: {}).", e));
+                0
+            }
+        };
+
+        let model_size_mb = std::fs::metadata(model_path).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+        log_cb(format!("💽 Файл модели: ~{:.1} МБ.", model_size_mb));
+
         let backend = LlamaBackend::init().map_err(|e| e.to_string())?;
         let gpu_layers: u32 = 999;
         let mut model_params = LlamaModelParams::default();
         model_params = model_params.with_n_gpu_layers(gpu_layers);
-        log_cb(format!("⚙️ GPU слоёв: {} (попытка полного оффлоуда)", gpu_layers));
+        log_cb(format!("⚙️ Запрос GPU слоёв: {} (попытка оффлоуда)", gpu_layers));
+        
         let model = LlamaModel::load_from_file(&backend, model_path, &model_params)
             .map_err(|e| format!("Ошибка загрузки модели: {}", e))?;
         log_cb(format!("✅ Модель загружена успешно: {}", model_path));
+
+        // ── Проверка: реально ли модель ушла в VRAM? ──
+        if vram_before > 0 {
+            let vram_after = match nvml_wrapper::Nvml::init() {
+                Ok(nvml) => match nvml.device_by_index(0) {
+                    Ok(device) => match device.memory_info() {
+                        Ok(mem) => mem.used,
+                        Err(_) => 0
+                    },
+                    Err(_) => 0
+                },
+                Err(_) => 0
+            };
+            
+            let diff = vram_after as i64 - vram_before as i64;
+            if diff > 100_000_000 { // > 100 MB
+                log_cb(format!("✅ GPU: Модель загружена в VRAM. Занято {} МБ видеопамяти.", diff / 1024 / 1024));
+            } else {
+                log_cb("❌ ВНИМАНИЕ: VRAM не увеличилась! Модель работает на CPU, а не на GPU!".to_string());
+                log_cb("❅ Причина: llama-cpp-2 не собран с поддержкой CUDA, либо CUDA Toolkit не настроен в системе. Проверьте логи компиляции (cargo build).".to_string());
+            }
+        }
 
         let mut gguf_params = Vec::new();
         if let Some(v) = extract_f32_from_gguf(model_path, "tokenizer.ggml.temp") { gguf_params.push(format!("Temp={:.2}", v)); }
@@ -337,19 +145,17 @@ impl LlamaEngine {
         } else { None };
 
         Ok(Self {
-            backend, model, n_ctx, kv_quant,
+            backend, model, global_ctx_limit, kv_quant_keys, kv_quant_values,
             model_path: model_path.to_string(),
+            model_size_mb,
             mmproj_path: mmproj_path.map(|s| s.to_string()),
+            stream_cb: Arc::new(stream_cb),
             #[cfg(feature = "mtmd")]
             mtmd_ctx,
         })
     }
 
-    pub fn n_ctx(&self) -> u32 {
-        self.n_ctx
-    }
-
-    pub fn get_tokens_count(&self, messages: &[ChatMessage], format_type: &str) -> Result<usize, String> {
+    pub fn build_prompt(&self, messages: &[ChatMessage], format_type: &str, log_cb: &impl Fn(String)) -> (String, PromptFormat) {
         let pf = PromptFormat::from_str(format_type);
         let actual_format = if pf == PromptFormat::Auto {
             PromptFormat::detect_from_gguf(&self.model_path)
@@ -357,14 +163,33 @@ impl LlamaEngine {
             pf.clone()
         };
 
-        let full_prompt = actual_format.format_messages(messages);
+        let mut full_prompt = String::new();
+        if pf == PromptFormat::Auto {
+            if let Some(template) = extract_string_from_gguf(&self.model_path, "tokenizer.chat_template") {
+                if let Some(rendered) = PromptFormat::format_messages_jinja(&template, messages) {
+                    full_prompt = rendered;
+                    log_cb("✨ Использован Jinja шаблон из GGUF".to_string());
+                } else {
+                    log_cb("⚠️ Не удалось применить Jinja шаблон, используется фолбэк ручной склейки.".to_string());
+                }
+            }
+        }
 
+        if full_prompt.is_empty() {
+             full_prompt = actual_format.format_messages(messages);
+        }
+
+        (full_prompt, actual_format)
+    }
+
+    pub fn get_tokens_count(&self, messages: &[ChatMessage], format_type: &str) -> Result<usize, String> {
+        let (full_prompt, _) = self.build_prompt(messages, format_type, &|_|{});
         let tokens = self.model.str_to_token(&full_prompt, AddBos::Always)
             .map_err(|e| format!("Ошибка токенизации: {}", e))?;
         Ok(tokens.len())
     }
 
-    fn run_generation<F, L>(
+    pub fn run_generation<F, L>(
         &self,
         full_prompt: &str,
         max_tokens: usize,
@@ -387,34 +212,54 @@ impl LlamaEngine {
             actual_temp, params.top_k, params.top_p, actual_min_p, actual_rep_pen, params.presence_penalty
         ));
 
-        let batch_size = 512; 
+        let batch_size = 2048;
         let logical_cores = std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(8);
         let threads = (logical_cores / 2).max(4);
-
-        let mut ctx_params = LlamaContextParams::default();
-        ctx_params = ctx_params.with_n_ctx(NonZeroU32::new(self.n_ctx));
-        ctx_params = ctx_params.with_n_batch(batch_size as u32);
-        ctx_params = ctx_params.with_n_threads(threads);
-        ctx_params = ctx_params.with_n_threads_batch(threads);
-        ctx_params = ctx_params.with_flash_attention_policy(1);
-
-        if self.kv_quant {
-            ctx_params = ctx_params.with_type_k(KvCacheType::Q8_0).with_type_v(KvCacheType::Q8_0);
-        }
-
-        let mut ctx = self.model.new_context(&self.backend, ctx_params)
-            .map_err(|e| format!("Ошибка создания контекста: {}", e))?;
 
         let tokens = self.model.str_to_token(full_prompt, AddBos::Always)
             .map_err(|e| format!("Ошибка токенизации: {}", e))?;
 
         if tokens.is_empty() { return Err("Промпт пуст".to_string()); }
-        
-        let total_expected = tokens.len() + max_tokens;
-        log_cb(format!("📐 Промпт: {} токенов, max_gen={}, ожидаемый финал: {}/{} (n_ctx)", tokens.len(), max_tokens, total_expected, self.n_ctx));
 
-        if tokens.len() as u32 >= self.n_ctx {
-            let err_msg = format!("Текст слишком большой ({} токенов) для текущего контекста ({}).", tokens.len(), self.n_ctx);
+        let ideal_ctx_size = (tokens.len() as u32 + max_tokens as u32 + 128).min(self.global_ctx_limit);
+
+        let mut ctx_params = LlamaContextParams::default();
+        ctx_params = ctx_params.with_n_ctx(NonZeroU32::new(ideal_ctx_size));
+        ctx_params = ctx_params.with_n_batch(batch_size as u32);
+        ctx_params = ctx_params.with_n_threads(threads);
+        ctx_params = ctx_params.with_n_threads_batch(threads);
+        
+        let type_k = if self.kv_quant_keys { KvCacheType::Q8_0 } else { KvCacheType::F16 };
+        let type_v = if self.kv_quant_values { KvCacheType::Q8_0 } else { KvCacheType::F16 };
+        ctx_params = ctx_params.with_type_k(type_k).with_type_v(type_v);
+
+        // ── Flash Attention совместим с Q8_0, включаем безусловно ──
+        ctx_params = ctx_params.with_flash_attention_policy(1);
+        log_cb("⚡ Flash Attention: включен (policy=1).".to_string());
+
+        let mut ctx = self.model.new_context(&self.backend, ctx_params)
+            .map_err(|e| format!("Ошибка создания контекста: {}", e))?;
+
+        let total_expected = tokens.len() + max_tokens;
+        log_cb(format!("📐 Промпт: {} токенов, max_gen={}, ожидаемый финал: {}/{} (n_ctx)", tokens.len(), max_tokens, total_expected, ideal_ctx_size));
+
+        let layers = extract_u32_from_gguf(&self.model_path, "llama.block_count").unwrap_or(32);
+        let heads = extract_u32_from_gguf(&self.model_path, "llama.attention.head_count").unwrap_or(32);
+        let heads_kv = extract_u32_from_gguf(&self.model_path, "llama.attention.head_count_kv").unwrap_or(heads);
+        let embd = extract_u32_from_gguf(&self.model_path, "llama.embedding_length").unwrap_or(4096);
+        let head_dim = embd / heads;
+
+        let b_k = if self.kv_quant_keys { 1.06 } else { 2.0 };
+        let b_v = if self.kv_quant_values { 1.06 } else { 2.0 };
+
+        let kv_bytes = (layers as f64 * head_dim as f64 * ideal_ctx_size as f64) * (heads as f64 * b_k + heads_kv as f64 * b_v);
+        let kv_mb = kv_bytes / (1024.0 * 1024.0);
+        let total_mb = self.model_size_mb + kv_mb;
+
+        log_cb(format!("💾 Ожидаемое потребление VRAM (GPU): Модель ~{:.1} МБ + Кэш ~{:.1} МБ = Итого ~{:.1} МБ", self.model_size_mb, kv_mb, total_mb));
+
+        if tokens.len() as u32 >= ideal_ctx_size {
+            let err_msg = format!("Текст слишком большой ({} токенов) для текущего контекста ({}).", tokens.len(), ideal_ctx_size);
             log_cb(format!("❌ ОШИБКА КОНТЕКСТА: {}", err_msg));
             return Err(err_msg);
         }
@@ -441,7 +286,13 @@ impl LlamaEngine {
             n_past += chunk.len() as i32;
         }
 
-        log_cb(format!("⏱ Промпт обработан за {:.1}с", prompt_start.elapsed().as_secs_f64()));
+        let prompt_elapsed = prompt_start.elapsed().as_secs_f64();
+        log_cb(format!("⏱ Промпт обработан за {:.1}с (Пакеты по {})", prompt_elapsed, batch_size));
+
+        let prompt_pps = tokens.len() as f64 / prompt_elapsed.max(0.001);
+        if prompt_pps < 100.0 {
+            log_cb(format!("⚠️ ВНИМАНИЕ: Скорость промпта {:.0} tok/s. Если у вас CUDA сборка, модель возможно работает на CPU вместо GPU!", prompt_pps));
+        }
 
         let gen_start = Instant::now();
 
@@ -452,25 +303,27 @@ impl LlamaEngine {
         let mut gen_tokens: Vec<llama_cpp_2::token::LlamaToken> = Vec::new();
 
         let mut stop_words: Vec<&str> = vec![
-            "<|im_end|>", "<end_of_turn>", "</s>", "<|eot_id|>", 
+            "<|im_end|>", "<end_of_turn>", "</s>", "<|eot_id|>",
             "<turn>", "<|eot|>", "User:", "System:", "<eos>", "Yes",
             "<turn|>", "/end_of_turn>", "<step>", "<|end_of_text|>", "<｜end of sentence｜>",
             "</start_of_turn>", "<|channel|>"
         ];
-        
+
         for &w in custom_stop_words {
             if !stop_words.contains(&w) {
                 stop_words.push(w);
             }
         }
-        
+
         let mut _stop_reason = "MAX_TOKENS";
 
-        while n_cur < self.n_ctx as i32 && generated_tokens < max_tokens {
+        while n_cur < ideal_ctx_size as i32 && generated_tokens < max_tokens {
             if cancel_flag.load(Ordering::SeqCst) {
                 _stop_reason = "CANCELLED";
                 break;
             }
+
+            let sample_start = Instant::now();
 
             let candidates_array = ctx.candidates_ith(batch.n_tokens() - 1);
             let candidates = LlamaTokenDataArray::from_iter(candidates_array, false);
@@ -479,31 +332,35 @@ impl LlamaEngine {
             let penalty_last_n = 256.min(past_tokens.len());
             let last_tokens_slice = if past_tokens.len() > penalty_last_n { &past_tokens[past_tokens.len() - penalty_last_n..] } else { &past_tokens };
             let mut penalty_tokens = last_tokens_slice.to_vec();
-            penalty_tokens.sort_unstable(); 
+            penalty_tokens.sort_unstable();
             penalty_tokens.dedup();
 
             for (id, logit) in candidates_vec.iter_mut() {
                 if penalty_tokens.binary_search(id).is_ok() {
                     *logit -= params.presence_penalty;
-                    if *logit <= 0.0 { *logit *= actual_rep_pen; } 
+                    if *logit <= 0.0 { *logit *= actual_rep_pen; }
                     else { *logit /= actual_rep_pen; }
                 }
             }
 
             for (_, logit) in candidates_vec.iter_mut() { *logit /= actual_temp; }
 
-            let max_logit = candidates_vec.iter().map(|(_, l)| *l).fold(f32::NEG_INFINITY, f32::max);
+            // ── ОПТИМИЗАЦИЯ СЭМПЛИНГА ──
+            candidates_vec.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+            let k = if actual_min_p >= 0.05 { 1000 } else { (params.top_k as usize).min(candidates_vec.len()).max(1) };
+            candidates_vec.truncate(k);
+
+            let max_logit = candidates_vec.first().map(|(_, l)| *l).unwrap_or(0.0);
             let mut sum_exp = 0.0;
             let mut probs: Vec<(llama_cpp_2::token::LlamaToken, f32)> = candidates_vec.into_iter().map(|(id, logit)| {
                 let p = (logit - max_logit).exp(); sum_exp += p; (id, p)
             }).collect();
-            for (_, p) in probs.iter_mut() { *p /= sum_exp; }
-            probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-            let k = if actual_min_p >= 0.05 { probs.len() } else { (params.top_k as usize).min(probs.len()).max(1) };
-            probs.truncate(k);
-            let max_prob = probs.first().map(|(_, p)| *p).unwrap_or(1.0);
             
+            for (_, p) in probs.iter_mut() { *p /= sum_exp; }
+
+            let max_prob = probs.first().map(|(_, p)| *p).unwrap_or(1.0);
+
             let min_p_thresh = max_prob * actual_min_p;
             probs.retain(|(_, p)| *p >= min_p_thresh);
 
@@ -530,58 +387,52 @@ impl LlamaEngine {
             let mut new_token = probs.last().map(|(id, _)| *id).unwrap_or_else(|| self.model.token_eos());
             for (id, p) in probs.iter() { cumulative += *p; if r <= cumulative { new_token = *id; break; } }
 
+            if generated_tokens == 0 || generated_tokens % 50 == 0 {
+                log_cb(format!("⏱ Сэмплер отработал за {:.2} мс", sample_start.elapsed().as_millis()));
+            }
+
             if new_token == self.model.token_eos() { _stop_reason = "EOS"; break; }
             past_tokens.push(new_token);
             gen_tokens.push(new_token);
 
-            // ++ АППАРАТНАЯ ЗАЩИТА: ИНТЕЛЛЕКТУАЛЬНЫЙ N-GRAM ДЕТЕКТОР ЦИКЛОВ ++
             let mut loop_detected = false;
             let g_len = gen_tokens.len();
             for l in 1..=32 {
-                let required_repeats = match l {
-                    1 => 15,
-                    2 => 6,
-                    _ => 4,
-                };
-                
+                let required_repeats = match l { 1 => 15, 2 => 6, _ => 4 };
                 if g_len >= l * required_repeats {
                     let mut is_loop = true;
                     let suffix = &gen_tokens[g_len - l..g_len];
-                    
                     for i in 1..required_repeats {
                         let start = g_len - l * (i + 1);
                         let end = g_len - l * i;
-                        if &gen_tokens[start..end] != suffix {
-                            is_loop = false;
-                            break;
-                        }
+                        if &gen_tokens[start..end] != suffix { is_loop = false; break; }
                     }
-                    if is_loop {
-                        loop_detected = true;
-                        break;
-                    }
+                    if is_loop { loop_detected = true; break; }
                 }
             }
 
             if loop_detected {
                 log_cb("🛑 Сработала аппаратная защита N-Gram: обнаружено зацикливание фразы. Жесткое прерывание.".to_string());
                 _stop_reason = "LOOP_DETECTED";
-                break; 
+                break;
             }
 
             if let Ok(bytes) = self.model.token_to_bytes(new_token, Special::Tokenize) {
                 generated_bytes.extend_from_slice(&bytes);
-                result_text = String::from_utf8_lossy(&generated_bytes).into_owned();
+                let current_text = String::from_utf8_lossy(&generated_bytes).into_owned();
+                let diff = current_text[result_text.len()..].to_string();
+                if !diff.is_empty() { (self.stream_cb)(diff); }
+                result_text = current_text;
             }
 
             let mut should_stop = false;
             let mut matched_word = String::new();
             for word in stop_words.iter() {
-                if result_text.contains(word) { 
-                    matched_word = word.to_string(); 
-                    result_text = result_text.replace(word, "").trim().to_string(); 
-                    should_stop = true; 
-                    break; 
+                if result_text.contains(word) {
+                    matched_word = word.to_string();
+                    result_text = result_text.replace(word, "").trim().to_string();
+                    should_stop = true;
+                    break;
                 }
             }
             if should_stop { log_cb(format!("🛑 Стоп-слово '{}' на токене {}", matched_word, generated_tokens)); _stop_reason = "STOP_WORD"; break; }
@@ -589,7 +440,7 @@ impl LlamaEngine {
             batch.clear();
             batch.add(new_token, n_cur, &[0], true).map_err(|e| e.to_string())?;
             ctx.decode(&mut batch).map_err(|e| e.to_string())?;
-            
+
             n_cur += 1; generated_tokens += 1;
             if generated_tokens % 20 == 0 {
                 let gen_p = (generated_tokens as f32 / max_tokens as f32) * 50.0;
@@ -629,271 +480,9 @@ impl LlamaEngine {
         log_cb: L,
     ) -> Result<String, String>
     where F: FnMut(f32, &str), L: Fn(String) {
-        let pf = PromptFormat::from_str(format_type);
-        let actual_format = if pf == PromptFormat::Auto {
-            PromptFormat::detect_from_gguf(&self.model_path)
-        } else {
-            pf.clone()
-        };
-
-        let full_prompt = actual_format.format_messages(messages);
-        
+        let (full_prompt, actual_format) = self.build_prompt(messages, format_type, &log_cb);
         log_cb(format!("🔤 Определен формат промпта: {:?}", actual_format));
-        
-        let words = actual_format.get_stop_words(); 
-        
+        let words = actual_format.get_stop_words();
         self.run_generation(&full_prompt, max_tokens, model_params, &words, cancel_flag, progress_cb, log_cb)
     }
-
-    #[cfg(feature = "mtmd")]
-    pub fn generate_chat_multimodal<F, L>(
-        &self,
-        messages: &[ChatMessage],
-        attachments: &[ChatAttachment],
-        max_tokens: usize,
-        model_params: &ModelParams,
-        format_type: &str,
-        cancel_flag: Arc<AtomicBool>,
-        mut progress_cb: F,
-        log_cb: L,
-    ) -> Result<String, String>
-    where F: FnMut(f32, &str), L: Fn(String) {
-        let mtmd_ctx = self.mtmd_ctx.as_ref().ok_or("mmproj не загружен")?;
-
-        let pf = PromptFormat::from_str(format_type);
-        let actual_format = if pf == PromptFormat::Auto {
-            PromptFormat::detect_from_gguf(&self.model_path)
-        } else {
-            pf.clone()
-        };
-
-        let mut full_prompt = actual_format.format_messages(messages);
-        
-        log_cb(format!("🔤 Определен формат промпта (мультимодальный): {:?}", actual_format));
-
-        let marker = mtmd_default_marker();
-        for _ in attachments.iter() {
-            full_prompt.push_str(marker);
-        }
-
-        log_cb(format!("📐 Мультимодальный промпт: {} символов, {} вложений", full_prompt.len(), attachments.len()));
-
-        let mut bitmaps = Vec::new();
-        for att in attachments {
-            let data = base64_decode(&att.data_base64)
-                .map_err(|_| format!("Ошибка декодирования base64: {}", att.file_name))?;
-            let bitmap = MtmdBitmap::from_buffer(mtmd_ctx, &data)
-                .map_err(|e| format!("Ошибка загрузки {}: {:?}", att.file_name, e))?;
-            bitmaps.push(bitmap);
-        }
-
-        let bitmap_refs: Vec<&MtmdBitmap> = bitmaps.iter().collect();
-
-        let input_text = llama_cpp_2::mtmd::MtmdInputText {
-            text: full_prompt.clone(),
-            add_special: true,
-            parse_special: true,
-        };
-
-        let chunks = mtmd_ctx.tokenize(input_text, &bitmap_refs)
-            .map_err(|e| format!("Ошибка токенизации: {:?}", e))?;
-
-        let batch_size = 512;
-        let logical_cores = std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(8);
-        let threads = (logical_cores / 2).max(4);
-
-        let mut ctx_params = LlamaContextParams::default();
-        ctx_params = ctx_params.with_n_ctx(NonZeroU32::new(self.n_ctx));
-        ctx_params = ctx_params.with_n_batch(batch_size as u32);
-        ctx_params = ctx_params.with_n_threads(threads);
-        ctx_params = ctx_params.with_n_threads_batch(threads);
-        ctx_params = ctx_params.with_flash_attention_policy(1);
-
-        if self.kv_quant {
-            ctx_params = ctx_params.with_type_k(KvCacheType::Q8_0).with_type_v(KvCacheType::Q8_0);
-        }
-
-        let mut ctx = self.model.new_context(&self.backend, ctx_params)
-            .map_err(|e| format!("Ошибка создания контекста: {}", e))?;
-
-        let n_past = chunks.eval_chunks(mtmd_ctx, &ctx, 0, 0, batch_size, true)
-            .map_err(|e| format!("Ошибка eval_chunks: {:?}", e))?;
-
-        progress_cb(50.0, "Генерация ответа...");
-
-        let actual_min_p = model_params.min_p.max(0.0);
-        let actual_rep_pen = model_params.repetition_penalty.max(1.0);
-        let actual_temp = model_params.temperature.max(0.01);
-
-        log_cb(format!(
-            "🎛 Фактические параметры сэмплинга: Temp={:.2}, Top_K={}, Top_P={:.2}, Min_P={:.2}, Rep_Pen={:.2}, Pres_Pen={:.2}",
-            actual_temp, model_params.top_k, model_params.top_p, actual_min_p, actual_rep_pen, model_params.presence_penalty
-        ));
-
-        let gen_start = std::time::Instant::now();
-        let mut n_cur = n_past as i32;
-        let mut generated_tokens = 0;
-        let mut result_text = String::new();
-        let mut generated_bytes: Vec<u8> = Vec::new();
-        let mut past_tokens: Vec<llama_cpp_2::token::LlamaToken> = Vec::new();
-        let mut gen_tokens: Vec<llama_cpp_2::token::LlamaToken> = Vec::new();
-        let mut _stop_reason = "MAX_TOKENS";
-
-        let mut stop_words: Vec<&str> = vec![
-            "<|im_end|>", "<end_of_turn>", "</s>", "<|eot_id|>",
-            "<turn>", "<|eot|>", "User:", "System:", "<eos>", "Yes",
-            "<turn|>", "/end_of_turn>", "<step>", "<|end_of_text|>", "<｜end of sentence｜>",
-            "</start_of_turn>"
-        ];
-        
-        let words = actual_format.get_stop_words();
-        for &w in &words {
-            if !stop_words.contains(&w) {
-                stop_words.push(w);
-            }
-        }
-
-        while n_cur < self.n_ctx as i32 && generated_tokens < max_tokens as usize {
-            if cancel_flag.load(Ordering::SeqCst) {
-                _stop_reason = "CANCELLED";
-                break;
-            }
-
-            let candidates_array = ctx.candidates_ith(0);
-            let candidates = LlamaTokenDataArray::from_iter(candidates_array, false);
-            let mut candidates_vec: Vec<(llama_cpp_2::token::LlamaToken, f32)> = candidates.data.iter().map(|d| (d.id(), d.logit())).collect();
-
-            let penalty_last_n = 256.min(past_tokens.len());
-            let last_tokens_slice = if past_tokens.len() > penalty_last_n { &past_tokens[past_tokens.len() - penalty_last_n..] } else { &past_tokens };
-            let mut penalty_tokens = last_tokens_slice.to_vec();
-            penalty_tokens.sort_unstable(); 
-            penalty_tokens.dedup();
-
-            for (id, logit) in candidates_vec.iter_mut() {
-                if penalty_tokens.binary_search(id).is_ok() {
-                    *logit -= model_params.presence_penalty;
-                    if *logit <= 0.0 { *logit *= actual_rep_pen; }
-                    else { *logit /= actual_rep_pen; }
-                }
-            }
-
-            for (_, logit) in candidates_vec.iter_mut() { *logit /= actual_temp; }
-
-            let max_logit = candidates_vec.iter().map(|(_, l)| *l).fold(f32::NEG_INFINITY, f32::max);
-            let mut sum_exp = 0.0;
-            let mut probs: Vec<(llama_cpp_2::token::LlamaToken, f32)> = candidates_vec.into_iter().map(|(id, logit)| {
-                let p = (logit - max_logit).exp(); sum_exp += p; (id, p)
-            }).collect();
-            for (_, p) in probs.iter_mut() { *p /= sum_exp; }
-            probs.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-
-            let k = if actual_min_p >= 0.05 { probs.len() } else { (model_params.top_k as usize).min(probs.len()).max(1) };
-            probs.truncate(k);
-            let max_prob = probs.first().map(|(_, p)| *p).unwrap_or(1.0);
-            
-            let min_p_thresh = max_prob * actual_min_p;
-            probs.retain(|(_, p)| *p >= min_p_thresh);
-
-            let top_p_thresh = if actual_min_p >= 0.05 { 1.0 } else { model_params.top_p };
-            let mut cumulative_prob = 0.0;
-            let mut top_p_idx = probs.len();
-            for (i, (_, p)) in probs.iter().enumerate() {
-                cumulative_prob += *p;
-                if cumulative_prob >= top_p_thresh { top_p_idx = i + 1; break; }
-            }
-            probs.truncate(top_p_idx);
-
-            let sum_prob: f32 = probs.iter().map(|(_, p)| *p).sum();
-            for (_, p) in probs.iter_mut() { *p /= sum_prob; }
-
-            static SEED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1337);
-            let mut seed = SEED.load(Ordering::SeqCst);
-            if seed == 1337 { seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos().max(1); }
-            seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5;
-            SEED.store(seed, Ordering::SeqCst);
-            let r = (seed as f32) / (u32::MAX as f32);
-
-            let mut cumulative = 0.0;
-            let mut new_token = probs.last().map(|(id, _)| *id).unwrap_or_else(|| self.model.token_eos());
-            for (id, p) in probs.iter() { cumulative += *p; if r <= cumulative { new_token = *id; break; } }
-
-            if new_token == self.model.token_eos() { _stop_reason = "EOS"; break; }
-            past_tokens.push(new_token);
-            gen_tokens.push(new_token);
-
-            // ++ АППАРАТНАЯ ЗАЩИТА: ИНТЕЛЛЕКТУАЛЬНЫЙ N-GRAM ДЕТЕКТОР ЦИКЛОВ ++
-            let mut loop_detected = false;
-            let g_len = gen_tokens.len();
-            for l in 1..=32 {
-                let required_repeats = match l {
-                    1 => 15,
-                    2 => 6,
-                    _ => 4,
-                };
-                
-                if g_len >= l * required_repeats {
-                    let mut is_loop = true;
-                    let suffix = &gen_tokens[g_len - l..g_len];
-                    for i in 1..required_repeats {
-                        let start = g_len - l * (i + 1);
-                        let end = g_len - l * i;
-                        if &gen_tokens[start..end] != suffix {
-                            is_loop = false;
-                            break;
-                        }
-                    }
-                    if is_loop {
-                        loop_detected = true;
-                        break;
-                    }
-                }
-            }
-
-            if loop_detected {
-                log_cb("🛑 Сработала аппаратная защита N-Gram: обнаружено зацикливание фразы. Жесткое прерывание.".to_string());
-                _stop_reason = "LOOP_DETECTED";
-                break;
-            }
-
-            if let Ok(bytes) = self.model.token_to_bytes(new_token, Special::Tokenize) {
-                generated_bytes.extend_from_slice(&bytes);
-                result_text = String::from_utf8_lossy(&generated_bytes).into_owned();
-            }
-
-            let mut should_stop = false;
-            let mut matched_word = String::new();
-            for word in stop_words.iter() {
-                if result_text.contains(word) { 
-                    matched_word = word.to_string();
-                    result_text = result_text.replace(word, "").trim().to_string(); 
-                    should_stop = true; 
-                    break; 
-                }
-            }
-            if should_stop { log_cb(format!("🛑 Стоп-слово '{}' на токене {}", matched_word, generated_tokens)); _stop_reason = "STOP_WORD"; break; }
-
-            let mut batch = LlamaBatch::new(batch_size as usize, 1);
-            batch.add(new_token, n_cur, &[0], true).map_err(|e| e.to_string())?;
-            ctx.decode(&mut batch).map_err(|e| e.to_string())?;
-
-            n_cur += 1; generated_tokens += 1;
-            if generated_tokens % 20 == 0 {
-                let gen_p = (generated_tokens as f32 / max_tokens as f32) * 50.0;
-                progress_cb(50.0 + gen_p, &format!("Генерация: {} токенов...", generated_tokens));
-            }
-        }
-        progress_cb(100.0, &format!("Готово ({} токенов)", generated_tokens));
-
-        let gen_elapsed = gen_start.elapsed().as_secs_f64();
-        let speed = if gen_elapsed > 0.0 { generated_tokens as f64 / gen_elapsed } else { 0.0 };
-        log_cb(format!("⚙️ Сгенерировано {} токенов за {:.1}с ({:.0} tok/s). Причина: {}", generated_tokens, gen_elapsed, speed, _stop_reason));
-
-        Ok(result_text)
-    }
-}
-
-fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
-    use base64::Engine as _;
-    base64::engine::general_purpose::STANDARD.decode(input)
-        .map_err(|e| format!("base64 decode error: {}", e))
 }

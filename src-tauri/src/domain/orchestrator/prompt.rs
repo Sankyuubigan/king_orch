@@ -14,8 +14,13 @@ pub fn build_system_prompt(
     messages: &[ChatMessage],
     has_tools: bool,
     all_tools: &[(String, String, serde_json::Value)],
+    max_gen_tokens: usize,
 ) -> String {
     let mut sp = agent.system_prompt.clone();
+    
+    // ДОБАВЛЯЕМ ЛИМИТ ГЕНЕРАЦИИ ДЛЯ ЗАЩИТЫ ОТ ОБРЫВОВ
+    sp.push_str(&format!("\n\n[ЛИМИТ ОТВЕТА]\nТвой жесткий лимит генерации — {} токенов. Строй свой ответ так, чтобы гарантированно успеть завершить мысль. Писать длинно НЕ обязательно. Если можешь ответить кратко — отвечай кратко.", max_gen_tokens));
+    
     sp.push_str("\n\n[ПРОТОКОЛ ЧЕСТНОСТИ]\n");
     sp.push_str(TRUTH_PROTOCOL);
     sp.push_str("\n\n⚠️ ВАЖНО: ОТВЕЧАЙ НА ТОМ ЖЕ ЯЗЫКЕ, ЧТО И ПОЛЬЗОВАТЕЛЬ.");

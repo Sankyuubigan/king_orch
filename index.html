@@ -165,8 +165,8 @@
           <div class="group-title">2. Параметры генерации (для выбранной модели)</div>
           
           <div class="input-row" style="margin-top: 10px;" title="Температура (Temperature).">
-            <label for="temp-slider" style="min-width: 180px;">Температура: <strong id="temp-value">0.8</strong></label>
-            <input type="range" id="temp-slider" min="0.0" max="2.0" step="0.05" value="0.8" style="flex: 1;" />
+            <label for="temp-slider" style="min-width: 180px;">Температура: <strong id="temp-value">0.5</strong></label>
+            <input type="range" id="temp-slider" min="0.0" max="2.0" step="0.05" value="0.5" style="flex: 1;" />
           </div>
           <div class="input-row" style="margin-top: 10px;" title="top_k">
             <label for="topk-slider" style="min-width: 180px;">top_k: <strong id="topk-value">40</strong></label>
@@ -177,12 +177,12 @@
             <input type="range" id="topp-slider" min="0.05" max="1.0" step="0.05" value="0.95" style="flex: 1;" />
           </div>
           <div class="input-row" style="margin-top: 10px;" title="min_p">
-            <label for="minp-slider" style="min-width: 180px;">min_p: <strong id="minp-value">0.05</strong></label>
-            <input type="range" id="minp-slider" min="0.0" max="0.5" step="0.01" value="0.05" style="flex: 1;" />
+            <label for="minp-slider" style="min-width: 180px;">min_p: <strong id="minp-value">0.1</strong></label>
+            <input type="range" id="minp-slider" min="0.0" max="0.5" step="0.01" value="0.1" style="flex: 1;" />
           </div>
           <div class="input-row" style="margin-top: 10px;" title="repetition_penalty">
-            <label for="reppen-slider" style="min-width: 180px;">repetition_penalty: <strong id="reppen-value">1.1</strong></label>
-            <input type="range" id="reppen-slider" min="1.0" max="2.0" step="0.05" value="1.1" style="flex: 1;" />
+            <label for="reppen-slider" style="min-width: 180px;">repetition_penalty: <strong id="reppen-value">1.15</strong></label>
+            <input type="range" id="reppen-slider" min="1.0" max="2.0" step="0.05" value="1.15" style="flex: 1;" />
           </div>
           <div class="input-row" style="margin-top: 10px;" title="presence_penalty">
             <label for="prespen-slider" style="min-width: 180px;">presence_penalty: <strong id="prespen-value">0.0</strong></label>
@@ -195,7 +195,7 @@
         </div>
 
         <div class="group-box">
-          <div class="group-title">3. Общие системные настройки</div>
+          <div class="group-title">3. Общие системные настройки (Динамическая память)</div>
           <div class="input-row">
             <label>Тема интерфейса:</label>
             <select id="theme-select">
@@ -206,19 +206,27 @@
           <div class="input-row" style="margin-top: 10px;">
             <label>Формат промпта:</label>
             <select id="prompt-format-select" style="flex: 1;">
-              <option value="Auto">Автоопределение</option>
+              <option value="Auto">Автоопределение (Jinja/GGUF)</option>
               <option value="ChatML">ChatML (Qwen, Mistral)</option>
               <option value="Gemma">Gemma</option>
               <option value="Llama3">Llama 3</option>
             </select>
           </div>
           <div class="input-row" style="margin-top: 10px;">
-            <label for="context-slider" style="min-width: 180px;">Контекст: <strong id="context-value">24576</strong></label>
+            <label for="context-slider" style="min-width: 250px;">Глобальный лимит контекста: <strong id="context-value">24576</strong></label>
             <input type="range" id="context-slider" min="4096" max="131072" step="1024" value="24576" style="flex: 1;" />
           </div>
           <div class="input-row" style="margin-top: 10px;">
-            <input type="checkbox" id="chk-kv-quant" />
-            <label for="chk-kv-quant">Квантизация KV кэша (Q8_0)</label>
+            <label for="max-gen-slider" style="min-width: 250px;">Макс. токенов для ответа (Резерв): <strong id="max-gen-value">2048</strong></label>
+            <input type="range" id="max-gen-slider" min="512" max="16384" step="512" value="2048" style="flex: 1;" />
+          </div>
+          <div class="input-row" style="margin-top: 10px;">
+            <input type="checkbox" id="chk-kv-quant-k" />
+            <label for="chk-kv-quant-k">Квантование КЛЮЧЕЙ KV кэша (Q8_0) - Снижает качество логики</label>
+          </div>
+          <div class="input-row" style="margin-top: 10px;">
+            <input type="checkbox" id="chk-kv-quant-v" />
+            <label for="chk-kv-quant-v">Квантование ЗНАЧЕНИЙ KV кэша (Q8_0) - Экономит память без потери ума</label>
           </div>
           <div class="input-row" style="margin-top: 10px;">
             <input type="checkbox" id="chk-show-advanced" />

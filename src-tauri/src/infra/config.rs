@@ -17,11 +17,11 @@ pub struct ModelParams {
 impl Default for ModelParams {
     fn default() -> Self {
         Self {
-            temperature: 0.8,
+            temperature: 0.5,
             top_k: 40,
             top_p: 0.95,
-            min_p: 0.05,
-            repetition_penalty: 1.1,
+            min_p: 0.1,
+            repetition_penalty: 1.15,
             presence_penalty: 0.0,
         }
     }
@@ -35,8 +35,12 @@ pub struct AppConfig {
     pub model_params: HashMap<String, ModelParams>,
     #[serde(default = "default_context_size")]
     pub context_size: u32,
-    #[serde(default = "default_kv_quantization")]
-    pub kv_quantization: bool,
+    #[serde(default = "default_max_gen_tokens")]
+    pub max_gen_tokens: u32,
+    #[serde(default = "default_kv_quant_keys")]
+    pub kv_quant_keys: bool,
+    #[serde(default = "default_kv_quant_values")]
+    pub kv_quant_values: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
     #[serde(default = "default_prompt_format")]
@@ -64,7 +68,9 @@ pub fn auto_detect_mmproj(model_path: &str) -> Option<String> {
 }
 
 fn default_context_size() -> u32 { 24576 }
-fn default_kv_quantization() -> bool { false }
+fn default_max_gen_tokens() -> u32 { 2048 }
+fn default_kv_quant_keys() -> bool { false }
+fn default_kv_quant_values() -> bool { false }
 fn default_theme() -> String { "dark".to_string() }
 fn default_prompt_format() -> String { "Auto".to_string() }
 fn default_confidence_threshold() -> f32 { 0.8 }
@@ -77,7 +83,9 @@ impl Default for AppConfig {
             last_model: None,
             model_params: HashMap::new(),
             context_size: default_context_size(),
-            kv_quantization: default_kv_quantization(),
+            max_gen_tokens: default_max_gen_tokens(),
+            kv_quant_keys: default_kv_quant_keys(),
+            kv_quant_values: default_kv_quant_values(),
             theme: default_theme(),
             prompt_format: default_prompt_format(),
             confidence_threshold: default_confidence_threshold(),

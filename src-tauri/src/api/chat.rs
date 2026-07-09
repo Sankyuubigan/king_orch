@@ -70,14 +70,18 @@ pub async fn chat_request(
     message: String,
     history: Vec<ChatMessage>,
     context_size: u32,
-    kv_quantization: bool,
+    max_gen_tokens: u32,
+    kv_quant_keys: bool,
+    kv_quant_values: bool,
     model_params: ModelParams,
     attachments: Vec<ChatAttachment>,
     mmproj_path: Option<String>,
 ) -> Result<ChatResponse, String> {
     let mut cfg = infra::load_config(&app);
     cfg.context_size = context_size;
-    cfg.kv_quantization = kv_quantization;
+    cfg.max_gen_tokens = max_gen_tokens;
+    cfg.kv_quant_keys = kv_quant_keys;
+    cfg.kv_quant_values = kv_quant_values;
     infra::save_config(&app, &cfg);
 
     let format_type = cfg.prompt_format.clone();
@@ -109,12 +113,18 @@ pub async fn chat_request(
     let subcall_cb = move |subcall: &SubCall| {
         let _ = app_subcall.emit("subcall_done", subcall.clone());
     };
+    
+    let app_stream = app.clone();
+    let stream_cb = move |chunk: String| {
+        let _ = app_stream.emit("stream_chunk", chunk);
+    };
 
     let result = tokio::task::spawn_blocking(move || {
         domain::run_chat(
             log_cb,
             status_cb,
             subcall_cb,
+            stream_cb,
             agents_dir,
             mcp_servers_dir,
             model_path,
@@ -123,7 +133,9 @@ pub async fn chat_request(
             history,
             attachments,
             context_size,
-            kv_quantization,
+            max_gen_tokens,
+            kv_quant_keys,
+            kv_quant_values,
             model_params,
             format_type,
             mmproj_path,
@@ -160,7 +172,7 @@ pub fn get_prompt_preview(
     let agent = agents.iter().find(|a| a.id == agent_id).ok_or("Агент не найден")?;
 
     // Строим системный промпт (без загрузки реальных MCP инструментов для скорости)
-    let system_prompt = crate::domain::build_system_prompt(agent, &history, false, &[]);
+    let system_prompt = crate::domain::build_system_prompt(agent, &history, false, &[], 2048); // Дефолтный лимит для UI-превью
 
     let mut llm_messages = vec![ChatMessage {
         id: None,

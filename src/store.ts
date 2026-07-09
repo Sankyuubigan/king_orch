@@ -28,6 +28,11 @@ class Store {
 
   // Каталог моделей
   modelsCatalog: any[] = [];
+  
+  // Для стриминга текста в реальном времени
+  rtStreamUid: string | null = null;
+  rtStreamBuffer: string = "";
+  rtIsJson: boolean = false;
 
   nextUid(): string {
     return `msg_${this.uidCounter++}`;
@@ -39,6 +44,9 @@ class Store {
     this.uidCounter = 0;
     this.realtimeSubcallKeys.clear();
     this.activeThoughtsBlock = null;
+    this.rtStreamUid = null;
+    this.rtStreamBuffer = "";
+    this.rtIsJson = false;
   }
 }
 

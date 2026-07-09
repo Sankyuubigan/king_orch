@@ -6,6 +6,7 @@ import { createMessageElement, createSubcallElement, createToolCallElement, crea
 import type { Role, MessageMenuCallbacks } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, CatalogEntry } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
+import { renderMarkdown } from "../utils";
 import mermaid from "mermaid";
 
 mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
@@ -15,7 +16,6 @@ async function renderMermaid() {
   } catch(e) {
     console.error('Mermaid render error:', e);
   }
-  // Fallback: show raw code for mermaid blocks that failed to render
   document.querySelectorAll('pre.mermaid').forEach(el => {
     if (!el.querySelector('svg')) {
       const code = el.textContent || '';
@@ -39,7 +39,9 @@ export interface ChatElements {
   btnBackChat: HTMLButtonElement;
   logView: HTMLTextAreaElement;
   contextSlider: HTMLInputElement;
-  chkKvQuant: HTMLInputElement;
+  maxGenSlider: HTMLInputElement;
+  chkKvQuantK: HTMLInputElement;
+  chkKvQuantV: HTMLInputElement;
   tempSlider: HTMLInputElement;
   topkSlider: HTMLInputElement;
   toppSlider: HTMLInputElement;
@@ -82,7 +84,6 @@ export class ChatController {
     }, 100);
   }
 
-  // ─── Скролл ───
   private scrollToBottomIfNearEnd(el: HTMLElement) {
     const threshold = 100;
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
@@ -91,7 +92,6 @@ export class ChatController {
     }
   }
 
-  // ─── Логирование ───
   logToGUI(msg: string) {
     if (this.el.logView) {
       this.el.logView.value += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
@@ -99,7 +99,6 @@ export class ChatController {
     }
   }
 
-  // ─── Подсчет токенов (Live) ───
   private triggerTokenCount() {
     if (this.countTimer) clearTimeout(this.countTimer);
     this.countTimer = window.setTimeout(() => this.updateTokenCounter(), 400);
@@ -110,18 +109,17 @@ export class ChatController {
     const modelPath = this.el.modelSelect?.value;
     const agentId = this.el.agentSelect?.value;
     const text = this.el.chatInput?.value || "";
-    const contextSize = parseInt(this.el.contextSlider?.value || "8192", 10);
+    const contextSize = parseInt(this.el.contextSlider?.value || "24576", 10);
 
     if (!modelPath || !agentId) return;
 
-    let hfModelId = "Xenova/Meta-Llama-3-8B-Instruct"; // Дефолт
+    let hfModelId = "Xenova/Meta-Llama-3-8B-Instruct";
     const catalogModel = store.modelsCatalog.find((m: CatalogEntry) => modelPath.includes(m.name) || m.name === modelPath);
     if (catalogModel && catalogModel.hf_model_id) {
         hfModelId = catalogModel.hf_model_id;
     }
 
     try {
-        // Запрашиваем собранный промпт у Rust (без тяжелой инициализации MCP-инструментов, для скорости)
         const promptText: string = await invoke("get_prompt_preview", {
             modelPath, 
             agentId, 
@@ -129,7 +127,6 @@ export class ChatController {
             history: store.chatHistory
         });
         
-        // Считаем токены через HuggingFace Transformers
         const tokens = await countTokens(promptText, hfModelId);
 
         if (this.el.tokenCounter) {
@@ -150,7 +147,6 @@ export class ChatController {
     }
   }
 
-  // ─── Меню сообщений ───
   private async onDeleteMessage(uid: string) {
     const idx = store.msgUidList.indexOf(uid); if (idx === -1) return;
     store.chatHistory.splice(idx, 1); store.msgUidList.splice(idx, 1);
@@ -193,7 +189,6 @@ export class ChatController {
 
     this.logToGUI(`Нажата кнопка 'Отправить и запустить' для сообщения: ${uid}`);
 
-    // Оставляем историю до выбранного сообщения (включительно)
     store.chatHistory = store.chatHistory.slice(0, idx + 1);
     store.msgUidList = store.msgUidList.slice(0, idx + 1);
     this.renderChatFromHistory();
@@ -204,8 +199,8 @@ export class ChatController {
     await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
     bus.emit("session:changed");
 
-    const startTime = performance.now();
     const preSendLength = store.chatHistory.length;
+    const startTime = performance.now();
 
     try {
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value) };
@@ -214,26 +209,34 @@ export class ChatController {
       let mmprojPath: string | null = null;
       try { mmprojPath = await invoke("get_mmproj_path", { modelPath }); } catch (_) {}
 
-      // Отправляем пустое сообщение, Rust подхватит user_message из истории и продолжит
       const response: any = await invoke("chat_request", {
         modelPath,
         agentId: activeAgent,
         message: "",
         history: allHistory,
         contextSize: parseInt(this.el.contextSlider.value, 10),
-        kvQuantization: this.el.chkKvQuant.checked,
+        maxGenTokens: parseInt(this.el.maxGenSlider.value, 10),
+        kvQuantKeys: this.el.chkKvQuantK.checked,
+        kvQuantValues: this.el.chkKvQuantV.checked,
         modelParams: params,
         attachments: [],
         mmprojPath
       });
 
+      const dur = ((performance.now() - startTime) / 1000);
       const newMessages = response.messages || [];
       const thisRoundThoughts = store.chatHistory.slice(preSendLength).filter((m: any) => m.type === 'thought');
 
       if (newMessages.length > 0) {
         const oldHistory = newMessages.slice(0, preSendLength);
         const afterOldHistory = newMessages.slice(preSendLength);
-
+        
+        afterOldHistory.forEach((m: any) => {
+            if (m.author && m.author !== 'user' && m.author !== 'system') {
+                m.time_sec = dur;
+            }
+        });
+        
         const oldUids = store.msgUidList.slice(0, preSendLength);
         const thoughtUids = store.msgUidList.slice(preSendLength, preSendLength + thisRoundThoughts.length);
         const remainingMessages = afterOldHistory.slice(thisRoundThoughts.length);
@@ -288,7 +291,6 @@ export class ChatController {
     bus.emit("session:open", newId);
   }
 
-  // ─── Рендеринг ───
   private appendMessageToContainer(container: HTMLDivElement, role: Role, content: string, agentName?: string, timeText?: string) {
     container.appendChild(createMessageElement(role, content, agentName, timeText));
     this.scrollToBottomIfNearEnd(container); renderMermaid();
@@ -330,7 +332,8 @@ export class ChatController {
       const role = (msg.author && msg.author !== 'user') ? (msg.author === 'system' ? 'system' : 'agent') : 'user' as Role;
       const agentName = (msg.author && msg.author !== 'user' && msg.author !== 'system') ? msg.author : undefined;
       const hasMenu = uid && (role === 'user' || role === 'agent');
-      this.el.chatHistory.appendChild(createMessageElement(role, msg.content, agentName, undefined, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined));
+      const timeText = msg.time_sec ? `${msg.time_sec.toFixed(1)} сек` : undefined;
+      this.el.chatHistory.appendChild(createMessageElement(role, msg.content, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined));
     }
     if (thoughtsItems.length > 0) this.el.chatHistory.appendChild(createThoughtsBlock(thoughtsItems, lastAssistantUid, this.thoughtMenuCallbacks));
     this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
@@ -345,17 +348,24 @@ export class ChatController {
     this.appendMessageToContainer(this.el.subchatHistory, 'agent', subCall.response, subCall.agent_name, `${subCall.time_sec.toFixed(1)} сек`);
   }
 
-  // ─── Стейт обработки ───
   setProcessingState(state: boolean) {
     store.isProcessing = state;
     this.el.modelSelect.disabled = this.el.agentSelect.disabled = this.el.chatInput.disabled = this.el.btnSend.disabled = state;
     this.el.btnStop.disabled = !state;
-    if (state) { this.el.chatFeedback.style.display = "block"; this.el.progressBar.style.width = "0%"; this.el.statusLabel.innerText = "Подготовка..."; store.realtimeSubcallKeys.clear(); }
+    if (state) { 
+        this.el.chatFeedback.style.display = "block"; 
+        this.el.progressBar.style.width = "0%"; 
+        this.el.statusLabel.innerText = "Подготовка..."; 
+        store.realtimeSubcallKeys.clear(); 
+        
+        store.rtStreamUid = null;
+        store.rtStreamBuffer = "";
+        store.rtIsJson = false;
+    }
     else { this.el.chatFeedback.style.display = "none"; }
     bus.emit("processing:changed", state);
   }
 
-  // ─── Отправка сообщения ───
   async handleSend() {
     const text = this.el.chatInput.value.trim(); if (!text && this.attachments.length === 0) return; if (store.isProcessing) return;
     const activeAgent = this.el.agentSelect.value; const modelPath = this.el.modelSelect.value;
@@ -364,7 +374,6 @@ export class ChatController {
     const displayText = text || (this.attachments.length > 0 ? `[${this.attachments.length} файлов]` : '');
     this.appendMessage('user', displayText, undefined, undefined, undefined, false, userUid);
     this.el.chatInput.value = ""; this.el.chatInput.style.height = "auto"; clearTimeout(store.draftTimeout);
-    // Clear attachments preview
     this.el.filePreview.innerHTML = '';
     const attachments = [...this.attachments];
     this.attachments = [];
@@ -378,18 +387,34 @@ export class ChatController {
       const displayName = this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace(/^[📁📊]\s*/, '');
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value) };
       const allHistory = store.chatHistory.slice();
-      // Get mmproj path for the current model
       let mmprojPath: string | null = null;
       try { mmprojPath = await invoke("get_mmproj_path", { modelPath }); } catch (_) {}
-      const response: any = await invoke("chat_request", { modelPath, agentId: activeAgent, message: text, history: allHistory, contextSize: parseInt(this.el.contextSlider.value, 10), kvQuantization: this.el.chkKvQuant.checked, modelParams: params, attachments, mmprojPath });
-      const dur = ((performance.now() - startTime) / 1000).toFixed(1);
-      // Merge streamed intermediate thoughts with final results from Rust
+      const response: any = await invoke("chat_request", { 
+          modelPath, 
+          agentId: activeAgent, 
+          message: text, 
+          history: allHistory, 
+          contextSize: parseInt(this.el.contextSlider.value, 10), 
+          maxGenTokens: parseInt(this.el.maxGenSlider.value, 10), 
+          kvQuantKeys: this.el.chkKvQuantK.checked, 
+          kvQuantValues: this.el.chkKvQuantV.checked, 
+          modelParams: params, 
+          attachments, 
+          mmprojPath 
+      });
+      const dur = ((performance.now() - startTime) / 1000);
       const newMessages = response.messages || [];
       const thisRoundThoughts = store.chatHistory.slice(preSendLength + 1).filter((m: any) => m.type === 'thought');
       if (newMessages.length > 0) {
         const oldHistory = newMessages.slice(0, preSendLength);
         const userMsg = newMessages.slice(preSendLength, preSendLength + 1);
         const afterUserMsg = newMessages.slice(preSendLength + 1);
+        
+        afterUserMsg.forEach((m: any) => {
+            if (m.author && m.author !== 'user' && m.author !== 'system') {
+                m.time_sec = dur;
+            }
+        });
         
         const oldUids = store.msgUidList.slice(0, preSendLength + 1);
         const thoughtUids = store.msgUidList.slice(preSendLength + 1); 
@@ -401,7 +426,7 @@ export class ChatController {
       const agentUid = store.nextUid(); store.msgUidList.push(agentUid);
       const hasRT = response.sub_calls && response.sub_calls.some((c: any) => store.realtimeSubcallKeys.has(`${c.agent_name}:${c.time_sec.toFixed(2)}`));
       if (response.text) {
-        this.appendMessage('agent', response.text, displayName, `⏱ ${dur} сек`, response.sub_calls, hasRT, agentUid);
+        this.renderChatFromHistory();
       } else if (newMessages.length > 0) {
         this.renderChatFromHistory();
       }
@@ -421,11 +446,10 @@ export class ChatController {
       }
     } finally { 
         this.setProcessingState(false); 
-        this.triggerTokenCount(); // Обновляем счетчик после завершения
+        this.triggerTokenCount();
     }
   }
 
-  // ─── Автосохранение черновика ───
   private triggerDraftSave() {
     if (store.isProcessing) return;
     if (!store.currentSessionId && this.el.chatInput.value.trim() !== "") {
@@ -437,7 +461,6 @@ export class ChatController {
     }
   }
 
-  // ─── Управление сессиями (вызывается через шину) ───
   startNewSession() {
     if (store.isProcessing) return;
     store.currentSessionId = null; store.resetForNewSession(); this.thoughtDedupSet.clear();
@@ -462,7 +485,6 @@ export class ChatController {
     } catch(e) { showToast(`Ошибка: ${e}`, "error"); }
   }
 
-  // ─── Состояние кнопки прикрепления ───
   private async updateAttachButtonState() {
     const btn = this.el.btnAttach;
     const modelPath = this.el.modelSelect?.value;
@@ -482,7 +504,6 @@ export class ChatController {
     }
   }
 
-  // ─── Файловые вложения ───
   private async handleFileSelect(files: FileList | null) {
     if (!files || store.isProcessing) return;
     for (let i = 0; i < files.length; i++) {
@@ -534,7 +555,6 @@ export class ChatController {
     this.el.filePreview.appendChild(div);
   }
 
-  // ─── Привязка DOM-событий ───
   private bindDomEvents() {
     this.el.btnSend?.addEventListener("click", () => this.handleSend());
     this.el.chatInput?.addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); this.handleSend(); } });
@@ -553,13 +573,64 @@ export class ChatController {
     this.el.agentSelect?.addEventListener("change", () => { this.triggerTokenCount(); });
   }
 
-  // ─── Привязка Tauri-событий ───
   private thoughtDedupSet = new Set<string>();
 
   private bindTauriEvents() {
     listen("progress", (e) => { this.el.progressBar.style.width = `${e.payload}%`; });
     listen("status", (e) => { this.el.statusLabel.innerText = e.payload as string; });
     listen("log", (e) => { this.logToGUI(e.payload as string); });
+    
+    // СТРИМИНГ ОТВЕТА В ЧАТ В РЕАЛЬНОМ ВРЕМЕНИ
+    listen("stream_chunk", (e) => {
+        if (!store.isProcessing) return;
+        const chunk = e.payload as string;
+        store.rtStreamBuffer += chunk;
+        
+        // Если это внутренний JSON (вызов сабагента или тулзы) — скрываем от глаз пользователя!
+        if (store.rtStreamBuffer.trimStart().startsWith("{") || store.rtStreamBuffer.trimStart().startsWith("```json")) {
+            store.rtIsJson = true;
+            return;
+        }
+        
+        // Если это начало ответа, создаем пустое сообщение в UI
+        if (!store.rtStreamUid) {
+            store.rtStreamUid = store.nextUid();
+            const displayName = this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace(/^[📁📊]\s*/, '');
+            this.appendMessage('agent', '', displayName, undefined, undefined, false, store.rtStreamUid);
+        }
+        
+        // Обновляем тело сообщения (renderMarkdown автоматически скроет <think> теги из текста)
+        const msgEl = this.el.chatHistory.querySelector(`[data-msg-uid="${store.rtStreamUid}"]`);
+        if (msgEl) {
+            const contentDiv = msgEl.querySelector('div:nth-child(2)');
+            if (contentDiv) {
+                contentDiv.innerHTML = renderMarkdown(store.rtStreamBuffer);
+                this.scrollToBottomIfNearEnd(this.el.chatHistory);
+            }
+        }
+        
+        // Печатаем "Мысли" агента в реальном времени в раскрывающийся блок!
+        const thinkMatch = store.rtStreamBuffer.match(/<think>([\s\S]*?)(?:<\/think>|$)/i);
+        if (thinkMatch) {
+            const thoughtContent = thinkMatch[1].trim();
+            if (!store.activeThoughtsBlock && msgEl) {
+                const item = createThoughtElement("Агент", thoughtContent);
+                item.id = "rt-thought";
+                store.activeThoughtsBlock = createThoughtsBlock([item]);
+                this.el.chatHistory.insertBefore(store.activeThoughtsBlock, msgEl);
+            } else if (store.activeThoughtsBlock) {
+                let item = store.activeThoughtsBlock.querySelector('#rt-thought');
+                if (!item) {
+                    item = createThoughtElement("Агент", thoughtContent);
+                    item.id = "rt-thought";
+                    addToThoughtsBlock(store.activeThoughtsBlock, item as HTMLElement);
+                } else {
+                    item.innerHTML = `🧠 <strong>Агент</strong>: <em>${thoughtContent}</em>`;
+                }
+            }
+        }
+    });
+
     listen("subcall_done", (e) => {
       const call = e.payload as any;
       store.realtimeSubcallKeys.add(`${call.agent_name}:${call.time_sec.toFixed(2)}`);
@@ -568,9 +639,9 @@ export class ChatController {
       else { store.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(store.activeThoughtsBlock); }
       this.scrollToBottomIfNearEnd(this.el.chatHistory);
     });
+    
     listen("agent_thought", (e) => {
       const payload = e.payload as { author: string, thought: string, time_sec: number };
-      // Dedup: skip if same agent + same thought prefix
       const dedupKey = `${payload.author}:${payload.thought.substring(0, 200)}`;
       if (this.thoughtDedupSet.has(dedupKey)) return;
       this.thoughtDedupSet.add(dedupKey);
@@ -583,7 +654,6 @@ export class ChatController {
     });
   }
 
-  // ─── Привязка шины событий ───
   private bindBusEvents() {
     bus.on("session:new", () => this.startNewSession());
     bus.on("session:open", (id: string) => this.openSession(id));

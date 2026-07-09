@@ -29,7 +29,6 @@ fn safe_truncate(s: &str, max_len: usize) -> String {
     format!("{}...", &s[..end])
 }
 
-// ─── Helper: централизованный вывод мысли ───
 fn log_agent_thought(log_cb: &dyn Fn(String), agent: &AgentProfile, action_type: &str, target: &str, thought: &str, thinking_sec: f32, depth: usize) {
     if thought.is_empty() { return; }
     if thinking_sec > 0.0 {
@@ -39,7 +38,6 @@ fn log_agent_thought(log_cb: &dyn Fn(String), agent: &AgentProfile, action_type:
     }
 }
 
-// ─── Helper: список валидных ID сабагентов для ошибок ───
 fn valid_agent_ids(agents: &[AgentProfile], exclude_id: &str, exclude_mode: &str) -> Vec<String> {
     agents.iter()
         .filter(|a| a.id != exclude_id && a.mode != exclude_mode)
@@ -48,27 +46,28 @@ fn valid_agent_ids(agents: &[AgentProfile], exclude_id: &str, exclude_mode: &str
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_chat<L, S, C>(
-    log_cb: L, status_cb: S, subcall_cb: C,
+pub fn run_chat<L, S, C, ST>(
+    log_cb: L, status_cb: S, subcall_cb: C, stream_cb: ST,
     agents_dir: std::path::PathBuf, mcp_servers_dir: std::path::PathBuf,
     model_path: String, agent_id: String, user_text: String, history: Vec<ChatMessage>,
     attachments: Vec<ChatAttachment>,
-    context_size: u32, kv_quantization: bool, model_params: ModelParams, format_type: String,
+    context_size: u32, max_gen_tokens: u32, kv_quant_keys: bool, kv_quant_values: bool, model_params: ModelParams, format_type: String,
     mmproj_path: Option<String>, cancel_flag: Arc<AtomicBool>,
 ) -> Result<(String, Vec<SubCall>, Vec<ChatMessage>), String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
     S: Fn(String, u8) + Clone + Send + Sync + 'static,
     C: Fn(&SubCall) + Clone + Send + Sync + 'static,
+    ST: Fn(String) + Clone + Send + Sync + 'static,
 {
     status_cb("Загрузка модели в память...".to_string(), 10);
     let engine = if mmproj_path.is_some() {
-        LlamaEngine::new_with_mmproj(&model_path, mmproj_path.as_deref(), context_size, kv_quantization, &log_cb)?
+        LlamaEngine::new_with_mmproj(&model_path, mmproj_path.as_deref(), context_size, kv_quant_keys, kv_quant_values, &log_cb, stream_cb)?
     } else {
-        LlamaEngine::new(&model_path, context_size, kv_quantization, &log_cb)?
+        LlamaEngine::new(&model_path, context_size, kv_quant_keys, kv_quant_values, &log_cb, stream_cb)?
     };
     let agents = load_agents(&agents_dir)?;
-    let max_gen_tokens = ((context_size as usize).saturating_sub(2048).max(1024)).min(4096);
+    let max_gen_usize = max_gen_tokens as usize;
     let recent_history: Vec<ChatMessage> = history.iter()
         .filter(|m| m.msg_type != "thought")
         .cloned()
@@ -94,7 +93,6 @@ where
         user_text.clone()
     };
 
-    // Определяем entry type: если agent_id совпадает с file_stem YAML workflow — запускаем граф
     let mut all_sub_calls = Vec::new();
     let workflows = load_workflows(&agents_dir).unwrap_or_default();
     let workflow_match = find_workflow_by_stem(&workflows, &agent_id).filter(|wf| wf.visible);
@@ -113,7 +111,7 @@ where
             log_cb: log_cb.clone(),
             status_cb: status_cb.clone(),
             subcall_cb: subcall_cb.clone(),
-            max_gen_tokens,
+            max_gen_tokens: max_gen_usize,
             model_params: &model_params,
             format_type: &format_type,
             cancel_flag: cancel_flag.clone(),
@@ -127,25 +125,26 @@ where
         return Ok((String::new(), all_sub_calls, ctx.messages));
     }
 
-    // Fallback: запуск .md агента
     if let Some(primary_agent) = agents.iter().find(|a| a.id == agent_id) {
         log_cb(format!("▶ Запуск агента: {}", primary_agent.name));
+        
         let final_res = run_agent_node(
             log_cb, status_cb, subcall_cb,
             &engine, primary_agent, &agents, user_text, recent_history,
             &attachments,
-            max_gen_tokens, &model_params, &format_type,
+            max_gen_usize, &model_params, &format_type,
             cancel_flag, 0, &mut all_sub_calls, None, &mcp_servers_dir,
             &mut messages_store, &mut msg_counter,
             String::new(),
         )?;
+        
         let sub_calls_opt = if all_sub_calls.is_empty() { None } else { Some(all_sub_calls.clone()) };
         messages_store.push(ChatMessage {
             id: Some(format!("msg_{}", msg_counter)),
             msg_type: "message".to_string(),
             content: final_res.clone(),
             sub_calls: sub_calls_opt,
-            author: Some(primary_agent.id.clone()), // Исправление Бага №1: Сохраняем реальный ID агента вместо жесткого "assistant"
+            author: Some(primary_agent.id.clone()),
         });
         Ok((final_res, all_sub_calls, messages_store))
     } else {
@@ -218,9 +217,6 @@ where
     S: Fn(String, u8) + Clone + Send + Sync + 'static,
     C: Fn(&SubCall) + Clone + Send + Sync + 'static,
 {
-    // ═══════════════════════════════════════
-    //  PHASE 1: SETUP
-    // ═══════════════════════════════════════
     if depth > 5 { return Err("Превышена максимальная глубина вложенности сабагентов".into()); }
     log_cb(format!("▶ Запуск агента: {} (глубина: {})", agent.name, depth));
 
@@ -228,7 +224,6 @@ where
     let mut all_tools: Vec<(String, String, serde_json::Value)> = Vec::new();
     runtime::load_mcp_servers(&log_cb, mcp_servers_dir, &agent.mcp_servers, &mut mcp_clients, &mut all_tools);
 
-    // Built-in emit_signal tool
     all_tools.push(("_builtin".to_string(), "emit_signal".to_string(), serde_json::json!({
         "name": "emit_signal",
         "description": "Сохранить сигнал/маркер в сессию. Другие агенты, экстрактор и phase_router увидят его. Принимает key (имя сигнала) и value (произвольный JSON-объект с данными).",
@@ -243,7 +238,7 @@ where
     })));
 
     let has_tools = !all_tools.is_empty();
-    let mut system_prompt = build_system_prompt(agent, messages, has_tools, &all_tools);
+    let mut system_prompt = build_system_prompt(agent, messages, has_tools, &all_tools, max_gen_tokens);
     if !injected_reports.is_empty() {
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&injected_reports);
@@ -262,15 +257,9 @@ where
             role = "user";
         } else if actual_author == "system" {
             role = "system";
-        } else if actual_author == agent.id || actual_author == agent.name {
-            role = "assistant";
-        } else if actual_author == "assistant" {
-            // Для совместимости со старыми сессиями, где ID агента не был сохранен
+        } else if actual_author == agent.id || actual_author == agent.name || actual_author == "assistant" {
             role = "assistant";
         } else {
-            // Исправление Бага №2: Предотвращение Role Leakage (галлюцинаций)
-            // Сообщения от ДРУГИХ агентов передаются в роли 'user' как внешний контекст,
-            // иначе текущий агент решит, что это его собственные слова, и начнет им подражать.
             role = "user";
             content = format!("[Контекст из чата. Предыдущий ответ от агента '{}']:\n{}", actual_author, content);
         }
@@ -293,9 +282,6 @@ where
 
     let initial_dump = format!("### [SYSTEM PROMPT]\n{}", system_prompt);
 
-    // ═══════════════════════════════════════
-    //  PHASE 2: LOOP STATE
-    // ═══════════════════════════════════════
     let mut final_response = String::new();
     let mut tool_calls = Vec::new();
     let start_time = Instant::now();
@@ -303,21 +289,18 @@ where
     let mut consecutive_incomplete = 0;
     let mut consecutive_invalid_targets = 0;
 
-    // ═══════════════════════════════════════
-    //  PHASE 3: MAIN GENERATION LOOP
-    // ═══════════════════════════════════════
     for iter in 1..=30 {
         if cancel_flag.load(Ordering::SeqCst) { return Err("Прервано пользователем".to_string()); }
 
-        // --- ТОЧНЫЙ КОНТРОЛЬ КОНТЕКСТА: АВТО-ОБРЕЗКА ---
+        let mut ideal_ctx;
         loop {
             let current_tokens = engine.get_tokens_count(&llm_messages, format_type).unwrap_or(0);
-            let reserve = max_gen_tokens;
-            if current_tokens + reserve <= engine.n_ctx() as usize || llm_messages.len() <= 2 {
-                log_cb(format!("📊 Токены: {} / {} (Бюджет контекста). Резерв генерации: {}", current_tokens, engine.n_ctx(), reserve));
+            ideal_ctx = (current_tokens as u32 + max_gen_tokens as u32 + 128).min(engine.global_ctx_limit);
+
+            if current_tokens + max_gen_tokens <= ideal_ctx as usize || llm_messages.len() <= 2 {
+                log_cb(format!("📊 Память: выделен KV-кэш на {} токенов (Промпт: {}, Резерв: {})", ideal_ctx, current_tokens, max_gen_tokens));
                 break;
             }
-            // Удаляем самое старое сообщение (индекс 1, т.к. 0 — это системный промпт)
             if llm_messages.len() > 2 {
                 llm_messages.remove(1);
                 log_cb("⚠️ Превышен лимит контекста! Удалено самое старое сообщение из памяти LLM.".to_string());
@@ -326,7 +309,6 @@ where
             }
         }
 
-        // ── 3a. LLM GENERATION ──
         let gen_start = Instant::now();
         log_cb(format!(">>> [{}] LLM вызов #{}, msgs={}, max_gen={}, глубина={}", agent.name, iter, llm_messages.len(), max_gen_tokens, depth));
         let raw_response = if !attachments.is_empty() && engine.is_multimodal() {
@@ -346,14 +328,9 @@ where
         log_cb(format!("<<< [{}] LLM за {:.1}с, ответ {} символов", agent.name, gen_start.elapsed().as_secs_f32(), raw_response.len()));
 
         let response = clean_thought_tags(&raw_response);
-        let cleaned_len = response.len();
-        if cleaned_len != raw_response.len() {
-            log_cb(format!("🧹 clean_thought_tags удалил {} символов (было {}, стало {})", raw_response.len() - cleaned_len, raw_response.len(), cleaned_len));
-        }
         let mut action_found = false;
         let mut thought_logged = false;
 
-        // ── 3b. RESPONSE DISPATCH: Tool call ──
         if let Some((tool_name, arguments, thought)) = parse_tool_call(&response) {
             action_found = true;
             consecutive_incomplete = 0;
@@ -367,7 +344,6 @@ where
 
             if tool_name == "emit_signal" {
                 tool_found = true;
-                // Фолбэк: если LLM засунула аргументы в "properties"
                 let mut key_val = arguments.get("key");
                 let mut val_val = arguments.get("value");
                 if key_val.is_none() && val_val.is_none() {
@@ -435,7 +411,6 @@ where
                     }
                 }
             }
-            // ─── FALLBACK: tool_name совпадает с ID сабагента → синтаксическая ошибка, reprompt ───
             if !tool_found {
                 if agents.iter().any(|a| a.id == tool_name && a.id != agent.id) {
                     consecutive_failed_tools += 1;
@@ -450,7 +425,6 @@ where
                 }
             }
             let output = tool_output.unwrap_or_else(|| format!("Ошибка: Инструмент '{}' не найден.", tool_name));
-            // ─── FOLD: ошибка инструмента — мгновенный проброс наверх ───
             if !tool_found || output.starts_with("Ошибка") {
                 consecutive_failed_tools += 1;
                 if consecutive_failed_tools >= 3 {
@@ -469,7 +443,6 @@ where
             continue;
         }
 
-        // ── 3c. RESPONSE DISPATCH: Orchestrator JSON (target) ──
         if let Some(parsed) = parse_orchestrator_response(&response) {
             action_found = true;
             consecutive_incomplete = 0;
@@ -483,13 +456,11 @@ where
                 break;
             }
 
-            // FIX A: Validate target BEFORE logging thought to UI
             if let Some(subagent) = agents.iter().find(|a| a.id == parsed.target) {
                 consecutive_invalid_targets = 0;
                 log_agent_thought(&log_cb, agent, "вызов", &parsed.target, &parsed.thought, gen_start.elapsed().as_secs_f32(), depth);
                 thought_logged = true;
 
-                // Recurse into subagent
                 log_cb(format!("📞 {} вызывает сабагента: {}", agent.name, subagent.name));
 
                 let start_len = all_sub_calls.len();
@@ -509,7 +480,6 @@ where
                     None
                 };
 
-                // ─── FOLD: ошибка сабагента — мгновенный проброс наверх ───
                 if sub_result.starts_with(AGENT_ERROR_PREFIX) {
                     log_cb(format!("❌ Сабагент '{}' вернул ошибку — fold: {}", subagent.id, sub_result));
                     let err_msg = ChatMessage {
@@ -535,20 +505,19 @@ where
                 messages.push(msg);
                 *msg_counter += 1;
 
-                let new_sys = build_system_prompt(agent, messages, has_tools, &all_tools);
+                let new_sys = build_system_prompt(agent, messages, has_tools, &all_tools, max_gen_tokens);
                 if let Some(f) = llm_messages.first_mut() { if f.msg_type == "message" && f.author.as_deref() == Some("system") { f.content = new_sys; } }
                 llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), sub_calls: None, author: Some("assistant".to_string()) });
                 llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: format!("Отчет от {}:\n{}\n\nЕсли достаточно — ответь ОБЫЧНЫМ ТЕКСТОМ.", subagent.name, truncate_result(&sub_result, 2000)), sub_calls: None, author: Some("user".to_string()) });
                 continue;
             } else {
-                // FIX A + D: Invalid target — DON'T log thought, limit retries, list valid agents
                 consecutive_invalid_targets += 1;
                 if consecutive_invalid_targets >= 3 {
                     log_cb(format!("❌ {} превысил лимит неверных target-вызовов (3).", agent.name));
                     final_response = format!("{} Агент '{}' вызывает несуществующего сабагента '{}'. Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id, parsed.target);
                     break;
                 }
-                    llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), sub_calls: None, author: Some("assistant".to_string()) });
+                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), sub_calls: None, author: Some("assistant".to_string()) });
                 let valid_ids = valid_agent_ids(agents, &agent.id, "primary");
                 let error_msg = if valid_ids.is_empty() {
                     format!("Ошибка: Агент '{}' не найден.", parsed.target)
@@ -560,7 +529,6 @@ where
             }
         }
 
-        // ── 3d. THOUGHT LOGGING (think tags, partial JSON without action) ──
         if !thought_logged {
             let extracted = extract_think_content(&raw_response);
             for t in &extracted {
@@ -568,12 +536,11 @@ where
             }
             if extracted.is_empty() && !raw_response.contains("<think") {
                 if let Some(t) = extract_thought_from_partial_json(&raw_response) {
-                log_cb(format!("💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), t));
+                    log_cb(format!("💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), t));
                 }
             }
         }
 
-        // ── 3e. HANDLE NO ACTION ──
         if !action_found && has_tools {
             if response.trim().is_empty() {
                 consecutive_incomplete += 1;
@@ -596,19 +563,14 @@ where
                 llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: "Ты начал размышлять в JSON, но не указал действие. Пиши кратко и СРАЗУ укажи \"target\" или \"tool\".".to_string(), sub_calls: None, author: Some("user".to_string()) });
                 continue;
             }
-
         }
 
-        // ── 3f. COMPLETION (worker/primary with plain text) ──
         let preview = safe_truncate(&response, 300).replace('\n', " ");
         log_cb(format!("✅ Агент {} завершил ответом ({} символов): {}", agent.name, response.len(), preview));
         final_response = response;
         break;
     }
 
-    // ═══════════════════════════════════════
-    //  PHASE 4: TEARDOWN
-    // ═══════════════════════════════════════
     if depth > 0 {
         let subcall = SubCall { agent_name: agent.name.clone(), prompt: initial_dump.trim().to_string(), response: final_response.clone(), time_sec: start_time.elapsed().as_secs_f32(), tool_calls };
         subcall_cb(&subcall);

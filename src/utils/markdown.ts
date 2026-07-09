@@ -1,6 +1,9 @@
 export function renderMarkdown(text: string): string {
   if (!text) return "";
-  let html = text.replace(/<think[\s\S]*?<\/think>/gi, '');
+  
+  // Отрезаем тег <think> и всё, что внутри него.
+  // Добавлено (?:<\/think>|$) для того чтобы скрывать незакрытый <think> в момент стриминга (во время генерации).
+  let html = text.replace(/<think[\s\S]*?(?:<\/think>|$)/gi, '');
   
   // Удаление артефактов формата Gemma (</start_of_turn> и <start_of_turn>)
   html = html.replace(/<\/?start_of_turn>/gi, '');

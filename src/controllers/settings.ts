@@ -8,9 +8,10 @@ import { showToast } from "../ui";
 export interface SettingsElements {
   modelSelect: HTMLSelectElement;
   agentSelect: HTMLSelectElement;
-  contextSlider: HTMLInputElement;
-  contextValue: HTMLElement;
-  chkKvQuant: HTMLInputElement;
+  contextSlider: HTMLInputElement; contextValue: HTMLElement;
+  maxGenSlider: HTMLInputElement; maxGenValue: HTMLElement;
+  chkKvQuantK: HTMLInputElement;
+  chkKvQuantV: HTMLInputElement;
   themeSelect: HTMLSelectElement;
   promptFormatSelect: HTMLSelectElement;
   tempSlider: HTMLInputElement; tempValue: HTMLElement;
@@ -69,7 +70,9 @@ export class SettingsController {
       if (verEl) verEl.textContent = version;
       this.updateModelSelect(config);
       if (config.context_size) { this.el.contextSlider.value = config.context_size.toString(); this.el.contextValue.innerText = config.context_size.toString(); }
-      if (config.kv_quantization !== undefined) this.el.chkKvQuant.checked = config.kv_quantization;
+      if (config.max_gen_tokens) { this.el.maxGenSlider.value = config.max_gen_tokens.toString(); this.el.maxGenValue.innerText = config.max_gen_tokens.toString(); }
+      if (config.kv_quant_keys !== undefined) this.el.chkKvQuantK.checked = config.kv_quant_keys;
+      if (config.kv_quant_values !== undefined) this.el.chkKvQuantV.checked = config.kv_quant_values;
       if (config.theme) { this.el.themeSelect.value = config.theme; document.documentElement.setAttribute('data-theme', config.theme); }
       if (config.prompt_format) this.el.promptFormatSelect.value = config.prompt_format;
       if (config.show_advanced_features !== undefined) {
@@ -110,7 +113,20 @@ export class SettingsController {
   }
 
   private bindDomEvents() {
-    this.el.contextSlider?.addEventListener("input", () => { this.el.contextValue.innerText = this.el.contextSlider.value; });
+    this.el.contextSlider?.addEventListener("input", async () => { 
+        this.el.contextValue.innerText = this.el.contextSlider.value; 
+        await invoke("set_config_value", { key: "context_size", value: parseInt(this.el.contextSlider.value, 10) });
+    });
+    this.el.maxGenSlider?.addEventListener("input", async () => { 
+        this.el.maxGenValue.innerText = this.el.maxGenSlider.value; 
+        await invoke("set_config_value", { key: "max_gen_tokens", value: parseInt(this.el.maxGenSlider.value, 10) });
+    });
+    this.el.chkKvQuantK?.addEventListener("change", async () => {
+        await invoke("set_config_value", { key: "kv_quant_keys", value: this.el.chkKvQuantK.checked });
+    });
+    this.el.chkKvQuantV?.addEventListener("change", async () => {
+        await invoke("set_config_value", { key: "kv_quant_values", value: this.el.chkKvQuantV.checked });
+    });
     this.el.themeSelect?.addEventListener("change", async () => { document.documentElement.setAttribute('data-theme', this.el.themeSelect.value); await invoke("set_theme", { theme: this.el.themeSelect.value }); });
     this.el.promptFormatSelect?.addEventListener("change", async () => { await invoke("set_prompt_format", { format: this.el.promptFormatSelect.value }); });
     const sliders: [HTMLInputElement, HTMLElement][] = [[this.el.tempSlider, this.el.tempValue],[this.el.topkSlider, this.el.topkValue],[this.el.toppSlider, this.el.toppValue],[this.el.minpSlider, this.el.minpValue],[this.el.reppenSlider, this.el.reppenValue],[this.el.prespenSlider, this.el.prespenValue]];
