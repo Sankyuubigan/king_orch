@@ -149,7 +149,6 @@
 | `llm.rs` | Работа с llama-cpp-2, токенизация, генерация, сэмплирование, чтение GGUF, структура `ChatMessage` с полями `type`/`author` |
 | `config.rs` | Структуры AppConfig/ModelParams, чтение/запись конфига, каталог моделей |
 | `session_manager.rs` | Чтение/запись JSON-файлов сессий (единый массив `messages[]`) |
-| `migration.rs` | Миграция старых сессий: конвертация `role`/`agent_name` → `type`/`author`. Запускается при старте приложения |
 | `mcp_client.rs` | JSON-RPC клиент для MCP-серверов через stdin/stdout |
 | `downloader.rs` | Скачивание .gguf файлов с прогрессом |
 

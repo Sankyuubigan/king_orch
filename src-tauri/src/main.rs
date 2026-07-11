@@ -21,8 +21,7 @@ fn main() {
         })
         .setup(|app| {
             let app_handle = app.handle();
-            let sessions_dir = infra::session_manager::sessions_dir(&app_handle);
-            infra::migration::migrate_all_sessions(&sessions_dir);
+            let _ = infra::session_manager::sessions_dir(&app_handle);
             api::chat::init_log_file();
             Ok(())
         })

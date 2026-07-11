@@ -6,7 +6,6 @@ pub mod llm;
 pub mod llm_types;
 pub mod llm_gguf;
 pub mod llm_multimodal;
-pub mod migration;
 pub mod session_manager;
 pub mod mcp_client;
 pub mod downloader;

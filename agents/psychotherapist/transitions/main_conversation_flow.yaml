@@ -12,11 +12,11 @@ nodes:
       User: {{ user_message }}
       Session signals: {{ signals }}
     ui_pos:
-      y: 489
       x: -1307
+      y: 489
   - id: priority_router
     type: switch
-    input_object: "{{ nodes.extract_facts.output }}"
+    input_object: '{{ nodes.extract_facts.output }}'
     switch_field: phase
     cases_priority:
       - key: data_collection
@@ -24,8 +24,8 @@ nodes:
       - key: datamining
         to: note_1782220629095
     ui_pos:
-      y: 460
       x: -949
+      y: 460
   - id: call_provocateur
     type: llm_worker
     agent: provocateur
@@ -58,8 +58,8 @@ nodes:
     inject_reports:
       - soma_translator
     ui_pos:
-      y: 121
       x: 1509
+      y: 121
   - id: call_validator
     type: llm_worker
     agent: validator
@@ -90,8 +90,8 @@ nodes:
       - soma_translator
       - pattern_finder_by_floors
     ui_pos:
-      x: 3754
       y: 678
+      x: 3754
     disabled: true
   - id: call_pattern_finder
     type: llm_worker
@@ -113,8 +113,8 @@ nodes:
       - pattern_finder_by_floors
       - destructor_detector
     ui_pos:
-      x: 4025
       y: 681
+      x: 4025
   - id: check_somatic
     type: condition_check
     field: has_somatic
@@ -146,20 +146,21 @@ nodes:
       - key: Кластер
         to: call_decomposer
     ui_pos:
-      y: 262
       x: 346
+      y: 262
   - id: call_decomposer
     type: llm_worker
     agent: decomposer
     ui_pos:
-      y: 385
       x: 611
+      y: 385
   - id: synchronize_with_user
     type: llm_worker
     agent: synchronizer
     ui_pos:
-      y: 162
       x: 3367
+      y: 162
+    disabled: true
   - id: note_1782220193985
     type: note
     input: |
@@ -171,14 +172,14 @@ nodes:
     type: note
     input: уточнение данных у юзера
     ui_pos:
-      y: 98
       x: 2678
+      y: 98
   - id: note_1782220629095
     type: note
     input: лечение анализ
     ui_pos:
-      y: 566
       x: 3097
+      y: 566
   - id: note_1782221436115
     type: note
     input: пересчитываем данные с учетом новых данных от юзера
@@ -189,8 +190,8 @@ nodes:
     type: note
     input: проверяем абстрактный ли запрос
     ui_pos:
-      y: 244
       x: 852
+      y: 244
 
 edges:
   - from: extract_facts

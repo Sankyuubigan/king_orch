@@ -6,7 +6,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
 use crate::infra::llm::ChatMessage;
-use crate::infra::migration;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SessionMeta {
@@ -40,19 +39,12 @@ pub fn sessions_dir(app: &AppHandle) -> PathBuf {
     path
 }
 
-/// Reads a session file, migrates old format if needed, deserializes to ChatSession.
-fn load_migrated_session(path: &PathBuf) -> Result<(Value, ChatSession), String> {
+/// Reads a session file, deserializes to ChatSession.
+fn load_session(path: &PathBuf) -> Result<(Value, ChatSession), String> {
     let content =
         fs::read_to_string(path).map_err(|e| format!("Ошибка чтения сессии: {}", e))?;
-    let mut value: Value = serde_json::from_str(&content)
+    let value: Value = serde_json::from_str(&content)
         .map_err(|e| format!("Ошибка парсинга сессии: {}", e))?;
-    let migrated = migration::migrate_session_value(&mut value);
-    if migrated {
-        let new_content = serde_json::to_string_pretty(&value)
-            .map_err(|e| format!("Ошибка сериализации сессии: {}", e))?;
-        fs::write(path, new_content)
-            .map_err(|e| format!("Ошибка сохранения сессии: {}", e))?;
-    }
     let session: ChatSession = serde_json::from_value(value.clone())
         .map_err(|e| format!("Ошибка парсинга сессии: {}", e))?;
     Ok((value, session))
@@ -65,7 +57,7 @@ pub fn get_sessions(app: &AppHandle) -> Vec<SessionMeta> {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file() && path.extension().map_or(false, |e| e == "json") {
-                if let Ok((_, session)) = load_migrated_session(&path) {
+                if let Ok((_, session)) = load_session(&path) {
                     let created_at = session.created_at.unwrap_or(session.updated_at);
                     sessions.push(SessionMeta {
                         id: session.id,
@@ -83,7 +75,7 @@ pub fn get_sessions(app: &AppHandle) -> Vec<SessionMeta> {
 
 pub fn get_session(app: &AppHandle, id: &str) -> Result<ChatSession, String> {
     let path = sessions_dir(app).join(format!("{}.json", id));
-    let (_, session) = load_migrated_session(&path)?;
+    let (_, session) = load_session(&path)?;
     Ok(session)
 }
 
@@ -99,7 +91,7 @@ pub fn save_session(
     let mut session_created_at = now;
 
     if path.exists() {
-        if let Ok((_, old_session)) = load_migrated_session(&path) {
+        if let Ok((_, old_session)) = load_session(&path) {
             session_created_at = old_session.created_at.unwrap_or(old_session.updated_at);
         }
     }
@@ -139,7 +131,7 @@ pub fn rename_session(app: &AppHandle, id: &str, new_title: &str) -> Result<(), 
     if !path.exists() {
         return Err("Сессия не найдена".to_string());
     }
-    let (mut value, _) = load_migrated_session(&path)?;
+    let (mut value, _) = load_session(&path)?;
     if let Some(obj) = value.as_object_mut() {
         obj.insert("title".to_string(), Value::String(new_title.to_string()));
     }
