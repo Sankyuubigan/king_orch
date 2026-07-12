@@ -39,6 +39,7 @@ interface GraphNodeDef {
   sequential_to?: string;
   true_to?: string;
   false_to?: string;
+  system_message?: string;
   disabled?: boolean;
 }
 
@@ -884,8 +885,12 @@ export class GraphController {
 
     if (data.type === "note") {
       html += `<div class="graph-detail-section">
-        <div class="detail-label">Текст заметки</div>
-        <textarea id="ge-note-content" class="ge-textarea" rows="6" style="font-size:16px;font-weight:600;">${this.esc(data.input || "")}</textarea>
+        <div class="detail-label">Текст заметки (только в редакторе графа)</div>
+        <textarea id="ge-note-content" class="ge-textarea" rows="4">${this.esc(data.input || "")}</textarea>
+      </div>`;
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Системное сообщение пользователю (system_message)</div>
+        <textarea id="ge-note-sysmsg" class="ge-textarea" rows="4" placeholder="Текст, который появится в чате как системное сообщение">${this.esc(data.system_message || "")}</textarea>
       </div>`;
     }
 
@@ -1035,6 +1040,15 @@ export class GraphController {
       noteContent.addEventListener("change", () => {
         this.saveCheckpoint();
         this.editor!.drawflow.drawflow.Home.data[nodeId].data.input = noteContent.value || undefined;
+        this.updateNodeHtml(nodeId);
+      });
+    }
+
+    const noteSysMsg = document.getElementById("ge-note-sysmsg") as HTMLTextAreaElement;
+    if (noteSysMsg) {
+      noteSysMsg.addEventListener("change", () => {
+        this.saveCheckpoint();
+        this.editor!.drawflow.drawflow.Home.data[nodeId].data.system_message = noteSysMsg.value || undefined;
         this.updateNodeHtml(nodeId);
       });
     }
@@ -1889,7 +1903,10 @@ export class GraphController {
       }
     }
     if (data.type === "note") {
-      return `<div class="gn-note-content">${this.esc(data.input || "")}</div>`;
+      const sysBadge = data.system_message
+        ? `<div class="gn-sysmsg-badge">→ чат: ${this.esc((data.system_message || "").slice(0, 40))}${(data.system_message || "").length > 40 ? "…" : ""}</div>`
+        : "";
+      return `<div class="gn-note-content">${this.esc(data.input || "")}</div>${sysBadge}`;
     }
 
     const disabledBadge = data.disabled ? `<div class="gn-disabled-badge">⛔ DISABLED</div>` : "";

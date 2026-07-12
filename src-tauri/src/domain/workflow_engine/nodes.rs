@@ -597,11 +597,36 @@ where
             next_nodes: vec![],
         }),
 
-        NodeType::Note => Ok(NodeResult {
-            output: serde_json::json!({"note": true, "content": node.input.as_deref().unwrap_or("")}),
-            next_node: None,
-            next_nodes: vec![],
-        }),
+        NodeType::Note => {
+            let mut output = serde_json::json!({
+                "note": true,
+                "content": node.input.as_deref().unwrap_or(""),
+                "emitted": false,
+            });
+
+            if let Some(sys_msg) = node.system_message.as_ref() {
+                let text = sys_msg.trim();
+                if !text.is_empty() {
+                    let msg = ChatMessage {
+                        id: Some(format!("msg_{}", runner.msg_counter)),
+                        msg_type: "message".to_string(),
+                        content: text.to_string(),
+                        sub_calls: None,
+                        author: Some("system".to_string()),
+                    };
+                    context.messages.push(msg);
+                    *runner.msg_counter += 1;
+                    context.output_emitted = true;
+                    output["emitted"] = serde_json::json!(true);
+                }
+            }
+
+            Ok(NodeResult {
+                output,
+                next_node: None,
+                next_nodes: vec![],
+            })
+        }
     }
 }
 

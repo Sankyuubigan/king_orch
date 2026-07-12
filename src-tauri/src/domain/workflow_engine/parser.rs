@@ -136,6 +136,9 @@ pub struct NodeDef {
     pub inject_reports: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub problems: Option<String>,
+    /// Текст, выводимый в чат пользователя как системное сообщение (независим от заметки `input`)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_message: Option<String>,
     /// Визуальные координаты для редактора графов (x, y)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ui_pos: Option<HashMap<String, i32>>,
