@@ -48,8 +48,8 @@ nodes:
       Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
     output_type: message
     ui_pos:
-      y: -545
       x: 105
+      y: -545
     disabled: true
   - id: call_grounder
     type: llm_worker
@@ -58,8 +58,9 @@ nodes:
     inject_reports:
       - soma_translator
     ui_pos:
-      x: 1509
       y: 121
+      x: 1509
+    disabled: true
   - id: call_validator
     type: llm_worker
     agent: validator
@@ -76,8 +77,8 @@ nodes:
       - key: ДАННЫХ ДОСТАТОЧНО
         to: note_1782220629095
     ui_pos:
-      y: 179
       x: 2422
+      y: 179
   - id: call_destructor_finder
     type: llm_worker
     agent: destructor_detector
@@ -90,8 +91,8 @@ nodes:
       - soma_translator
       - pattern_finder_by_floors
     ui_pos:
-      y: 678
       x: 3754
+      y: 678
     disabled: true
   - id: call_pattern_finder
     type: llm_worker
@@ -99,8 +100,8 @@ nodes:
     inject_reports:
       - soma_translator
     ui_pos:
-      y: 573
       x: 3484
+      y: 573
   - id: call_healer
     type: llm_worker
     agent: neuro_reprogrammer
@@ -129,8 +130,9 @@ nodes:
     sequential_to: note_1782220193985
     true_to: call_grounder
     ui_pos:
-      y: 274
-      x: 1247
+      x: 1241
+      y: 273
+    disabled: true
   - id: call_cluster_checker
     type: llm_worker
     agent: cluster_checker
@@ -145,6 +147,7 @@ nodes:
         to: note_1782224256075
       - key: Кластер
         to: call_decomposer
+    default: call_decomposer
     ui_pos:
       x: 346
       y: 262
@@ -184,14 +187,15 @@ nodes:
     type: note
     input: пересчитываем данные с учетом новых данных от юзера
     ui_pos:
-      x: -682
       y: 241
+      x: -682
   - id: note_1782224256075
     type: note
     input: проверяем абстрактный ли запрос
     ui_pos:
-      x: 852
       y: 244
+      x: 852
+    disabled: true
 
 edges:
   - from: extract_facts

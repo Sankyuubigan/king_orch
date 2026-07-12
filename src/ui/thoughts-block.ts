@@ -1,9 +1,11 @@
 import { ThoughtMenuCallbacks } from "../types";
+import { confirmDialog } from "./confirm";
 
 export function createThoughtsBlock(
   initialItems?: HTMLElement[],
-  assistantUid?: string,
-  menuCallbacks?: ThoughtMenuCallbacks
+  assistantUid?: string | null,
+  menuCallbacks?: ThoughtMenuCallbacks,
+  thoughtUids?: string[]
 ): HTMLDivElement {
   const block = document.createElement("div");
   block.className = "thoughts-block";
@@ -19,12 +21,12 @@ export function createThoughtsBlock(
   const toggle = document.createElement("span");
   toggle.className = "thoughts-toggle";
   toggle.textContent = "▶";
-  header.appendChild(titleSpan);
   header.appendChild(toggle);
+  header.appendChild(titleSpan);
 
-  if (menuCallbacks && assistantUid) {
+  if (menuCallbacks && (assistantUid || (thoughtUids && thoughtUids.length > 0))) {
     const menuWrapper = document.createElement("div");
-    menuWrapper.className = "msg-menu-wrapper thoughts-menu-wrapper";
+    menuWrapper.className = "msg-menu-wrapper";
     const btn = document.createElement("button");
     btn.className = "msg-menu-btn";
     btn.innerHTML = "⋮";
@@ -34,13 +36,23 @@ export function createThoughtsBlock(
     const deleteItem = document.createElement("button");
     deleteItem.className = "msg-menu-item danger";
     deleteItem.textContent = "🗑️ Удалить мысли";
-    deleteItem.addEventListener("click", (e) => { e.stopPropagation(); dropdown.classList.remove("show"); menuCallbacks.onDeleteThoughts(assistantUid); });
+    deleteItem.addEventListener("click", async (e) => {
+      e.stopPropagation();
+      dropdown.classList.remove("show");
+      const confirmed = await confirmDialog(
+        "Удаление мыслей",
+        "Вы уверены, что хотите удалить этот блок мыслей из сессии?"
+      );
+      if (confirmed) {
+        menuCallbacks.onDeleteThoughts(assistantUid ?? null, thoughtUids ?? []);
+      }
+    });
     const cloneItem = document.createElement("button");
     cloneItem.className = "msg-menu-item";
     cloneItem.textContent = "📋 Клон до мыслей";
-    cloneItem.addEventListener("click", (e) => { e.stopPropagation(); dropdown.classList.remove("show"); menuCallbacks.onCloneFromThoughts(assistantUid); });
+    cloneItem.addEventListener("click", (e) => { e.stopPropagation(); dropdown.classList.remove("show"); menuCallbacks.onCloneFromThoughts(assistantUid!); });
     dropdown.appendChild(deleteItem);
-    dropdown.appendChild(cloneItem);
+    if (assistantUid) dropdown.appendChild(cloneItem);
     menuWrapper.appendChild(btn);
     menuWrapper.appendChild(dropdown);
     header.appendChild(menuWrapper);

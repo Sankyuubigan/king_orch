@@ -193,10 +193,9 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 .thoughts-block { align-self: center; width: 85%; margin: 4px 0; }
 .thoughts-header { background: transparent; border: 1px dashed var(--border); border-radius: 8px; padding: 8px 12px; cursor: pointer; font-size: 13px; color: #888; text-align: center; user-select: none; transition: background 0.2s; display: flex; justify-content: center; align-items: center; position: relative; }
 .thoughts-header:hover { background: var(--msg-system); }
-.thoughts-title { flex: 1; }
-.thoughts-toggle { font-size: 10px; margin-left: 6px; display: inline-block; }
-.thoughts-menu-wrapper { position: absolute; right: 8px; top: 50%; transform: translateY(-50%); opacity: 0.4; transition: opacity 0.2s; }
-.thoughts-header:hover .thoughts-menu-wrapper { opacity: 1; }
+.thoughts-title { flex: 1; text-align: center; }
+.thoughts-toggle { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); font-size: 10px; }
+.thoughts-header:hover .msg-menu-wrapper { opacity: 1; }
 .thoughts-content { overflow: hidden; transition: max-height 0.3s ease; }
 .thoughts-collapsed { max-height: 0; padding: 0; border: none; }
 .thoughts-expanded { max-height: 5000px; padding: 8px 0; }

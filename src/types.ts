@@ -53,7 +53,7 @@ export interface SessionMeta {
 }
 
 export interface ThoughtMenuCallbacks {
-    onDeleteThoughts: (assistantUid: string) => void;
+    onDeleteThoughts: (assistantUid: string | null, thoughtUids: string[]) => void;
     onCloneFromThoughts: (assistantUid: string) => void;
 }
 

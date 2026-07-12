@@ -47,7 +47,15 @@ pub struct ChatMessage {
 pub fn push_report(messages: &mut Vec<ChatMessage>, msg: ChatMessage, single_report: bool) {
     if single_report {
         if let Some(author) = msg.author.clone() {
-            messages.retain(|m| m.author.as_deref() != Some(author.as_str()));
+            messages.retain(|m| {
+                // Сигналы — инфраструктурные маркеры, а не отчёты агента.
+                // Их нельзя сворачивать single_report, иначе маршрутизаторы
+                // (signal_router) теряют эмитнутые сигналы.
+                if m.msg_type == "signal" {
+                    return true;
+                }
+                m.author.as_deref() != Some(author.as_str())
+            });
         }
     }
     messages.push(msg);

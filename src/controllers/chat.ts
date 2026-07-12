@@ -72,7 +72,7 @@ export class ChatController {
       onCopy: (uid) => this.onCopyMessage(uid),
     };
     this.thoughtMenuCallbacks = {
-      onDeleteThoughts: (uid) => this.onDeleteThoughts(uid),
+      onDeleteThoughts: (uid, uids) => this.onDeleteThoughts(uid, uids),
       onCloneFromThoughts: (uid) => this.onCloneFromThoughts(uid),
     };
     this.bindDomEvents();
@@ -284,11 +284,23 @@ export class ChatController {
     }
   }
 
-  private async onDeleteThoughts(assistantUid: string) {
-    const idx = store.msgUidList.indexOf(assistantUid); if (idx === -1) return;
-    if (store.chatHistory[idx].sub_calls) store.chatHistory[idx].sub_calls = [];
-    let i = idx - 1;
-    while (i >= 0 && store.chatHistory[i].type === 'thought') { store.chatHistory.splice(i, 1); store.msgUidList.splice(i, 1); i--; }
+  private async onDeleteThoughts(assistantUid: string | null, thoughtUids: string[]) {
+    if (thoughtUids.length > 0) {
+      const removeSet = new Set(thoughtUids);
+      for (let i = store.chatHistory.length - 1; i >= 0; i--) {
+        if (removeSet.has(store.msgUidList[i])) {
+          store.chatHistory.splice(i, 1);
+          store.msgUidList.splice(i, 1);
+        }
+      }
+    } else if (assistantUid) {
+      const idx = store.msgUidList.indexOf(assistantUid); if (idx === -1) return;
+      if (store.chatHistory[idx].sub_calls) store.chatHistory[idx].sub_calls = [];
+      let i = idx - 1;
+      while (i >= 0 && store.chatHistory[i].type === 'thought') { store.chatHistory.splice(i, 1); store.msgUidList.splice(i, 1); i--; }
+    } else {
+      return;
+    }
     this.renderChatFromHistory();
     if (store.currentSessionId) await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
     showToast("Блок мыслей удален.", "success");
@@ -316,7 +328,7 @@ export class ChatController {
     store.activeThoughtsBlock = null;
     if (subCalls && subCalls.length > 0 && !skipSubcallRender) {
       const items = subCalls.map(call => createSubcallElement(call, (c) => this.showSubchat(c)));
-      this.el.chatHistory.appendChild(createThoughtsBlock(items, uid, this.thoughtMenuCallbacks));
+      this.el.chatHistory.appendChild(createThoughtsBlock(items, uid, this.thoughtMenuCallbacks, []));
     }
     const hasMenu = uid !== undefined && (role === 'user' || role === 'agent');
     const msgEl = createMessageElement(role, content, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined);
@@ -325,12 +337,13 @@ export class ChatController {
 
   renderChatFromHistory() {
     this.el.chatHistory.innerHTML = ''; store.activeThoughtsBlock = null;
-    let thoughtsItems: HTMLElement[] = []; let lastAssistantUid: string | undefined;
+    let thoughtsItems: HTMLElement[] = []; let thoughtsUids: string[] = []; let lastAssistantUid: string | undefined;
     for (let i = 0; i < store.chatHistory.length; i++) {
       const msg = store.chatHistory[i]; const uid = store.msgUidList[i];
       if (msg.type === 'thought' || msg.type === 'signal') {
         const content = msg.type === 'signal' ? `[Сигнал] ${msg.content}` : msg.content;
         thoughtsItems.push(createThoughtElement(msg.author || 'Система', content, msg.time_sec));
+        thoughtsUids.push(uid);
 
         if (msg.sub_calls && msg.sub_calls.length > 0) {
           msg.sub_calls.forEach((call: any) => thoughtsItems.push(createSubcallElement(call, (c) => this.showSubchat(c))));
@@ -339,11 +352,12 @@ export class ChatController {
       }
       if (msg.type === 'message' && msg.author && msg.author !== 'user' && msg.author !== 'system' && msg.sub_calls && msg.sub_calls.length > 0) {
         lastAssistantUid = uid;
+        thoughtsUids = [];
         msg.sub_calls.forEach(call => thoughtsItems.push(createSubcallElement(call, (c) => this.showSubchat(c))));
       }
       if (thoughtsItems.length > 0) {
-        this.el.chatHistory.appendChild(createThoughtsBlock(thoughtsItems, lastAssistantUid, this.thoughtMenuCallbacks));
-        thoughtsItems = []; lastAssistantUid = undefined;
+        this.el.chatHistory.appendChild(createThoughtsBlock(thoughtsItems, lastAssistantUid, this.thoughtMenuCallbacks, thoughtsUids));
+        thoughtsItems = []; thoughtsUids = []; lastAssistantUid = undefined;
       }
       const role = (msg.author && msg.author !== 'user') ? (msg.author === 'system' ? 'system' : 'agent') : 'user' as Role;
       const agentName = (msg.author && msg.author !== 'user' && msg.author !== 'system') ? msg.author : undefined;
@@ -351,7 +365,7 @@ export class ChatController {
       const timeText = msg.time_sec ? `${msg.time_sec.toFixed(1)} сек` : undefined;
       this.el.chatHistory.appendChild(createMessageElement(role, msg.content, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined));
     }
-    if (thoughtsItems.length > 0) this.el.chatHistory.appendChild(createThoughtsBlock(thoughtsItems, lastAssistantUid, this.thoughtMenuCallbacks));
+    if (thoughtsItems.length > 0) this.el.chatHistory.appendChild(createThoughtsBlock(thoughtsItems, lastAssistantUid, this.thoughtMenuCallbacks, thoughtsUids));
     this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
   }
 

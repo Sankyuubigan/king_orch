@@ -196,9 +196,21 @@ where
                 "[workflow] Узел '{}' отключён (disabled), пропускаем",
                 node.id
             ));
+            // При пропуске отключённой ноды продолжаем по её линейному
+            // продолжению (sequential_to). Иначе пайплайн доходит до
+            // тупика: у нод ConditionCheck/Switch/SignalRouter преемник
+            // задан в полях самой ноды, а не ребром, и без вызова
+            // execute_node next_node остаётся None.
+            let fallthrough = node.sequential_to.clone();
+            if fallthrough.is_some() {
+                (runner.log_cb)(format!(
+                    "[workflow]   skip -> продолжение по sequential_to: {}",
+                    fallthrough.as_ref().unwrap()
+                ));
+            }
             nodes::NodeResult {
                 output: serde_json::Value::Null,
-                next_node: None,
+                next_node: fallthrough,
                 next_nodes: vec![],
             }
         } else {
