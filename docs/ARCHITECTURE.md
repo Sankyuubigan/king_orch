@@ -138,7 +138,7 @@
 | `workflow_engine/context.rs` | Контекст выполнения: проход `{{ template }}` переменных, хранение outputs узлов |
 | `workflow_engine/fact_extractor.rs` | **Built-in** fact-экстрактор (не требует отдельного .md файла). Факты инжектятся runtime из YAML |
 | `parsers.rs` | Распаковка JSON от LLM, очистка think-тегов |
-| `agent_manager.rs` | Парсинг .md файлов агентов, обработка INCLUDE, загрузка entry points (`load_entry_points`) через `visible` поле |
+| `agent_manager.rs` | Парсинг .md файлов агентов, обработка INCLUDE, загрузка entry points (`load_entry_points`) через `visible` поле. Парсит `single_report` (только 1 отчёт агента в сессии) в `AgentProfile` |
 
 ### Подслой 5.3: Инфраструктура (`src-tauri/src/infra/`)
 
@@ -146,7 +146,7 @@
 
 | Файл | Зона ответственности |
 |------|---------------------|
-| `llm.rs` | Работа с llama-cpp-2, токенизация, генерация, сэмплирование, чтение GGUF, структура `ChatMessage` с полями `type`/`author` |
+| `llm.rs` | Работа с llama-cpp-2, токенизация, генерация, сэмплирование, чтение GGUF, структура `ChatMessage` с полями `type`/`author`. Хелпер `push_report()` — дедупликация отчётов агента при `single_report` |
 | `config.rs` | Структуры AppConfig/ModelParams, чтение/запись конфига, каталог моделей |
 | `session_manager.rs` | Чтение/запись JSON-файлов сессий (единый массив `messages[]`) |
 | `mcp_client.rs` | JSON-RPC клиент для MCP-серверов через stdin/stdout |

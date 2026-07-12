@@ -1,7 +1,7 @@
 use crate::domain::workflow_engine::context::WorkflowContext;
 use crate::domain::workflow_engine::parser::{EdgeDef, NodeDef, NodeType, WorkflowConfig, WorkflowDef};
 use crate::domain::workflow_engine::WorkflowRunner;
-use crate::infra::{ChatMessage, SubCall};
+use crate::infra::{ChatMessage, SubCall, push_report};
 
 /// Результат выполнения узла
 #[derive(Debug, Clone)]
@@ -111,7 +111,7 @@ where
             sub_calls: node_sub_calls,
             author: Some(agent_id.to_string()),
         };
-        context.messages.push(msg);
+        push_report(&mut context.messages, msg, agent.single_report);
         *runner.msg_counter += 1;
         context.output_emitted = node.output_type.as_deref() == Some("message");
 

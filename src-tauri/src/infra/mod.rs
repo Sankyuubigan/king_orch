@@ -12,7 +12,7 @@ pub mod downloader;
 
 // ─── Публичные типы ───
 pub use config::{AppConfig, CatalogEntry, ModelParams};
-pub use llm::{ChatMessage, ChatAttachment, LlamaEngine, SubCall, ToolCallInfo};
+pub use llm::{ChatMessage, ChatAttachment, LlamaEngine, SubCall, ToolCallInfo, push_report};
 pub use session_manager::{ChatSession, SessionMeta};
 pub use mcp_client::McpClient;
 

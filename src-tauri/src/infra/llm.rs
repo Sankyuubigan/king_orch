@@ -21,7 +21,7 @@ use llama_cpp_2::mtmd::{MtmdContext, MtmdContextParams};
 
 use crate::infra::config::ModelParams;
 
-pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat};
+pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report};
 pub use super::llm_gguf::{extract_string_from_gguf, extract_f32_from_gguf, extract_u32_from_gguf};
 
 /// Прогноз потребления VRAM для заданного размера контекста:

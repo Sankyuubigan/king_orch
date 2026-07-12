@@ -40,6 +40,19 @@ pub struct ChatMessage {
     pub author: Option<String>,
 }
 
+/// Добавляет отчёт агента в массив сообщений сессии.
+/// Если `single_report == true`, предварительно удаляет все прошлые сообщения
+/// того же автора — чтобы в сессии хранился только один (последний) отчёт агента
+/// и не раздувался контекст.
+pub fn push_report(messages: &mut Vec<ChatMessage>, msg: ChatMessage, single_report: bool) {
+    if single_report {
+        if let Some(author) = msg.author.clone() {
+            messages.retain(|m| m.author.as_deref() != Some(author.as_str()));
+        }
+    }
+    messages.push(msg);
+}
+
 impl ChatMessage {
     pub fn llm_role(&self) -> &str {
         match (self.msg_type.as_str(), self.author.as_deref()) {

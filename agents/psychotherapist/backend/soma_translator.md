@@ -3,6 +3,7 @@ name: Психосоматолог
 description: Расшифровщик психосоматики (переводит симптомы на ментальный язык)
 destiny: Найти ментальный баг юзера по его психосоматическим симптомам
 visible: true
+single_report: true
 tools:
   write: false
   bash: false

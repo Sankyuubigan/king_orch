@@ -5,7 +5,7 @@ use crate::domain::agent_manager::{load_agents, AgentProfile};
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner,
 };
-use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, ToolCallInfo};
+use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, ToolCallInfo, push_report};
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
     has_incomplete_json_action, parse_orchestrator_response, parse_tool_call, strip_tool_call,
@@ -489,7 +489,7 @@ where
                         sub_calls: node_sub_calls.clone(),
                         author: Some(subagent.id.clone()),
                     };
-                    messages.push(err_msg);
+                    push_report(messages, err_msg, subagent.single_report);
                     *msg_counter += 1;
                     final_response = sub_result;
                     break;
@@ -502,7 +502,7 @@ where
                     sub_calls: node_sub_calls.clone(),
                     author: Some(subagent.id.clone()),
                 };
-                messages.push(msg);
+                push_report(messages, msg, subagent.single_report);
                 *msg_counter += 1;
 
                 let new_sys = build_system_prompt(agent, messages, has_tools, &all_tools, max_gen_tokens);
