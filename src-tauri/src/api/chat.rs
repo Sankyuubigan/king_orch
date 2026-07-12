@@ -158,6 +158,26 @@ pub async fn stop_processing(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
+/// Режим графа: строит системный промпт самого «тяжёлого» агента графа.
+/// Пиковая VRAM определяется одним LLM-вызовом (движок работает последовательно),
+/// поэтому берём агента с самым длинным системным промптом (worst-case).
+/// Sub-workflow узлы намеренно НЕ раскрываются — считаем только текущий граф.
+fn build_worst_agent_prompt(
+    agents: &[domain::AgentProfile],
+    wf: &domain::WorkflowDef,
+    history: &[ChatMessage],
+) -> String {
+    let worst_prompt = wf.nodes.iter()
+        .filter(|n| n.node_type == domain::NodeType::LlmWorker)
+        .filter_map(|n| n.agent.as_deref())
+        .filter_map(|aid| agents.iter().find(|a| a.id == aid))
+        .map(|agent| domain::build_system_prompt(agent, history, false, &[], 2048))
+        .max_by_key(|sp| sp.chars().count());
+
+    // Граф без llm_worker-узлов → пустой системный промпт (посчитаются только история + сообщение)
+    worst_prompt.unwrap_or_default()
+}
+
 /// Для Live-превью токенов: возвращает сырую строку промпта, как она будет выглядеть для LLM
 #[tauri::command]
 pub fn get_prompt_preview(
@@ -169,10 +189,18 @@ pub fn get_prompt_preview(
 ) -> Result<String, String> {
     let agents_dir = crate::infra::find_agents_dir(&app);
     let agents = crate::domain::load_agents(&agents_dir)?;
-    let agent = agents.iter().find(|a| a.id == agent_id).ok_or("Агент не найден")?;
 
-    // Строим системный промпт (без загрузки реальных MCP инструментов для скорости)
-    let system_prompt = crate::domain::build_system_prompt(agent, &history, false, &[], 2048); // Дефолтный лимит для UI-превью
+    // Системный промпт: либо конкретного .md-агента, либо — в режиме графа —
+    // самого «тяжёлого» агента графа (worst-case для оценки VRAM).
+    let system_prompt = match agents.iter().find(|a| a.id == agent_id) {
+        Some(agent) => crate::domain::build_system_prompt(agent, &history, false, &[], 2048),
+        None => {
+            let workflows = crate::domain::load_workflows(&agents_dir)?;
+            let wf = crate::domain::find_workflow_by_stem(&workflows, &agent_id)
+                .ok_or("Entry point не найден: нет ни .md агента, ни workflow с таким ID")?;
+            build_worst_agent_prompt(&agents, wf, &history)
+        }
+    };
 
     let mut llm_messages = vec![ChatMessage {
         id: None,
@@ -216,4 +244,66 @@ pub fn get_prompt_memory(
     const CTX_RESERVE: u32 = 128;
     let effective_ctx = (prompt_tokens + max_gen + CTX_RESERVE).min(context_size);
     Ok(crate::infra::llm::estimate_vram_mb(&model_path, effective_ctx, kv_quant_keys, kv_quant_values))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_agent(id: &str, system_prompt: &str) -> domain::AgentProfile {
+        domain::AgentProfile {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: String::new(),
+            system_prompt: system_prompt.to_string(),
+            is_hidden: false,
+            mode: "worker".to_string(),
+            mcp_servers: Vec::new(),
+            subagents: Vec::new(),
+            folder: None,
+            single_report: false,
+        }
+    }
+
+    fn parse_wf(yaml: &str) -> domain::WorkflowDef {
+        serde_yaml::from_str(yaml).expect("Не удалось распарсить тестовый workflow")
+    }
+
+    #[test]
+    fn worst_agent_prompt_picks_longest_system_prompt() {
+        let agents = vec![
+            make_agent("short", "коротко"),
+            make_agent("long", &"очень длинный системный промпт ".repeat(20)),
+            make_agent("medium", &"средний ".repeat(5)),
+        ];
+        let wf = parse_wf(
+            "name: test\nnodes:\n  - id: n1\n    type: llm_worker\n    agent: short\n  - id: n2\n    type: llm_worker\n    agent: long\n  - id: n3\n    type: llm_worker\n    agent: medium\nedges: []\n",
+        );
+
+        let prompt = build_worst_agent_prompt(&agents, &wf, &[]);
+        assert!(prompt.contains("очень длинный системный промпт"), "должен выбраться самый длинный агент");
+        assert!(!prompt.contains("коротко"), "короткий агент не должен попасть в результат");
+    }
+
+    #[test]
+    fn worst_agent_prompt_ignores_sub_workflow_and_non_worker_nodes() {
+        let agents = vec![make_agent("worker_a", "промпт воркера А")];
+        let wf = parse_wf(
+            "name: test\nnodes:\n  - id: sub\n    type: sub_workflow\n    workflow: other_graph\n  - id: w\n    type: llm_worker\n    agent: worker_a\nedges: []\n",
+        );
+
+        let prompt = build_worst_agent_prompt(&agents, &wf, &[]);
+        assert!(prompt.contains("промпт воркера А"));
+    }
+
+    #[test]
+    fn worst_agent_prompt_empty_when_no_workers() {
+        let agents: Vec<domain::AgentProfile> = vec![];
+        let wf = parse_wf(
+            "name: test\nnodes:\n  - id: r\n    type: return\nedges: []\n",
+        );
+
+        let prompt = build_worst_agent_prompt(&agents, &wf, &[]);
+        assert_eq!(prompt, "");
+    }
 }

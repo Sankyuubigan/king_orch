@@ -143,17 +143,19 @@ export class ChatController {
         });
 
         if (this.el.tokenCounter) {
+            const isGraph = this.el.agentSelect.options[this.el.agentSelect.selectedIndex]?.text.startsWith("📁") ?? false;
+            const graphHint = isGraph ? " Оценка по самому тяжёлому агенту графа." : "";
             const memStr = isFinite(vramMb) && vramMb > 0 ? ` (~${vramMb.toFixed(1)} МБ)` : "";
             this.el.tokenCounter.innerText = `${tokens} / ${contextSize}${memStr}`;
             this.el.tokenCounter.classList.remove("warning", "danger");
             if (tokens > contextSize) {
                 this.el.tokenCounter.classList.add("danger");
-                this.el.tokenCounter.title = "Внимание: Лимит превышен! При отправке старые сообщения будут удалены из контекста.";
+                this.el.tokenCounter.title = "Внимание: Лимит превышен! При отправке старые сообщения будут удалены из контекста." + graphHint;
             } else if (tokens > contextSize * 0.8) {
                 this.el.tokenCounter.classList.add("warning");
-                this.el.tokenCounter.title = "Контекст заполняется. Близко к лимиту.";
+                this.el.tokenCounter.title = "Контекст заполняется. Близко к лимиту." + graphHint;
             } else {
-                this.el.tokenCounter.title = "Токены: Текущие / Лимит контекста";
+                this.el.tokenCounter.title = "Токены: Текущие / Лимит контекста." + graphHint;
             }
         }
     } catch (e) {

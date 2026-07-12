@@ -214,7 +214,7 @@ Session signals: []";
         println!("{}", prompt);
         println!("=== END PROMPT ===");
 
-        let engine = LlamaEngine::new(&model_path, 8192, false, &|_| {}).unwrap();
+        let engine = LlamaEngine::new(&model_path, 8192, false, false, &|_| {}, |_| {}).unwrap();
 
         let msgs = vec![
             ChatMessage {

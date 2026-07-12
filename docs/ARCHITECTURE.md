@@ -121,11 +121,11 @@
 | `models.rs` | `get_models_catalog`, `get_model_params`, `set_model_params`, `reset_model_params`, `add_model` | Параметры моделей и каталог |
 | `agents.rs` | `get_agents` | Загрузка списка entry points (.md + YAML) |
 | `graph.rs` | `get_workflow_graphs` | Чтение YAML workflow и возврат структуры графа для UI |
-| `chat.rs` | `chat_request`, `stop_processing` | Главный цикл чата |
+| `chat.rs` | `chat_request`, `stop_processing`, `get_prompt_preview`, `get_prompt_memory` | Главный цикл чата + Live-превью токенов/VRAM |
 
 ### Подслой 5.2: Домен (`src-tauri/src/domain/`)
 
-**Дверь:** `domain/mod.rs` — реэкспортирует `run_chat`, `AgentEntry`, `load_entry_points`
+**Дверь:** `domain/mod.rs` — реэкспортирует `run_chat`, `AgentEntry`, `AgentProfile`, `load_entry_points`, `build_system_prompt`, `load_agents`, а также workflow-контракт `load_workflows`, `find_workflow_by_stem`, `WorkflowDef`, `NodeType`
 
 | Файл/Модуль | Зона ответственности |
 |-------------|---------------------|
@@ -198,6 +198,18 @@ User → Entry point (выбор в UI: .md с visible: true или YAML с visi
          │          └→ вся история non-thought сообщений inject'ится в llm_messages
          │             (автоматически, в отличие от workflow где {{ messages }} опционален)
 ```
+
+### Live-превью токенов и VRAM
+
+Счётчик под полем ввода (`controllers/chat.ts::updateTokenCounter`) показывает `токены / лимит (~МБ VRAM)` для выбранного entry point:
+
+1. `get_prompt_preview(model_path, agent_id, message, history)` собирает сырую строку промпта:
+   - **`.md`-агент** (`agent_id` найден в `load_agents`): системный промпт этого агента + история non-thought сообщений + текущее сообщение.
+   - **Режим графа** (`agent_id` — это workflow): т.к. промпт выбирает узел графа, берётся **самый «тяжёлый» агент** — среди узлов `llm_worker` текущего графа выбирается агент с самым длинным системным промптом (`build_worst_agent_prompt`). Пиковая VRAM определяется одним LLM-вызовом (движок работает последовательно), поэтому worst-case = самый большой одиночный промпт. Sub-workflow узлы **не** раскрываются — считается только текущий граф. Граф без `llm_worker` → пустой системный промпт (учтётся только история + сообщение).
+2. Фронт токенизирует строку (`countTokens`, HF-токенизатор).
+3. `get_prompt_memory(...)` → `infra::llm::estimate_vram_mb`: `размер файла модели + KV-кэш`, где `effective_ctx = (prompt_tokens + max_gen + 128).min(context_size)`.
+
+Прокси «по символам» для выбора худшего агента допустим для примерной оценки. В UI для графа в подсказке счётчика добавляется пометка «Оценка по самому тяжёлому агенту графа».
 
 **Запрещённые импорты:**
 - ❌ `api/chat.rs → crate::infra::llm::ChatMessage` (кишки)
