@@ -70,6 +70,7 @@ export class ChatController {
       onClone: (uid) => this.onCloneMessage(uid),
       onRunFrom: (uid) => this.onRunFromMessage(uid),
       onCopy: (uid) => this.onCopyMessage(uid),
+      onEdit: (uid) => this.onEditMessage(uid),
     };
     this.thoughtMenuCallbacks = {
       onDeleteThoughts: (uid, uids) => this.onDeleteThoughts(uid, uids),
@@ -192,6 +193,68 @@ export class ChatController {
     } catch (err) {
       showToast(`Ошибка копирования: ${err}`, "error");
     }
+  }
+
+  private onEditMessage(uid: string) {
+    const idx = store.msgUidList.indexOf(uid);
+    if (idx === -1) return;
+    const msg = store.chatHistory[idx];
+    const msgEl = this.el.chatHistory.querySelector(`[data-msg-uid="${uid}"]`) as HTMLDivElement | null;
+    if (!msgEl) return;
+
+    const contentDiv = msgEl.querySelector(".msg-content") as HTMLDivElement | null;
+    if (!contentDiv) return;
+    const originalContent = msg.content || "";
+
+    this.renderEditor(msgEl, contentDiv, originalContent, (newContent) => {
+      msg.content = newContent;
+      this.renderChatFromHistory();
+      if (store.currentSessionId) saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
+      this.triggerTokenCount();
+      showToast("Сообщение обновлено.", "success");
+    });
+  }
+
+  private renderEditor(msgEl: HTMLDivElement, contentDiv: HTMLDivElement, initialValue: string, onSave: (newContent: string) => void) {
+    if (contentDiv.querySelector("textarea.msg-edit-input")) return;
+
+    msgEl.classList.add("message-editing");
+    contentDiv.classList.add("msg-edit-host");
+    contentDiv.innerHTML = "";
+
+    const textarea = document.createElement("textarea");
+    textarea.className = "msg-edit-input";
+    textarea.value = initialValue;
+
+    const autoGrow = () => {
+      textarea.style.height = "auto";
+      textarea.style.height = `${Math.max(textarea.scrollHeight, 120)}px`;
+    };
+
+    const btnRow = document.createElement("div");
+    btnRow.className = "msg-edit-actions";
+
+    const saveBtn = document.createElement("button");
+    saveBtn.className = "msg-edit-save";
+    saveBtn.textContent = "💾 Сохранить";
+    saveBtn.addEventListener("click", () => {
+      onSave(textarea.value);
+    });
+
+    const cancelBtn = document.createElement("button");
+    cancelBtn.className = "msg-edit-cancel";
+    cancelBtn.textContent = "✖ Отмена";
+    cancelBtn.addEventListener("click", () => {
+      this.renderChatFromHistory();
+    });
+
+    btnRow.appendChild(saveBtn);
+    btnRow.appendChild(cancelBtn);
+    contentDiv.appendChild(textarea);
+    contentDiv.appendChild(btnRow);
+
+    textarea.addEventListener("input", autoGrow);
+    setTimeout(() => { textarea.focus(); textarea.setSelectionRange(textarea.value.length, textarea.value.length); autoGrow(); }, 0);
   }
 
   private async onRunFromMessage(uid: string) {

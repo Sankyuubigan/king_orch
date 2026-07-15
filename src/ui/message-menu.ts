@@ -5,6 +5,7 @@ export interface MessageMenuCallbacks {
   onClone: (msgUid: string) => void;
   onRunFrom: (msgUid: string) => void;
   onCopy: (msgUid: string) => void;
+  onEdit: (msgUid: string) => void;
 }
 
 let activeMenu: HTMLDivElement | null = null;
@@ -48,6 +49,16 @@ export function createMessageMenu(msgUid: string, callbacks: MessageMenuCallback
     callbacks.onCopy(msgUid);
   });
 
+  const editItem = document.createElement("button");
+  editItem.className = "msg-menu-item";
+  editItem.textContent = "✏️ Редактировать";
+  editItem.addEventListener("click", (e) => {
+    e.stopPropagation();
+    dropdown.classList.remove("show");
+    activeMenu = null;
+    callbacks.onEdit(msgUid);
+  });
+
   const cloneItem = document.createElement("button");
   cloneItem.className = "msg-menu-item";
   cloneItem.textContent = "📋 Создать Клон сессии";
@@ -75,6 +86,7 @@ export function createMessageMenu(msgUid: string, callbacks: MessageMenuCallback
   });
 
   dropdown.appendChild(copyItem);
+  dropdown.appendChild(editItem);
   dropdown.appendChild(cloneItem);
   dropdown.appendChild(runFromItem);
   dropdown.appendChild(deleteItem);

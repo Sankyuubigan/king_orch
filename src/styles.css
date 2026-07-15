@@ -190,6 +190,15 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 .msg-menu-item.danger { color: var(--danger); }
 .msg-menu-item.danger:hover { background: rgba(255,0,0,0.1); }
 
+.msg-edit-input { width: 100%; min-height: 120px; resize: vertical; box-sizing: border-box; background: var(--bg, #1a1a1a); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: inherit; font-size: 14px; line-height: 1.5; }
+
+.message.message-editing { align-self: stretch; max-width: 100%; width: 100%; }
+.msg-edit-input:focus { outline: none; border-color: var(--accent, #4a9eff); }
+.msg-edit-actions { display: flex; gap: 8px; margin-top: 8px; }
+.msg-edit-save, .msg-edit-cancel { cursor: pointer; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); font-size: 13px; background: var(--panel-bg); color: var(--text); }
+.msg-edit-save:hover { background: rgba(76,175,80,0.2); border-color: #4caf50; }
+.msg-edit-cancel:hover { background: rgba(255,82,82,0.15); border-color: #ff5252; }
+
 .thoughts-block { align-self: center; width: 85%; margin: 4px 0; }
 .thoughts-header { background: transparent; border: 1px dashed var(--border); border-radius: 8px; padding: 8px 12px; cursor: pointer; font-size: 13px; color: #888; text-align: center; user-select: none; transition: background 0.2s; display: flex; justify-content: center; align-items: center; position: relative; }
 .thoughts-header:hover { background: var(--msg-system); }

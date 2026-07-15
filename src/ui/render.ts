@@ -25,6 +25,7 @@ export function createMessageElement(
   }
 
   const contentDiv = document.createElement("div");
+  contentDiv.className = "msg-content";
   contentDiv.innerHTML = renderMarkdown(content);
   msgDiv.appendChild(contentDiv);
 
