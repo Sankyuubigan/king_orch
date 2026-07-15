@@ -18,7 +18,7 @@ use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SubCall};
 use nodes::find_next_node;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 /// Общие ресурсы для выполнения workflow — пробрасываются во все узлы.
@@ -36,6 +36,7 @@ pub struct WorkflowRunner<'a, L, S, C> {
     pub mcp_servers_dir: &'a Path,
     pub all_sub_calls: &'a mut Vec<SubCall>,
     pub msg_counter: &'a mut u32,
+    pub stream_meta: Arc<Mutex<orchestrator::StreamMeta>>,
 }
 
 impl<'a, L, S, C> WorkflowRunner<'a, L, S, C>
@@ -51,6 +52,7 @@ where
         task: &str,
         messages: &mut Vec<ChatMessage>,
         injected_reports: &str,
+        allow_stream: bool,
     ) -> Result<String, String> {
         orchestrator::run_agent_node(
             self.log_cb.clone(),
@@ -73,6 +75,8 @@ where
             messages,
             self.msg_counter,
             injected_reports.to_string(),
+            self.stream_meta.clone(),
+            allow_stream,
         )
     }
 

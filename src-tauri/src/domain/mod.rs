@@ -13,6 +13,7 @@ pub use agent_manager::AgentProfile;
 
 // ─── Публичные функции ───
 pub use orchestrator::run_chat;
+pub use orchestrator::StreamMeta;
 pub use orchestrator::prompt::build_system_prompt;
 pub use agent_manager::load_agents;
 pub use agent_manager::load_entry_points;

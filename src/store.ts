@@ -34,6 +34,11 @@ class Store {
   rtStreamBuffer: string = "";
   rtIsJson: boolean = false;
 
+  // Для стриминга мыслей в блок «Мысли агентов» в реальном времени
+  rtThoughtUid: string | null = null;
+  rtThoughtBuffer: string = "";
+  rtThoughtAuthor: string = "";
+
   nextUid(): string {
     return `msg_${this.uidCounter++}`;
   }
@@ -47,6 +52,9 @@ class Store {
     this.rtStreamUid = null;
     this.rtStreamBuffer = "";
     this.rtIsJson = false;
+    this.rtThoughtUid = null;
+    this.rtThoughtBuffer = "";
+    this.rtThoughtAuthor = "";
   }
 }
 

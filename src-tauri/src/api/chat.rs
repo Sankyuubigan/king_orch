@@ -1,7 +1,7 @@
 use serde::Serialize;
 use std::io::Write;
 use std::sync::atomic::Ordering;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State, Emitter};
 
 use crate::domain;
@@ -115,8 +115,20 @@ pub async fn chat_request(
     };
     
     let app_stream = app.clone();
+    let stream_meta = Arc::new(Mutex::new(domain::StreamMeta::default()));
+    let meta_for_cb = stream_meta.clone();
     let stream_cb = move |chunk: String| {
-        let _ = app_stream.emit("stream_chunk", chunk);
+        let (kind, author) = {
+            let m = meta_for_cb.lock().expect("stream_meta lock poisoned");
+            (m.kind.clone(), m.author.clone())
+        };
+        if kind.is_empty() {
+            return;
+        }
+        let _ = app_stream.emit(
+            "stream_chunk",
+            serde_json::json!({ "kind": kind, "author": author, "text": chunk }),
+        );
     };
 
     let result = tokio::task::spawn_blocking(move || {
@@ -140,6 +152,7 @@ pub async fn chat_request(
             format_type,
             mmproj_path,
             cancel_flag,
+            stream_meta,
         )
     })
     .await

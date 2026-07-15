@@ -93,7 +93,10 @@ where
             ));
 
             let start_len = runner.all_sub_calls.len();
-            let result = runner.call_agent(agent, &task, &mut context.messages, &injected_reports)?;
+            // Только узлы с output_type: message стримят ответ в основной чат.
+            // Остальные (thought по умолчанию) стримят мысли в блок «Мысли агентов».
+            let allow_stream = node.output_type.as_deref() == Some("message");
+            let result = runner.call_agent(agent, &task, &mut context.messages, &injected_reports, allow_stream)?;
             let end_len = runner.all_sub_calls.len();
 
             let node_sub_calls = if start_len < end_len {

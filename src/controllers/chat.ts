@@ -391,6 +391,9 @@ export class ChatController {
         store.rtStreamUid = null;
         store.rtStreamBuffer = "";
         store.rtIsJson = false;
+        store.rtThoughtUid = null;
+        store.rtThoughtBuffer = "";
+        store.rtThoughtAuthor = "";
     }
     else { this.el.chatFeedback.style.display = "none"; }
     bus.emit("processing:changed", state);
@@ -613,22 +616,62 @@ export class ChatController {
     // СТРИМИНГ ОТВЕТА В ЧАТ В РЕАЛЬНОМ ВРЕМЕНИ
     listen("stream_chunk", (e) => {
         if (!store.isProcessing) return;
-        const chunk = e.payload as string;
+        // Бэкенд шлёт объект { kind, author, text }; для обратной совместимости
+        // (старые вызовы) payload может прийти строкой — считаем его message.
+        const payload = e.payload as any;
+        const kind: string = typeof payload === "string" ? "message" : (payload.kind || "message");
+        const chunk: string = typeof payload === "string" ? payload : (payload.text || "");
+        const author: string = (payload && typeof payload.author === "string") ? payload.author : "";
+
+        // ── МЫСЛИ: печатаем в блок «Мысли агентов» в реальном времени ──
+        if (kind === "thought") {
+            // Новый агент → новый пузырь мыслей
+            if (store.rtThoughtUid && store.rtThoughtAuthor && author && author !== store.rtThoughtAuthor) {
+                store.rtThoughtUid = null;
+                store.rtThoughtBuffer = "";
+                store.rtThoughtAuthor = "";
+            }
+            store.rtThoughtBuffer += chunk;
+
+            // Прячем внутренние JSON-вызовы (сабагент/инструмент) от глаз пользователя
+            if (store.rtThoughtBuffer.trimStart().startsWith("{") || store.rtThoughtBuffer.trimStart().startsWith("```json")) {
+                return;
+            }
+
+            const label = author || "Агент";
+            if (!store.rtThoughtUid) {
+                store.rtThoughtUid = store.nextUid();
+                store.rtThoughtAuthor = label;
+                const item = createThoughtElement(label, store.rtThoughtBuffer);
+                item.id = "rt-thought-stream";
+                store.activeThoughtsBlock = createThoughtsBlock([item]);
+                this.el.chatHistory.appendChild(store.activeThoughtsBlock);
+            } else {
+                const item = store.activeThoughtsBlock?.querySelector('#rt-thought-stream');
+                if (item) {
+                    item.innerHTML = `🧠 <strong>${label}</strong>: <em>${store.rtThoughtBuffer}</em>`;
+                }
+            }
+            this.scrollToBottomIfNearEnd(this.el.chatHistory);
+            return;
+        }
+
+        // ── СООБЩЕНИЕ: старая логика основного чата ──
         store.rtStreamBuffer += chunk;
-        
+
         // Если это внутренний JSON (вызов сабагента или тулзы) — скрываем от глаз пользователя!
         if (store.rtStreamBuffer.trimStart().startsWith("{") || store.rtStreamBuffer.trimStart().startsWith("```json")) {
             store.rtIsJson = true;
             return;
         }
-        
+
         // Если это начало ответа, создаем пустое сообщение в UI
         if (!store.rtStreamUid) {
             store.rtStreamUid = store.nextUid();
             const displayName = this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace(/^[📁📊]\s*/, '');
             this.appendMessage('agent', '', displayName, undefined, undefined, false, store.rtStreamUid);
         }
-        
+
         // Обновляем тело сообщения (renderMarkdown автоматически скроет <think> теги из текста)
         const msgEl = this.el.chatHistory.querySelector(`[data-msg-uid="${store.rtStreamUid}"]`);
         if (msgEl) {
@@ -638,7 +681,7 @@ export class ChatController {
                 this.scrollToBottomIfNearEnd(this.el.chatHistory);
             }
         }
-        
+
         // Печатаем "Мысли" агента в реальном времени в раскрывающийся блок!
         const thinkMatch = store.rtStreamBuffer.match(/<think>([\s\S]*?)(?:<\/think>|$)/i);
         if (thinkMatch) {

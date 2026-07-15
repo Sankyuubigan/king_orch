@@ -160,6 +160,8 @@ pub async fn run_iterative_test(
             &mut current_chat_messages,
             &mut msg_counter,
             String::new(), // injected_reports
+            std::sync::Arc::new(std::sync::Mutex::new(domain::StreamMeta::default())),
+            false,
         ) {
             Ok(response) => {
                 append_test_log(&format!("✅ Ответ LLM: {}", response));

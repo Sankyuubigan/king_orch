@@ -12,8 +12,8 @@ nodes:
       User: {{ user_message }}
       Session signals: {{ signals }}
     ui_pos:
-      x: -1307
       y: 489
+      x: -1307
   - id: priority_router
     type: switch
     input_object: '{{ nodes.extract_facts.output }}'
@@ -29,7 +29,6 @@ nodes:
   - id: call_provocateur
     type: llm_worker
     agent: provocateur
-    task: Пользователь не согласен или сопротивляется. Ответь ему.
     output_type: message
     ui_pos:
       x: 3075
@@ -39,8 +38,8 @@ nodes:
     agent: soma_translator
     task: Пользователь описал боль. Дай ему расшифровку по НГМ.
     ui_pos:
-      x: -21
       y: 139
+      x: -21
   - id: collect_info
     type: llm_worker
     agent: liaison
@@ -48,8 +47,8 @@ nodes:
       Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
     output_type: message
     ui_pos:
-      x: 105
       y: -545
+      x: 105
     disabled: true
   - id: call_grounder
     type: llm_worker
@@ -58,27 +57,27 @@ nodes:
     inject_reports:
       - soma_translator
     ui_pos:
-      y: 121
       x: 1509
+      y: 121
     disabled: true
   - id: call_validator
     type: llm_worker
     agent: validator
     ui_pos:
-      y: 278
       x: 2075
+      y: 278
   - id: check_validator_signal
     type: signal_router
     signal_name: validator_report
     field: verdict
     cases_priority:
-      - key: КРАШ-ТЕСТ НЕОБХОДИМ
+      - key: УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО
         to: note_1782220533024
       - key: ДАННЫХ ДОСТАТОЧНО
         to: note_1782220629095
     ui_pos:
-      x: 2422
       y: 179
+      x: 2422
   - id: call_destructor_finder
     type: llm_worker
     agent: destructor_detector
@@ -114,8 +113,8 @@ nodes:
       - pattern_finder_by_floors
       - destructor_detector
     ui_pos:
-      y: 681
       x: 4025
+      y: 681
   - id: check_somatic
     type: condition_check
     field: has_somatic
@@ -137,8 +136,8 @@ nodes:
     type: llm_worker
     agent: cluster_checker
     ui_pos:
-      x: 91
       y: 272
+      x: 91
   - id: check_cluster_signal
     type: signal_router
     signal_name: cluster_checker
@@ -149,8 +148,8 @@ nodes:
         to: call_decomposer
     default: call_decomposer
     ui_pos:
-      x: 346
       y: 262
+      x: 346
   - id: call_decomposer
     type: llm_worker
     agent: decomposer
@@ -161,8 +160,8 @@ nodes:
     type: llm_worker
     agent: synchronizer
     ui_pos:
-      x: 3367
       y: 162
+      x: 3367
     disabled: true
   - id: note_1782220193985
     type: note
@@ -174,6 +173,7 @@ nodes:
   - id: note_1782220533024
     type: note
     input: уточнение данных у юзера
+    system_message: "Давайте проведем один мысленный эксперимент, чтобы заглянуть в самый корень вашей проблемы. Если вы окажетесь в этой точке и пути назад не будет, с каким самым невыносимым чувством вы столкнетесь внутри себя? \n\n(Пожалуйста, не пишите о том, что вы будете делать или как будете решать проблему. Опишите именно вашу внутреннюю катастрофу. Например: \"я почувствую себя абсолютно бесполезным ничтожеством\", \"я столкнусь с парализующим страхом смерти/пустоты\", \"я почувствую, что я абсолютно одинок и никому не нужен\", \"моя самооценка будет уничтожена\". Что именно сломается внутри вас?)"
     ui_pos:
       x: 2678
       y: 98
@@ -181,8 +181,8 @@ nodes:
     type: note
     input: лечение анализ
     ui_pos:
-      x: 3097
       y: 566
+      x: 3097
   - id: note_1782221436115
     type: note
     input: пересчитываем данные с учетом новых данных от юзера
@@ -193,8 +193,8 @@ nodes:
     type: note
     input: проверяем абстрактный ли запрос
     ui_pos:
-      y: 244
       x: 852
+      y: 244
     disabled: true
 
 edges:

@@ -14,8 +14,32 @@ use prompt::build_system_prompt;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
+
+/// Метаданные текущего стрима: куда выводить токены.
+/// `kind == "message"` → печатать в основной чат юзеру.
+/// `kind == "thought"` → печатать в блок «Мысли агентов».
+/// Пустой `kind` → не стримить вообще (внутренние вызовы: fact-extractor и т.п.).
+#[derive(Clone, Default)]
+pub struct StreamMeta {
+    pub kind: String,
+    pub author: String,
+}
+
+/// Восстанавливает предыдущее значение `StreamMeta` при выходе из узла/агента,
+/// чтобы вложенные сабагенты не оставляли флаг включённым навсегда.
+struct StreamGuard {
+    meta: Arc<Mutex<StreamMeta>>,
+    prev: StreamMeta,
+}
+impl Drop for StreamGuard {
+    fn drop(&mut self) {
+        if let Ok(mut m) = self.meta.lock() {
+            *m = self.prev.clone();
+        }
+    }
+}
 
 const AGENT_ERROR_PREFIX: &str = "⚠️ ОШИБКА_АГЕНТА:";
 
@@ -51,8 +75,9 @@ pub fn run_chat<L, S, C, ST>(
     agents_dir: std::path::PathBuf, mcp_servers_dir: std::path::PathBuf,
     model_path: String, agent_id: String, user_text: String, history: Vec<ChatMessage>,
     attachments: Vec<ChatAttachment>,
-    context_size: u32, max_gen_tokens: u32, kv_quant_keys: bool, kv_quant_values: bool, model_params: ModelParams, format_type: String,
+    context_size: u32, max_gen_tokens: u32, kv_quant_keys: bool, kv_quant_values: bool,     model_params: ModelParams, format_type: String,
     mmproj_path: Option<String>, cancel_flag: Arc<AtomicBool>,
+    stream_meta: Arc<Mutex<StreamMeta>>,
 ) -> Result<(String, Vec<SubCall>, Vec<ChatMessage>), String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -118,6 +143,7 @@ where
             mcp_servers_dir: &mcp_servers_dir,
             all_sub_calls: &mut all_sub_calls,
             msg_counter: &mut msg_counter,
+            stream_meta: stream_meta.clone(),
         };
         crate::domain::workflow_engine::run_workflow(
             workflow, &mut ctx, &mut runner,
@@ -136,6 +162,7 @@ where
             cancel_flag, 0, &mut all_sub_calls, None, &mcp_servers_dir,
             &mut messages_store, &mut msg_counter,
             String::new(),
+            stream_meta.clone(), true,
         )?;
         
         let sub_calls_opt = if all_sub_calls.is_empty() { None } else { Some(all_sub_calls.clone()) };
@@ -211,6 +238,8 @@ pub(crate) fn run_agent_node<L, S, C>(
     mcp_servers_dir: &Path,
     messages: &mut Vec<ChatMessage>, msg_counter: &mut u32,
     injected_reports: String,
+    stream_meta: Arc<Mutex<StreamMeta>>,
+    allow_stream: bool,
 ) -> Result<String, String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -219,6 +248,15 @@ where
 {
     if depth > 5 { return Err("Превышена максимальная глубина вложенности сабагентов".into()); }
     log_cb(format!("▶ Запуск агента: {} (глубина: {})", agent.name, depth));
+
+    // ── Маркер стрима: куда выводить токены этого агента ──
+    let prev_meta = stream_meta.lock().map(|m| m.clone()).unwrap_or_default();
+    {
+        let mut m = stream_meta.lock().expect("stream_meta lock poisoned");
+        m.kind = if allow_stream { "message" } else { "thought" }.to_string();
+        m.author = agent.name.clone();
+    }
+    let _stream_guard = StreamGuard { meta: stream_meta.clone(), prev: prev_meta };
 
     let mut mcp_clients = HashMap::new();
     let mut all_tools: Vec<(String, String, serde_json::Value)> = Vec::new();
@@ -472,6 +510,7 @@ where
                     cancel_flag.clone(), depth + 1, all_sub_calls, Some(agent.name.clone()), mcp_servers_dir,
                     messages, msg_counter,
                     String::new(),
+                    stream_meta.clone(), false,
                 )?;
                 let end_len = all_sub_calls.len();
                 let node_sub_calls = if start_len < end_len {
