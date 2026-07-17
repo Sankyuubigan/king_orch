@@ -190,13 +190,13 @@ User → Entry point (выбор в UI: .md с visible: true или YAML с visi
            │          ├→ switch → приоритетная (cases_priority) или стандартная маршрутизация
            │          ├→ condition_check → бинарная проверка поля (true/false)
            │          ├→ sub_workflow → рекурсивный вызов другого YAML
-           │          ├→ llm_worker → run_agent_node() для .md агента (без авто-истории)
+           │          ├→ llm_worker → run_agent_node() для .md агента (история non-thought сообщений inject'ится автоматически, как в legacy)
            │          ├→ note → pass-through (визуальная заметка, не влияет на выполнение)
            │          └→ system_condition → Rust-side проверка (aggregate_and_output для вывода)
          │
     [Нет] → orchestrator::run_agent_node()
-         │          └→ вся история non-thought сообщений inject'ится в llm_messages
-         │             (автоматически, в отличие от workflow где {{ messages }} опционален)
+│          └→ вся история non-thought сообщений inject'ится в llm_messages
+│             (автоматически — в workflow-режиме то же самое, {{ messages }} лишь дублирует её внутрь task)
 ```
 
 ### Live-превью токенов и VRAM

@@ -3,7 +3,7 @@ const { createMcpServer } = require('./mcp_base.cjs');
 
 createMcpServer({
     name: "ddg-search-mcp",
-    version: "1.0.0",
+    version: "1.1.0",
     tools: [{
         name: "WebSearch",
         description: "Поиск в интернете через DuckDuckGo (быстро, без API ключей)",
@@ -24,11 +24,17 @@ createMcpServer({
 });
 
 function fetchSearch(query, callback) {
+    const postData = 'q=' + encodeURIComponent(query);
     const options = {
-        hostname: 'html.duckduckgo.com',
-        path: '/html/?q=' + encodeURIComponent(query),
-        method: 'GET',
-        headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' }
+        hostname: 'lite.duckduckgo.com',
+        path: '/lite/',
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Safari/537.36',
+            'Accept': 'text/html',
+            'Referer': 'https://lite.duckduckgo.com/'
+        }
     };
     const req = https.request(options, (res) => {
         let data = '';
@@ -36,44 +42,29 @@ function fetchSearch(query, callback) {
         res.on('end', () => { callback(null, data); });
     });
     req.on('error', (err) => { callback(err.message, null); });
+    req.write(postData);
     req.end();
-}
-
-function parseResults(html) {
-    const results = [];
-    const blocks = html.split('class="result__body"');
-    for (let i = 1; i < blocks.length; i++) {
-        const block = blocks[i];
-        const aStart = block.indexOf('class="result__a"');
-        if (aStart === -1) continue;
-        const hrefStart = block.indexOf('href="', aStart);
-        if (hrefStart === -1) continue;
-        const hrefEnd = block.indexOf('"', hrefStart + 6);
-        let url = block.substring(hrefStart + 6, hrefEnd);
-        if (url.startsWith('//')) url = 'https:' + url;
-        
-        const titleStart = block.indexOf('>', hrefEnd);
-        if (titleStart === -1) continue;
-        const titleEnd = block.indexOf('</a>', titleStart);
-        if (titleEnd === -1) continue;
-        let title = block.substring(titleStart + 1, titleEnd).replace(/<[^>]+>/g, '').trim();
-        
-        const snippetClass = 'class="result__snippet"';
-        const snippetStart = block.indexOf(snippetClass);
-        let snippet = "";
-        if (snippetStart !== -1) {
-            const tagClose = block.indexOf('>', snippetStart + snippetClass.length);
-            const tagEnd = block.indexOf('</a>', tagClose);
-            if (tagClose !== -1 && tagEnd !== -1) {
-                snippet = block.substring(tagClose + 1, tagEnd).replace(/<[^>]+>/g, '').trim();
-            }
-        }
-        results.push({ title: unescapeHtml(title), url, snippet: unescapeHtml(snippet) });
-        if (results.length >= 8) break;
-    }
-    return results;
 }
 
 function unescapeHtml(str) {
     return str.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&#39;/g, "'");
+}
+
+function parseResults(html) {
+    const results = [];
+    const linkRe = /<a\s+[^>]*class='result-link'[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>|<a\s+[^>]*href="([^"]+)"[^>]*class='result-link'[^>]*>([\s\S]*?)<\/a>/g;
+    let m;
+    while ((m = linkRe.exec(html)) !== null) {
+        let url = m[1] || m[3];
+        if (url.startsWith('//')) url = 'https:' + url;
+        const title = unescapeHtml((m[2] || m[4]).replace(/<[^>]+>/g, '').trim());
+
+        const after = html.slice(m.index + m[0].length);
+        const snipMatch = after.match(/<td class='result-snippet'>([\s\S]*?)<\/td>/);
+        const snippet = snipMatch ? unescapeHtml(snipMatch[1].replace(/<[^>]+>/g, '').trim()) : "";
+
+        results.push({ title, url, snippet });
+        if (results.length >= 8) break;
+    }
+    return results;
 }

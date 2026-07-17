@@ -153,7 +153,8 @@ where
 
     if let Some(primary_agent) = agents.iter().find(|a| a.id == agent_id) {
         log_cb(format!("▶ Запуск агента: {}", primary_agent.name));
-        
+        log_cb(format!("DEBUG run_chat: history.len={}, msg_0_author={:?}", history.len(), history.first().map(|m| m.author.clone())));
+
         let final_res = run_agent_node(
             log_cb, status_cb, subcall_cb,
             &engine, primary_agent, &agents, user_text, recent_history,
@@ -166,14 +167,14 @@ where
         )?;
         
         let sub_calls_opt = if all_sub_calls.is_empty() { None } else { Some(all_sub_calls.clone()) };
-        messages_store.push(ChatMessage {
-            id: Some(format!("msg_{}", msg_counter)),
-            msg_type: "message".to_string(),
-            content: final_res.clone(),
-            sub_calls: sub_calls_opt,
-            author: Some(primary_agent.id.clone()),
-        });
-        Ok((final_res, all_sub_calls, messages_store))
+            messages_store.push(ChatMessage {
+                id: Some(format!("msg_{}", msg_counter)),
+                msg_type: "message".to_string(),
+                content: final_res.clone(),
+                sub_calls: sub_calls_opt,
+                author: Some(primary_agent.id.clone()),
+            });
+            Ok((final_res, all_sub_calls, messages_store))
     } else {
         Err(format!("Entry point '{}' не найден: нет ни workflow, ни .md агента с таким ID", agent_id))
     }

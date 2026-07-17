@@ -475,7 +475,8 @@ export class ChatController {
     this.attachments = [];
     this.setProcessingState(true);
     if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
-    const preSendLength = store.chatHistory.length;
+    const historyBefore = store.chatHistory.length;
+    const preSendLength = historyBefore + 1;
     store.chatHistory.push({ type: "message", author: "user", content: displayText });
     await saveSession(store.currentSessionId, store.chatHistory, ""); bus.emit("session:changed");
     const startTime = performance.now();
@@ -500,23 +501,20 @@ export class ChatController {
       });
       const dur = ((performance.now() - startTime) / 1000);
       const newMessages = response.messages || [];
+      console.log("DBG chat_request -> newMessages.len=", newMessages.length, "newMessages=", JSON.stringify(newMessages.map((m: any) => ({ t: m.type, a: m.author }))), "response.text?", !!response.text);
       const thisRoundThoughts = store.chatHistory.slice(preSendLength + 1).filter((m: any) => m.type === 'thought');
       if (newMessages.length > 0) {
-        const oldHistory = newMessages.slice(0, preSendLength);
-        const userMsg = newMessages.slice(preSendLength, preSendLength + 1);
-        const afterUserMsg = newMessages.slice(preSendLength + 1);
-        
-        afterUserMsg.forEach((m: any) => {
+        newMessages.forEach((m: any) => {
             if (m.author && m.author !== 'user' && m.author !== 'system') {
                 m.time_sec = dur;
             }
         });
-        
+
         const oldUids = store.msgUidList.slice(0, preSendLength + 1);
-        const thoughtUids = store.msgUidList.slice(preSendLength + 1); 
-        const newUids = afterUserMsg.map(() => store.nextUid());
-        
-        store.chatHistory = [...oldHistory, ...userMsg, ...thisRoundThoughts, ...afterUserMsg];
+        const thoughtUids = store.msgUidList.slice(preSendLength + 1);
+        const newUids = newMessages.slice(preSendLength + 1).map(() => store.nextUid());
+
+        store.chatHistory = [...newMessages.slice(0, preSendLength + 1), ...thisRoundThoughts, ...newMessages.slice(preSendLength + 1)];
         store.msgUidList = [...oldUids, ...thoughtUids, ...newUids];
       }
       const agentUid = store.nextUid(); store.msgUidList.push(agentUid);
@@ -524,6 +522,20 @@ export class ChatController {
       if (response.text) {
         this.renderChatFromHistory();
       } else if (newMessages.length > 0) {
+        this.renderChatFromHistory();
+      }
+      // Гарантируем, что финальный ответ агента попал в историю и сессию.
+      // Защита от потери ответа, когда response.messages приходит неполным.
+      const lastMsg = store.chatHistory[store.chatHistory.length - 1];
+      const hasFinal = lastMsg && lastMsg.type === 'message' && lastMsg.author === activeAgent;
+      if (response.text && !hasFinal) {
+        store.chatHistory.push({
+          type: "message",
+          author: activeAgent,
+          content: response.text,
+          sub_calls: (response.sub_calls && response.sub_calls.length) ? response.sub_calls : undefined,
+        });
+        store.msgUidList.push(store.nextUid());
         this.renderChatFromHistory();
       }
       await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);

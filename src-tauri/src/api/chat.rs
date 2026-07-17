@@ -131,9 +131,10 @@ pub async fn chat_request(
         );
     };
 
+    let log_cb_for_result = log_cb.clone();
     let result = tokio::task::spawn_blocking(move || {
         domain::run_chat(
-            log_cb,
+            log_cb.clone(),
             status_cb,
             subcall_cb,
             stream_cb,
@@ -157,6 +158,8 @@ pub async fn chat_request(
     })
     .await
     .map_err(|e| e.to_string())??;
+
+    log_cb_for_result(format!("DEBUG chat_request: result.messages.len={}, types_authors={:?}", result.2.len(), result.2.iter().map(|m| (m.msg_type.clone(), m.author.clone())).collect::<Vec<_>>()));
 
     Ok(ChatResponse {
         text: result.0,

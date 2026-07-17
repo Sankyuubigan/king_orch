@@ -99,7 +99,7 @@ pub struct ChatMessage {
 
 ### Получение данных агентами
 
-**Режим графа (YAML workflow):** Контролируется через `{{ messages }}` в темплейте узла — автор графа решает, кому и когда давать историю.
+**Режим графа (YAML workflow):** Как и в legacy-режиме, ВСЯ история non-thought сообщений (`type: "message"`) из `messages[]` автоматически inject'ится в `llm_messages` каждого `llm_worker` (`orchestrator/mod.rs:287`, цикл по `messages`, пропускающий только `thought`). Автор графа НЕ обязан писать `{{ messages }}` — история переписки видна всем агентам графа по умолчанию. `{{ messages }}`/`{{ user_message }}` в шаблоне узла — опциональный способ вставить историю текстом ВНУТРЬ `task` (инструкции агента), а не замена авто-инжекта.
 
 **Legacy .md режим:** Все non-thought сообщения из `messages[]` автоматически inject'ятся как отдельные `ChatMessage` в `llm_messages` перед текущим user_text. Порядок: `[system, msg_1, ответ_1, msg_2, ответ_2, ..., current_user_text]`. Отдельные thought-сообщения (результаты сабагентов) в историю не попадают.
 
@@ -119,7 +119,7 @@ pub struct ChatMessage {
 
 **История сообщений:**
 - **Legacy .md режим:** все non-thought сообщения из `messages[]` автоматически inject'ятся как отдельные `ChatMessage` в `llm_messages` (в порядке: system, history..., current user_text). Финальный ответ агента сохраняется в `messages[]` как `{ type: "message", author: "assistant" }`.
-- **Graph (YAML) режим:** история НЕ inject'ится автоматически. Управление через `{{ messages }}` в темплейте узла — автор графа решает, кому давать контекст.
+- **Graph (YAML) режим:** история (`type: "message"`) inject'ится автоматически для каждого `llm_worker` — так же, как в legacy. `{{ messages }}` опционален и лишь дублирует историю внутрь `task`. НЕ инжектятся автоматически только `thought`-сообщения (внутренние отчёты агентов) — их передают целевому агенту через `inject_reports` узла (`workflow_engine/nodes.rs:74`) или через тулзу `batch_get_agent_report` (вызов из `.md`).
 
 Фронтенд лишь отправляет `invoke("chat_request")` и слушает Tauri-события.
 

@@ -87,7 +87,7 @@ pub fn extract_thought_from_partial_json(text: &str) -> Option<String> {
 
 pub fn clean_thought_tags(text: &str) -> String {
     let mut result = text.to_string();
-    if let Ok(re) = regex::Regex::new(r"(?s)<\|channel>thought.*?<channel\|>") {
+    if let Ok(re) = regex::Regex::new(r"(?s)<\|channel>thought(?:.*?<channel\|>|.*$)") {
         result = re.replace_all(&result, "").to_string();
     }
     if let Ok(re) = regex::Regex::new(r"(?s)<think[^>]*>.*?</think\s*>") {
