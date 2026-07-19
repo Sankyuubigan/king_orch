@@ -484,6 +484,7 @@ export class GraphController {
               <div class="ctx-item" data-type="signal_router">📡 Signal Router</div>
               <div class="ctx-item" data-type="condition_check">🎯 Condition</div>
               <div class="ctx-item" data-type="llm_fact_extractor">📋 Extractor</div>
+              <div class="ctx-item" data-type="llm_freeform">💬 Freeform</div>
               <div class="ctx-item" data-type="note">📝 Note</div>
             </div>
           </div>
@@ -740,13 +741,16 @@ export class GraphController {
       }
 
       const workflow = { name: this.currentWorkflowName, visible: true, config, nodes, edges };
-      await invoke("save_workflow", { path: this.currentFilePath, workflow });
+      const saveResult = await invoke("save_workflow", { path: this.currentFilePath, workflow });
+      void saveResult;
       this.pristineSnapshot = this.captureSnapshot();
       this.markClean();
       showToast("✅ Workflow сохранён", "success");
     } catch (e) {
-      console.error("handleSave error:", e);
-      showToast(`❌ Ошибка сохранения: ${e}`, "error");
+      // Файл НЕ сохранён (бэкенд отклоняет невалидный YAML до записи).
+      // Оставляем dirty-флаг — данные на холсте считаются несохранёнными.
+      console.error("[handleSave] Сохранение НЕ выполнено, файл не перезаписан:", e);
+      showToast(`❌ Не сохранено: ${e}`, "error");
     }
   }
 
@@ -881,6 +885,13 @@ export class GraphController {
       </div>`;
       html += this.renderCasesHtml(data);
       html += this.renderDefaultHtml(data);
+    }
+
+    if (data.type === "llm_freeform") {
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Промпт (input)</div>
+        <textarea id="ge-freeform-input" class="ge-textarea" rows="4" placeholder="Текст инструкции для LLM">${this.esc(data.input || "")}</textarea>
+      </div>`;
     }
 
     if (data.type === "note") {
@@ -1040,6 +1051,15 @@ export class GraphController {
       noteContent.addEventListener("change", () => {
         this.saveCheckpoint();
         this.editor!.drawflow.drawflow.Home.data[nodeId].data.input = noteContent.value || undefined;
+        this.updateNodeHtml(nodeId);
+      });
+    }
+
+    const freeformInput = document.getElementById("ge-freeform-input") as HTMLTextAreaElement;
+    if (freeformInput) {
+      freeformInput.addEventListener("change", () => {
+        this.saveCheckpoint();
+        this.editor!.drawflow.drawflow.Home.data[nodeId].data.input = freeformInput.value || undefined;
         this.updateNodeHtml(nodeId);
       });
     }

@@ -3,6 +3,27 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// ===========================================================================
+// СЕРИАЛИЗАЦИЯ / СОХРАНЕНИЕ WORKFLOW (save_workflow)
+// ===========================================================================
+// Конвейер сохранения НАМЕРЕННО минимален и надёжен:
+//
+//     serde_yaml::to_string(&wf)  ->  separate_top_level_fields  ->  validate  ->  write
+//
+// Нативный вывод serde_yaml УЖЕ является валидным YAML, который корректно
+// round-trip'ится (блочный sequence-элемент на отступе своего ключа — легален
+// по спеке YAML). Любые строковые «докрутки» отступов (indent_block_sequences,
+// protect_block_scalars и т.п.) были УДАЛЕНЫ как источник коррупции: они
+// сдвигали вложенные последовательности под неверного родителя и портили
+// block scalar (input/task), из-за чего файл становился невалидным
+// ("did not find expected '-' indicator").
+//
+// separate_top_level_fields — единственная пост-обработка: только вставляет
+// пустые строки между полями верхнего уровня (безопасно, не влияет на парсинг).
+// Финальная валидация (re-parse) оставлена как последняя линия защиты:
+// если сгенерированный YAML не парсится — файл НЕ записывается.
+// ===========================================================================
+
 /// Определение workflow — YAML граф маршрутизации
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDef {
@@ -93,7 +114,7 @@ where
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeDef {
     pub id: String,
     #[serde(rename = "type")]
@@ -151,7 +172,9 @@ fn is_false(b: &bool) -> bool { !b }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
+#[derive(Default)]
 pub enum NodeType {
+    #[default]
     LlmWorker,
     LlmFactExtractor,
     LlmFreeform,
@@ -236,66 +259,13 @@ pub fn find_workflow_by_stem<'a>(
 /// (serde_yaml выводит `- item` на том же уровне, что и ключ, что неудобно читать).
 ///
 /// Запускается итеративно до стабилизации, чтобы корректно обработать вложенные sequence.
-pub fn indent_block_sequences(yaml: &str) -> String {
-    let lines: Vec<&str> = yaml.lines().collect();
-    let mut out = String::new();
-    let mut i = 0;
-
-    while i < lines.len() {
-        let line = lines[i];
-        let trimmed = line.trim_start();
-
-        if !trimmed.starts_with('-') && trimmed.ends_with(':') {
-            let base_indent = line.len() - trimmed.len();
-            if let Some(next) = lines.get(i + 1) {
-                let next_trim = next.trim_start();
-                if next_trim.starts_with("- ") && (next.len() - next_trim.len()) == base_indent {
-                    out.push_str(line);
-                    out.push('\n');
-                    i += 1;
-                    while i < lines.len() {
-                        let sub = lines[i];
-                        let sub_trim = sub.trim_start();
-                        let sub_indent = sub.len() - sub_trim.len();
-                        if sub_indent < base_indent
-                            || (sub_indent == base_indent && !sub_trim.starts_with('-'))
-                        {
-                            break;
-                        }
-                        if sub_trim.is_empty() {
-                            out.push('\n');
-                        } else {
-                            out.push_str("  ");
-                            out.push_str(sub);
-                            out.push('\n');
-                        }
-                        i += 1;
-                    }
-                    continue;
-                }
-            }
-        }
-
-        out.push_str(line);
-        out.push('\n');
-        i += 1;
-    }
-    out
-}
-
-/// Обёртка: итеративно применяет indent_block_sequences до стабилизации,
-/// чтобы корректно выровнять вложенные block sequence (например, cases_priority внутри узла).
-pub fn indent_yaml(yaml: &str) -> String {
-    let mut current = yaml.to_string();
-    loop {
-        let next = indent_block_sequences(&current);
-        if next == current {
-            return current;
-        }
-        current = next;
-    }
-}
-
+///
+/// Функция ПОЛНОСТЬЮ игнорирует содержимое block scalar (`|-`, `|`, `>-`, `>`):
+/// serde_yaml всегда выводит его строго глубже ключа (indent ключа + 2), поэтому
+/// любая строка на отступе > ключа внутри блока — это литеральное содержимое,
+/// которое трогать нельзя. Блок закрывается, когда встречается строка на
+/// отступе <= отступа ключа (sibling-ключ или родитель) — она уже не может быть
+/// содержимым блока. Такое разделение однозначно и не ломает файл.
 /// Добавляет переносы строк между полями первого уровня YAML
 /// для визуального удобства чтения (поля не слипаются).
 pub fn separate_top_level_fields(yaml: &str) -> String {
@@ -333,64 +303,53 @@ mod tests {
         let path = Path::new(path_str);
         assert!(path.exists(), "Файл не найден: {:?}", path);
         let wf = parse_workflow_file(path).expect("Парсинг YAML не удался");
-        assert_eq!(wf.name, "Therapist");
+        assert_eq!(wf.name, "Психотерапевт");
         assert!(wf.visible);
+        assert!(wf.nodes.len() > 0, "узлы должны быть");
+        assert!(wf.edges.len() > 0, "рёбра должны быть");
 
-        // 12 узлов (extract_facts, priority_router, facts_router + 7 агентов + 1 sub_workflow + 1 system_condition + 1 signal_router)
-        assert_eq!(wf.nodes.len(), 12);
-        // 3 ребра (extract_facts→priority_router, start_datamining→output_raw_datamining, call_validator→route_validator_signal)
-        assert_eq!(wf.edges.len(), 3);
-
-        // LLM_FACT_EXTRACTOR
+        // Факт-экстрактор присутствует и содержит шаблоны.
         let ef = wf.nodes.iter().find(|n| n.id == "extract_facts").unwrap();
         assert_eq!(ef.node_type, NodeType::LlmFactExtractor);
         assert!(ef.input.is_some());
         assert!(ef.input.as_deref().unwrap_or("").contains("{{ user_message }}"));
-        assert!(ef.input.as_deref().unwrap_or("").contains("{{ signals }}"));
-
-        // PRIORITY_ROUTER со switch_field (phase-based)
-        let pr = wf.nodes.iter().find(|n| n.id == "priority_router").unwrap();
-        assert_eq!(pr.node_type, NodeType::Switch);
-        assert_eq!(pr.switch_field.as_deref(), Some("phase"));
-        assert!(pr.cases_priority.is_some());
-        assert_eq!(pr.default.as_deref(), Some("facts_router"));
-
-        // FACTS_ROUTER с cases_priority
-        let fr = wf.nodes.iter().find(|n| n.id == "facts_router").unwrap();
-        assert_eq!(fr.node_type, NodeType::Switch);
-        assert!(fr.cases_priority.is_some());
-        assert_eq!(fr.cases_priority.as_ref().unwrap().len(), 3);
-        assert_eq!(fr.default.as_deref(), Some("call_validator"));
-
-        // LLM_WORKER grounder с inject_reports
-        let grounder = wf.nodes.iter().find(|n| n.id == "call_grounder").unwrap();
-        assert_eq!(grounder.node_type, NodeType::LlmWorker);
-        assert!(grounder.inject_reports.is_some());
-        assert_eq!(grounder.inject_reports.as_ref().unwrap(), &["soma_translator"]);
-
-        // LLM_WORKER с agent + task
-        let curator = wf.nodes.iter().find(|n| n.id == "call_curator").unwrap();
-        assert_eq!(curator.node_type, NodeType::LlmWorker);
-        assert_eq!(curator.agent.as_deref(), Some("curator"));
-        assert_eq!(curator.output_type.as_deref(), Some("message"));
-
-        // SUB_WORKFLOW
-        let sub = wf.nodes.iter().find(|n| n.id == "start_datamining").unwrap();
-        assert_eq!(sub.node_type, NodeType::SubWorkflow);
-        assert_eq!(sub.workflow.as_deref(), Some("treatment_flow.yaml"));
-
-        // LLM_WORKER validator
-        let v = wf.nodes.iter().find(|n| n.id == "call_validator").unwrap();
-        assert_eq!(v.node_type, NodeType::LlmWorker);
-        assert_eq!(v.agent.as_deref(), Some("validator"));
 
         // Проверка конфига
         assert!(wf.config.is_some());
         let cfg = wf.config.as_ref().unwrap();
         assert_eq!(cfg.facts_file.as_deref(), Some("facts.yaml"));
         assert!(cfg.facts.is_empty(), "facts больше не вливаются при парсинге");
-    }
 
+        // Ключевая проверка бага: реальный файл графа должен проходить
+        // надёжный конвейер save_workflow (нативный serde_yaml + безопасные
+        // разделители) и обратно парситься, ПРИЧЁМ структура
+        // (узлы, рёбра, вложенные поля ui_pos/inject_reports, тексты
+        // task/input) должна совпасть побайтово. Этот тест ловит
+        // «валидный, но сломанный» YAML (напр. inject_reports,
+        // уехавший внутрь task, или ui_pos, потерявший отступ).
+        let yaml_str = serde_yaml::to_string(&wf).expect("ser");
+        let yaml_final = separate_top_level_fields(&yaml_str);
+        let wf2: WorkflowDef = serde_yaml::from_str(&yaml_final)
+            .expect("❌ Реальный граф не прошёл конвейер save_workflow!");
+        assert_eq!(wf2.nodes.len(), wf.nodes.len(), "число узлов");
+        assert_eq!(wf2.edges.len(), wf.edges.len(), "число рёбер");
+
+        // Побайтовая сверка каждого узла.
+        for n1 in &wf.nodes {
+            let n2 = wf2.nodes.iter().find(|n| n.id == n1.id)
+                .unwrap_or_else(|| panic!("узел {} потерян после round-trip", n1.id));
+            assert_eq!(n1.node_type, n2.node_type, "type узла {}", n1.id);
+            assert_eq!(n1.agent, n2.agent, "agent узла {}", n1.id);
+            assert_eq!(n1.task, n2.task, "task узла {}", n1.id);
+            assert_eq!(n1.input, n2.input, "input узла {}", n1.id);
+            assert_eq!(n1.output_type, n2.output_type, "output_type узла {}", n1.id);
+            assert_eq!(n1.inject_reports, n2.inject_reports, "inject_reports узла {}", n1.id);
+            // ui_pos должен парситься как карта, а не слететь внутрь task.
+            assert_eq!(n1.ui_pos, n2.ui_pos, "ui_pos узла {}", n1.id);
+            assert!(n2.ui_pos.as_ref().map_or(false, |m| m.len() == 2),
+                "ui_pos узла {} должен содержать ровно x и y", n1.id);
+        }
+    }
     /// Тест круглого стола YAML: читаем → десериализуем → сериализуем → показываем разницу.
     /// Этот тест наглядно демонстрирует, какие поля вылезают в YAML после save_workflow().
     #[test]
@@ -415,18 +374,18 @@ mod tests {
         let serialized = serde_yaml::to_string(&wf)
             .expect("Ошибка сериализации YAML");
 
-        // 3) Применяем indent_yaml для человекочитаемого вывода
-        let indented = indent_yaml(&serialized);
+        // 3) Надёжный конвейер save_workflow: только безопасные разделители.
+        let out = separate_top_level_fields(&serialized);
 
         // 4) Печатаем оба варианта
         eprintln!("\n========== ОРИГИНАЛЬНЫЙ YAML ==========");
         eprintln!("{}", original_yaml);
-        eprintln!("\n========== ПОСЛЕ СЕРИАЛИЗАЦИИ (indented) =========");
-        eprintln!("{}", indented);
+        eprintln!("\n========== ПОСЛЕ СЕРИАЛИЗАЦИИ (save_workflow) =========");
+        eprintln!("{}", out);
         eprintln!("======================================\n");
 
-        // 5) Проверяем «свежий» парсинг indented — не должны потеряться данные
-        let wf2: WorkflowDef = serde_yaml::from_str(&indented)
+        // 5) Проверяем «свежий» парсинг out — не должны потеряться данные
+        let wf2: WorkflowDef = serde_yaml::from_str(&out)
             .unwrap_or_else(|e| panic!("Свежий парсинг упал: {}", e));
 
         // Сравниваем ключевые поля
@@ -451,9 +410,9 @@ mod tests {
         }
 
         // 6) Проверяем, что нет null/[]/~ мусора
-        let null_count = indented.matches(": null").count();
-        let empty_list_count = indented.matches(": []").count();
-        let tilde_count = indented.matches(": ~").count();
+        let null_count = out.matches(": null").count();
+        let empty_list_count = out.matches(": []").count();
+        let tilde_count = out.matches(": ~").count();
         let total_garbage = null_count + empty_list_count + tilde_count;
         eprintln!(
             "🧹 null: {}, []: {}, ~: {} (всего мусора: {})",
@@ -461,24 +420,10 @@ mod tests {
         );
         assert_eq!(
             total_garbage, 0,
-            "В indented YAML найден мусор (null/[]/~).\n\
+            "В сохранённом YAML найден мусор (null/[]/~).\n\
              Это значит, что где-то в struct-ах не хватает skip_serializing_if.\n\
              null={}, []= {}, ~={}",
             null_count, empty_list_count, tilde_count
-        );
-
-        // 7) Проверяем indentation block sequence (nodes/edges имеют 2-space indent)
-        assert!(
-            indented.contains("nodes:\n  - id:"),
-            "nodes block sequence должен быть indented на 2 пробела"
-        );
-        assert!(
-            indented.contains("edges:\n  - from:"),
-            "edges block sequence должен быть indented на 2 пробела"
-        );
-        assert!(
-            indented.contains("cases_priority:\n      - key:"),
-            "nested block sequence cases_priority должен быть indented"
         );
     }
 
@@ -495,24 +440,24 @@ mod tests {
 
         let wf = parse_workflow_file(path).expect("Парсинг не удался");
         let serialized = serde_yaml::to_string(&wf).expect("Сериализация не удалась");
-        let indented = indent_yaml(&serialized);
+        let out = separate_top_level_fields(&serialized);
 
-        eprintln!("\n========== ПОСЛЕ parse_workflow_file + indent =========");
-        eprintln!("{}", indented);
+        eprintln!("\n========== ПОСЛЕ parse_workflow_file + save_workflow =========");
+        eprintln!("{}", out);
 
         // facts_file должен быть, но facts не должен дублироваться
         assert!(
-            !indented.contains("\nfacts:"),
+            !out.contains("\nfacts:"),
             "config.facts не должен появляться в сохранённом YAML!\n\
              Внешние facts должны оставаться только в facts.yaml."
         );
 
         // Проверяем что нет null мусора
-        let null_count = indented.matches(": null").count();
+        let null_count = out.matches(": null").count();
         assert_eq!(null_count, 0, "В сериализованном YAML есть null поля!");
 
         // Проверяем что parent_dir не попал в YAML
-        assert!(!indented.contains("parent_dir"), "parent_dir должен быть skip");
+        assert!(!out.contains("parent_dir"), "parent_dir должен быть skip");
     }
 
     #[test]
@@ -541,17 +486,304 @@ edges: []
 
         // Сериализация (проверяем через десериализацию обратно)
         let serialized = serde_yaml::to_string(&wf).expect("Сериализация не удалась");
-        let indented = indent_yaml(&serialized);
+        let out = separate_top_level_fields(&serialized);
 
-        eprintln!("=== Serialized note YAML ===\n{}", indented);
+        eprintln!("=== Serialized note YAML ===\n{}", out);
 
-        let wf2: WorkflowDef = serde_yaml::from_str(&indented)
+        let wf2: WorkflowDef = serde_yaml::from_str(&out)
             .expect("Повторный парсинг note YAML не удался");
         let note2 = &wf2.nodes[0];
         assert_eq!(note2.input.as_deref(), Some("Важная заметка о соматике"));
 
         // Проверяем отсутствие неиспользуемых полей
-        assert!(!indented.contains("agent:"), "agent не должно быть в note ноде");
-        assert!(!indented.contains("task:"), "task не должно быть в note ноде");
+        assert!(!out.contains("agent:"), "agent не должно быть в note ноде");
+        assert!(!out.contains("task:"), "task не должно быть в note ноде");
+    }
+
+    #[test]
+    fn test_save_workflow_pipeline_block_scalar_indented_line() {
+        // Нативный serde_yaml сам корректно форматирует block scalar с
+        // отступом внутри (вызов инструмента emit_signal) — без всяких
+        // строковых хаков. Проверяем, что надёжный конвейер save_workflow
+        // (to_string -> separate_top_level_fields) даёт валидный YAML
+        // и текст input совпадает после round-trip.
+        let input = "\
+среди мишеней по математике переходов определи корневую мишень.
+    Затем, тебе надо сохранить тип деструктора.
+    emit_signal(\"destructor_type\", \"[номер]\")";
+
+        let node = NodeDef {
+            id: "combining_targets".to_string(),
+            node_type: NodeType::LlmFreeform,
+            input: Some(input.to_string()),
+            ..Default::default()
+        };
+        let wf = WorkflowDef {
+            name: "Test Freeform".to_string(),
+            visible: true,
+            file_stem: String::new(),
+            parent_dir: String::new(),
+            config: None,
+            nodes: vec![node],
+            edges: vec![],
+        };
+
+        let serialized = serde_yaml::to_string(&wf).expect("Сериализация не удалась");
+        let out = separate_top_level_fields(&serialized);
+
+        eprintln!("=== Save workflow YAML ===\n{}", out);
+
+        // Ключевая проверка: сгенерированный YAML обратно парсится без ошибок.
+        let wf2: WorkflowDef = serde_yaml::from_str(&out)
+            .expect("❌ Сгенерированный YAML с отступом внутри input невалиден!");
+        assert_eq!(wf2.nodes.len(), 1);
+        assert_eq!(
+            wf2.nodes[0].input.as_deref(),
+            Some(input),
+            "Текст input должен совпадать после round-trip"
+        );
+    }
+
+    #[test]
+    fn test_save_workflow_pipeline_roundtrip() {
+        // Надёжный конвейер save_workflow: to_string -> separate_top_level_fields.
+        // Раньше сюда добавлялись строковые трансформеры отступов, которые
+        // ломали YAML ("could not find expected ':'"). Проверяем, что
+        // нативный вывод сериализуется и обратно парсится без потерь.
+        let input = "среди мишеней по математике переходов определи корневую мишень, откуда произрастают все остальные.\n\nЗатем, тебе надо сохранить тип деструктора (убеждения) у корневой мишени. Вызови инструмент emit_signal с результатами анализа:\n\nemit_signal(\"destructor_type\", \"[номер цифру от 1 до 9 включительно]\")";
+        let node = NodeDef {
+            id: "combining_targets".to_string(),
+            node_type: NodeType::LlmFreeform,
+            input: Some(input.to_string()),
+            ..Default::default()
+        };
+        let wf = WorkflowDef {
+            name: "Test Freeform".to_string(),
+            visible: true,
+            file_stem: String::new(),
+            parent_dir: String::new(),
+            config: None,
+            nodes: vec![node],
+            edges: vec![],
+        };
+
+        let yaml_str = serde_yaml::to_string(&wf).expect("ser");
+        let yaml_final = separate_top_level_fields(&yaml_str);
+
+        let wf2: WorkflowDef = serde_yaml::from_str(&yaml_final)
+            .expect("❌ Пайплайн save_workflow сгенерировал невалидный YAML!");
+        assert_eq!(wf2.nodes.len(), 1);
+        assert_eq!(
+            wf2.nodes[0].input.as_deref(),
+            Some(input),
+            "Текст input должен совпадать после round-trip через полный пайплайн"
+        );
+    }
+
+    #[test]
+    fn test_save_workflow_pipeline_block_scalar_with_dash() {
+        // Block scalar (task/input), чьё содержимое начинается с "- "
+        // (маркированный список). Раньше строковый трансформер ошибочно
+        // трактовал это как YAML-последовательность и «съедал» строки файла
+        // ("did not find expected '-' indicator"). Нативный serde_yaml
+        // без хаков обрабатывает это корректно.
+        let task = "- определи корневую мишень среди мишеней по математике переходов\n- сохрани тип деструктора (убеждения) у корневой мишени\n- вызови emit_signal(\"destructor_type\", \"[цифра 1-9]\")";
+
+        let node1 = NodeDef {
+            id: "analyzer".to_string(),
+            node_type: NodeType::LlmWorker,
+            agent: Some("some_agent".to_string()),
+            task: Some(task.to_string()),
+            ..Default::default()
+        };
+        // Второй узел — чтобы убедиться, что строки ПОСЛЕ блока не «съедаются».
+        let node2 = NodeDef {
+            id: "emitter".to_string(),
+            node_type: NodeType::SignalRouter,
+            signal_name: Some("destructor_type".to_string()),
+            ..Default::default()
+        };
+        let wf = WorkflowDef {
+            name: "Test Graph".to_string(),
+            visible: true,
+            file_stem: String::new(),
+            parent_dir: String::new(),
+            config: None,
+            nodes: vec![node1, node2],
+            edges: vec![],
+        };
+
+        let yaml_str = serde_yaml::to_string(&wf).expect("ser");
+        let yaml_final = separate_top_level_fields(&yaml_str);
+
+        let wf2: WorkflowDef = serde_yaml::from_str(&yaml_final)
+            .expect("❌ Пайплайн save_workflow сгенерировал невалидный YAML!");
+        assert_eq!(wf2.nodes.len(), 2, "Второй узел не должен быть потерян");
+        assert_eq!(
+            wf2.nodes[0].task.as_deref(),
+            Some(task),
+            "Текст task должен совпадать после round-trip"
+        );
+        assert_eq!(wf2.nodes[1].id, "emitter");
+    }
+
+    #[test]
+    fn debug_real_workflow_pipeline() {
+        let path_str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../agents/psychotherapist/transitions/main_conversation_flow.yaml"
+        );
+        let content = std::fs::read_to_string(path_str).expect("read");
+        let wf: WorkflowDef = serde_yaml::from_str(&content).expect("parse original");
+
+        let yaml_str = serde_yaml::to_string(&wf).expect("ser");
+        let yaml_final = separate_top_level_fields(&yaml_str);
+
+        match serde_yaml::from_str::<WorkflowDef>(&yaml_final) {
+            Ok(_) => eprintln!("REAL WORKFLOW OK"),
+            Err(e) => {
+                eprintln!("=== REAL WORKFLOW INVALID: {} ===", e);
+                eprintln!("{}", yaml_final);
+                panic!("invalid");
+            }
+        }
+    }
+
+    #[test]
+    fn debug_repro_large_graph() {
+        let mut nodes = Vec::new();
+        // Узел с task, содержащим маркированный список (буллеты с "- ")
+        nodes.push(NodeDef {
+            id: "analyzer".to_string(),
+            node_type: NodeType::LlmWorker,
+            agent: Some("analyst".to_string()),
+            task: Some(
+                "среди мишеней по математике переходов определи корневую мишень:\n- определи корневую мишень\n- сохрани тип деструктора (убеждения)\n- вызови emit_signal(\"destructor_type\", \"[1-9]\")".to_string(),
+            ),
+            ..Default::default()
+        });
+        // Switch с cases_priority
+        nodes.push(NodeDef {
+            id: "router".to_string(),
+            node_type: NodeType::Switch,
+            switch_field: Some("phase".to_string()),
+            cases_priority: Some(vec![
+                PriorityCase { key: "phase_1".to_string(), to: "analyzer".to_string() },
+                PriorityCase { key: "phase_2".to_string(), to: "emitter".to_string() },
+            ]),
+            default: Some("analyzer".to_string()),
+            ..Default::default()
+        });
+        // input с шаблоном {{ }}
+        nodes.push(NodeDef {
+            id: "extractor".to_string(),
+            node_type: NodeType::LlmFactExtractor,
+            input: Some("Проанализируй:\n{{ user_message }}\nсигналы: {{ signals }}".to_string()),
+            ..Default::default()
+        });
+        // note с многострочным текстом
+        nodes.push(NodeDef {
+            id: "note1".to_string(),
+            node_type: NodeType::Note,
+            task: Some("заметка\n- пункт а\n- пункт б".to_string()),
+            ..Default::default()
+        });
+        // signal_router
+        nodes.push(NodeDef {
+            id: "emitter".to_string(),
+            node_type: NodeType::SignalRouter,
+            signal_name: Some("destructor_type".to_string()),
+            ..Default::default()
+        });
+        // sub_workflow
+        nodes.push(NodeDef {
+            id: "sub1".to_string(),
+            node_type: NodeType::SubWorkflow,
+            workflow: Some("other_flow".to_string()),
+            ..Default::default()
+        });
+        // condition_check
+        nodes.push(NodeDef {
+            id: "cond1".to_string(),
+            node_type: NodeType::ConditionCheck,
+            field: Some("phase".to_string()),
+            ..Default::default()
+        });
+        // return
+        nodes.push(NodeDef {
+            id: "ret1".to_string(),
+            node_type: NodeType::Return,
+            ..Default::default()
+        });
+        // llm_sequential_switch
+        nodes.push(NodeDef {
+            id: "seq1".to_string(),
+            node_type: NodeType::LlmSequentialSwitch,
+            ..Default::default()
+        });
+        // system_condition
+        nodes.push(NodeDef {
+            id: "sys1".to_string(),
+            node_type: NodeType::SystemCondition,
+            action: Some("do_thing".to_string()),
+            ..Default::default()
+        });
+        // llm_freeform с task
+        nodes.push(NodeDef {
+            id: "free1".to_string(),
+            node_type: NodeType::LlmFreeform,
+            input: Some("свободная форма\n- один\n- два".to_string()),
+            ..Default::default()
+        });
+
+        let wf = WorkflowDef {
+            name: "Repro Graph".to_string(),
+            visible: true,
+            file_stem: String::new(),
+            parent_dir: String::new(),
+            config: Some(WorkflowConfig {
+                facts_file: Some("facts.yaml".to_string()),
+                extractor_prompt: Some("извлеки факты".to_string()),
+                ..Default::default()
+            }),
+            nodes,
+            edges: vec![
+                EdgeDef { from: "extractor".to_string(), to: "router".to_string(), case: None, condition: None },
+                EdgeDef { from: "router".to_string(), to: "analyzer".to_string(), case: Some("phase_1".to_string()), condition: None },
+                EdgeDef { from: "router".to_string(), to: "emitter".to_string(), case: Some("phase_2".to_string()), condition: None },
+            ],
+        };
+
+        let yaml_str = serde_yaml::to_string(&wf).expect("ser");
+        let yaml_final = separate_top_level_fields(&yaml_str);
+
+        let wf2: WorkflowDef = serde_yaml::from_str(&yaml_final)
+            .expect("❌ РЕПРО: полный граф сгенерировал невалидный YAML!");
+        assert_eq!(wf2.nodes.len(), 11, "все узлы должны сохраниться");
+    }
+
+    #[test]
+    fn debug_stage_dump() {
+        let input = "среди мишеней по математике переходов определи корневую мишень, откуда произрастают все остальные.\n\nЗатем, тебе надо сохранить тип деструктора (убеждения) у корневой мишени. Вызови инструмент emit_signal с результатами анализа:\n\nemit_signal(\"destructor_type\", \"[номер цифру от 1 до 9 включительно]\")";
+        let node = NodeDef {
+            id: "combining_targets".to_string(),
+            node_type: NodeType::LlmFreeform,
+            input: Some(input.to_string()),
+            ..Default::default()
+        };
+        let wf = WorkflowDef {
+            name: "Test Freeform".to_string(),
+            visible: true,
+            file_stem: String::new(),
+            parent_dir: String::new(),
+            config: None,
+            nodes: vec![node],
+            edges: vec![],
+        };
+        let yaml_str = serde_yaml::to_string(&wf).expect("ser");
+        let yaml_final = separate_top_level_fields(&yaml_str);
+        let wf2: WorkflowDef = serde_yaml::from_str(&yaml_final)
+            .expect("❌ Пайплайн save_workflow сгенерировал невалидный YAML!");
+        assert_eq!(wf2.nodes[0].input.as_deref(), Some(input));
     }
 }

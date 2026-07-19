@@ -3,7 +3,7 @@ use std::fs;
 use std::path::Path;
 
 use crate::domain::workflow_engine::parser::{
-    indent_yaml, separate_top_level_fields, EdgeDef, FactsFile, NodeDef, WorkflowConfig,
+    separate_top_level_fields, EdgeDef, FactsFile, NodeDef, WorkflowConfig,
 };
 
 /// Workflow со включённым file_stem + team
@@ -79,9 +79,20 @@ pub fn save_workflow(
 
     let yaml_str = serde_yaml::to_string(&workflow)
         .map_err(|e| format!("Ошибка сериализации YAML: {}", e))?;
-    let yaml_indented = indent_yaml(&yaml_str);
-    let yaml_separated = separate_top_level_fields(&yaml_indented);
-    fs::write(&path, &yaml_separated)
+    // Нативный вывод serde_yaml уже валиден и корректно round-trip'ится
+    // (блочный sequence-айтем на отступе ключа — легален по спеке YAML).
+    // НКАКИХ строковых трансформеров отступов: они были источником
+    // коррупции (сдвигали вложенные последовательности под неверного
+    // родителя). Только безопасная косметика — пустые строки между
+    // полями верхнего уровня (не влияет на парсинг).
+    let yaml_final = separate_top_level_fields(&yaml_str);
+
+    // Валидация: сгенерированный YAML должен обратно парситься.
+    // Если нет — файл НЕ записываем (иначе данные потеряются).
+    serde_yaml::from_str::<crate::domain::workflow_engine::parser::WorkflowDef>(&yaml_final)
+        .map_err(|e| format!("❌ Сгенерированный YAML невалиден, файл НЕ сохранён: {}", e))?;
+
+    fs::write(&path, &yaml_final)
         .map_err(|e| format!("Ошибка записи файла {}: {}", path, e))?;
     Ok(())
 }

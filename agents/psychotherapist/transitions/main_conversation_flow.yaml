@@ -6,216 +6,283 @@ config:
   facts_file: facts.yaml
 
 nodes:
-  - id: extract_facts
-    type: llm_fact_extractor
-    input: |
-      User: {{ user_message }}
-      Session signals: {{ signals }}
-    ui_pos:
-      x: -1307
-      y: 489
-  - id: priority_router
-    type: switch
-    input_object: '{{ nodes.extract_facts.output }}'
-    switch_field: phase
-    cases_priority:
-      - key: data_collection
-        to: note_1782221436115
-      - key: datamining
-        to: note_1782220629095
-    ui_pos:
-      y: 460
-      x: -949
-  - id: call_provocateur
-    type: llm_worker
-    agent: provocateur
-    output_type: message
-    ui_pos:
-      y: 153
-      x: 3075
-  - id: call_soma_translator
-    type: llm_worker
-    agent: soma_translator
-    task: Пользователь описал боль. Дай ему расшифровку по НГМ.
-    ui_pos:
-      x: -21
-      y: 139
-  - id: collect_info
-    type: llm_worker
-    agent: liaison
-    task: |
-      Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
-    output_type: message
-    ui_pos:
-      x: 105
-      y: -545
-    disabled: true
-  - id: call_grounder
-    type: llm_worker
-    agent: grounder
-    output_type: message
-    inject_reports:
-      - soma_translator
-    ui_pos:
-      y: 121
-      x: 1509
-  - id: call_validator
-    type: llm_worker
-    agent: validator
-    ui_pos:
-      y: 278
-      x: 2075
-  - id: check_validator_signal
-    type: signal_router
-    signal_name: validator_report
-    field: verdict
-    cases_priority:
-      - key: УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО
-        to: note_1782220533024
-      - key: ДАННЫХ ДОСТАТОЧНО
-        to: note_1782220629095
-    ui_pos:
-      x: 2422
-      y: 179
-  - id: call_destructor_finder
-    type: llm_worker
-    agent: destructor_detector
-    task: |
-      Проанализируй отчёты коллег и определи Деструктор (Этаж -2).
-      Найди: Идол, Угрозу, Деструктор, Запрет удовольствия, Парадоксальную петлю.
-      Сохрани diagnostic_report через инструмент emit_signal.
-      После отправки сигнала ответь target: reply с кратким итогом.
-    inject_reports:
-      - soma_translator
-      - pattern_finder_by_floors
-    ui_pos:
-      x: 3754
-      y: 678
-    disabled: true
-  - id: call_pattern_finder
-    type: llm_worker
-    agent: pattern_finder_by_floors
-    inject_reports:
-      - soma_translator
-    ui_pos:
-      x: 3484
-      y: 573
-  - id: call_healer
-    type: llm_worker
-    agent: neuro_reprogrammer
-    task: |
-      Из отчёта pattern_finder_by_floors возьми номер типа паттерна.
-      Затем выполни ШАГ 2 — прочитай описание этого паттерна в базе знаний инструментом ReadSection.
-      После этого переведи паттерн на контекст проблемы пользователя.
-    output_type: message
-    inject_reports:
-      - pattern_finder_by_floors
-      - destructor_detector
-    ui_pos:
-      x: 4025
-      y: 681
-  - id: check_somatic
-    type: condition_check
-    field: has_somatic
-    sequential_to: call_cluster_checker
-    true_to: call_soma_translator
-    ui_pos:
-      x: -269
-      y: 204
-  - id: check_grounding
-    type: condition_check
-    field: grounding_dont_exist
-    true_to: call_grounder
-    false_to: note_1782220193985
-    ui_pos:
-      x: 1241
-      y: 276
-  - id: call_cluster_checker
-    type: llm_worker
-    agent: cluster_checker
-    ui_pos:
-      x: 91
-      y: 272
-  - id: check_cluster_signal
-    type: signal_router
-    signal_name: cluster_checker
-    cases_priority:
-      - key: Конкретная проблема
-        to: note_1782224256075
-      - key: Кластер
-        to: call_decomposer
-    default: call_decomposer
-    ui_pos:
-      y: 262
-      x: 346
-  - id: call_decomposer
-    type: llm_worker
-    agent: decomposer
-    ui_pos:
-      x: 611
-      y: 385
-  - id: synchronize_with_user
-    type: llm_worker
-    agent: synchronizer
-    ui_pos:
-      x: 3367
-      y: 162
-    disabled: true
-  - id: note_1782220193985
-    type: note
-    input: |
-      проверка данных. развилка на доработку данных или отправку на лечение
-    ui_pos:
-      x: 1638
-      y: 287
-  - id: note_1782220533024
-    type: note
-    input: уточнение данных у юзера
-    system_message: "Давайте проведем один мысленный эксперимент, чтобы заглянуть в самый корень вашей проблемы. Если вы окажетесь в этой точке и пути назад не будет, с каким самым невыносимым чувством вы столкнетесь внутри себя? \n\n(Пожалуйста, не пишите о том, что вы будете делать или как будете решать проблему. Опишите именно вашу внутреннюю катастрофу. Например: \"я почувствую себя абсолютно бесполезным ничтожеством\", \"я столкнусь с парализующим страхом смерти/пустоты\", \"я почувствую, что я абсолютно одинок и никому не нужен\", \"моя самооценка будет уничтожена\". Что именно сломается внутри вас?)"
-    ui_pos:
-      x: 2678
-      y: 98
-  - id: note_1782220629095
-    type: note
-    input: лечение анализ
-    ui_pos:
-      x: 3097
-      y: 566
-  - id: note_1782221436115
-    type: note
-    input: пересчитываем данные с учетом новых данных от юзера
-    ui_pos:
-      y: 241
-      x: -682
-  - id: note_1782224256075
-    type: note
-    input: проверяем абстрактный ли запрос
-    ui_pos:
-      x: 852
-      y: 244
+
+- id: extract_facts
+  type: llm_fact_extractor
+  input: |
+    User: {{ user_message }}
+    Session signals: {{ signals }}
+  ui_pos:
+    x: -1307
+    y: 489
+
+- id: priority_router
+  type: switch
+  input_object: '{{ nodes.extract_facts.output }}'
+  switch_field: phase
+  cases_priority:
+  - key: data_collection
+    to: note_1782221436115
+  - key: datamining
+    to: note_1782220629095
+  ui_pos:
+    x: -949
+    y: 460
+
+- id: call_provocateur
+  type: llm_worker
+  agent: provocateur
+  output_type: message
+  ui_pos:
+    y: 153
+    x: 3075
+
+- id: call_soma_translator
+  type: llm_worker
+  agent: soma_translator
+  task: Пользователь описал боль. Дай ему расшифровку по НГМ.
+  ui_pos:
+    x: -21
+    y: 139
+
+- id: collect_info
+  type: llm_worker
+  agent: liaison
+  task: |
+    Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
+  output_type: message
+  ui_pos:
+    y: -545
+    x: 105
+  disabled: true
+
+- id: call_grounder
+  type: llm_worker
+  agent: grounder
+  output_type: message
+  inject_reports:
+  - soma_translator
+  ui_pos:
+    y: 121
+    x: 1509
+
+- id: call_validator
+  type: llm_worker
+  agent: validator
+  ui_pos:
+    x: 2075
+    y: 278
+
+- id: check_validator_signal
+  type: signal_router
+  signal_name: validator_report
+  field: verdict
+  cases_priority:
+  - key: УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО
+    to: note_1782220533024
+  - key: ДАННЫХ ДОСТАТОЧНО
+    to: note_1782220629095
+  ui_pos:
+    x: 2422
+    y: 179
+
+- id: call_destructor_finder
+  type: llm_worker
+  agent: destructor_detector
+  task: |
+    Проанализируй отчёты коллег и определи Деструктор (Этаж -2).
+    Найди: Идол, Угрозу, Деструктор, Запрет удовольствия, Парадоксальную петлю.
+    Сохрани diagnostic_report через инструмент emit_signal.
+    После отправки сигнала ответь target: reply с кратким итогом.
+  inject_reports:
+  - soma_translator
+  - pattern_finder_by_floors
+  ui_pos:
+    y: 675
+    x: 4530
+  disabled: true
+
+- id: call_pattern_finder
+  type: llm_worker
+  agent: pattern_finder_by_floors
+  inject_reports:
+  - soma_translator
+  ui_pos:
+    y: 570
+    x: 4260
+
+- id: call_healer
+  type: llm_worker
+  agent: neuro_reprogrammer
+  task: |
+    Из отчёта pattern_finder_by_floors возьми номер типа паттерна.
+    Затем выполни ШАГ 2 — прочитай описание этого паттерна в базе знаний инструментом ReadSection.
+    После этого переведи паттерн на контекст проблемы пользователя.
+  output_type: message
+  inject_reports:
+  - pattern_finder_by_floors
+  - destructor_detector
+  ui_pos:
+    x: 4801
+    y: 678
+
+- id: check_somatic
+  type: condition_check
+  field: has_somatic
+  sequential_to: call_cluster_checker
+  true_to: call_soma_translator
+  ui_pos:
+    x: -269
+    y: 204
+
+- id: check_grounding
+  type: condition_check
+  field: grounding_dont_exist
+  true_to: call_grounder
+  false_to: note_1782220193985
+  ui_pos:
+    x: 1241
+    y: 276
+
+- id: call_cluster_checker
+  type: llm_worker
+  agent: cluster_checker
+  ui_pos:
+    x: 91
+    y: 272
+
+- id: check_cluster_signal
+  type: signal_router
+  signal_name: cluster_checker
+  cases_priority:
+  - key: Конкретная проблема
+    to: note_1782224256075
+  - key: Кластер
+    to: call_decomposer
+  default: call_decomposer
+  ui_pos:
+    y: 262
+    x: 346
+
+- id: call_decomposer
+  type: llm_worker
+  agent: decomposer
+  ui_pos:
+    y: 385
+    x: 611
+
+- id: synchronize_with_user
+  type: llm_worker
+  agent: synchronizer
+  ui_pos:
+    x: 3367
+    y: 162
+  disabled: true
+
+- id: note_1782220193985
+  type: note
+  input: |
+    проверка данных. развилка на доработку данных или отправку на лечение
+  ui_pos:
+    y: 287
+    x: 1638
+
+- id: note_1782220533024
+  type: note
+  input: уточнение данных у юзера
+  system_message: "Давайте проведем один мысленный эксперимент, чтобы заглянуть в самый корень вашей проблемы. Если вы окажетесь в этой точке и пути назад не будет, с каким самым невыносимым чувством вы столкнетесь внутри себя? \n\n(Пожалуйста, не пишите о том, что вы будете делать или как будете решать проблему. Опишите именно вашу внутреннюю катастрофу. Например: \"я почувствую себя абсолютно бесполезным ничтожеством\", \"я столкнусь с парализующим страхом смерти/пустоты\", \"я почувствую, что я абсолютно одинок и никому не нужен\", \"моя самооценка будет уничтожена\". Что именно сломается внутри вас?)\n\nПредставьте гипотетическую, но абсолютно безвыходную ситуацию. Что Вы почувствуете в этот момент ? Какие эмоции или состояние вы ощутите?"
+  ui_pos:
+    y: 98
+    x: 2678
+
+- id: note_1782220629095
+  type: note
+  input: ослабление сопротивления
+  ui_pos:
+    x: 3097
+    y: 566
+
+- id: note_1782221436115
+  type: note
+  input: пересчитываем данные с учетом новых данных от юзера
+  ui_pos:
+    y: 241
+    x: -682
+
+- id: note_1782224256075
+  type: note
+  input: проверяем абстрактный ли запрос
+  ui_pos:
+    x: 852
+    y: 242
+
+- id: call_shadow_worker
+  type: llm_worker
+  agent: shadow_worker
+  output_type: message
+  ui_pos:
+    x: 3549
+    y: 628
+
+- id: note_1784427848563
+  type: note
+  input: вычисление типа
+  ui_pos:
+    y: 582
+    x: 3824
+
+- id: combining_targets
+  type: llm_freeform
+  input: |-
+    среди мишеней по математике переходов определи корневую мишень, откуда произрастают все остальные.
+
+    Затем, тебе надо сохранить тип деструктора (убеждения) у корневой мишени. Вызови инструмент emit_signal с результатами анализа:
+
+    emit_signal("destructor_type", "[номер цифру от 1 до 9 включительно]")
+  ui_pos:
+    x: 3453
+    y: 958
 
 edges:
-  - from: extract_facts
-    to: priority_router
-  - from: note_1782220533024
-    to: call_provocateur
-  - from: note_1782220193985
-    to: call_validator
-  - from: call_validator
-    to: check_validator_signal
-  - from: call_pattern_finder
-    to: call_destructor_finder
-  - from: note_1782220629095
-    to: call_pattern_finder
-  - from: call_destructor_finder
-    to: call_healer
-  - from: note_1782221436115
-    to: check_somatic
-  - from: note_1782224256075
-    to: check_grounding
-  - from: call_cluster_checker
-    to: check_cluster_signal
-  - from: call_provocateur
-    to: synchronize_with_user
-  - from: call_decomposer
-    to: note_1782224256075
+
+- from: extract_facts
+  to: priority_router
+
+- from: note_1782220533024
+  to: call_provocateur
+
+- from: note_1782220193985
+  to: call_validator
+
+- from: call_validator
+  to: check_validator_signal
+
+- from: call_pattern_finder
+  to: call_destructor_finder
+
+- from: note_1784427848563
+  to: call_pattern_finder
+
+- from: call_destructor_finder
+  to: call_healer
+
+- from: note_1782221436115
+  to: check_somatic
+
+- from: note_1782224256075
+  to: check_grounding
+
+- from: call_cluster_checker
+  to: check_cluster_signal
+
+- from: call_provocateur
+  to: synchronize_with_user
+
+- from: call_decomposer
+  to: note_1782224256075
+
+- from: note_1782220629095
+  to: call_shadow_worker
+
+- from: call_shadow_worker
+  to: note_1784427848563
