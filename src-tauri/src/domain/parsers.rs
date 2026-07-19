@@ -87,9 +87,19 @@ pub fn extract_thought_from_partial_json(text: &str) -> Option<String> {
 
 pub fn clean_thought_tags(text: &str) -> String {
     let mut result = text.to_string();
-    if let Ok(re) = regex::Regex::new(r"(?s)<\|channel>thought(?:.*?<channel\|>|.*$)") {
+    // Реальный формат Gemma: `<|channel>KIND\n` открывает канал, `<channel|>`
+    // (или `</|channel>`) закрывает его и переключает на контент. KIND — до
+    // первого `\n` или `<` (модель часто не ставит `>` после KIND).
+    // Вырезаем весь канал целиком вместе с содержимым.
+    if let Ok(re) = regex::Regex::new(r"(?s)<\|channel>[^\n<]*[\s\S]*?(?:<channel\|>|</\|channel>[^\n<]*>)") {
         result = re.replace_all(&result, "").to_string();
     }
+    // Открывающий маркер без закрытия (в конце потока)
+    result = result.replace("<|channel>", "");
+    // Закрывающие маркеры (оба варианта)
+    result = result.replace("<channel|>", "").replace("</|channel>", "");
+    // Маркер поворота
+    result = result.replace("<|turn>", "");
     if let Ok(re) = regex::Regex::new(r"(?s)<think[^>]*>.*?</think\s*>") {
         result = re.replace_all(&result, "").to_string();
     }
@@ -101,7 +111,14 @@ pub fn clean_thought_tags(text: &str) -> String {
     }
     result = result.replace("</start_of_turn>", "").replace("<start_of_turn>", "");
     result = result.replace("<audio|>", "").replace("<video|>", "").replace("<image|>", "");
-    result = result.replace("<|channel>", "").replace("<channel|>", "");
+    // Артефакт: слово "thought"/"json", оставшееся в начале после вырезки
+    // тегов (модель иногда пишет его как обычный текст).
+    if let Ok(re) = regex::Regex::new(r"(?i)^\s*thought\s*\n?") {
+        result = re.replace(&result, "").to_string();
+    }
+    if let Ok(re) = regex::Regex::new(r"(?i)^\s*json\s*\n?") {
+        result = re.replace(&result, "").to_string();
+    }
     result.trim().to_string()
 }
 

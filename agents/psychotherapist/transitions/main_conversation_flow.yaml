@@ -12,8 +12,8 @@ nodes:
       User: {{ user_message }}
       Session signals: {{ signals }}
     ui_pos:
-      y: 489
       x: -1307
+      y: 489
   - id: priority_router
     type: switch
     input_object: '{{ nodes.extract_facts.output }}'
@@ -24,22 +24,22 @@ nodes:
       - key: datamining
         to: note_1782220629095
     ui_pos:
-      x: -949
       y: 460
+      x: -949
   - id: call_provocateur
     type: llm_worker
     agent: provocateur
     output_type: message
     ui_pos:
-      x: 3075
       y: 153
+      x: 3075
   - id: call_soma_translator
     type: llm_worker
     agent: soma_translator
     task: Пользователь описал боль. Дай ему расшифровку по НГМ.
     ui_pos:
-      y: 139
       x: -21
+      y: 139
   - id: collect_info
     type: llm_worker
     agent: liaison
@@ -47,8 +47,8 @@ nodes:
       Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
     output_type: message
     ui_pos:
-      y: -545
       x: 105
+      y: -545
     disabled: true
   - id: call_grounder
     type: llm_worker
@@ -57,15 +57,14 @@ nodes:
     inject_reports:
       - soma_translator
     ui_pos:
-      x: 1509
       y: 121
-    disabled: true
+      x: 1509
   - id: call_validator
     type: llm_worker
     agent: validator
     ui_pos:
-      x: 2075
       y: 278
+      x: 2075
   - id: check_validator_signal
     type: signal_router
     signal_name: validator_report
@@ -76,8 +75,8 @@ nodes:
       - key: ДАННЫХ ДОСТАТОЧНО
         to: note_1782220629095
     ui_pos:
-      y: 179
       x: 2422
+      y: 179
   - id: call_destructor_finder
     type: llm_worker
     agent: destructor_detector
@@ -126,18 +125,17 @@ nodes:
   - id: check_grounding
     type: condition_check
     field: grounding_dont_exist
-    sequential_to: note_1782220193985
     true_to: call_grounder
+    false_to: note_1782220193985
     ui_pos:
       x: 1241
-      y: 273
-    disabled: true
+      y: 276
   - id: call_cluster_checker
     type: llm_worker
     agent: cluster_checker
     ui_pos:
-      y: 272
       x: 91
+      y: 272
   - id: check_cluster_signal
     type: signal_router
     signal_name: cluster_checker
@@ -160,8 +158,8 @@ nodes:
     type: llm_worker
     agent: synchronizer
     ui_pos:
-      y: 162
       x: 3367
+      y: 162
     disabled: true
   - id: note_1782220193985
     type: note
@@ -181,8 +179,8 @@ nodes:
     type: note
     input: лечение анализ
     ui_pos:
-      y: 566
       x: 3097
+      y: 566
   - id: note_1782221436115
     type: note
     input: пересчитываем данные с учетом новых данных от юзера
@@ -195,7 +193,6 @@ nodes:
     ui_pos:
       x: 852
       y: 244
-    disabled: true
 
 edges:
   - from: extract_facts

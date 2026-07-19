@@ -6,7 +6,7 @@ import { createMessageElement, createSubcallElement, createToolCallElement, crea
 import type { Role, MessageMenuCallbacks } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, CatalogEntry } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
-import { renderMarkdown } from "../utils";
+import { renderMarkdown, stripStreamArtifacts, extractChannelThought } from "../utils";
 import mermaid from "mermaid";
 
 mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
@@ -426,7 +426,9 @@ export class ChatController {
       const agentName = (msg.author && msg.author !== 'user' && msg.author !== 'system') ? msg.author : undefined;
       const hasMenu = uid && (role === 'user' || role === 'agent');
       const timeText = msg.time_sec ? `${msg.time_sec.toFixed(1)} сек` : undefined;
-      this.el.chatHistory.appendChild(createMessageElement(role, msg.content, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined));
+      // Скрываем служебные теги LLM в сохранённых ответах (defence in depth).
+      const cleanContent = role === 'agent' ? stripStreamArtifacts(msg.content) : msg.content;
+      this.el.chatHistory.appendChild(createMessageElement(role, cleanContent, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined));
     }
     if (thoughtsItems.length > 0) this.el.chatHistory.appendChild(createThoughtsBlock(thoughtsItems, lastAssistantUid, this.thoughtMenuCallbacks, thoughtsUids));
     this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
@@ -699,6 +701,9 @@ export class ChatController {
         const author: string = (payload && typeof payload.author === "string") ? payload.author : "";
 
         // ── МЫСЛИ: печатаем в блок «Мысли агентов» в реальном времени ──
+        // Примечание: служебные теги LLM (<|channel>...<|turn> и т.п.) уже
+        // отфильтрованы на бэкенде в stream_cb (parsers::clean_thought_tags),
+        // поэтому здесь приходит уже чистый текст.
         if (kind === "thought") {
             // Новый агент → новый пузырь мыслей
             if (store.rtThoughtUid && store.rtThoughtAuthor && author && author !== store.rtThoughtAuthor) {
@@ -735,6 +740,7 @@ export class ChatController {
         store.rtStreamBuffer += chunk;
 
         // Если это внутренний JSON (вызов сабагента или тулзы) — скрываем от глаз пользователя!
+        // Учитываем и служебный формат <|channel>json> (уже очищен в буфере).
         if (store.rtStreamBuffer.trimStart().startsWith("{") || store.rtStreamBuffer.trimStart().startsWith("```json")) {
             store.rtIsJson = true;
             return;
@@ -747,13 +753,35 @@ export class ChatController {
             this.appendMessage('agent', '', displayName, undefined, undefined, false, store.rtStreamUid);
         }
 
-        // Обновляем тело сообщения (renderMarkdown автоматически скроет <think> теги из текста)
+        // Обновляем тело сообщения. Скрываем служебные теги LLM (<|channel>...<channel|> и
+        // <|turn>) перед подачей в renderMarkdown (теги могут прийти внутри чанка).
+        const visibleText = stripStreamArtifacts(store.rtStreamBuffer);
         const msgEl = this.el.chatHistory.querySelector(`[data-msg-uid="${store.rtStreamUid}"]`);
         if (msgEl) {
             const contentDiv = msgEl.querySelector('div:nth-child(2)');
             if (contentDiv) {
-                contentDiv.innerHTML = renderMarkdown(store.rtStreamBuffer);
+                contentDiv.innerHTML = renderMarkdown(visibleText);
                 this.scrollToBottomIfNearEnd(this.el.chatHistory);
+            }
+        }
+
+        // Печатаем "Мысли" агента (формат <|channel>thought>...) в раскрывающийся блок.
+        const channelThought = extractChannelThought(store.rtStreamBuffer);
+        if (channelThought) {
+            if (!store.activeThoughtsBlock && msgEl) {
+                const item = createThoughtElement("Агент", channelThought);
+                item.id = "rt-channel-thought";
+                store.activeThoughtsBlock = createThoughtsBlock([item]);
+                this.el.chatHistory.insertBefore(store.activeThoughtsBlock, msgEl);
+            } else if (store.activeThoughtsBlock) {
+                let item = store.activeThoughtsBlock.querySelector('#rt-channel-thought');
+                if (!item) {
+                    item = createThoughtElement("Агент", channelThought);
+                    item.id = "rt-channel-thought";
+                    addToThoughtsBlock(store.activeThoughtsBlock, item as HTMLElement);
+                } else {
+                    item.innerHTML = `🧠 <strong>Агент</strong>: <em>${channelThought}</em>`;
+                }
             }
         }
 
