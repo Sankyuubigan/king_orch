@@ -1,6 +1,6 @@
 use futures_util::StreamExt;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Read, Write};
 use tauri::{AppHandle, Emitter};
 
 #[derive(Clone, serde::Serialize)]
@@ -9,25 +9,64 @@ struct DownloadProgress {
     total: u64,
 }
 
+const MIN_GGUF_SIZE: u64 = 1024 * 1024;
+
 #[tauri::command]
 pub async fn download_model(app: AppHandle, url: String, save_path: String) -> Result<(), String> {
-    let res = reqwest::get(&url)
+    eprintln!("[download] Старт загрузки: {} -> {}", url, save_path);
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::default())
+        .timeout(std::time::Duration::from_secs(60 * 60))
+        .build()
+        .map_err(|e| format!("Ошибка создания HTTP-клиента: {}", e))?;
+
+    let res = client
+        .get(&url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        .header("Accept", "*/*")
+        .send()
         .await
         .map_err(|e| format!("Ошибка подключения: {}", e))?;
-        
+
+    eprintln!("[download] Финальный URL после редиректов: {}", res.url());
+    let status = res.status();
+    if !status.is_success() {
+        let body = res
+            .text()
+            .await
+            .unwrap_or_default();
+        let preview: String = body.chars().take(500).collect();
+        eprintln!("[download] Ошибка HTTP {} при загрузке {}: {}", status, url, preview);
+        let _ = std::fs::remove_file(&save_path);
+        return Err(format!("Ошибка загрузки (HTTP {}): {}", status, preview));
+    }
+
     let total_size = res.content_length().unwrap_or(0);
-    
+    eprintln!("[download] HTTP OK, размер: {} байт", total_size);
+
     let mut file = File::create(&save_path).map_err(|e| format!("Ошибка создания файла: {}", e))?;
     let mut stream = res.bytes_stream();
-    let mut downloaded = 0;
+    let mut downloaded: u64 = 0;
 
     let mut last_emit = std::time::Instant::now();
 
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("Ошибка загрузки: {}", e))?;
-        file.write_all(&chunk).map_err(|e| format!("Ошибка записи на диск: {}", e))?;
+        let chunk = match chunk {
+            Ok(c) => c,
+            Err(e) => {
+                let _ = std::fs::remove_file(&save_path);
+                eprintln!("[download] Ошибка потока: {}", e);
+                return Err(format!("Ошибка загрузки: {}", e));
+            }
+        };
+        if let Err(e) = file.write_all(&chunk) {
+            let _ = std::fs::remove_file(&save_path);
+            eprintln!("[download] Ошибка записи на диск: {}", e);
+            return Err(format!("Ошибка записи на диск: {}", e));
+        }
         downloaded += chunk.len() as u64;
-        
+
         if last_emit.elapsed().as_millis() > 100 {
             let _ = app.emit("download_progress", DownloadProgress {
                 downloaded,
@@ -36,11 +75,35 @@ pub async fn download_model(app: AppHandle, url: String, save_path: String) -> R
             last_emit = std::time::Instant::now();
         }
     }
-    
+
     let _ = app.emit("download_progress", DownloadProgress {
         downloaded,
         total: total_size,
     });
 
+    if total_size > 0 && downloaded < total_size {
+        let _ = std::fs::remove_file(&save_path);
+        eprintln!("[download] Недокачано: {} из {} байт", downloaded, total_size);
+        return Err(format!("Загрузка прервалась: скачано {} из {} байт", downloaded, total_size));
+    }
+
+    if downloaded < MIN_GGUF_SIZE {
+        let _ = std::fs::remove_file(&save_path);
+        eprintln!("[download] Подозрительно маленький файл: {} байт", downloaded);
+        return Err(format!("Скачанный файл подозрительно мал ({} байт) — возможно, это не GGUF-модель", downloaded));
+    }
+
+    let mut head = [0u8; 4];
+    if File::open(&save_path)
+        .and_then(|mut f| f.read_exact(&mut head))
+        .is_err()
+        || &head != b"GGUF"
+    {
+        let _ = std::fs::remove_file(&save_path);
+        eprintln!("[download] Файл не является GGUF (magic: {:?})", head);
+        return Err("Скачанный файл не является GGUF-моделью".to_string());
+    }
+
+    eprintln!("[download] Готово: {} байт", downloaded);
     Ok(())
 }

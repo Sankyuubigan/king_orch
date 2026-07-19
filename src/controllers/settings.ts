@@ -28,6 +28,8 @@ export interface SettingsElements {
   downloadStatusLabel: HTMLDivElement;
   btnAddModel: HTMLButtonElement;
   chkShowAdvanced: HTMLInputElement;
+  modelsList: HTMLDivElement;
+  btnAddModelLlm: HTMLButtonElement;
 }
 
 export class SettingsController {
@@ -61,6 +63,54 @@ export class SettingsController {
     if (config.last_model && config.models.includes(config.last_model)) this.el.modelSelect.value = config.last_model;
   }
 
+  renderModelsList(config: any) {
+    this.el.modelsList.innerHTML = "";
+    if (!config.models || config.models.length === 0) {
+      const empty = document.createElement("div");
+      empty.className = "models-list-empty";
+      empty.style.color = "var(--text-muted, #888)";
+      empty.style.fontSize = "13px";
+      empty.innerText = "Модели не добавлены.";
+      this.el.modelsList.appendChild(empty);
+      return;
+    }
+    for (const m of config.models) {
+      const row = document.createElement("div");
+      row.className = "model-list-row";
+      row.style.cssText = "display:flex; align-items:center; justify-content:space-between; gap:10px; padding:8px 10px; border:1px solid var(--border, #333); border-radius:6px; background:var(--bg-elevated, #1c1c1c);";
+
+      const info = document.createElement("div");
+      info.style.cssText = "display:flex; flex-direction:column; gap:2px; min-width:0;";
+      const name = document.createElement("div");
+      const fileName = m.split(/[/\\]/).pop() || m;
+      name.innerText = (config.last_model === m ? "● " : "") + fileName;
+      name.style.cssText = "font-weight:600; color:var(--text, #eee); word-break:break-all;";
+      const path = document.createElement("div");
+      path.innerText = m;
+      path.style.cssText = "font-size:11px; color:var(--text-muted, #888); word-break:break-all;";
+      info.appendChild(name);
+      info.appendChild(path);
+
+      const btnRemove = document.createElement("button");
+      btnRemove.className = "btn-danger";
+      btnRemove.innerText = "Удалить";
+      btnRemove.style.cssText = "flex-shrink:0; padding:4px 12px;";
+      btnRemove.addEventListener("click", async () => {
+        if (!confirm(`Удалить модель «${fileName}» из списка? Файл на диске не будет удалён.`)) return;
+        try {
+          const cfg: any = await invoke("remove_model", { path: m });
+          this.updateModelSelect(cfg);
+          this.renderModelsList(cfg);
+          showToast("Модель удалена из списка.", "success");
+        } catch (e) { showToast(`Ошибка: ${e}`, "error"); }
+      });
+
+      row.appendChild(info);
+      row.appendChild(btnRemove);
+      this.el.modelsList.appendChild(row);
+    }
+  }
+
   async loadConfig() {
     bus.emit("log", "Загрузка конфигурации...");
     try {
@@ -69,6 +119,7 @@ export class SettingsController {
       const verEl = document.getElementById("app-version");
       if (verEl) verEl.textContent = version;
       this.updateModelSelect(config);
+      this.renderModelsList(config);
       if (config.context_size) { this.el.contextSlider.value = config.context_size.toString(); this.el.contextValue.innerText = config.context_size.toString(); }
       if (config.max_gen_tokens) { this.el.maxGenSlider.value = config.max_gen_tokens.toString(); this.el.maxGenValue.innerText = config.max_gen_tokens.toString(); }
       if (config.kv_quant_keys !== undefined) this.el.chkKvQuantK.checked = config.kv_quant_keys;
@@ -139,12 +190,13 @@ export class SettingsController {
       await invoke("set_config_value", { key: "show_advanced_features", value: val });
       bus.emit("advanced:visibility", val);
     });
-    this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await open({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); await this.loadModelParams(); } } catch(e) {} });
+    this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await open({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });
+    this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await open({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });
     this.el.btnDownloadModel?.addEventListener("click", async () => {
       const name = this.el.downloadModelSelect.value; if (!name) return;
       const model = store.modelsCatalog.find(m => m.name === name); if (!model) return;
       try {
-        const savePath = await save({ defaultPath: `${model.name}.gguf`, filters: [{ name: "GGUF", extensions: ["gguf"] }] }); if (!savePath) return;
+         const savePath = await save({ defaultPath: model.download_url.split('/').pop() || `${model.name}.gguf`, filters: [{ name: "GGUF", extensions: ["gguf"] }] }); if (!savePath) return;
         this.el.btnDownloadModel.disabled = true; this.el.downloadProgressContainer.style.display = "block";
         await invoke("download_model", { url: model.download_url, savePath }); await invoke("add_model", { path: savePath });
         await this.loadConfig(); showToast(`Модель ${model.name} скачана!`, "success");

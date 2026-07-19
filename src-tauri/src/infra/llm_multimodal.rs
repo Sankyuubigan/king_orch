@@ -56,7 +56,7 @@ impl LlamaEngine {
         for att in attachments {
             let data = base64_decode(&att.data_base64)
                 .map_err(|_| format!("Ошибка декодирования base64: {}", att.file_name))?;
-            let bitmap = MtmdBitmap::from_buffer(mtmd_ctx, &data)
+            let bitmap = MtmdBitmap::from_buffer(mtmd_ctx, &data, false)
                 .map_err(|e| format!("Ошибка загрузки {}: {:?}", att.file_name, e))?;
             bitmaps.push(bitmap);
         }

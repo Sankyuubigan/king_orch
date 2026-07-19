@@ -42,6 +42,8 @@ function initApp() {
     downloadStatusLabel: $<HTMLDivElement>("download-status-label"),
     btnAddModel: $<HTMLButtonElement>("btn-add-model"),
     chkShowAdvanced: $<HTMLInputElement>("chk-show-advanced"),
+    modelsList: $<HTMLDivElement>("models-list"),
+    btnAddModelLlm: $<HTMLButtonElement>("btn-add-model-llm"),
   });
 
   // ─── Контроллер чата (вкладка 💬) ───

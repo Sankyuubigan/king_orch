@@ -20,7 +20,7 @@ tauri-plugin-updater = "2.0.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["full"] }
-llama-cpp-2 = { version = "0.1.146", features = ["cuda", "mtmd"] }
+llama-cpp-2 = { version = "0.1.151", features = ["cuda", "mtmd"] }
 regex = "1.10"
 lazy_static = "1.4"
 reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }

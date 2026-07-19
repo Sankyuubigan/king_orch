@@ -70,7 +70,13 @@ pub fn reset_model_params(app: AppHandle, model_path: String) -> infra::ModelPar
 }
 
 #[tauri::command]
-pub fn add_model(app: AppHandle, path: String) -> infra::AppConfig {
+pub fn add_model(app: AppHandle, path: String) -> Result<infra::AppConfig, String> {
+    let meta = std::fs::metadata(&path)
+        .map_err(|e| format!("Файл модели не найден: {}", e))?;
+    if meta.len() < 1024 * 1024 {
+        return Err(format!("Файл слишком маленький ({} байт) — это не GGUF-модель", meta.len()));
+    }
+
     let mut cfg = infra::load_config(&app);
     if !cfg.models.contains(&path) {
         cfg.models.push(path.clone());
@@ -82,7 +88,20 @@ pub fn add_model(app: AppHandle, path: String) -> infra::AppConfig {
     }
 
     infra::save_config(&app, &cfg);
-    cfg
+    Ok(cfg)
+}
+
+#[tauri::command]
+pub fn remove_model(app: AppHandle, path: String) -> Result<infra::AppConfig, String> {
+    let mut cfg = infra::load_config(&app);
+    cfg.models.retain(|m| m != &path);
+    if cfg.last_model.as_deref() == Some(path.as_str()) {
+        cfg.last_model = None;
+    }
+    cfg.model_params.remove(&path);
+    cfg.mmproj_files.remove(&path);
+    infra::save_config(&app, &cfg);
+    Ok(cfg)
 }
 
 #[tauri::command]
