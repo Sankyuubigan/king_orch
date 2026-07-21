@@ -34,8 +34,8 @@ nodes:
   agent: provocateur
   output_type: message
   ui_pos:
-    y: 153
     x: 3075
+    y: 153
 
 - id: call_soma_translator
   type: llm_worker
@@ -63,8 +63,8 @@ nodes:
   inject_reports:
   - soma_translator
   ui_pos:
-    y: 121
-    x: 1509
+    y: 168
+    x: 667
 
 - id: call_validator
   type: llm_worker
@@ -98,8 +98,8 @@ nodes:
   - soma_translator
   - pattern_finder_by_floors
   ui_pos:
-    y: 675
     x: 4530
+    y: 675
   disabled: true
 
 - id: call_pattern_finder
@@ -108,8 +108,8 @@ nodes:
   inject_reports:
   - soma_translator
   ui_pos:
-    y: 570
     x: 4260
+    y: 570
 
 - id: call_healer
   type: llm_worker
@@ -123,13 +123,13 @@ nodes:
   - pattern_finder_by_floors
   - destructor_detector
   ui_pos:
-    x: 4801
     y: 678
+    x: 4801
 
 - id: check_somatic
   type: condition_check
   field: has_somatic
-  sequential_to: call_cluster_checker
+  sequential_to: note_1782224256075
   true_to: call_soma_translator
   ui_pos:
     x: -269
@@ -139,37 +139,37 @@ nodes:
   type: condition_check
   field: grounding_dont_exist
   true_to: call_grounder
-  false_to: note_1782220193985
+  false_to: call_cluster_checker
   ui_pos:
-    x: 1241
-    y: 276
+    y: 325
+    x: 410
 
 - id: call_cluster_checker
   type: llm_worker
   agent: cluster_checker
   ui_pos:
-    x: 91
-    y: 272
+    y: 347
+    x: 801
 
 - id: check_cluster_signal
   type: signal_router
   signal_name: cluster_checker
   cases_priority:
   - key: Конкретная проблема
-    to: note_1782224256075
+    to: note_1782220193985
   - key: Кластер
     to: call_decomposer
   default: call_decomposer
   ui_pos:
-    y: 262
-    x: 346
+    x: 1058
+    y: 295
 
 - id: call_decomposer
   type: llm_worker
   agent: decomposer
   ui_pos:
-    y: 385
-    x: 611
+    x: 1313
+    y: 447
 
 - id: synchronize_with_user
   type: llm_worker
@@ -213,30 +213,30 @@ nodes:
   type: note
   input: проверяем абстрактный ли запрос
   ui_pos:
-    x: 852
-    y: 242
+    y: 291
+    x: 21
 
 - id: call_shadow_worker
   type: llm_worker
   agent: shadow_worker
   output_type: message
   ui_pos:
-    x: 3549
     y: 628
+    x: 3549
 
 - id: note_1784427848563
   type: note
   input: вычисление типа
   ui_pos:
-    y: 582
     x: 3824
+    y: 582
 
 - id: combining_targets
   type: llm_freeform
   input: |-
-    среди мишеней по математике переходов определи корневую мишень, откуда произрастают все остальные.
+    среди мишеней по математике переходов определи корневую мишень, откуда произрастают все остальные. среди них есть корневая или они не пересекаются?
 
-    Затем, тебе надо сохранить тип деструктора (убеждения) у корневой мишени. Вызови инструмент emit_signal с результатами анализа:
+    Затем, если ты нашёл корневую, то тебе надо сохранить тип деструктора (убеждения) у корневой мишени. Вызови инструмент emit_signal с результатами анализа:
 
     emit_signal("destructor_type", "[номер цифру от 1 до 9 включительно]")
   ui_pos:
@@ -279,7 +279,7 @@ edges:
   to: synchronize_with_user
 
 - from: call_decomposer
-  to: note_1782224256075
+  to: note_1782220193985
 
 - from: note_1782220629095
   to: call_shadow_worker

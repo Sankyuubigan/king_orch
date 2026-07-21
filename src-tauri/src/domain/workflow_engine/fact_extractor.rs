@@ -147,9 +147,8 @@ fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], user_message: &st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::workflow_engine::parser::FactDef;
     use crate::infra::{ChatMessage, LlamaEngine, ModelParams};
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
     #[test]
@@ -158,51 +157,18 @@ mod tests {
         let model_path =
             std::env::var("TEST_MODEL_PATH").expect("Set TEST_MODEL_PATH to a GGUF file path");
 
-        let facts = vec![
-            FactDef {
-                id: "has_somatic".into(),
-                criteria: Some(
-                    r#"TRUE если: пользователь жалуется на конкретную физическую боль или телесный симптом — "спина болит", "голова раскалывается", "мышцы зажаты", "колено стреляет", "живот крутит", "врач поставил диагноз", "температура", "кашель", "сыпь на коже".
-FALSE если: пользователь описывает только эмоциональные/психологические состояния — "тоскливо", "тревога", "апатия", "меланхолия", "потеря смысла", "плохое настроение", "ощущаю себя мертвым", "нет энергии", "депрессия", даже если использует телесные метафоры ("кошки скребут", "ноет на душе", "тяжесть на сердце"). Это эмоциональные симптомы, а не соматика."#
-                        .into(),
-                ),
-            },
-            FactDef {
-                id: "grounding_dont_exist".into(),
-                criteria: Some(
-                    r#"Запрос юзера является абстрактным, то есть ни один из данных пунктов не соблюдается:
-1. Описан конкретный случай из жизни (кто, где, когда).
-2. Детально описано тяжелое текущее физическое или психическое состояние (например: "я в трансе", "тело сковано", "ощущаю себя мертвым"). Само состояние здесь является фактом.
-3. Описано конкретное действие, которое человек не может совершить (например: "не могу общаться с девушками", "не могу встать с кровати").
-Если текст состоит только из общих фраз, диагнозов, философских рассуждений или жалоб на жизнь в целом ("я неудачник", "у меня прокрастинация", "все люди злые") — запрос АБСТРАКТНЫЙ."#
-                        .into(),
-                ),
-            },
-            FactDef {
-                id: "user_doesnt_agree".into(),
-                criteria: Some(
-                    "Пользователь не согласен с ответами команды психотерапии. Юзер не доволен ответами"
-                        .into(),
-                ),
-            },
-        ];
-        let phases: Vec<FactDef> = vec![
-            FactDef {
-                id: "data_collection".into(),
-                criteria: Some(
-                    "Нет сигнала phase, либо последний signals phase сигнал = data_collection"
-                        .into(),
-                ),
-            },
-            FactDef {
-                id: "datamining".into(),
-                criteria: Some("Последний signals phase сигнал = datamining".into()),
-            },
-            FactDef {
-                id: "treatment".into(),
-                criteria: Some("Последний signals phase сигнал = treatment".into()),
-            },
-        ];
+        // Единый источник правды — реальный facts.yaml. Никаких копий критериев в тесте.
+        let workflow_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .join("agents/psychotherapist/transitions");
+        let config = WorkflowConfig {
+            facts_file: Some("facts.yaml".into()),
+            ..Default::default()
+        };
+        let facts = resolve_facts(&config, Some(&workflow_dir));
+        let phases = resolve_phases(&config, Some(&workflow_dir));
+        assert!(!facts.is_empty(), "facts.yaml не загрузился из {:?}", workflow_dir);
         let signals = "[]";
         let user_msg = "User: Я мужчина. У меня состояние медлительное заторможенное трансовое , такое негативное состояние, дискомфорт оно приносит мне. Как будто бы меня затягивает куда-то, какая-то меланхолия без всяких причин, настроения нету. Ощущаю себя мёртвым каким-то. Удовольствия от жизни нету. Я как будто бы не вижу смысла в получении удовольствия. Это странно. По этой причине мне и девушки неинтересны. дискомфорт возникает из за того что нету настроения. как то тоскливо без причины как будто бы кошки скребут ноют внутри.
 Session signals: []";
