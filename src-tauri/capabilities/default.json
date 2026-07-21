@@ -11,6 +11,7 @@
     "dialog:allow-message",
     "dialog:allow-open",
     "dialog:allow-save",
+    "updater:default",
     "shell:default",
     {
       "identifier": "shell:allow-execute",

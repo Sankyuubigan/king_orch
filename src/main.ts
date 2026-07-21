@@ -44,6 +44,15 @@ function initApp() {
     chkShowAdvanced: $<HTMLInputElement>("chk-show-advanced"),
     modelsList: $<HTMLDivElement>("models-list"),
     btnAddModelLlm: $<HTMLButtonElement>("btn-add-model-llm"),
+    btnCheckUpdate: $<HTMLButtonElement>("btn-check-update"),
+    updateStatus: $<HTMLElement>("update-status"),
+    btnAutoDownload: $<HTMLButtonElement>("btn-auto-download"),
+    autoDownloadModal: $<HTMLElement>("auto-download-modal"),
+    modalModelName: $<HTMLElement>("modal-model-name"),
+    modalSavePath: $<HTMLElement>("modal-save-path"),
+    modalFreeSpace: $<HTMLElement>("modal-free-space"),
+    btnModalCancel: $<HTMLButtonElement>("btn-modal-cancel"),
+    btnModalConfirm: $<HTMLButtonElement>("btn-modal-confirm"),
   });
 
   // ─── Контроллер чата (вкладка 💬) ───

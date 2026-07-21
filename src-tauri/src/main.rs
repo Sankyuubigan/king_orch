@@ -45,6 +45,8 @@ fn main() {
             api::models::add_model,
             api::models::remove_model,
             api::models::get_mmproj_path,
+            api::models::get_auto_download_info,
+            api::models::auto_download_default_model,
             api::chat::chat_request,
             api::chat::stop_processing,
             api::chat::get_prompt_preview,

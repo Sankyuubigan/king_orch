@@ -32,6 +32,8 @@ pub struct AppConfig {
     pub models: Vec<String>,
     pub last_model: Option<String>,
     #[serde(default)]
+    pub models_dir: Option<String>,
+    #[serde(default)]
     pub model_params: HashMap<String, ModelParams>,
     #[serde(default = "default_context_size")]
     pub context_size: u32,
@@ -81,6 +83,7 @@ impl Default for AppConfig {
         Self {
             models: Vec::new(),
             last_model: None,
+            models_dir: None,
             model_params: HashMap::new(),
             context_size: default_context_size(),
             max_gen_tokens: default_max_gen_tokens(),
@@ -124,6 +127,8 @@ pub struct CatalogEntry {
     pub default_params: ModelParams,
     #[serde(default)]
     pub hf_model_id: Option<String>,
+    #[serde(default)]
+    pub is_default: bool,
 }
 
 pub fn find_agents_dir(app: &AppHandle) -> PathBuf {

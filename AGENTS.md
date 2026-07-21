@@ -128,24 +128,24 @@ pub struct ChatMessage {
 
 ## 8. Сборка и тестирование (специфика King Orch)
 
+> ⚠️ **ЗАПРЕЩЁН прямой вызов `cargo build` / `cargo test` / `cargo check`**
+> (см. `global_ai_docs/desktop_rust_tauri/rules.md:29`)
+> Только через `build.bat` и `test.bat` — они сами находят VS (vswhere) и вызывают `vcvarsall.bat`.
+
 **Перед любой Rust-командой — убедиться, что sccache-сервер запущен:**
 ```powershell
 sccache --start-server        # если ещё не запущен
 ```
 
-### Rust-сборка
+### Rust-сборка (только так!)
 ```powershell
 cmd /c "cd /d `"D:\Projects\king_orch_3`" && build.bat 2>&1"
 ```
-```powershell
-cmd /c "cd /d `"D:\Projects\king_orch_3\src-tauri`" && cargo build 2>&1"
-```
 
-### Rust-тесты
+### Rust-тесты (только так!)
 ```powershell
 cmd /c "cd /d `"D:\Projects\king_orch_3`" && test.bat 2>&1"
 ```
-`test.bat` сам находит VS (через vswhere) и вызывает `vcvarsall.bat` перед `cargo test`.  
 
 ### Фронтенд-сборка и тесты
 ```powershell

@@ -146,6 +146,18 @@
       <div id="view-settings" class="view" style="overflow-y: auto;">
         
         <div class="group-box">
+          <div class="group-title">О приложении</div>
+          <div class="input-row">
+            <label>Версия:</label>
+            <span id="app-version">—</span>
+          </div>
+          <div class="input-row" style="margin-top: 10px;">
+            <button id="btn-check-update" class="btn-primary">Проверить обновления</button>
+            <span id="update-status" style="font-size: 13px; color: var(--text-muted); margin-left: 10px;"></span>
+          </div>
+        </div>
+
+        <div class="group-box">
           <div class="group-title">1. Скачать новую модель</div>
           <div class="input-row">
             <select id="download-model-select" style="flex: 1;">
@@ -159,6 +171,9 @@
               <div id="download-progress-bar" class="progress-bar"></div>
             </div>
           </div>
+          <button id="btn-auto-download" class="btn-primary" style="display:none; margin-top:10px;">
+            ⚡ Скачать автоматически
+          </button>
         </div>
 
         <div class="group-box">
@@ -239,12 +254,23 @@
             <label for="chk-show-advanced">Отображать продвинутые функции</label>
           </div>
         </div>
-
-        <div class="group-box" style="opacity: 0.6;">
-          <div class="group-title">О приложении</div>
-          <div class="input-row">
-            <label>Версия:</label>
-            <span id="app-version">—</span>
+        <div id="auto-download-modal" class="modal-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:1000; align-items:center; justify-content:center;">
+          <div class="modal-box" style="background:var(--bg-elevated,#1c1c1c); border:1px solid var(--border,#333); border-radius:12px; padding:24px; max-width:500px; width:90%;">
+            <h3 style="margin:0 0 16px 0; color:var(--text,#eee); font-size:18px;">Автоматическая загрузка модели</h3>
+            <p style="margin:8px 0; color:var(--text-muted,#aaa); font-size:14px;">
+              Будет скачана модель: <strong id="modal-model-name" style="color:var(--text,#eee);"></strong>
+            </p>
+            <p style="margin:8px 0; color:var(--text-muted,#aaa); font-size:14px;">
+              Путь: <span id="modal-save-path" style="color:var(--text,#eee); word-break:break-all;"></span>
+            </p>
+            <p style="margin:8px 0; color:var(--text-muted,#aaa); font-size:14px;">
+              Свободно на диске: <span id="modal-free-space" style="color:var(--text,#eee);"></span>
+            </p>
+            <p style="margin-top:16px; color:var(--text,#eee); font-size:15px;">Согласны?</p>
+            <div style="display:flex; gap:10px; justify-content:flex-end; margin-top:20px;">
+              <button id="btn-modal-cancel" class="btn-secondary">Отмена</button>
+              <button id="btn-modal-confirm" class="btn-primary">ОК</button>
+            </div>
           </div>
         </div>
       </div>

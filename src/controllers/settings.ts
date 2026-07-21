@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
+import { check } from "@tauri-apps/plugin-updater";
 import { store } from "../store";
 import { bus } from "../events";
 import { showToast } from "../ui";
@@ -30,6 +31,15 @@ export interface SettingsElements {
   chkShowAdvanced: HTMLInputElement;
   modelsList: HTMLDivElement;
   btnAddModelLlm: HTMLButtonElement;
+  btnCheckUpdate: HTMLButtonElement;
+  updateStatus: HTMLElement;
+  btnAutoDownload: HTMLButtonElement;
+  autoDownloadModal: HTMLElement;
+  modalModelName: HTMLElement;
+  modalSavePath: HTMLElement;
+  modalFreeSpace: HTMLElement;
+  btnModalCancel: HTMLButtonElement;
+  btnModalConfirm: HTMLButtonElement;
 }
 
 export class SettingsController {
@@ -72,8 +82,10 @@ export class SettingsController {
       empty.style.fontSize = "13px";
       empty.innerText = "Модели не добавлены.";
       this.el.modelsList.appendChild(empty);
+      this.el.btnAutoDownload.style.display = "block";
       return;
     }
+    this.el.btnAutoDownload.style.display = "none";
     for (const m of config.models) {
       const row = document.createElement("div");
       row.className = "model-list-row";
@@ -118,6 +130,7 @@ export class SettingsController {
       const version: string = await invoke("get_app_version") as string;
       const verEl = document.getElementById("app-version");
       if (verEl) verEl.textContent = version;
+      if (this.el.updateStatus) this.el.updateStatus.textContent = "";
       this.updateModelSelect(config);
       this.renderModelsList(config);
       if (config.context_size) { this.el.contextSlider.value = config.context_size.toString(); this.el.contextValue.innerText = config.context_size.toString(); }
@@ -192,14 +205,62 @@ export class SettingsController {
     });
     this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await open({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });
     this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await open({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });
+    this.el.btnCheckUpdate?.addEventListener("click", async () => {
+      const btn = this.el.btnCheckUpdate;
+      const status = this.el.updateStatus;
+      btn.disabled = true;
+      status.textContent = "Проверка...";
+      try {
+        const update = await check();
+        if (update) {
+          status.textContent = `Доступна версия ${update.version}`;
+          const install = confirm(`Доступно обновление до версии ${update.version}. Установить?`);
+          if (install) {
+            status.textContent = "Установка...";
+            await update.downloadAndInstall();
+          }
+        } else {
+          status.textContent = "У вас актуальная версия";
+        }
+      } catch (e: any) {
+        status.textContent = "";
+        showToast(`Ошибка проверки обновлений: ${e}`, "error");
+      } finally {
+        btn.disabled = false;
+      }
+    });
     this.el.btnDownloadModel?.addEventListener("click", async () => {
       const name = this.el.downloadModelSelect.value; if (!name) return;
       const model = store.modelsCatalog.find(m => m.name === name); if (!model) return;
       try {
-         const savePath = await save({ defaultPath: model.download_url.split('/').pop() || `${model.name}.gguf`, filters: [{ name: "GGUF", extensions: ["gguf"] }] }); if (!savePath) return;
+         const savePath = await save({ defaultPath: model.download_url.split('/').pop()?.split('?')[0] || `${model.name}.gguf`, filters: [{ name: "GGUF", extensions: ["gguf"] }] }); if (!savePath) return;
         this.el.btnDownloadModel.disabled = true; this.el.downloadProgressContainer.style.display = "block";
         await invoke("download_model", { url: model.download_url, savePath }); await invoke("add_model", { path: savePath });
         await this.loadConfig(); showToast(`Модель ${model.name} скачана!`, "success");
+      } catch(e) { showToast(`Ошибка: ${e}`, "error"); }
+      finally { this.el.btnDownloadModel.disabled = false; this.el.downloadProgressContainer.style.display = "none"; }
+    });
+
+    this.el.btnAutoDownload?.addEventListener("click", async () => {
+      try {
+        const info: any = await invoke("get_auto_download_info");
+        this.el.modalModelName.innerText = info.model_name;
+        this.el.modalSavePath.innerText = info.save_path;
+        this.el.modalFreeSpace.innerText = `${info.free_space_gb} GB`;
+        this.el.autoDownloadModal.style.display = "flex";
+
+        const confirmed = await new Promise<boolean>((resolve) => {
+          this.el.btnModalConfirm.onclick = () => { resolve(true); };
+          this.el.btnModalCancel.onclick = () => { resolve(false); };
+        });
+        this.el.autoDownloadModal.style.display = "none";
+        if (!confirmed) return;
+
+        this.el.btnDownloadModel.disabled = true;
+        this.el.downloadProgressContainer.style.display = "block";
+        await invoke("auto_download_default_model", { savePath: info.save_path });
+        await this.loadConfig();
+        showToast(`Модель ${info.model_name} скачана!`, "success");
       } catch(e) { showToast(`Ошибка: ${e}`, "error"); }
       finally { this.el.btnDownloadModel.disabled = false; this.el.downloadProgressContainer.style.display = "none"; }
     });

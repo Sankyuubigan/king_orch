@@ -1,6 +1,98 @@
+use serde::Serialize;
 use tauri::AppHandle;
 
 use crate::infra;
+
+#[derive(Serialize)]
+pub struct AutoDownloadInfo {
+    pub model_name: String,
+    pub model_url: String,
+    pub save_path: String,
+    pub free_space_gb: u64,
+    pub drive_letter: String,
+}
+
+#[tauri::command]
+pub fn get_auto_download_info(app: AppHandle) -> Result<AutoDownloadInfo, String> {
+    let catalog = infra::load_catalog(&app);
+    let default_entry = catalog
+        .iter()
+        .find(|e| e.is_default)
+        .ok_or_else(|| "В каталоге не найдена модель по умолчанию".to_string())?;
+
+    let disks = sysinfo::Disks::new();
+    let mut best_drive: Option<(String, u64)> = None;
+
+    for disk in &disks {
+        let mount = disk.mount_point().to_string_lossy().to_string();
+        let available = disk.available_space();
+        if mount.len() >= 2 && mount.as_bytes()[1] == b':' {
+            let drive_letter = mount[..1].to_uppercase();
+            if let Some((_, best_avail)) = best_drive {
+                if available > best_avail {
+                    best_drive = Some((drive_letter, available));
+                }
+            } else {
+                best_drive = Some((drive_letter, available));
+            }
+        }
+    }
+
+    let (drive_letter, free_space) =
+        best_drive.ok_or_else(|| "Не найден ни один диск для сохранения модели".to_string())?;
+
+    let save_dir = format!("{}:\\llm_local_ai_models", drive_letter);
+    let filename = default_entry
+        .download_url
+        .split('/')
+        .last()
+        .and_then(|s| s.split('?').next())
+        .unwrap_or(&format!("{}.gguf", default_entry.name))
+        .to_string();
+    let save_path = format!("{}\\{}", save_dir, filename);
+
+    Ok(AutoDownloadInfo {
+        model_name: default_entry.name.clone(),
+        model_url: default_entry.download_url.clone(),
+        save_path,
+        free_space_gb: free_space / (1024 * 1024 * 1024),
+        drive_letter,
+    })
+}
+
+#[tauri::command]
+pub async fn auto_download_default_model(app: AppHandle, save_path: String) -> Result<(), String> {
+    let catalog = infra::load_catalog(&app);
+    let default_entry = catalog
+        .iter()
+        .find(|e| e.is_default)
+        .ok_or_else(|| "В каталоге не найдена модель по умолчанию".to_string())?;
+
+    let parent_dir = std::path::Path::new(&save_path)
+        .parent()
+        .ok_or_else(|| "Неверный путь сохранения".to_string())?;
+    std::fs::create_dir_all(parent_dir)
+        .map_err(|e| format!("Не удалось создать директорию: {}", e))?;
+
+    crate::infra::downloader::download_model(
+        app.clone(),
+        default_entry.download_url.clone(),
+        save_path.clone(),
+    )
+    .await?;
+
+    let models_dir = parent_dir.to_str().map(|d| d.to_string());
+
+    let mut cfg = infra::load_config(&app);
+    if !cfg.models.contains(&save_path) {
+        cfg.models.push(save_path.clone());
+    }
+    cfg.last_model = Some(save_path);
+    cfg.models_dir = models_dir;
+    infra::save_config(&app, &cfg);
+
+    Ok(())
+}
 
 #[tauri::command]
 pub fn get_models_catalog(app: AppHandle) -> Vec<infra::CatalogEntry> {
