@@ -20,7 +20,7 @@ pub fn get_auto_download_info(app: AppHandle) -> Result<AutoDownloadInfo, String
         .find(|e| e.is_default)
         .ok_or_else(|| "В каталоге не найдена модель по умолчанию".to_string())?;
 
-    let disks = sysinfo::Disks::new();
+    let disks = sysinfo::Disks::new_with_refreshed_list();
     let mut best_drive: Option<(String, u64)> = None;
 
     for disk in &disks {

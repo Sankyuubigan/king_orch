@@ -45,6 +45,7 @@ function initApp() {
     modelsList: $<HTMLDivElement>("models-list"),
     btnAddModelLlm: $<HTMLButtonElement>("btn-add-model-llm"),
     btnCheckUpdate: $<HTMLButtonElement>("btn-check-update"),
+    btnInstallUpdate: $<HTMLButtonElement>("btn-install-update"),
     updateStatus: $<HTMLElement>("update-status"),
     btnAutoDownload: $<HTMLButtonElement>("btn-auto-download"),
     autoDownloadModal: $<HTMLElement>("auto-download-modal"),

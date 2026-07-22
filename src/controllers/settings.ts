@@ -32,6 +32,7 @@ export interface SettingsElements {
   modelsList: HTMLDivElement;
   btnAddModelLlm: HTMLButtonElement;
   btnCheckUpdate: HTMLButtonElement;
+  btnInstallUpdate: HTMLButtonElement;
   updateStatus: HTMLElement;
   btnAutoDownload: HTMLButtonElement;
   autoDownloadModal: HTMLElement;
@@ -44,6 +45,7 @@ export interface SettingsElements {
 
 export class SettingsController {
   private el: SettingsElements;
+  private pendingUpdate: any = null;
 
   constructor(el: SettingsElements) {
     this.el = el;
@@ -210,15 +212,14 @@ export class SettingsController {
       const status = this.el.updateStatus;
       btn.disabled = true;
       status.textContent = "Проверка...";
+      this.el.btnInstallUpdate.style.display = "none";
+      this.pendingUpdate = null;
       try {
         const update = await check();
         if (update) {
           status.textContent = `Доступна версия ${update.version}`;
-          const install = confirm(`Доступно обновление до версии ${update.version}. Установить?`);
-          if (install) {
-            status.textContent = "Установка...";
-            await update.downloadAndInstall();
-          }
+          this.el.btnInstallUpdate.style.display = "inline-block";
+          this.pendingUpdate = update;
         } else {
           status.textContent = "У вас актуальная версия";
         }
@@ -227,6 +228,26 @@ export class SettingsController {
         showToast(`Ошибка проверки обновлений: ${e}`, "error");
       } finally {
         btn.disabled = false;
+      }
+    });
+    this.el.btnInstallUpdate?.addEventListener("click", async () => {
+      if (!this.pendingUpdate) return;
+      const btn = this.el.btnInstallUpdate;
+      const status = this.el.updateStatus;
+      btn.disabled = true;
+      this.el.btnCheckUpdate.disabled = true;
+      status.textContent = "Установка...";
+      try {
+        await this.pendingUpdate.downloadAndInstall();
+        status.textContent = "Обновление установлено. Перезапустите приложение.";
+        this.el.btnInstallUpdate.style.display = "none";
+        this.pendingUpdate = null;
+      } catch (e: any) {
+        status.textContent = "";
+        showToast(`Ошибка установки: ${e}`, "error");
+      } finally {
+        btn.disabled = false;
+        this.el.btnCheckUpdate.disabled = false;
       }
     });
     this.el.btnDownloadModel?.addEventListener("click", async () => {
