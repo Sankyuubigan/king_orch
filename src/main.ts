@@ -42,6 +42,7 @@ function initApp() {
     downloadStatusLabel: $<HTMLDivElement>("download-status-label"),
     btnAddModel: $<HTMLButtonElement>("btn-add-model"),
     chkShowAdvanced: $<HTMLInputElement>("chk-show-advanced"),
+    chkShowFolderAgents: $<HTMLInputElement>("chk-show-folder-agents"),
     modelsList: $<HTMLDivElement>("models-list"),
     btnAddModelLlm: $<HTMLButtonElement>("btn-add-model-llm"),
     btnCheckUpdate: $<HTMLButtonElement>("btn-check-update"),

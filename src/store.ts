@@ -23,6 +23,9 @@ class Store {
   // Продвинутые функции
   showAdvancedFeatures = false;
 
+  // Командные агенты (из подпапок)
+  showFolderAgents = false;
+
   // Тестирование агентов
   testFileContent: any[] | null = null;
 

@@ -52,6 +52,8 @@ pub struct AppConfig {
     pub confidence_threshold: f32,
     #[serde(default = "default_show_advanced_features")]
     pub show_advanced_features: bool,
+    #[serde(default = "default_show_folder_agents")]
+    pub show_folder_agents: bool,
     #[serde(default)]
     pub mmproj_files: HashMap<String, String>,
 }
@@ -78,6 +80,7 @@ fn default_theme() -> String { "dark".to_string() }
 fn default_prompt_format() -> String { "Auto".to_string() }
 fn default_confidence_threshold() -> f32 { 0.8 }
 fn default_show_advanced_features() -> bool { false }
+fn default_show_folder_agents() -> bool { false }
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -94,6 +97,7 @@ impl Default for AppConfig {
             prompt_format: default_prompt_format(),
             confidence_threshold: default_confidence_threshold(),
             show_advanced_features: default_show_advanced_features(),
+            show_folder_agents: default_show_folder_agents(),
             mmproj_files: HashMap::new(),
         }
     }

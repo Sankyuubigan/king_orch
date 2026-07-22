@@ -1,7 +1,7 @@
 ---
 name: Visualizer Agent
 description: Создаёт визуализации связей между проблемами в формате Mermaid.js
-visible: true
+visible: false
 mode: worker
 subagents: []
 tools:

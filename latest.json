@@ -1,11 +1,11 @@
 {
-  "version": "26.7.28",
-  "notes": "Обновление King Orch до версии 26.7.28",
-  "pub_date": "2026-07-22T07:54:05.313Z",
+  "version": "26.7.32",
+  "notes": "King Orch 26.7.32",
+  "pub_date": "2026-07-22T23:32:51.377Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVURlh4c2JxZjRQYTJYK0IzUTFiTEdSbjhYYXFBSlVpSjFLYUFlckQ4ODhwd2lBcW9zQ1JEenpzYVNaK0k3ekRDMWpSWFhGS1VuU0FGYjVXdFAvRERlSWhKTmNUWVVLWUEwPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0NzA2ODQ1CWZpbGU6S2luZyBPcmNoXzI2LjcuMjhfeDY0LXNldHVwLmV4ZQpPODFtendrUnBzaXFhUldoc1VoZFNkTlVKd29tOTUyUytaZFVjcUlYbVZNTTR5aTc2SVkvbFBMd2NjS3psMDc0MzM2N1hpbXI2L0N4SlVFdUsvQ1lEZz09Cg==",
-      "url": "https://github.com/Sankyuubigan/king_orch/releases/download/v26.7.28/King.Orch_26.7.28_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVURlh4c2JxZjRQYSszYm9wYWVzYUhXWHduSy9NU1JWQkdSREUvQ3FtdlhZYWVuVk52Vmh0bVJHQUV3TldOcUc0VlpGWGF1Z21DTzFoWXU4SUppQ0ZXeDBuSSsrYXhDOEFFPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0NzYzMTMyCWZpbGU6S2luZyBPcmNoXzI2LjcuMzJfeDY0LXNldHVwLmV4ZQpCSVk3a3I1SHl6N0paMlk0d0o3SXc4ZWx5TlpvN0J5Qk05YVM3ME5KeVdLUVJOZ3FBQ1FSb3A0eWUrb01sSEtGUlRmRWVITElaZnJTWk9kUjAzd2dBQT09Cg==",
+      "url": "https://github.com/Sankyuubigan/king_orch/releases/download/v26.7.32/King.Orch_26.7.32_x64-setup.exe"
     }
   }
 }

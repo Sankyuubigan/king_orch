@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { showToast } from "../ui";
+import { store } from "../store";
 import type { TestCaseDef, SingleTestResult } from "../types";
 
 export interface AgentTestElements {
@@ -41,7 +42,7 @@ export class AgentTestController {
       const agents: any[] = await invoke("get_agents");
       this.el.testAgentList.innerHTML = "";
       for (const a of agents) {
-        if (a.is_hidden) continue;
+        if (a.is_hidden || (a.folder !== null && !store.showFolderAgents)) continue;
         const label = document.createElement("label");
         const cb = document.createElement("input");
         cb.type = "checkbox";

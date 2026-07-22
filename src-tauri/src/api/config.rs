@@ -41,6 +41,11 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
                 cfg.show_advanced_features = v;
             }
         }
+        "show_folder_agents" => {
+            if let Some(v) = value.as_bool() {
+                cfg.show_folder_agents = v;
+            }
+        }
         _ => {}
     }
     infra::save_config(&app, &cfg);

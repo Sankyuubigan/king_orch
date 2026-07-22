@@ -29,6 +29,7 @@ export interface SettingsElements {
   downloadStatusLabel: HTMLDivElement;
   btnAddModel: HTMLButtonElement;
   chkShowAdvanced: HTMLInputElement;
+  chkShowFolderAgents: HTMLInputElement;
   modelsList: HTMLDivElement;
   btnAddModelLlm: HTMLButtonElement;
   btnCheckUpdate: HTMLButtonElement;
@@ -146,6 +147,10 @@ export class SettingsController {
         store.showAdvancedFeatures = config.show_advanced_features;
         bus.emit("advanced:visibility", config.show_advanced_features);
       }
+      if (config.show_folder_agents !== undefined) {
+        this.el.chkShowFolderAgents.checked = config.show_folder_agents;
+        store.showFolderAgents = config.show_folder_agents;
+      }
       await this.loadAgents();
       bus.emit("config:loaded", config);
       await this.loadCatalog();
@@ -158,7 +163,7 @@ export class SettingsController {
       const entries: any[] = await invoke("get_agents");
       this.el.agentSelect.innerHTML = '';
       for (const e of entries) {
-        if (!e.is_hidden) {
+        if (!e.is_hidden && (e.folder === null || store.showFolderAgents)) {
           const o = document.createElement("option");
           o.value = e.id;
           const prefix = e.entry_type === 'workflow' ? '📁' : '📊';
@@ -204,6 +209,12 @@ export class SettingsController {
       store.showAdvancedFeatures = val;
       await invoke("set_config_value", { key: "show_advanced_features", value: val });
       bus.emit("advanced:visibility", val);
+    });
+    this.el.chkShowFolderAgents?.addEventListener("change", async () => {
+      const val = this.el.chkShowFolderAgents.checked;
+      store.showFolderAgents = val;
+      await invoke("set_config_value", { key: "show_folder_agents", value: val });
+      await this.loadAgents();
     });
     this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await open({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });
     this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await open({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });
