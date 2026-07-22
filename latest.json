@@ -1,0 +1,11 @@
+{
+  "version": "26.7.26",
+  "notes": "Обновление King Orch до версии 26.7.26",
+  "pub_date": "2026-07-22T04:37:55.011Z",
+  "platforms": {
+    "windows-x86_64": {
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVURlh4c2JxZjRQYTFrdERoU1NTZkRJRUp0VjBreXA2N3pnbVRRSlR3SzM0aHJMR2RCWWF1K1B5Y2c3SXhtQjVvdjFLRSszNC9NWDJ3RkdNNXVJUFpUclFINHRLbDJKdVFvPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzg0Njk1MDc0CWZpbGU6S2luZyBPcmNoXzI2LjcuMjZfeDY0LXNldHVwLmV4ZQo0R0h1RXlBTW02SVhNQW4vM2RMN3JEc3ZiOHRlTkdDTjlxazQ3enF6OXoxL3dUdHU1RjNJMEZreWs3OUVmTU9RZVdGNUVEQnBvbHVEL054enpnY2pCUT09Cg==",
+      "url": "https://github.com/Sankyuubigan/king_orch/releases/download/v26.7.26/King.Orch_26.7.26_x64-setup.exe"
+    }
+  }
+}

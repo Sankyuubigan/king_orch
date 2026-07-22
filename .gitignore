@@ -15,7 +15,6 @@ package-lock.json
 app_config.json
 /categories
 /tools/subagent-catalog
-latest.json
 temp_tauri.key
 /king_orch_3_ast_map.md
 /.agents_workspace
