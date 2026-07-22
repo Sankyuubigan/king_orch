@@ -93,12 +93,38 @@ async function downloadAndExtractDeno(binDir, target) {
 
 async function main() {
     try {
+        const prepOnly = process.argv.includes('--prep-only');
+
+        // 0. Обновление версии (правило YY.M.P)
         console.log('========================================');
-        console.log('[1/5] Установка зависимостей Node.js...');
+        console.log('[1/6] Обновление версии...');
+        const confPath = path.join(scriptDir, 'src-tauri', 'tauri.conf.json');
+        const cargoPath = path.join(scriptDir, 'src-tauri', 'Cargo.toml');
+        let confText = fs.readFileSync(confPath, 'utf8');
+        const match = confText.match(/"version"\s*:\s*"(\d+)\.(\d+)\.(\d+)"/);
+        if (match) {
+            const oldMaj = match[1];
+            const oldMin = match[2];
+            const oldPat = parseInt(match[3], 10);
+            const now = new Date();
+            const newMaj = now.getFullYear().toString().slice(-2);
+            const newMin = (now.getMonth() + 1).toString();
+            const newPat = (oldMaj === newMaj && oldMin === newMin) ? oldPat + 1 : 1;
+            const version = `${newMaj}.${newMin}.${newPat}`;
+            confText = confText.replace(/"version"\s*:\s*".*?"/, `"version": "${version}"`);
+            fs.writeFileSync(confPath, confText, 'utf8');
+            let cargoText = fs.readFileSync(cargoPath, 'utf8');
+            cargoText = cargoText.replace(/^version\s*=\s*".*?"/m, `version = "${version}"`);
+            fs.writeFileSync(cargoPath, cargoText, 'utf8');
+            console.log(`Версия обновлена до: ${version}`);
+        }
+
+        console.log('\n========================================');
+        console.log('[2/6] Установка зависимостей Node.js...');
         await runCommand('npm', ['install', '--legacy-peer-deps']);
 
         console.log('\n========================================');
-        console.log('[2/5] Подготовка сайдкаров...');
+        console.log('[3/6] Подготовка сайдкаров...');
         const binDir = path.join(scriptDir, 'src-tauri', 'bin');
         const iconsDir = path.join(scriptDir, 'src-tauri', 'icons');
         if (!fs.existsSync(binDir)) fs.mkdirSync(binDir, { recursive: true });
@@ -131,7 +157,7 @@ async function main() {
         await downloadAndExtractDeno(binDir, target);
 
         console.log('\n========================================');
-        console.log('[3/5] Проверка иконок...');
+        console.log('[4/6] Проверка иконок...');
         const iconPath = path.join(iconsDir, 'icon.ico');
         let needsIconGeneration = false;
         if (!isValidIco(iconPath)) {
@@ -155,8 +181,13 @@ async function main() {
             console.log('  ✅ icon.ico валиден.');
         }
 
+        if (prepOnly) {
+            console.log('\n✅ Prep-only: версия, npm, сайдкары, иконки готовы. Компиляция пропущена.');
+            return;
+        }
+
         console.log('\n========================================');
-        console.log('[4/5] Сборка приложения (без установщика)...');
+        console.log('[5/6] Сборка приложения (без установщика)...');
 
         // Переопределяем конфиг Tauri — отключаем бандлер (NSIS), но компиляция идёт штатно
         const overridePath = path.join(scriptDir, 'src-tauri', 'tauri-dev-override.json');
@@ -199,7 +230,7 @@ async function main() {
         }
 
         console.log('\n========================================');
-        console.log('[5/5] Запуск приложения...');
+        console.log('[6/6] Запуск приложения...');
         console.log('🚀 Запуск King Orch (без консоли)...');
         const child = spawn(exePath, [], {
             detached: true,

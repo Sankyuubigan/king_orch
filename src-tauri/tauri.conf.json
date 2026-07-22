@@ -1,6 +1,6 @@
 {
   "productName": "King Orch",
-  "version": "26.5.75",
+  "version": "26.7.16",
   "identifier": "com.kingorch.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -23,7 +23,7 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
     "targets": [
       "nsis"
     ],

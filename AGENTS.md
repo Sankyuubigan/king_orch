@@ -128,9 +128,10 @@ pub struct ChatMessage {
 
 ## 8. Сборка и тестирование (специфика King Orch)
 
-> ⚠️ **ЗАПРЕЩЁН прямой вызов `cargo build` / `cargo test` / `cargo check`**
-> (см. `global_ai_docs/desktop_rust_tauri/rules.md:29`)
-> Только через `build.bat` и `test.bat` — они сами находят VS (vswhere) и вызывают `vcvarsall.bat`.
+> ⚠️ **ЗАПРЕЩЁН прямой вызов `cargo build` / `cargo test` / `cargo check` / `npx tauri build` / `npx tauri dev`**
+> (см. `global_ai_docs/desktop_rust_tauri/rules.md:29`, `global_ai_docs/desktop_rust_tauri/rules.md:34`)
+> Только через `build.bat`, `test.bat` или `generate_installer.bat` — они сами находят VS (vswhere), вызывают `vcvarsall.bat` (инициализируют MSVC) и сбрасывают sccache-обёртки.
+> Запуск `npx tauri build` напрямую без .bat = sccache не найдёт cl.exe и сборка упадёт.
 
 **Перед любой Rust-командой — убедиться, что sccache-сервер запущен:**
 ```powershell
