@@ -689,7 +689,17 @@ export class ChatController {
     listen("progress", (e) => { this.el.progressBar.style.width = `${e.payload}%`; });
     listen("status", (e) => { this.el.statusLabel.innerText = e.payload as string; });
     listen("log", (e) => { this.logToGUI(e.payload as string); });
-    
+
+    listen("download_progress", (e) => {
+      const { downloaded, total } = e.payload as { downloaded: number; total: number };
+      if (total > 0) {
+        const pct = ((downloaded / total) * 100).toFixed(1);
+        const mbD = (downloaded / 1024 / 1024).toFixed(1);
+        const mbT = (total / 1024 / 1024).toFixed(1);
+        this.logToGUI(`📥 Скачивание: ${mbD} MB / ${mbT} MB (${pct}%)`);
+      }
+    });
+
     // СТРИМИНГ ОТВЕТА В ЧАТ В РЕАЛЬНОМ ВРЕМЕНИ
     listen("stream_chunk", (e) => {
         if (!store.isProcessing) return;

@@ -2,7 +2,7 @@ use serde::Serialize;
 use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, State, Emitter};
+use tauri::{AppHandle, State, Emitter, Manager};
 
 use crate::domain;
 use crate::infra::{self, ChatMessage, ChatAttachment, ModelParams, SubCall};
@@ -131,6 +131,9 @@ pub async fn chat_request(
         );
     };
 
+    let bins_dir = crate::infra::bin_downloader::get_bins_dir(
+        &app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+    );
     let log_cb_for_result = log_cb.clone();
     let result = tokio::task::spawn_blocking(move || {
         domain::run_chat(
@@ -140,6 +143,7 @@ pub async fn chat_request(
             stream_cb,
             agents_dir,
             mcp_servers_dir,
+            bins_dir,
             model_path,
             agent_id,
             message,

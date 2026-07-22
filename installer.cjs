@@ -16,17 +16,6 @@ function runCommand(command, args = [], options = {}) {
 
 async function main() {
     try {
-        // Clear old bundle directory to prevent false positives
-        const bundleDir = path.join(scriptDir, 'src-tauri', 'target', 'release', 'bundle');
-        if (fs.existsSync(bundleDir)) {
-            try {
-                fs.rmSync(bundleDir, { recursive: true, force: true });
-                console.log('Cleared old bundle directory.');
-            } catch (e) {
-                console.warn('Warning: Could not clear old bundle directory. Files might be locked.');
-            }
-        }
-
         // Step 2: Signing key
         console.log('========================================');
         console.log('[2/4] Setting up signing key...');
@@ -57,20 +46,7 @@ async function main() {
         console.log('[4/4] Post-build verification...');
         console.log('========================================\n');
 
-        const binDir = path.join(scriptDir, 'src-tauri', 'bin');
         const releaseDir = path.join(scriptDir, 'src-tauri', 'target', 'release');
-        const releaseBinDir = path.join(releaseDir, 'bin');
-
-        // Note: Copying sidecars here just in case they are needed for the executable run locally.
-        if (fs.existsSync(binDir) && fs.existsSync(releaseDir)) {
-            if (!fs.existsSync(releaseBinDir)) fs.mkdirSync(releaseBinDir, { recursive: true });
-            for (const file of fs.readdirSync(binDir)) {
-                const src = path.join(binDir, file);
-                const dst = path.join(releaseBinDir, file);
-                try { fs.copyFileSync(src, dst); } catch (e) {}
-            }
-        }
-
         const nsisDir = path.join(releaseDir, 'bundle', 'nsis');
         let installerFound = false;
 

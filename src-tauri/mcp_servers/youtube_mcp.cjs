@@ -50,7 +50,7 @@ function prepareVideo(url, chunkSize) {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yt-'));
     const outTmpl = path.join(tmpDir, '%(id)s.%(ext)s');
     const isWin = process.platform === 'win32'; const ytName = isWin ? 'yt-dlp.exe' : 'yt-dlp'; let ytDlpCmd = 'yt-dlp';
-    for (const p of [path.join(process.cwd(), 'bin', ytName), path.join(process.cwd(), ytName), path.join(__dirname, '..', '..', 'bin', ytName)]) { if (fs.existsSync(p)) { ytDlpCmd = `"${p}"`; break; } }
+    const searchPaths = [path.join(process.cwd(), 'bin', ytName), path.join(process.cwd(), ytName), path.join(__dirname, '..', '..', 'bin', ytName)]; if (process.env.KING_ORCH_BINS_DIR) searchPaths.push(path.join(process.env.KING_ORCH_BINS_DIR, ytName)); for (const p of searchPaths) { if (fs.existsSync(p)) { ytDlpCmd = `"${p}"`; break; } }
 
     let cookiesArg = "";
     for (const p of [path.join(process.cwd(), 'cookies'), path.join(__dirname, '..', '..', 'cookies')]) {

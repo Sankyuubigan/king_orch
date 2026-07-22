@@ -12,17 +12,6 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "updater:default",
-    "shell:default",
-    {
-      "identifier": "shell:allow-execute",
-      "allow":[
-        { "name": "bin/yt-dlp", "sidecar": true, "args": true },
-        { "name": "yt-dlp", "sidecar": true, "args": true },
-        { "name": "bin/node", "sidecar": true, "args": true },
-        { "name": "node", "sidecar": true, "args": true },
-        { "name": "bin/deno", "sidecar": true, "args": true },
-        { "name": "deno", "sidecar": true, "args": true }
-      ]
-    }
+    "shell:default"
   ]
 }

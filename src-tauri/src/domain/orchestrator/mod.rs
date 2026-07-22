@@ -76,7 +76,7 @@ fn valid_agent_ids(agents: &[AgentProfile], exclude_id: &str, exclude_mode: &str
 #[allow(clippy::too_many_arguments)]
 pub fn run_chat<L, S, C, ST>(
     log_cb: L, status_cb: S, subcall_cb: C, stream_cb: ST,
-    agents_dir: std::path::PathBuf, mcp_servers_dir: std::path::PathBuf,
+    agents_dir: std::path::PathBuf, mcp_servers_dir: std::path::PathBuf, bins_dir: std::path::PathBuf,
     model_path: String, agent_id: String, user_text: String, history: Vec<ChatMessage>,
     attachments: Vec<ChatAttachment>,
     context_size: u32, max_gen_tokens: u32, kv_quant_keys: bool, kv_quant_values: bool,     model_params: ModelParams, format_type: String,
@@ -145,6 +145,7 @@ where
             format_type: &format_type,
             cancel_flag: cancel_flag.clone(),
             mcp_servers_dir: &mcp_servers_dir,
+            bins_dir: &bins_dir,
             all_sub_calls: &mut all_sub_calls,
             msg_counter: &mut msg_counter,
             stream_meta: stream_meta.clone(),
@@ -164,7 +165,7 @@ where
             &engine, primary_agent, &agents, user_text, recent_history,
             &attachments,
             max_gen_usize, &model_params, &format_type,
-            cancel_flag, 0, &mut all_sub_calls, None, &mcp_servers_dir,
+            cancel_flag, 0, &mut all_sub_calls, None, &mcp_servers_dir, &bins_dir,
             &mut messages_store, &mut msg_counter,
             String::new(),
             stream_meta.clone(), true,
@@ -240,7 +241,7 @@ pub(crate) fn run_agent_node<L, S, C>(
     max_gen_tokens: usize, model_params: &ModelParams, format_type: &str,
     cancel_flag: Arc<AtomicBool>, depth: usize,
     all_sub_calls: &mut Vec<SubCall>, _caller_name: Option<String>,
-    mcp_servers_dir: &Path,
+    mcp_servers_dir: &Path, bins_dir: &Path,
     messages: &mut Vec<ChatMessage>, msg_counter: &mut u32,
     injected_reports: String,
     stream_meta: Arc<Mutex<StreamMeta>>,
@@ -265,7 +266,7 @@ where
 
     let mut mcp_clients = HashMap::new();
     let mut all_tools: Vec<(String, String, serde_json::Value)> = Vec::new();
-    runtime::load_mcp_servers(&log_cb, mcp_servers_dir, &agent.mcp_servers, &mut mcp_clients, &mut all_tools);
+    runtime::load_mcp_servers(&log_cb, mcp_servers_dir, bins_dir, &agent.mcp_servers, &mut mcp_clients, &mut all_tools);
 
     all_tools.push(("_builtin".to_string(), "emit_signal".to_string(), serde_json::json!({
         "name": "emit_signal",
@@ -512,7 +513,7 @@ where
                     engine, subagent, agents, parsed.content.clone(), vec![],
                     &[],
                     max_gen_tokens, model_params, format_type,
-                    cancel_flag.clone(), depth + 1, all_sub_calls, Some(agent.name.clone()), mcp_servers_dir,
+                    cancel_flag.clone(), depth + 1, all_sub_calls, Some(agent.name.clone()), mcp_servers_dir, bins_dir,
                     messages, msg_counter,
                     String::new(),
                     stream_meta.clone(), false,

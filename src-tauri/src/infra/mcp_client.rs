@@ -13,10 +13,18 @@ pub struct McpClient {
 
 impl McpClient {
     pub fn spawn_stub(cmd_path: &str, args: &[&str], log_cb: impl Fn(String) + Send + Sync + 'static) -> Result<Self, String> {
+        Self::spawn_stub_with_env(cmd_path, args, &[], log_cb)
+    }
+
+    pub fn spawn_stub_with_env(
+        cmd_path: &str, args: &[&str], envs: &[(&str, &str)],
+        log_cb: impl Fn(String) + Send + Sync + 'static,
+    ) -> Result<Self, String> {
         log_cb(format!("🚀 Запуск MCP сервера: {} {:?}", cmd_path, args));
-        
+
         let mut cmd = Command::new(cmd_path);
         cmd.args(args).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        for (k, v) in envs { cmd.env(k, v); }
 
         #[cfg(target_os = "windows")]
         { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); }

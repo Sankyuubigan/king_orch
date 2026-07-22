@@ -3,7 +3,7 @@ use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::time::Instant;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::domain;
 use crate::infra::{self, ChatMessage, SubCall};
@@ -64,6 +64,9 @@ pub async fn run_iterative_test(
     let mut results = Vec::new();
     let agents_dir = infra::find_agents_dir(&app);
     let mcp_servers_dir = infra::find_mcp_servers_dir(&app);
+    let bins_dir = infra::bin_downloader::get_bins_dir(
+        &app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+    );
     let agents = domain::load_agents(&agents_dir)?;
     let agent = agents
         .iter()
@@ -157,6 +160,7 @@ pub async fn run_iterative_test(
             &mut all_sub_calls,
             None, // caller_name
             &mcp_servers_dir,
+            &bins_dir,
             &mut current_chat_messages,
             &mut msg_counter,
             String::new(), // injected_reports

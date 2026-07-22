@@ -55,49 +55,13 @@ function isValidIco(filePath) {
     return buf.length > 4 && buf[0] === 0 && buf[1] === 0 && buf[2] === 1 && buf[3] === 0;
 }
 
-async function downloadAndExtractDeno(binDir, target) {
-    const denoExePath = path.join(binDir, `deno-${target}.exe`);
-    if (fs.existsSync(denoExePath)) {
-        console.log('  ✅ Deno уже загружен.');
-        return;
-    }
-
-    console.log('Загрузка Deno (v2.1.4)...');
-    const zipPath = path.join(binDir, 'deno-download.zip');
-    const extractDir = path.join(binDir, 'deno-extract');
-
-    try {
-        await downloadFile('https://github.com/denoland/deno/releases/download/v2.1.4/deno-x86_64-pc-windows-msvc.zip', zipPath);
-
-        console.log('  Распаковка Deno...');
-        if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true, force: true });
-        fs.mkdirSync(extractDir, { recursive: true });
-
-        execSync(`powershell -NoProfile -Command "Expand-Archive -Path '${zipPath}' -DestinationPath '${extractDir}' -Force"`, { stdio: 'pipe' });
-
-        const extractedExe = path.join(extractDir, 'deno.exe');
-        if (fs.existsSync(extractedExe)) {
-            fs.copyFileSync(extractedExe, denoExePath);
-            console.log('  ✅ Deno загружен и распакован.');
-        } else {
-            throw new Error('deno.exe не найден в архиве');
-        }
-    } catch (e) {
-        console.error(`  ⚠️ Ошибка загрузки Deno: ${e.message}`);
-        console.error('  Deno-песочница будет недоступна. Скачайте вручную из https://deno.land/');
-    } finally {
-        try { if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath); } catch (e) {}
-        try { if (fs.existsSync(extractDir)) fs.rmSync(extractDir, { recursive: true, force: true }); } catch (e) {}
-    }
-}
-
 async function main() {
     try {
         const prepOnly = process.argv.includes('--prep-only');
 
         // 0. Обновление версии (правило YY.M.P)
         console.log('========================================');
-        console.log('[1/6] Обновление версии...');
+        console.log('[1/5] Обновление версии...');
         const confPath = path.join(scriptDir, 'src-tauri', 'tauri.conf.json');
         const cargoPath = path.join(scriptDir, 'src-tauri', 'Cargo.toml');
         let confText = fs.readFileSync(confPath, 'utf8');
@@ -120,44 +84,14 @@ async function main() {
         }
 
         console.log('\n========================================');
-        console.log('[2/6] Установка зависимостей Node.js...');
+        console.log('[2/5] Установка зависимостей Node.js...');
         await runCommand('npm', ['install', '--legacy-peer-deps']);
 
         console.log('\n========================================');
-        console.log('[3/6] Подготовка сайдкаров...');
-        const binDir = path.join(scriptDir, 'src-tauri', 'bin');
+        console.log('[3/5] Подготовка директорий и иконок...');
         const iconsDir = path.join(scriptDir, 'src-tauri', 'icons');
-        if (!fs.existsSync(binDir)) fs.mkdirSync(binDir, { recursive: true });
         if (!fs.existsSync(iconsDir)) fs.mkdirSync(iconsDir, { recursive: true });
 
-        let target = 'x86_64-pc-windows-msvc';
-        try {
-            const rustcInfo = execSync('rustc -vV', { encoding: 'utf8' });
-            const hostMatch = rustcInfo.match(/host:\s*(.*)/);
-            if (hostMatch) target = hostMatch[1].trim();
-        } catch (e) {}
-        console.log(`Target: ${target}`);
-
-        const ytdlpPath = path.join(binDir, `yt-dlp-${target}.exe`);
-        if (!fs.existsSync(ytdlpPath)) {
-            console.log('Загрузка yt-dlp...');
-            await downloadFile('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe', ytdlpPath);
-        } else {
-            console.log('  ✅ yt-dlp уже загружен.');
-        }
-
-        const nodeExePath = path.join(binDir, `node-${target}.exe`);
-        if (!fs.existsSync(nodeExePath)) {
-            console.log('Загрузка Node.js...');
-            await downloadFile('https://nodejs.org/dist/v20.12.2/win-x64/node.exe', nodeExePath);
-        } else {
-            console.log('  ✅ Node.js уже загружен.');
-        }
-
-        await downloadAndExtractDeno(binDir, target);
-
-        console.log('\n========================================');
-        console.log('[4/6] Проверка иконок...');
         const iconPath = path.join(iconsDir, 'icon.ico');
         let needsIconGeneration = false;
         if (!isValidIco(iconPath)) {
@@ -182,12 +116,12 @@ async function main() {
         }
 
         if (prepOnly) {
-            console.log('\n✅ Prep-only: версия, npm, сайдкары, иконки готовы. Компиляция пропущена.');
+            console.log('\n✅ Prep-only: версия, npm, иконки готовы. Компиляция пропущена.');
             return;
         }
 
         console.log('\n========================================');
-        console.log('[5/6] Сборка приложения (без установщика)...');
+        console.log('[4/5] Сборка приложения (без установщика)...');
 
         // Переопределяем конфиг Tauri — отключаем бандлер (NSIS), но компиляция идёт штатно
         const overridePath = path.join(scriptDir, 'src-tauri', 'tauri-dev-override.json');
@@ -205,19 +139,7 @@ async function main() {
             throw new Error('Сборка Tauri не удалась');
         }
 
-        // Копируем сайдкары рядом с exe
         const releaseDir = path.join(scriptDir, 'src-tauri', 'target', 'release');
-        const releaseBinDir = path.join(releaseDir, 'bin');
-        if (fs.existsSync(binDir) && fs.existsSync(releaseDir)) {
-            if (!fs.existsSync(releaseBinDir)) fs.mkdirSync(releaseBinDir, { recursive: true });
-            for (const file of fs.readdirSync(binDir)) {
-                const src = path.join(binDir, file);
-                const dst = path.join(releaseBinDir, file);
-                try { fs.copyFileSync(src, dst); } catch (e) {}
-            }
-            console.log('  📋 Сайдкары скопированы.');
-        }
-
         const exePath = path.join(releaseDir, 'king_orch.exe');
         if (!fs.existsSync(exePath)) {
             throw new Error('king_orch.exe не найден! Сборка не удалась.');
@@ -230,7 +152,7 @@ async function main() {
         }
 
         console.log('\n========================================');
-        console.log('[6/6] Запуск приложения...');
+        console.log('[5/5] Запуск приложения...');
         console.log('🚀 Запуск King Orch (без консоли)...');
         const child = spawn(exePath, [], {
             detached: true,

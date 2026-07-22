@@ -1,6 +1,6 @@
 use futures_util::StreamExt;
-use std::fs::File;
-use std::io::{Read, Write};
+use std::fs::{self, File};
+use std::io::{Cursor, Read, Write};
 use tauri::{AppHandle, Emitter};
 
 #[derive(Clone, serde::Serialize)]
@@ -105,5 +105,79 @@ pub async fn download_model(app: AppHandle, url: String, save_path: String) -> R
     }
 
     eprintln!("[download] Готово: {} байт", downloaded);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn download_binary(app: AppHandle, url: String, save_path: String, extract_zip: bool) -> Result<(), String> {
+    eprintln!("[download_binary] Старт: {} -> {}", url, save_path);
+
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::default())
+        .timeout(std::time::Duration::from_secs(60 * 60))
+        .build()
+        .map_err(|e| format!("Ошибка создания HTTP-клиента: {}", e))?;
+
+    let res = client
+        .get(&url)
+        .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
+        .send()
+        .await
+        .map_err(|e| format!("Ошибка подключения: {}", e))?;
+
+    let status = res.status();
+    if !status.is_success() {
+        return Err(format!("HTTP {} при скачивании {}", status, url));
+    }
+
+    let total_size = res.content_length().unwrap_or(0);
+    let bytes = res.bytes().await.map_err(|e| format!("Ошибка чтения: {}", e))?;
+
+    let _ = app.emit("download_progress", DownloadProgress {
+        downloaded: bytes.len() as u64,
+        total: total_size,
+    });
+
+    if extract_zip {
+        let reader = Cursor::new(&bytes);
+        let mut archive = zip::ZipArchive::new(reader)
+            .map_err(|e| format!("Ошибка открытия zip: {}", e))?;
+
+        let save_dir = std::path::Path::new(&save_path).parent().unwrap_or(std::path::Path::new("."));
+        fs::create_dir_all(save_dir).map_err(|e| format!("Ошибка создания директории: {}", e))?;
+
+        let target_name = std::path::Path::new(&save_path)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("binary.exe");
+
+        let mut extracted = false;
+        for i in 0..archive.len() {
+            let mut entry = archive.by_index(i).map_err(|e| format!("Ошибка zip: {}", e))?;
+            let entry_name = entry.name().to_string();
+            if entry_name.ends_with(target_name) || entry_name.ends_with(".exe") {
+                let mut out = fs::File::create(&save_path)
+                    .map_err(|e| format!("Ошибка создания {}: {}", save_path, e))?;
+                std::io::copy(&mut entry, &mut out).map_err(|e| format!("Ошибка распаковки: {}", e))?;
+                extracted = true;
+                break;
+            }
+        }
+        if !extracted {
+            return Err(format!("{} не найден внутри zip", target_name));
+        }
+    } else {
+        fs::write(&save_path, &bytes).map_err(|e| format!("Ошибка записи: {}", e))?;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        if let Ok(file) = fs::File::open(&save_path) {
+            use std::os::unix::fs::PermissionsExt;
+            file.set_permissions(fs::Permissions::from_mode(0o755)).ok();
+        }
+    }
+
+    eprintln!("[download_binary] Готово: {} байт", bytes.len());
     Ok(())
 }

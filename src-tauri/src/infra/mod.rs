@@ -9,6 +9,7 @@ pub mod llm_multimodal;
 pub mod session_manager;
 pub mod mcp_client;
 pub mod downloader;
+pub mod bin_downloader;
 
 // ─── Публичные типы ───
 pub use config::{AppConfig, CatalogEntry, ModelParams};

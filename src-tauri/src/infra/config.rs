@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tauri::path::BaseDirectory;
 use tauri::{AppHandle, Manager};
 
 #[derive(Serialize, Deserialize, Clone)]
@@ -132,21 +133,25 @@ pub struct CatalogEntry {
 }
 
 pub fn find_agents_dir(app: &AppHandle) -> PathBuf {
-    let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
-    for dir in [
-        exe_dir.join("agents"),
-        resource_dir.join("agents"),
-        PathBuf::from("agents"),
-        exe_dir.join("..").join("..").join("agents"),
-    ] {
-        if dir.exists() {
-            return dir;
+    for rel in ["agents", "../agents"] {
+        if let Ok(path) = app.path().resolve(rel, BaseDirectory::Resource) {
+            if path.exists() {
+                return path;
+            }
         }
     }
-    let default = exe_dir.join("agents");
-    let _ = fs::create_dir_all(&default);
-    default
+    if let Ok(exe_dir) = app.path().executable_dir() {
+        let path = exe_dir.join("agents");
+        if path.exists() {
+            return path;
+        }
+    }
+    let path = PathBuf::from("agents");
+    if path.exists() {
+        return path;
+    }
+    app.path().resolve("agents", BaseDirectory::Resource)
+        .unwrap_or_else(|_| PathBuf::from("agents"))
 }
 
 pub fn find_mcp_servers_dir(app: &AppHandle) -> PathBuf {
