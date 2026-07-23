@@ -211,54 +211,41 @@ async function main() {
         console.log('\n========================================');
         console.log('Generating latest.json from GitHub API...');
 
-        try {
-            const apiResponse = execSync(
-                `gh api repos/Sankyuubigan/king_orch/releases/tags/${tag} --jq ".assets[] | .name + \":\" + .browser_download_url"`,
-                { encoding: 'utf8', cwd: scriptDir }
-            ).trim();
+        const assetsJson = execSync(
+            `gh api repos/Sankyuubigan/king_orch/releases/tags/${tag} --jq .assets`,
+            { encoding: 'utf8', cwd: scriptDir }
+        ).trim();
 
-            const sigContent = fs.readFileSync(sigPathFull, 'utf8').trim();
+        const assets = JSON.parse(assetsJson);
+        const installerAsset = assets.find(a => a.name.endsWith('-setup.exe') && !a.name.endsWith('.sig'));
+        const installerUrl = installerAsset ? installerAsset.browser_download_url : '';
 
-            const latestJson = {
-                version: version,
-                notes: `King Orch ${version}`,
-                pub_date: new Date().toISOString(),
-                platforms: {
-                    "windows-x86_64": {
-                        signature: sigContent,
-                        url: ""
-                    }
-                }
-            };
-
-            for (const line of apiResponse.split('\n')) {
-                const colonIdx = line.indexOf(':');
-                if (colonIdx === -1) continue;
-                const assetName = line.substring(0, colonIdx);
-                let downloadUrl = line.substring(colonIdx + 1);
-                if (!downloadUrl.startsWith('http')) {
-                    downloadUrl = 'https://' + downloadUrl.substring(downloadUrl.indexOf('github.com'));
-                }
-                if (assetName.endsWith('-setup.exe') && !assetName.endsWith('.sig')) {
-                    latestJson.platforms["windows-x86_64"].url = downloadUrl;
-                }
-            }
-
-            if (!latestJson.platforms["windows-x86_64"].url) {
-                throw new Error('Could not find installer URL from GitHub API');
-            }
-
-            const latestJsonPath = path.join(scriptDir, 'latest.json');
-            fs.writeFileSync(latestJsonPath, JSON.stringify(latestJson, null, 2), 'utf8');
-            console.log(`latest.json generated. URL: ${latestJson.platforms["windows-x86_64"].url}`);
-
-            execSync('git add latest.json', { stdio: 'inherit', cwd: scriptDir });
-            execSync('git commit -m "chore(release): update latest.json for ' + tag + '"', { stdio: 'inherit', cwd: scriptDir });
-            execSync('git push origin main', { stdio: 'inherit', cwd: scriptDir });
-            console.log('latest.json pushed to main.');
-        } catch (e) {
-            console.error('Failed to generate/push latest.json:', e.message);
+        if (!installerUrl) {
+            throw new Error('Could not find installer URL from GitHub API');
         }
+
+        const sigContent = fs.readFileSync(sigPathFull, 'utf8').trim();
+
+        const latestJson = {
+            version: version,
+            notes: `King Orch ${version}`,
+            pub_date: new Date().toISOString(),
+            platforms: {
+                "windows-x86_64": {
+                    signature: sigContent,
+                    url: installerUrl
+                }
+            }
+        };
+
+        const latestJsonPath = path.join(scriptDir, 'latest.json');
+        fs.writeFileSync(latestJsonPath, JSON.stringify(latestJson, null, 2), 'utf8');
+        console.log(`latest.json generated. URL: ${installerUrl}`);
+
+        execSync('git add latest.json', { stdio: 'inherit', cwd: scriptDir });
+        execSync('git commit -m "chore(release): update latest.json for ' + tag + '"', { stdio: 'inherit', cwd: scriptDir });
+        execSync('git push origin main', { stdio: 'inherit', cwd: scriptDir });
+        console.log('latest.json pushed to main.');
 
         console.log('\n========================================');
         console.log(`DONE! Release ${tag} complete.`);

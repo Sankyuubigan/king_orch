@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State, Emitter, Manager};
 
 use crate::domain;
-use crate::infra::{self, ChatMessage, ChatAttachment, ModelParams, SubCall};
+use crate::infra::{self, ChatMessage, ChatAttachment, ModelParams, SubCall, LlmMessage};
 use crate::api::AppState;
 
 // ─── Лог-файл последнего запуска ───
@@ -222,25 +222,19 @@ pub fn get_prompt_preview(
         }
     };
 
-    let mut llm_messages = vec![ChatMessage {
-        id: None,
-        msg_type: "message".to_string(),
+    let mut llm_messages: Vec<LlmMessage> = vec![LlmMessage {
+        role: "system".to_string(),
         content: system_prompt,
-        sub_calls: None,
-        author: Some("system".to_string()),
     }];
     
     for msg in history.iter().filter(|m| m.msg_type != "thought") {
-        llm_messages.push(msg.clone());
+        llm_messages.push(msg.to_llm_message());
     }
     
     if !message.is_empty() {
-        llm_messages.push(ChatMessage {
-            id: None,
-            msg_type: "message".to_string(),
+        llm_messages.push(LlmMessage {
+            role: "user".to_string(),
             content: message,
-            sub_calls: None,
-            author: Some("user".to_string()),
         });
     }
 

@@ -4,6 +4,7 @@ export interface ChatMessage {
     content: string;
     sub_calls?: SubCall[];
     author?: string;
+    model?: string;
     time_sec?: number;
 }
 

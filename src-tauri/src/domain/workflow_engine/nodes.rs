@@ -1,7 +1,7 @@
 use crate::domain::workflow_engine::context::WorkflowContext;
 use crate::domain::workflow_engine::parser::{EdgeDef, NodeDef, NodeType, WorkflowConfig, WorkflowDef};
 use crate::domain::workflow_engine::WorkflowRunner;
-use crate::infra::{ChatMessage, SubCall, push_report};
+use crate::infra::{ChatMessage, SubCall, push_report, extract_model_filename};
 
 /// Результат выполнения узла
 #[derive(Debug, Clone)]
@@ -113,6 +113,7 @@ where
                 content: result.clone(),
             sub_calls: node_sub_calls,
             author: Some(agent_id.to_string()),
+            model: Some(extract_model_filename(&runner.engine.model_path)),
         };
         push_report(&mut context.messages, msg, agent.single_report);
         *runner.msg_counter += 1;
@@ -272,6 +273,7 @@ where
                         content: reports.clone(),
                         sub_calls: None,
                         author: Some("system".to_string()),
+                        model: None,
                     };
                     context.messages.push(msg);
                     *runner.msg_counter += 1;
@@ -616,6 +618,7 @@ where
                         content: text.to_string(),
                         sub_calls: None,
                         author: Some("system".to_string()),
+                        model: None,
                     };
                     context.messages.push(msg);
                     *runner.msg_counter += 1;

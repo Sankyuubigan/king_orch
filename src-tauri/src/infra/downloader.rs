@@ -49,7 +49,9 @@ pub async fn download_model(app: AppHandle, url: String, save_path: String) -> R
     let mut stream = res.bytes_stream();
     let mut downloaded: u64 = 0;
 
-    let mut last_emit = std::time::Instant::now();
+    let mut last_emit_pct: u64 = 0;
+    // Начальный эмит 0%
+    let _ = app.emit("download_progress", DownloadProgress { downloaded: 0, total: total_size });
 
     while let Some(chunk) = stream.next().await {
         let chunk = match chunk {
@@ -67,19 +69,22 @@ pub async fn download_model(app: AppHandle, url: String, save_path: String) -> R
         }
         downloaded += chunk.len() as u64;
 
-        if last_emit.elapsed().as_millis() > 100 {
-            let _ = app.emit("download_progress", DownloadProgress {
-                downloaded,
-                total: total_size,
-            });
-            last_emit = std::time::Instant::now();
+        if total_size > 0 {
+            let current_pct = (downloaded * 100) / total_size;
+            if current_pct >= last_emit_pct + 20 || downloaded >= total_size {
+                let _ = app.emit("download_progress", DownloadProgress {
+                    downloaded,
+                    total: total_size,
+                });
+                last_emit_pct = current_pct;
+            }
         }
     }
 
-    let _ = app.emit("download_progress", DownloadProgress {
-        downloaded,
-        total: total_size,
-    });
+    // Финальный эмит 100% (если ещё не был отправлен)
+    if downloaded >= total_size {
+        let _ = app.emit("download_progress", DownloadProgress { downloaded, total: total_size });
+    }
 
     if total_size > 0 && downloaded < total_size {
         let _ = std::fs::remove_file(&save_path);

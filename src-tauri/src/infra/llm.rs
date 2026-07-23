@@ -21,7 +21,7 @@ use llama_cpp_2::mtmd::{MtmdContext, MtmdContextParams};
 
 use crate::infra::config::ModelParams;
 
-pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report};
+pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report, LlmMessage, extract_model_filename};
 pub use super::llm_gguf::{extract_string_from_gguf, extract_f32_from_gguf, extract_u32_from_gguf};
 
 /// Прогноз потребления VRAM для заданного размера контекста:
@@ -175,7 +175,7 @@ impl LlamaEngine {
         })
     }
 
-    pub fn build_prompt(&self, messages: &[ChatMessage], format_type: &str, log_cb: &impl Fn(String)) -> (String, PromptFormat) {
+    pub fn build_prompt(&self, messages: &[LlmMessage], format_type: &str, log_cb: &impl Fn(String)) -> (String, PromptFormat) {
         let pf = PromptFormat::from_str(format_type);
         let actual_format = if pf == PromptFormat::Auto {
             PromptFormat::detect_from_gguf(&self.model_path)
@@ -202,7 +202,7 @@ impl LlamaEngine {
         (full_prompt, actual_format)
     }
 
-    pub fn get_tokens_count(&self, messages: &[ChatMessage], format_type: &str) -> Result<usize, String> {
+    pub fn get_tokens_count(&self, messages: &[LlmMessage], format_type: &str) -> Result<usize, String> {
         let (full_prompt, _) = self.build_prompt(messages, format_type, &|_|{});
         let tokens = self.model.str_to_token(&full_prompt, AddBos::Always)
             .map_err(|e| format!("Ошибка токенизации: {}", e))?;
@@ -475,7 +475,7 @@ impl LlamaEngine {
 
     pub fn generate_chat<F, L>(
         &self,
-        messages: &[ChatMessage],
+        messages: &[LlmMessage],
         max_tokens: usize,
         model_params: &ModelParams,
         format_type: &str,

@@ -147,7 +147,7 @@ fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], user_message: &st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::{ChatMessage, LlamaEngine, ModelParams};
+    use crate::infra::{ChatMessage, LlamaEngine, ModelParams, LlmMessage};
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
@@ -183,19 +183,13 @@ Session signals: []";
         let engine = LlamaEngine::new(&model_path, 8192, false, false, &|_| {}, |_| {}).unwrap();
 
         let msgs = vec![
-            ChatMessage {
-                id: None,
-                msg_type: "message".to_string(),
+            LlmMessage {
+                role: "system".to_string(),
                 content: prompt,
-                sub_calls: None,
-                author: Some("system".to_string()),
             },
-            ChatMessage {
-                id: None,
-                msg_type: "message".to_string(),
+            LlmMessage {
+                role: "user".to_string(),
                 content: user_msg.to_string(),
-                sub_calls: None,
-                author: Some("user".to_string()),
             },
         ];
 

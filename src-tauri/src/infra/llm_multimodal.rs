@@ -17,7 +17,7 @@ use llama_cpp_2::mtmd::{MtmdBitmap, mtmd_default_marker, MtmdInputText};
 
 use crate::infra::config::ModelParams;
 use super::llm::LlamaEngine;
-use super::llm_types::{ChatMessage, ChatAttachment};
+use super::llm_types::{ChatAttachment, LlmMessage};
 use super::llm_gguf::extract_u32_from_gguf;
 
 fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
@@ -30,7 +30,7 @@ impl LlamaEngine {
     #[cfg(feature = "mtmd")]
     pub fn generate_chat_multimodal<F, L>(
         &self,
-        messages: &[ChatMessage],
+        messages: &[LlmMessage],
         attachments: &[ChatAttachment],
         max_tokens: usize,
         model_params: &ModelParams,
@@ -282,7 +282,7 @@ impl LlamaEngine {
     #[cfg(not(feature = "mtmd"))]
     pub fn generate_chat_multimodal<F, L>(
         &self,
-        _messages: &[ChatMessage],
+        _messages: &[LlmMessage],
         _attachments: &[ChatAttachment],
         _max_tokens: usize,
         _model_params: &ModelParams,

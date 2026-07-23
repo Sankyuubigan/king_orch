@@ -304,7 +304,6 @@ export class ChatController {
 
       const dur = ((performance.now() - startTime) / 1000);
       const newMessages = response.messages || [];
-      const thisRoundThoughts = store.chatHistory.slice(preSendLength).filter((m: any) => m.type === 'thought');
 
       if (newMessages.length > 0) {
         const oldHistory = newMessages.slice(0, preSendLength);
@@ -317,12 +316,10 @@ export class ChatController {
         });
         
         const oldUids = store.msgUidList.slice(0, preSendLength);
-        const thoughtUids = store.msgUidList.slice(preSendLength, preSendLength + thisRoundThoughts.length);
-        const remainingMessages = afterOldHistory.slice(thisRoundThoughts.length);
-        const newUids = remainingMessages.map(() => store.nextUid());
+        const newUids = afterOldHistory.map(() => store.nextUid());
 
-        store.chatHistory = [...oldHistory, ...thisRoundThoughts, ...remainingMessages];
-        store.msgUidList = [...oldUids, ...thoughtUids, ...newUids];
+        store.chatHistory = [...oldHistory, ...afterOldHistory];
+        store.msgUidList = [...oldUids, ...newUids];
       }
 
       this.renderChatFromHistory();
@@ -504,32 +501,23 @@ export class ChatController {
       const dur = ((performance.now() - startTime) / 1000);
       const newMessages = response.messages || [];
       console.log("DBG chat_request -> newMessages.len=", newMessages.length, "newMessages=", JSON.stringify(newMessages.map((m: any) => ({ t: m.type, a: m.author }))), "response.text?", !!response.text);
-      const thisRoundThoughts = store.chatHistory.slice(preSendLength + 1).filter((m: any) => m.type === 'thought');
+      // Мысли стриминга: теперь приходят в response.messages от backend.
       if (newMessages.length > 0) {
         newMessages.forEach((m: any) => {
             if (m.author && m.author !== 'user' && m.author !== 'system') {
                 m.time_sec = dur;
             }
         });
-
-        const oldUids = store.msgUidList.slice(0, preSendLength + 1);
-        const thoughtUids = store.msgUidList.slice(preSendLength + 1);
-        const newUids = newMessages.slice(preSendLength + 1).map(() => store.nextUid());
-
-        store.chatHistory = [...newMessages.slice(0, preSendLength + 1), ...thisRoundThoughts, ...newMessages.slice(preSendLength + 1)];
-        store.msgUidList = [...oldUids, ...thoughtUids, ...newUids];
+        store.chatHistory = [...newMessages];
+        store.msgUidList = store.chatHistory.map(() => store.nextUid());
       }
-      const agentUid = store.nextUid(); store.msgUidList.push(agentUid);
       const hasRT = response.sub_calls && response.sub_calls.some((c: any) => store.realtimeSubcallKeys.has(`${c.agent_name}:${c.time_sec.toFixed(2)}`));
-      if (response.text) {
-        this.renderChatFromHistory();
-      } else if (newMessages.length > 0) {
+      if (response.text || newMessages.length > 0) {
         this.renderChatFromHistory();
       }
-      // Гарантируем, что финальный ответ агента попал в историю и сессию.
-      // Защита от потери ответа, когда response.messages приходит неполным.
-      const lastMsg = store.chatHistory[store.chatHistory.length - 1];
-      const hasFinal = lastMsg && lastMsg.type === 'message' && lastMsg.author === activeAgent;
+      // Защита от потери ответа: ищем последнее СООБЩЕНИЕ (не мысль) от агента.
+      const lastMessage = [...store.chatHistory].reverse().find((m: any) => m.type === 'message');
+      const hasFinal = lastMessage && lastMessage.author === activeAgent;
       if (response.text && !hasFinal) {
         store.chatHistory.push({
           type: "message",
@@ -835,8 +823,6 @@ export class ChatController {
       if (store.activeThoughtsBlock) { addToThoughtsBlock(store.activeThoughtsBlock, item); }
       else { store.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(store.activeThoughtsBlock); }
       this.scrollToBottomIfNearEnd(this.el.chatHistory);
-      store.chatHistory.push({ type: "thought", content: payload.thought, author: payload.author, time_sec: payload.time_sec });
-      store.msgUidList.push(store.nextUid());
     });
   }
 

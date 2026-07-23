@@ -14,7 +14,7 @@ pub use parser::{find_workflow_by_stem, load_workflows, NodeType, WorkflowDef};
 use crate::domain::agent_manager::AgentProfile;
 use crate::domain::orchestrator;
 use crate::domain::parsers::clean_thought_tags;
-use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SubCall};
+use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SubCall, LlmMessage};
 use nodes::find_next_node;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -84,13 +84,10 @@ where
 
     /// Зовёт LLM со свободным ответом (без системного промпта) — для llm_freeform
     pub fn call_llm_freeform(&self, user_text: &str, history: &[ChatMessage]) -> Result<String, String> {
-        let mut msgs = history.to_vec();
-        msgs.push(ChatMessage {
-            id: None,
-            msg_type: "message".to_string(),
+        let mut msgs: Vec<LlmMessage> = history.iter().map(|m| m.to_llm_message()).collect();
+        msgs.push(LlmMessage {
+            role: "user".to_string(),
             content: user_text.to_string(),
-            sub_calls: None,
-            author: Some("user".to_string()),
         });
         let raw = self
             .engine
@@ -110,19 +107,13 @@ where
     /// Зовёт LLM напрямую (без .md агента) — для fact-экстрактора
     pub fn call_llm_direct(&self, system_prompt: &str, user_text: &str) -> Result<String, String> {
         let msgs = vec![
-            ChatMessage {
-                id: None,
-                msg_type: "message".to_string(),
+            LlmMessage {
+                role: "system".to_string(),
                 content: system_prompt.to_string(),
-                sub_calls: None,
-                author: Some("system".to_string()),
             },
-            ChatMessage {
-                id: None,
-                msg_type: "message".to_string(),
+            LlmMessage {
+                role: "user".to_string(),
                 content: user_text.to_string(),
-                sub_calls: None,
-                author: Some("user".to_string()),
             },
         ];
         (self.log_cb)("[direct] LLM вызов (fact_extractor)...".to_string());

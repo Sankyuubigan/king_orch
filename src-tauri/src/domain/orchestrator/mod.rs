@@ -5,7 +5,7 @@ use crate::domain::agent_manager::{load_agents, AgentProfile};
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner,
 };
-use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, ToolCallInfo, push_report};
+use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename};
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
     has_incomplete_json_action, parse_orchestrator_response, parse_tool_call, strip_tool_call,
@@ -178,6 +178,7 @@ where
                 content: final_res.clone(),
                 sub_calls: sub_calls_opt,
                 author: Some(primary_agent.id.clone()),
+                model: Some(extract_model_filename(&engine.model_path)),
             });
             Ok((final_res, all_sub_calls, messages_store))
     } else {
@@ -288,7 +289,7 @@ where
         system_prompt.push_str(&injected_reports);
     }
 
-    let mut llm_messages = vec![ChatMessage { id: None, msg_type: "message".to_string(), content: system_prompt.clone(), sub_calls: None, author: Some("system".to_string()) }];
+    let mut llm_messages: Vec<LlmMessage> = vec![LlmMessage { role: "system".to_string(), content: system_prompt.clone() }];
 
     for msg in messages.iter() {
         if msg.msg_type == "thought" { continue; }
@@ -308,20 +309,14 @@ where
             content = format!("[Контекст из чата. Предыдущий ответ от агента '{}']:\n{}", actual_author, content);
         }
 
-        llm_messages.push(ChatMessage {
-            id: None,
-            msg_type: "message".to_string(),
-            content,
-            sub_calls: None,
-            author: Some(role.to_string()),
-        });
+        llm_messages.push(LlmMessage { role: role.to_string(), content });
     }
 
     let user_text_dup = llm_messages.last()
-        .map(|m| m.author.as_deref() == Some("user") && m.content == user_text)
+        .map(|m| m.role == "user" && m.content == user_text)
         .unwrap_or(false);
     if !user_text_dup && !user_text.is_empty() {
-        llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: user_text.clone(), sub_calls: None, author: Some("user".to_string()) });
+        llm_messages.push(LlmMessage { role: "user".to_string(), content: user_text.clone() });
     }
 
     let initial_dump = format!("### [SYSTEM PROMPT]\n{}", system_prompt);
@@ -410,6 +405,7 @@ where
                         content: serde_json::json!({key: value}).to_string(),
                         sub_calls: None,
                         author: Some(agent.id.clone()),
+                        model: None,
                     };
                     messages.push(signal_msg);
                     *msg_counter += 1;
@@ -426,6 +422,7 @@ where
                         content: analysis.clone(),
                         sub_calls: None,
                         author: Some(agent.id.clone()),
+                        model: Some(extract_model_filename(&engine.model_path)),
                     };
                     messages.push(analysis_msg);
                     *msg_counter += 1;
@@ -463,8 +460,8 @@ where
                         final_response = format!("{} Синтаксическая ошибка (3 попытки): агент '{}' продолжает использовать 'tool' вместо 'target'. Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
                         break;
                     }
-                    llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), sub_calls: None, author: Some("assistant".to_string()) });
-                    llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: format!("⚠️ ОШИБКА_СИНТАКСИСА: ты использовал 'tool' для вызова сабагента '{}'. Это сабагент, а не инструмент. Исправь: используй 'target'. Пример: {{\"thought\": \"...\", \"target\": \"{}\", \"task_or_response\": \"...\"}}.", tool_name, tool_name), sub_calls: None, author: Some("user".to_string()) });
+                    llm_messages.push(LlmMessage { role: "user".to_string(), content: response.clone() });
+                    llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("⚠️ ОШИБКА_СИНТАКСИСА: ты использовал 'tool' для вызова сабагента '{}'. Это сабагент, а не инструмент. Исправь: используй 'target'. Пример: {{\"thought\": \"...\", \"target\": \"{}\", \"task_or_response\": \"...\"}}.", tool_name, tool_name) });
                     continue;
                 }
             }
@@ -476,14 +473,14 @@ where
                     break;
                 }
                 tool_calls.push(ToolCallInfo { tool_name: tool_name.clone(), arguments: args_str, result: output.clone() });
-                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), sub_calls: None, author: Some("assistant".to_string()) });
-                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\n⚠️ Инструмент вернул ошибку. Используй другой инструмент или заверши через {{\"target\": \"reply\"}}.", tool_name, output), sub_calls: None, author: None });
+                llm_messages.push(LlmMessage { role: "user".to_string(), content: response.clone() });
+                llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\n⚠️ Инструмент вернул ошибку. Используй другой инструмент или заверши через {{\"target\": \"reply\"}}.", tool_name, output) });
                 continue;
             }
             consecutive_failed_tools = 0;
             tool_calls.push(ToolCallInfo { tool_name: tool_name.clone(), arguments: args_str, result: output.clone() });
-            llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), sub_calls: None, author: Some("assistant".to_string()) });
-            llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\nЕсли задача выполнена — ответь ОБЫЧНЫМ ТЕКСТОМ.", tool_name, output), sub_calls: None, author: None });
+            llm_messages.push(LlmMessage { role: "user".to_string(), content: response.clone() });
+            llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\nЕсли задача выполнена — ответь ОБЫЧНЫМ ТЕКСТОМ.", tool_name, output) });
             continue;
         }
 
@@ -533,6 +530,7 @@ where
                         content: sub_result.clone(),
                         sub_calls: node_sub_calls.clone(),
                         author: Some(subagent.id.clone()),
+                        model: Some(extract_model_filename(&engine.model_path)),
                     };
                     push_report(messages, err_msg, subagent.single_report);
                     *msg_counter += 1;
@@ -546,14 +544,15 @@ where
                     content: sub_result.clone(),
                     sub_calls: node_sub_calls.clone(),
                     author: Some(subagent.id.clone()),
+                    model: Some(extract_model_filename(&engine.model_path)),
                 };
                 push_report(messages, msg, subagent.single_report);
                 *msg_counter += 1;
 
                 let new_sys = build_system_prompt(agent, messages, has_tools, &all_tools, max_gen_tokens);
-                if let Some(f) = llm_messages.first_mut() { if f.msg_type == "message" && f.author.as_deref() == Some("system") { f.content = new_sys; } }
-                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), sub_calls: None, author: Some("assistant".to_string()) });
-                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: format!("Отчет от {}:\n{}\n\nЕсли достаточно — ответь ОБЫЧНЫМ ТЕКСТОМ.", subagent.name, truncate_result(&sub_result, 2000)), sub_calls: None, author: Some("user".to_string()) });
+                if let Some(f) = llm_messages.first_mut() { if f.role == "system" { f.content = new_sys; } }
+                llm_messages.push(LlmMessage { role: "user".to_string(), content: response.clone() });
+                llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("Отчет от {}:\n{}\n\nЕсли достаточно — ответь ОБЫЧНЫМ ТЕКСТОМ.", subagent.name, truncate_result(&sub_result, 2000)) });
                 continue;
             } else {
                 consecutive_invalid_targets += 1;
@@ -562,14 +561,14 @@ where
                     final_response = format!("{} Агент '{}' вызывает несуществующего сабагента '{}'. Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id, parsed.target);
                     break;
                 }
-                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), sub_calls: None, author: Some("assistant".to_string()) });
+                llm_messages.push(LlmMessage { role: "user".to_string(), content: response.clone() });
                 let valid_ids = valid_agent_ids(agents, &agent.id, "primary");
                 let error_msg = if valid_ids.is_empty() {
                     format!("Ошибка: Агент '{}' не найден.", parsed.target)
                 } else {
                     format!("Ошибка: Агент '{}' не найден. Доступные агенты: {}. Ответь JSON с одним из них.", parsed.target, valid_ids.join(", "))
                 };
-                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: error_msg, sub_calls: None, author: Some("user".to_string()) });
+                llm_messages.push(LlmMessage { role: "user".to_string(), content: error_msg });
                 continue;
             }
         }
@@ -578,10 +577,28 @@ where
             let extracted = extract_think_content(&raw_response);
             for t in &extracted {
                 log_cb(format!("💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), t));
+                messages.push(ChatMessage {
+                    id: Some(format!("msg_{}", msg_counter)),
+                    msg_type: "thought".to_string(),
+                    content: t.clone(),
+                    sub_calls: None,
+                    author: Some(agent.name.clone()),
+                    model: Some(extract_model_filename(&engine.model_path)),
+                });
+                *msg_counter += 1;
             }
             if extracted.is_empty() && !raw_response.contains("<think") {
                 if let Some(t) = extract_thought_from_partial_json(&raw_response) {
                     log_cb(format!("💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), t));
+                    messages.push(ChatMessage {
+                        id: Some(format!("msg_{}", msg_counter)),
+                        msg_type: "thought".to_string(),
+                        content: t.clone(),
+                        sub_calls: None,
+                        author: Some(agent.name.clone()),
+                        model: Some(extract_model_filename(&engine.model_path)),
+                    });
+                    *msg_counter += 1;
                 }
             }
         }
@@ -593,8 +610,8 @@ where
                     final_response = format!("{} Агент '{}' не смог сформировать ответ (5 пустых попыток). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
                     break;
                 }
-                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: String::new(), sub_calls: None, author: Some("assistant".to_string()) });
-                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: "Ты размышлял, но не выдал ответ. ПРЕКРАТИ размышлять. Вызови сабагента через JSON или ответь ОБЫЧНЫМ ТЕКСТОМ.".to_string(), sub_calls: None, author: Some("user".to_string()) });
+                llm_messages.push(LlmMessage { role: "user".to_string(), content: String::new() });
+                llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты размышлял, но не выдал ответ. ПРЕКРАТИ размышлять. Вызови сабагента через JSON или ответь ОБЫЧНЫМ ТЕКСТОМ.".to_string() });
                 continue;
             }
 
@@ -604,8 +621,8 @@ where
                     final_response = format!("{} Агент '{}' не смог завершить действие (5 попыток). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
                     break;
                 }
-                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: response.clone(), sub_calls: None, author: Some("assistant".to_string()) });
-                llm_messages.push(ChatMessage { id: None, msg_type: "message".to_string(), content: "Ты начал размышлять в JSON, но не указал действие. Пиши кратко и СРАЗУ укажи \"target\" или \"tool\".".to_string(), sub_calls: None, author: Some("user".to_string()) });
+                llm_messages.push(LlmMessage { role: "user".to_string(), content: response.clone() });
+                llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты начал размышлять в JSON, но не указал действие. Пиши кратко и СРАЗУ укажи \"target\" или \"tool\".".to_string() });
                 continue;
             }
         }

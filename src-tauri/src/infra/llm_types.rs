@@ -27,6 +27,22 @@ pub struct ChatAttachment {
     pub data_base64: String,
 }
 
+/// Лёгкий тип для промпта LLM — только role + content.
+/// Используется временно при вызове generate_chat(), не сохраняется в сессию.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LlmMessage {
+    pub role: String,
+    pub content: String,
+}
+
+/// Извлекает имя файла из полного пути модели (для поля model в ChatMessage).
+pub fn extract_model_filename(path: &str) -> String {
+    std::path::Path::new(path)
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ChatMessage {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -38,6 +54,8 @@ pub struct ChatMessage {
     pub sub_calls: Option<Vec<SubCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub author: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 /// Добавляет отчёт агента в массив сообщений сессии.
@@ -70,6 +88,13 @@ impl ChatMessage {
             ("message", None) => "user",
             ("thought", _) => "user",
             _ => "user",
+        }
+    }
+
+    pub fn to_llm_message(&self) -> LlmMessage {
+        LlmMessage {
+            role: self.llm_role().to_string(),
+            content: self.content.clone(),
         }
     }
 }
@@ -112,7 +137,7 @@ impl PromptFormat {
         Self::detect_from_path(path)
     }
 
-    pub fn format_messages_jinja(template: &str, messages: &[ChatMessage]) -> Option<String> {
+    pub fn format_messages_jinja(template: &str, messages: &[LlmMessage]) -> Option<String> {
         let mut env = minijinja::Environment::new();
         env.add_template("chat", template).ok()?;
         let tmpl = env.get_template("chat").ok()?;
@@ -120,8 +145,8 @@ impl PromptFormat {
         let mut msgs_val = Vec::new();
         for m in messages {
             msgs_val.push(minijinja::context! {
-                role => m.llm_role(),
-                content => m.content.clone()
+                role => m.role,
+                content => m.content
             });
         }
 
@@ -131,19 +156,19 @@ impl PromptFormat {
         }).ok()
     }
 
-    pub fn format_messages(&self, messages: &[ChatMessage]) -> String {
+    pub fn format_messages(&self, messages: &[LlmMessage]) -> String {
         let mut full_prompt = String::new();
         match self {
             PromptFormat::ChatML | PromptFormat::Auto => {
                 for msg in messages {
-                    full_prompt.push_str(&format!("<|im_start|>{}\n{}<|im_end|>\n", msg.llm_role(), msg.content));
+                    full_prompt.push_str(&format!("<|im_start|>{}\n{}<|im_end|>\n", msg.role, msg.content));
                 }
                 full_prompt.push_str("<|im_start|>assistant\n");
             },
             PromptFormat::Gemma => {
                 let mut system_text = String::new();
                 for msg in messages {
-                    let role = msg.llm_role();
+                    let role = &*msg.role;
                     if role == "system" {
                         if !system_text.is_empty() { system_text.push_str("\n\n"); }
                         system_text.push_str(&msg.content);
@@ -156,7 +181,7 @@ impl PromptFormat {
                     } else {
                         msg.content.clone()
                     };
-                    let out_role = match role { "assistant" => "model", r => r };
+                    let out_role = if role == "assistant" { "model".to_string() } else { role.to_string() };
                     full_prompt.push_str(&format!("<start_of_turn>{}\n{}<end_of_turn>\n", out_role, content));
                 }
                 if !system_text.is_empty() {
@@ -167,7 +192,7 @@ impl PromptFormat {
             PromptFormat::Gemma4 => {
                 let mut system_text = String::new();
                 for msg in messages {
-                    let role = msg.llm_role();
+                    let role = &*msg.role;
                     if role == "system" {
                         if !system_text.is_empty() { system_text.push_str("\n\n"); }
                         system_text.push_str(&msg.content);
@@ -180,7 +205,7 @@ impl PromptFormat {
                     } else {
                         msg.content.clone()
                     };
-                    let out_role = match role { "assistant" => "model", r => r };
+                    let out_role = if role == "assistant" { "model".to_string() } else { role.to_string() };
                     full_prompt.push_str(&format!("<|turn>{}\n{}<turn|>\n", out_role, content));
                 }
                 if !system_text.is_empty() {
@@ -190,7 +215,7 @@ impl PromptFormat {
             },
             PromptFormat::Llama3 => {
                 for msg in messages {
-                    full_prompt.push_str(&format!("<|start_header_id|>{}<|end_header_id|>\n\n{}<|eot_id|>", msg.llm_role(), msg.content));
+                    full_prompt.push_str(&format!("<|start_header_id|>{}<|end_header_id|>\n\n{}<|eot_id|>", msg.role, msg.content));
                 }
                 full_prompt.push_str("<|start_header_id|>assistant<|end_header_id|>\n\n");
             }
