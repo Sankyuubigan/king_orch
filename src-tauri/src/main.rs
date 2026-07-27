@@ -58,6 +58,7 @@ fn main() {
             api::test::write_test_results,
             api::version::get_app_version,
             infra::downloader::download_model,
+            api::file_utils::write_text_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

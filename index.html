@@ -38,7 +38,7 @@
         </div>
 
         <div class="chat-input-area group-box">
-          <textarea id="chat-input" placeholder="Спросите что угодно (Shift+Enter для переноса)..."></textarea>
+          <textarea id="chat-input" placeholder="Спросите что угодно (Enter — перенос строки, Ctrl+Enter — отправить)..."></textarea>
           
           <div id="file-preview" class="file-preview-row"></div>
 
@@ -53,7 +53,7 @@
             </div>
             <div class="chat-input-controls-right">
               <button id="btn-stop" class="btn-danger" disabled>⏹ Стоп</button>
-              <button id="btn-send" class="btn-primary">Отправить</button>
+              <button id="btn-send" class="btn-primary" style="flex-direction: column; line-height: 1.2; white-space: normal;">Отправить<br><small>Ctrl+Enter</small></button>
             </div>
           </div>
         </div>
@@ -284,6 +284,7 @@
         <div class="group-box" style="flex: 1; display: flex; flex-direction: column; height: 100%;">
           <div class="group-title" style="display: flex; justify-content: space-between;">
             <span>Логи системы</span>
+            <button id="btn-save-logs" class="btn-secondary" style="padding: 2px 8px; font-size: 12px;">💾 Сохранить</button>
             <button id="btn-clear-logs" class="btn-secondary" style="padding: 2px 8px; font-size: 12px;">Очистить</button>
           </div>
           <textarea id="log-view" readonly placeholder="Здесь будут логи приложения..."></textarea>

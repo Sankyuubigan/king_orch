@@ -1,6 +1,7 @@
 [
   {
     "name": "gemma-4-8b",
+    "is_default": true,
     "download_url": "https://huggingface.co/SC117/gemma-4-E4B-it-heretic-QAT-GGUF/resolve/main/gemma-4-E4B-it-heretic-QAT-UD-Q4_K_XL.gguf?download=true",
     "hf_model_id": "Xenova/gemma-tokenizer"
   },
@@ -22,7 +23,6 @@
   },
   {
     "name": "bonsai-27b-q1_0",
-    "is_default": true,
     "download_url": "https://huggingface.co/prism-ml/Bonsai-27B-gguf/resolve/main/Bonsai-27B-Q1_0.gguf?download=true",
     "hf_model_id": "Qwen/Qwen3.6-27B"
   }

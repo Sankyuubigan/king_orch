@@ -9,6 +9,7 @@ pub mod chat;
 pub mod graph;
 pub mod test;
 pub mod version;
+pub mod file_utils;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

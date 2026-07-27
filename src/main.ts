@@ -3,9 +3,11 @@
  * Вся логика изолирована в модулях-контроллерах.
  * Импорты идут через двери (index.ts) — модули не лезут в кишки друг друга.
  */
-import { initConfirmDialog } from "./ui";
+import { initConfirmDialog, showToast } from "./ui";
 import { ChatController, SessionController, SettingsController, GraphController, AgentTestController } from "./controllers";
 import { bus } from "./events";
+import { invoke } from "@tauri-apps/api/core";
+import { save } from "@tauri-apps/plugin-dialog";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -131,6 +133,7 @@ function initApp() {
   const viewLogs = $<HTMLDivElement>("view-logs");
   const viewSubchat = $<HTMLDivElement>("view-subchat");
   const btnClearLogs = $<HTMLButtonElement>("btn-clear-logs");
+  const btnSaveLogs = $<HTMLButtonElement>("btn-save-logs");
   const logView = $<HTMLTextAreaElement>("log-view");
 
   // Суб-вкладки студии агентов
@@ -181,6 +184,23 @@ function initApp() {
   tabSettings?.addEventListener("click", () => switchTab('settings'));
   tabLogs?.addEventListener("click", () => switchTab('logs'));
   btnClearLogs?.addEventListener("click", () => { logView.value = ""; });
+  btnSaveLogs?.addEventListener("click", async () => {
+    const text = logView.value;
+    if (!text.trim()) { showToast("Логи пусты", "info"); return; }
+    try {
+      const now = new Date();
+      const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
+      const savePath = await save({
+        defaultPath: `logs_${ts}.txt`,
+        filters: [{ name: "Text", extensions: ["txt"] }],
+      });
+      if (!savePath) return;
+      await invoke("write_text_file", { path: savePath, content: text });
+      showToast(`Логи сохранены: ${savePath}`, "success");
+    } catch (e) {
+      showToast(`Ошибка сохранения: ${e}`, "error");
+    }
+  });
 
   subtabGraph?.addEventListener("click", () => switchSubTab('graph'));
   subtabAiTest?.addEventListener("click", () => {
