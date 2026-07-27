@@ -21,6 +21,8 @@ pub struct AgentProfile {
     pub folder: Option<String>,
     #[serde(default)]
     pub single_report: bool,
+    #[serde(default)]
+    pub tools: Vec<String>,
 }
 
 /// Единая точка входа в UI — может быть .md агентом или YAML графом
@@ -98,6 +100,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             let mut visible = false;
             let mut single_report = false;
             let mut mcp_servers = Vec::new();
+            let mut tools = Vec::new();
             for line in frontmatter.lines() {
                 let line = line.trim();
                 if line.starts_with("name:") { name = line["name:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string(); }
@@ -105,8 +108,9 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 else if line.starts_with("visible:") { visible = line["visible:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("single_report:") { single_report = line["single_report:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("mcp_servers:") { if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["mcp_servers:".len()..].trim()) { mcp_servers = parsed; } }
+                else if line.starts_with("tools:") { if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["tools:".len()..].trim()) { tools = parsed; } }
             }
-            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, single_report }); }
+            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, single_report, tools }); }
         }
     }
     None

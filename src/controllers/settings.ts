@@ -57,6 +57,7 @@ export class SettingsController {
   async loadModelParams() {
     const p = this.el.modelSelect.value; if (!p) return;
     const params: any = await invoke("get_model_params", { modelPath: p });
+    store.currentModelParams = params;
     this.el.tempSlider.value = params.temperature; this.el.tempValue.innerText = params.temperature;
     this.el.topkSlider.value = params.top_k; this.el.topkValue.innerText = params.top_k;
     this.el.toppSlider.value = params.top_p; this.el.toppValue.innerText = params.top_p;
@@ -67,7 +68,21 @@ export class SettingsController {
 
   private async saveModelParams() {
     const p = this.el.modelSelect.value; if (!p) return;
-    await invoke("set_model_params", { modelPath: p, params: { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value) } });
+    const base = store.currentModelParams;
+    await invoke("set_model_params", { modelPath: p, params: {
+      temperature: parseFloat(this.el.tempSlider.value),
+      top_k: parseInt(this.el.topkSlider.value, 10),
+      top_p: parseFloat(this.el.toppSlider.value),
+      min_p: parseFloat(this.el.minpSlider.value),
+      repetition_penalty: parseFloat(this.el.reppenSlider.value),
+      presence_penalty: parseFloat(this.el.prespenSlider.value),
+      dry_multiplier: base?.dry_multiplier ?? 0.0,
+      dry_base: base?.dry_base ?? 1.75,
+      dry_allowed_length: base?.dry_allowed_length ?? 2,
+      dry_penalty_last_n: base?.dry_penalty_last_n ?? 0,
+      xtc_probability: base?.xtc_probability ?? 0.0,
+      xtc_threshold: base?.xtc_threshold ?? 0.1,
+    } });
   }
 
   updateModelSelect(config: any) {

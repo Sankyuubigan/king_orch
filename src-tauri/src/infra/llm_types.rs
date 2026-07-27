@@ -27,6 +27,12 @@ pub struct ChatAttachment {
     pub data_base64: String,
 }
 
+#[derive(Debug, Clone)]
+pub struct GenerationResult {
+    pub text: String,
+    pub stop_reason: String,
+}
+
 /// Лёгкий тип для промпта LLM — только role + content.
 /// Используется временно при вызове generate_chat(), не сохраняется в сессию.
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -119,7 +119,29 @@ pub async fn chat_request(
     let meta_for_cb = stream_meta.clone();
     let stream_cb = move |chunk: String| {
         let (kind, author) = {
-            let m = meta_for_cb.lock().expect("stream_meta lock poisoned");
+            let mut m = meta_for_cb.lock().expect("stream_meta lock poisoned");
+            // Динамическое переключение: пока LLM генерирует  блок,
+            // стримим как "thought". Когда  закрылся — переключаем
+            // на "message" чтобы появилась болванка ответа.
+            if m.kind == "message" && !m.thinking_done {
+                m.buffer.push_str(&chunk);
+                if m.buffer.contains("</think>") || m.buffer.contains("</think ") {
+                    //  закрылся — переключаем на message
+                    m.thinking_done = true;
+                    m.buffer.clear();
+                } else if m.buffer.contains("<think>") || m.buffer.contains("<think ") {
+                    // Всё ещё внутри think блока — стримим как thought
+                    let _ = app_stream.emit(
+                        "stream_chunk",
+                        serde_json::json!({ "kind": "thought", "author": m.author, "text": chunk }),
+                    );
+                    return;
+                } else if !m.buffer.is_empty() {
+                    // Нет  в буфере — значит LLM пишет обычный текст
+                    // сразу (без think). Переключаем на message.
+                    m.thinking_done = true;
+                }
+            }
             (m.kind.clone(), m.author.clone())
         };
         if kind.is_empty() {

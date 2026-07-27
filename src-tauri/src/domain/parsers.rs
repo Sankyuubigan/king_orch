@@ -34,6 +34,16 @@ fn extract_json_block(text: &str) -> Option<String> {
     None
 }
 
+pub fn is_valid_json_action(text: &str) -> bool {
+    if let Some(json_str) = extract_json_block(text) {
+        serde_json::from_str::<serde_json::Value>(&json_str)
+            .or_else(|_| serde_json::from_str(&json_str.replace('\n', " ").replace('\r', "")))
+            .is_ok()
+    } else {
+        false
+    }
+}
+
 fn is_valid_tool_name(name: &str) -> bool {
     let lower = name.trim().to_lowercase();
     if lower.is_empty() { return false; }

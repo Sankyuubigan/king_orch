@@ -51,6 +51,9 @@ pub struct WorkflowConfig {
     pub facts_file: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extractor_prompt: Option<String>,
+    /// Дефолтный пресет параметров LLM для всех узлов workflow (имя из sampling_presets.json)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_llm_params: Option<String>,
 }
 
 /// Внешний файл фактов (facts.yaml)
@@ -166,6 +169,9 @@ pub struct NodeDef {
     /// Нода отключена (не выполняется при активации workflow)
     #[serde(default, skip_serializing_if = "is_false")]
     pub disabled: bool,
+    /// Имя пресета параметров LLM из sampling_presets.json (переопределяет default_llm_params)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub llm_params: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool { !b }

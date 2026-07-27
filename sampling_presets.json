@@ -1,0 +1,30 @@
+{
+  "strict": {
+    "temperature": 0.0,
+    "top_k": 0,
+    "top_p": 1.0,
+    "min_p": 0.0,
+    "repetition_penalty": 1.1,
+    "presence_penalty": 0.0,
+    "dry_multiplier": 0.0,
+    "dry_base": 1.75,
+    "dry_allowed_length": 2,
+    "dry_penalty_last_n": 256,
+    "xtc_probability": 0.0,
+    "xtc_threshold": 0.1
+  },
+  "creative": {
+    "temperature": 0.8,
+    "top_k": 0,
+    "top_p": 1.0,
+    "min_p": 0.08,
+    "repetition_penalty": 1.0,
+    "presence_penalty": 0.0,
+    "dry_multiplier": 0.8,
+    "dry_base": 1.75,
+    "dry_allowed_length": 5,
+    "dry_penalty_last_n": 256,
+    "xtc_probability": 0.0,
+    "xtc_threshold": 0.1
+  }
+}

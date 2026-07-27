@@ -282,7 +282,8 @@ export class ChatController {
     const startTime = performance.now();
 
     try {
-      const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value) };
+      const _p = store.currentModelParams;
+      const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value), dry_multiplier: _p?.dry_multiplier ?? 0.0, dry_base: _p?.dry_base ?? 1.75, dry_allowed_length: _p?.dry_allowed_length ?? 2, dry_penalty_last_n: _p?.dry_penalty_last_n ?? 0, xtc_probability: _p?.xtc_probability ?? 0.0, xtc_threshold: _p?.xtc_threshold ?? 0.1 };
       const allHistory = store.chatHistory.slice();
 
       let mmprojPath: string | null = null;
@@ -481,7 +482,8 @@ export class ChatController {
     const startTime = performance.now();
     try {
       const displayName = this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace(/^[📁📊]\s*/, '');
-      const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value) };
+      const _p2 = store.currentModelParams;
+      const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value), dry_multiplier: _p2?.dry_multiplier ?? 0.0, dry_base: _p2?.dry_base ?? 1.75, dry_allowed_length: _p2?.dry_allowed_length ?? 2, dry_penalty_last_n: _p2?.dry_penalty_last_n ?? 0, xtc_probability: _p2?.xtc_probability ?? 0.0, xtc_threshold: _p2?.xtc_threshold ?? 0.1 };
       const allHistory = store.chatHistory.slice();
       let mmprojPath: string | null = null;
       try { mmprojPath = await invoke("get_mmproj_path", { modelPath }); } catch (_) {}
@@ -779,27 +781,6 @@ export class ChatController {
                     addToThoughtsBlock(store.activeThoughtsBlock, item as HTMLElement);
                 } else {
                     item.innerHTML = `🧠 <strong>Агент</strong>: <em>${channelThought}</em>`;
-                }
-            }
-        }
-
-        // Печатаем "Мысли" агента в реальном времени в раскрывающийся блок!
-        const thinkMatch = store.rtStreamBuffer.match(/<think>([\s\S]*?)(?:<\/think>|$)/i);
-        if (thinkMatch) {
-            const thoughtContent = thinkMatch[1].trim();
-            if (!store.activeThoughtsBlock && msgEl) {
-                const item = createThoughtElement("Агент", thoughtContent);
-                item.id = "rt-thought";
-                store.activeThoughtsBlock = createThoughtsBlock([item]);
-                this.el.chatHistory.insertBefore(store.activeThoughtsBlock, msgEl);
-            } else if (store.activeThoughtsBlock) {
-                let item = store.activeThoughtsBlock.querySelector('#rt-thought');
-                if (!item) {
-                    item = createThoughtElement("Агент", thoughtContent);
-                    item.id = "rt-thought";
-                    addToThoughtsBlock(store.activeThoughtsBlock, item as HTMLElement);
-                } else {
-                    item.innerHTML = `🧠 <strong>Агент</strong>: <em>${thoughtContent}</em>`;
                 }
             }
         }

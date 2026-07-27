@@ -13,7 +13,23 @@ pub struct ModelParams {
     pub min_p: f32,
     pub repetition_penalty: f32,
     pub presence_penalty: f32,
+    #[serde(default)]
+    pub dry_multiplier: f32,
+    #[serde(default = "default_dry_base")]
+    pub dry_base: f32,
+    #[serde(default = "default_dry_allowed_length")]
+    pub dry_allowed_length: i32,
+    #[serde(default)]
+    pub dry_penalty_last_n: i32,
+    #[serde(default)]
+    pub xtc_probability: f32,
+    #[serde(default = "default_xtc_threshold")]
+    pub xtc_threshold: f32,
 }
+
+fn default_dry_base() -> f32 { 1.75 }
+fn default_dry_allowed_length() -> i32 { 2 }
+fn default_xtc_threshold() -> f32 { 0.1 }
 
 impl Default for ModelParams {
     fn default() -> Self {
@@ -24,6 +40,12 @@ impl Default for ModelParams {
             min_p: 0.1,
             repetition_penalty: 1.15,
             presence_penalty: 0.0,
+            dry_multiplier: 0.8,
+            dry_base: 1.75,
+            dry_allowed_length: 2,
+            dry_penalty_last_n: 256,
+            xtc_probability: 0.0,
+            xtc_threshold: 0.1,
         }
     }
 }
@@ -129,7 +151,6 @@ pub fn save_config(app: &AppHandle, config: &AppConfig) {
 pub struct CatalogEntry {
     pub name: String,
     pub download_url: String,
-    pub default_params: ModelParams,
     #[serde(default)]
     pub hf_model_id: Option<String>,
     #[serde(default)]
@@ -172,6 +193,32 @@ pub fn find_mcp_servers_dir(app: &AppHandle) -> PathBuf {
         }
     }
     resource_dir.join("mcp_servers")
+}
+
+/// Именованные пресеты параметров сэмплинга (sampling_presets.json)
+pub type SamplingPresets = HashMap<String, ModelParams>;
+
+/// Загружает пресеты из sampling_presets.json, ища в нескольких местах.
+/// Если файл не найден — возвращает пустой HashMap (backward compatible).
+pub fn load_sampling_presets(project_dir: &Path) -> SamplingPresets {
+    let possible_paths = vec![
+        project_dir.join("sampling_presets.json"),
+        project_dir.join("src-tauri").join("sampling_presets.json"),
+        project_dir.join("..").join("sampling_presets.json"),
+        PathBuf::from("sampling_presets.json"),
+    ];
+
+    for path in &possible_paths {
+        if let Ok(data) = fs::read_to_string(path) {
+            if let Ok(presets) = serde_json::from_str::<SamplingPresets>(&data) {
+                eprintln!("[config] sampling_presets.json загружен из {}", path.display());
+                return presets;
+            }
+        }
+    }
+    eprintln!("[config] sampling_presets.json не найден (пробовали: {:?}), пресеты не загружены",
+        possible_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>());
+    HashMap::new()
 }
 
 pub fn load_catalog(app: &AppHandle) -> Vec<CatalogEntry> {

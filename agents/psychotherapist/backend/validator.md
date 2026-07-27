@@ -2,9 +2,7 @@
 name: Валидатор данных
 visible: true
 single_report: true
-tools:
-  write: false
-  bash: false
+tools: ["emit_signal"]
 ---
 
 Твоя задача - проверить данные проблемы (если представлено несколько мишеней, то по каждой отдельно) юзера.

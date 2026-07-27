@@ -194,7 +194,7 @@ Session signals: []";
         ];
 
         let cancel = Arc::new(AtomicBool::new(false));
-        let response = engine
+        let gen = engine
             .generate_chat(
                 &msgs,
                 256,
@@ -205,6 +205,7 @@ Session signals: []";
                 |_| {},
             )
             .unwrap();
+        let response = gen.text;
 
         println!("=== RAW RESPONSE ===");
         println!("{}", response);

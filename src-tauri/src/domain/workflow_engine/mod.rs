@@ -10,11 +10,12 @@ pub mod parser;
 
 pub use context::WorkflowContext;
 pub use parser::{find_workflow_by_stem, load_workflows, NodeType, WorkflowDef};
+pub use parser::WorkflowConfig;
 
 use crate::domain::agent_manager::AgentProfile;
 use crate::domain::orchestrator;
 use crate::domain::parsers::clean_thought_tags;
-use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SubCall, LlmMessage};
+use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SamplingPresets, SubCall, LlmMessage};
 use nodes::find_next_node;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -38,6 +39,8 @@ pub struct WorkflowRunner<'a, L, S, C> {
     pub all_sub_calls: &'a mut Vec<SubCall>,
     pub msg_counter: &'a mut u32,
     pub stream_meta: Arc<Mutex<orchestrator::StreamMeta>>,
+    /// Именованные пресеты параметров LLM (sampling_presets.json)
+    pub sampling_presets: &'a SamplingPresets,
 }
 
 impl<'a, L, S, C> WorkflowRunner<'a, L, S, C>
@@ -46,6 +49,32 @@ where
     S: Fn(String, u8) + Clone + Send + Sync + 'static,
     C: Fn(&SubCall) + Clone + Send + Sync + 'static,
 {
+    /// Резолвит параметры LLM для узла: node.llm_params → config.default_llm_params → base params.
+    pub fn resolve_llm_params(
+        &self,
+        node_llm_params: &Option<String>,
+        workflow_config: &Option<WorkflowConfig>,
+    ) -> ModelParams {
+        // 1. Приоритет: llm_params на узле
+        if let Some(ref preset_name) = node_llm_params {
+            if let Some(preset) = self.sampling_presets.get(preset_name) {
+                return preset.clone();
+            }
+            eprintln!("[workflow] Пресет '{}' не найден в sampling_presets.json, fallback на base params", preset_name);
+        }
+        // 2. default_llm_params в config workflow
+        if let Some(ref config) = workflow_config {
+            if let Some(ref default_name) = config.default_llm_params {
+                if let Some(preset) = self.sampling_presets.get(default_name) {
+                    return preset.clone();
+                }
+                eprintln!("[workflow] Дефолтный пресет '{}' не найден в sampling_presets.json, fallback на base params", default_name);
+            }
+        }
+        // 3. Базовые параметры пользователя
+        self.model_params.clone()
+    }
+
     /// Выполняет .md агента через `run_agent_node()`
     pub fn call_agent(
         &mut self,
@@ -54,6 +83,7 @@ where
         messages: &mut Vec<ChatMessage>,
         injected_reports: &str,
         allow_stream: bool,
+        resolved_params: &ModelParams,
     ) -> Result<String, String> {
         orchestrator::run_agent_node(
             self.log_cb.clone(),
@@ -66,7 +96,7 @@ where
             vec![],
             &[],
             self.max_gen_tokens,
-            self.model_params,
+            resolved_params,
             self.format_type,
             self.cancel_flag.clone(),
             1,
@@ -89,7 +119,7 @@ where
             role: "user".to_string(),
             content: user_text.to_string(),
         });
-        let raw = self
+        let gen = self
             .engine
             .generate_chat(
                 &msgs,
@@ -101,11 +131,11 @@ where
                 self.log_cb.clone(),
             )
             .map_err(|e| format!("Ошибка LLM в freeform: {}", e))?;
-        Ok(clean_thought_tags(&raw))
+        Ok(clean_thought_tags(&gen.text))
     }
 
     /// Зовёт LLM напрямую (без .md агента) — для fact-экстрактора
-    pub fn call_llm_direct(&self, system_prompt: &str, user_text: &str) -> Result<String, String> {
+    pub fn call_llm_direct(&self, system_prompt: &str, user_text: &str, resolved_params: &ModelParams) -> Result<String, String> {
         let msgs = vec![
             LlmMessage {
                 role: "system".to_string(),
@@ -118,17 +148,12 @@ where
         ];
         (self.log_cb)("[direct] LLM вызов (fact_extractor)...".to_string());
         let start = std::time::Instant::now();
-        
-        let mut params = self.model_params.clone();
-        params.temperature = 0.0;
-        params.top_p = 1.0;
-        params.min_p = 0.0;
 
-        let result = self.engine
+        let gen = self.engine
             .generate_chat(
                 &msgs,
                 self.max_gen_tokens,
-                &params,
+                resolved_params,
                 self.format_type,
                 self.cancel_flag.clone(),
                 |_, _| {},
@@ -136,7 +161,7 @@ where
             )
             .map_err(|e| format!("Ошибка LLM: {}", e));
         (self.log_cb)(format!("[direct] LLM ответ за {:.1}с", start.elapsed().as_secs_f32()));
-        result
+        gen.map(|g| g.text)
     }
 }
 

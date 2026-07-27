@@ -20,8 +20,9 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::mtmd::{MtmdContext, MtmdContextParams};
 
 use crate::infra::config::ModelParams;
+use crate::infra::sampler::{self, DryParams, XtcParams};
 
-pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report, LlmMessage, extract_model_filename};
+pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report, LlmMessage, extract_model_filename, GenerationResult};
 pub use super::llm_gguf::{extract_string_from_gguf, extract_f32_from_gguf, extract_u32_from_gguf};
 
 /// Прогноз потребления VRAM для заданного размера контекста:
@@ -218,7 +219,7 @@ impl LlamaEngine {
         cancel_flag: Arc<AtomicBool>,
         mut progress_cb: F,
         log_cb: L,
-    ) -> Result<String, String>
+    ) -> Result<GenerationResult, String>
     where
         F: FnMut(f32, &str),
         L: Fn(String),
@@ -228,8 +229,10 @@ impl LlamaEngine {
         let actual_temp = params.temperature.max(0.01);
 
         log_cb(format!(
-            "🎛 Фактические параметры сэмплинга: Temp={:.2}, Top_K={}, Top_P={:.2}, Min_P={:.2}, Rep_Pen={:.2}, Pres_Pen={:.2}",
-            actual_temp, params.top_k, params.top_p, actual_min_p, actual_rep_pen, params.presence_penalty
+            "🎛 Фактические параметры сэмплинга: Temp={:.2}, Top_K={}, Top_P={:.2}, Min_P={:.2}, Rep_Pen={:.2}, Pres_Pen={:.2}, DRY={:.2}/{:.2}/{}, XTC={:.2}/{:.2}",
+            actual_temp, params.top_k, params.top_p, actual_min_p, actual_rep_pen, params.presence_penalty,
+            params.dry_multiplier, params.dry_base, params.dry_penalty_last_n,
+            params.xtc_probability, params.xtc_threshold
         ));
 
         let batch_size = 2048;
@@ -311,10 +314,22 @@ impl LlamaEngine {
         let mut generated_bytes: Vec<u8> = Vec::new();
         let mut generated_tokens = 0;
         let mut gen_tokens: Vec<llama_cpp_2::token::LlamaToken> = Vec::new();
+        let mut dry_last_tokens: Vec<llama_cpp_2::token::LlamaToken> = Vec::new();
+        let dry_params = DryParams {
+            multiplier: params.dry_multiplier,
+            base: params.dry_base,
+            allowed_length: params.dry_allowed_length,
+            penalty_last_n: params.dry_penalty_last_n,
+        };
+        let xtc_params = XtcParams {
+            probability: params.xtc_probability,
+            threshold: params.xtc_threshold,
+            min_keep: 1,
+        };
 
         let mut stop_words: Vec<&str> = vec![
             "<|im_end|>", "<end_of_turn>", "</s>", "<|eot_id|>",
-            "<turn>", "<|eot|>", "User:", "System:", "<eos>", "Yes",
+            "<turn>", "<|eot|>", "User:", "System:", "<eos>",
             "<turn|>", "/end_of_turn>", "<step>", "<|end_of_text|>", "<｜end of sentence｜>",
             "</start_of_turn>", "<|channel|>"
         ];
@@ -349,6 +364,11 @@ impl LlamaEngine {
                     if *logit <= 0.0 { *logit *= actual_rep_pen; }
                     else { *logit /= actual_rep_pen; }
                 }
+            }
+
+            // ── DRY: штраф за вербатим-повторения n-грамм ──
+            if dry_params.multiplier > 0.0 && dry_params.penalty_last_n != 0 {
+                sampler::apply_dry(&mut candidates_vec, &dry_last_tokens, &dry_params, sampler::default_seq_breakers());
             }
 
             for (_, logit) in candidates_vec.iter_mut() { *logit /= actual_temp; }
@@ -391,6 +411,11 @@ impl LlamaEngine {
             SEED.store(seed, Ordering::SeqCst);
             let r = (seed as f32) / (u32::MAX as f32);
 
+            // ── XTC: убираем самые вероятные "скучные" токены ──
+            if xtc_params.probability > 0.0 && xtc_params.threshold <= 0.5 {
+                sampler::apply_xtc(&mut probs, &xtc_params, r);
+            }
+
             let mut cumulative = 0.0;
             let mut new_token = probs.last().map(|(id, _)| *id).unwrap_or_else(|| self.model.token_eos());
             for (id, p) in probs.iter() { cumulative += *p; if r <= cumulative { new_token = *id; break; } }
@@ -398,6 +423,8 @@ impl LlamaEngine {
             if new_token == self.model.token_eos() { _stop_reason = "EOS"; break; }
             past_tokens.push(new_token);
             gen_tokens.push(new_token);
+            dry_last_tokens.push(new_token);
+            if dry_last_tokens.len() > 256 { dry_last_tokens.remove(0); }
 
             let mut loop_detected = false;
             let g_len = gen_tokens.len();
@@ -463,7 +490,21 @@ impl LlamaEngine {
             let preview: String = result_text.chars().take(take).collect();
             log_cb(format!("📝 Первые {} символов: {}", take, preview.replace('\n', "\\n")));
         }
-        Ok(result_text)
+
+        // ── Фактическое VRAM после инференса (сверка с ожидаемым) ──
+        match nvml_wrapper::Nvml::init() {
+            Ok(nvml) => {
+                if let Ok(device) = nvml.device_by_index(0) {
+                    if let Ok(mem) = device.memory_info() {
+                        let used_mb = mem.used / 1024 / 1024;
+                        log_cb(format!("📊 Фактическое VRAM после инференса: {} МБ (ожидаемое: ~{:.0} МБ)", used_mb, total_mb));
+                    }
+                }
+            }
+            Err(_) => {}
+        }
+
+        Ok(GenerationResult { text: result_text, stop_reason: _stop_reason.to_string() })
     }
 
     pub fn is_multimodal(&self) -> bool {
@@ -482,7 +523,7 @@ impl LlamaEngine {
         cancel_flag: Arc<AtomicBool>,
         progress_cb: F,
         log_cb: L,
-    ) -> Result<String, String>
+    ) -> Result<GenerationResult, String>
     where F: FnMut(f32, &str), L: Fn(String) {
         let (full_prompt, actual_format) = self.build_prompt(messages, format_type, &log_cb);
         log_cb(format!("🔤 Определен формат промпта: {:?}", actual_format));

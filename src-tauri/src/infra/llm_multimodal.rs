@@ -16,8 +16,9 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::mtmd::{MtmdBitmap, mtmd_default_marker, MtmdInputText};
 
 use crate::infra::config::ModelParams;
+use crate::infra::sampler::{self, DryParams, XtcParams};
 use super::llm::LlamaEngine;
-use super::llm_types::{ChatAttachment, LlmMessage};
+use super::llm_types::{ChatAttachment, LlmMessage, GenerationResult};
 use super::llm_gguf::extract_u32_from_gguf;
 
 fn base64_decode(input: &str) -> Result<Vec<u8>, String> {
@@ -38,7 +39,7 @@ impl LlamaEngine {
         cancel_flag: Arc<AtomicBool>,
         mut progress_cb: F,
         log_cb: L,
-    ) -> Result<String, String>
+    ) -> Result<GenerationResult, String>
     where F: FnMut(f32, &str), L: Fn(String) {
         let mtmd_ctx = self.mtmd_ctx.as_ref().ok_or("mmproj не загружен")?;
 
@@ -131,11 +132,23 @@ impl LlamaEngine {
         let mut generated_bytes: Vec<u8> = Vec::new();
         let mut past_tokens: Vec<llama_cpp_2::token::LlamaToken> = Vec::new();
         let mut gen_tokens: Vec<llama_cpp_2::token::LlamaToken> = Vec::new();
+        let mut dry_last_tokens: Vec<llama_cpp_2::token::LlamaToken> = Vec::new();
+        let dry_params = DryParams {
+            multiplier: model_params.dry_multiplier,
+            base: model_params.dry_base,
+            allowed_length: model_params.dry_allowed_length,
+            penalty_last_n: model_params.dry_penalty_last_n,
+        };
+        let xtc_params = XtcParams {
+            probability: model_params.xtc_probability,
+            threshold: model_params.xtc_threshold,
+            min_keep: 1,
+        };
         let mut _stop_reason = "MAX_TOKENS";
 
         let mut stop_words: Vec<&str> = vec![
             "<|im_end|>", "<end_of_turn>", "</s>", "<|eot_id|>",
-            "<turn>", "<|eot|>", "User:", "System:", "<eos>", "Yes",
+            "<turn>", "<|eot|>", "User:", "System:", "<eos>",
             "<turn|>", "/end_of_turn>", "<step>", "<|end_of_text|>", "<｜end of sentence｜>",
             "</start_of_turn>"
         ];
@@ -169,6 +182,11 @@ impl LlamaEngine {
                     if *logit <= 0.0 { *logit *= actual_rep_pen; }
                     else { *logit /= actual_rep_pen; }
                 }
+            }
+
+            // ── DRY: штраф за вербатим-повторения n-грамм ──
+            if dry_params.multiplier > 0.0 && dry_params.penalty_last_n != 0 {
+                sampler::apply_dry(&mut candidates_vec, &dry_last_tokens, &dry_params, sampler::default_seq_breakers());
             }
 
             for (_, logit) in candidates_vec.iter_mut() { *logit /= actual_temp; }
@@ -210,6 +228,11 @@ impl LlamaEngine {
             SEED.store(seed, Ordering::SeqCst);
             let r = (seed as f32) / (u32::MAX as f32);
 
+            // ── XTC: убираем самые вероятные "скучные" токены ──
+            if xtc_params.probability > 0.0 && xtc_params.threshold <= 0.5 {
+                sampler::apply_xtc(&mut probs, &xtc_params, r);
+            }
+
             let mut cumulative = 0.0;
             let mut new_token = probs.last().map(|(id, _)| *id).unwrap_or_else(|| self.model.token_eos());
             for (id, p) in probs.iter() { cumulative += *p; if r <= cumulative { new_token = *id; break; } }
@@ -217,6 +240,8 @@ impl LlamaEngine {
             if new_token == self.model.token_eos() { _stop_reason = "EOS"; break; }
             past_tokens.push(new_token);
             gen_tokens.push(new_token);
+            dry_last_tokens.push(new_token);
+            if dry_last_tokens.len() > 256 { dry_last_tokens.remove(0); }
 
             let mut loop_detected = false;
             let g_len = gen_tokens.len();
@@ -276,7 +301,7 @@ impl LlamaEngine {
         let speed = if gen_elapsed > 0.0 { generated_tokens as f64 / gen_elapsed } else { 0.0 };
         log_cb(format!("⚙️ Сгенерировано {} токенов за {:.1}с ({:.0} tok/s). Причина: {}", generated_tokens, gen_elapsed, speed, _stop_reason));
 
-        Ok(result_text)
+        Ok(GenerationResult { text: result_text, stop_reason: _stop_reason.to_string() })
     }
 
     #[cfg(not(feature = "mtmd"))]
@@ -290,7 +315,7 @@ impl LlamaEngine {
         _cancel_flag: Arc<AtomicBool>,
         mut _progress_cb: F,
         _log_cb: L,
-    ) -> Result<String, String>
+    ) -> Result<GenerationResult, String>
     where F: FnMut(f32, &str), L: Fn(String) {
         Err("Мультимодальный режим не поддерживается в этой сборке (отсутствует фича mtmd)".to_string())
     }

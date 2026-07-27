@@ -1,4 +1,4 @@
-import type { ChatMessage } from "./types";
+import type { ChatMessage, ModelParams } from "./types";
 
 /**
  * Центральное хранилище состояния приложения.
@@ -31,6 +31,9 @@ class Store {
 
   // Каталог моделей
   modelsCatalog: any[] = [];
+
+  // Параметры текущей модели (включая DRY/XTC)
+  currentModelParams: ModelParams | null = null;
   
   // Для стриминга текста в реальном времени
   rtStreamUid: string | null = null;

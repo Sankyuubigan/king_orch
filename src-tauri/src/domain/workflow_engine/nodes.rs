@@ -37,14 +37,33 @@ where
             let prompt =
                 super::fact_extractor::build_extractor_prompt(&config, &input, &signals, Some(workflow_dir));
 
-            let llm_response = runner.call_llm_direct(&prompt, &input)?;
+            let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
+            let llm_response = runner.call_llm_direct(&prompt, &input, &resolved_params)?;
 
-            let parsed: serde_json::Value =
+            let mut parsed: serde_json::Value =
                 serde_json::from_str(&llm_response).unwrap_or_else(|_| {
                     extract_json(&llm_response)
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_else(|| serde_json::json!({}))
                 });
+
+            // ── Fallback: если JSON пустой — повторить с уточнением ──
+            if parsed.as_object().map_or(false, |o| o.is_empty()) {
+                (runner.log_cb)("[fact_extractor] JSON пустой, повтор с уточнением...".to_string());
+                let retry_prompt = format!(
+                    "{}\n\nВАЖНО: Ответь ТОЛЬКО JSON-объектом без какого-либо другого текста. Пример формата: {{\"has_somatic\": true, \"phase\": \"data_collection\"}}",
+                    prompt
+                );
+                let retry_response = runner.call_llm_direct(&retry_prompt, &input, &resolved_params)?;
+                parsed = serde_json::from_str(&retry_response).unwrap_or_else(|_| {
+                    extract_json(&retry_response)
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or_else(|| {
+                            (runner.log_cb)("[fact_extractor] Повтор тоже без JSON, используем fallback".to_string());
+                            serde_json::json!({"has_somatic": true, "phase": "data_collection"})
+                        })
+                });
+            }
 
             (runner.log_cb)(format!(
                 "[fact_extractor] Сырой ответ: {}",
@@ -96,7 +115,8 @@ where
             // Только узлы с output_type: message стримят ответ в основной чат.
             // Остальные (thought по умолчанию) стримят мысли в блок «Мысли агентов».
             let allow_stream = node.output_type.as_deref() == Some("message");
-            let result = runner.call_agent(agent, &task, &mut context.messages, &injected_reports, allow_stream)?;
+            let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
+            let result = runner.call_agent(agent, &task, &mut context.messages, &injected_reports, allow_stream, &resolved_params)?;
             let end_len = runner.all_sub_calls.len();
 
             let node_sub_calls = if start_len < end_len {

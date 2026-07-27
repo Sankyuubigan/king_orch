@@ -1,6 +1,6 @@
 {
   "productName": "King Orch",
-  "version": "26.7.39",
+  "version": "26.7.65",
   "identifier": "com.kingorch.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -34,7 +34,8 @@
     "resources": {
       "mcp_servers/*": "mcp_servers/",
       "../agents/": "agents/",
-      "../models_catalog.json": "models_catalog.json"
+      "../models_catalog.json": "models_catalog.json",
+      "../sampling_presets.json": "sampling_presets.json"
     }
   },
   "plugins": {

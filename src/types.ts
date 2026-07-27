@@ -29,6 +29,12 @@ export interface ModelParams {
     min_p: number;
     repetition_penalty: number;
     presence_penalty: number;
+    dry_multiplier: number;
+    dry_base: number;
+    dry_allowed_length: number;
+    dry_penalty_last_n: number;
+    xtc_probability: number;
+    xtc_threshold: number;
 }
 
 export interface AgentEntry {
@@ -80,5 +86,4 @@ export interface CatalogEntry {
     download_url: string;
     mmproj_url?: string;
     hf_model_id?: string;
-    default_params: ModelParams;
 }
