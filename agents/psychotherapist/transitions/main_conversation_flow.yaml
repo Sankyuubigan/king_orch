@@ -14,8 +14,8 @@ nodes:
     User: {{ user_message }}
     Session signals: {{ signals }}
   ui_pos:
-    x: -1307
-    y: 489
+    x: -1921
+    y: 508
   llm_params: strict
 
 - id: priority_router
@@ -23,29 +23,31 @@ nodes:
   input_object: '{{ nodes.extract_facts.output }}'
   switch_field: phase
   cases_priority:
+  - key: greeting
+    to: note_1785141025138
   - key: data_collection
     to: note_1782221436115
   - key: datamining
     to: note_1782220629095
   ui_pos:
-    x: -949
-    y: 460
+    y: 495
+    x: -1516
 
 - id: call_provocateur
   type: llm_worker
   agent: provocateur
   output_type: message
   ui_pos:
-    x: 3075
     y: 153
+    x: 3075
 
 - id: call_soma_translator
   type: llm_worker
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    y: 139
     x: -21
+    y: 139
 
 - id: collect_info
   type: llm_worker
@@ -85,8 +87,8 @@ nodes:
   - key: ДАННЫХ ДОСТАТОЧНО
     to: note_1782220629095
   ui_pos:
-    x: 2422
     y: 179
+    x: 2422
 
 - id: call_destructor_finder
   type: llm_worker
@@ -143,8 +145,8 @@ nodes:
   true_to: note_1785036347995
   false_to: call_cluster_checker
   ui_pos:
-    x: 410
     y: 325
+    x: 410
 
 - id: call_cluster_checker
   type: llm_worker
@@ -170,16 +172,24 @@ nodes:
   type: llm_worker
   agent: decomposer
   ui_pos:
-    x: 1313
     y: 447
+    x: 1313
 
 - id: synchronize_with_user
   type: llm_worker
   agent: synchronizer
   ui_pos:
-    x: 3367
     y: 162
+    x: 3367
   disabled: true
+
+- id: call_request_helper
+  type: llm_worker
+  agent: request_helper
+  output_type: message
+  ui_pos:
+    y: 7
+    x: -690
 
 - id: note_1782220193985
   type: note
@@ -194,22 +204,22 @@ nodes:
   input: уточнение данных у юзера
   system_message: "Давайте проведем один мысленный эксперимент, чтобы заглянуть в самый корень вашей проблемы. Если вы окажетесь в этой точке и пути назад не будет, с каким самым невыносимым чувством вы столкнетесь внутри себя? \n\n(Пожалуйста, не пишите о том, что вы будете делать или как будете решать проблему. Опишите именно вашу внутреннюю катастрофу. Например: \"я почувствую себя абсолютно бесполезным ничтожеством\", \"я столкнусь с парализующим страхом смерти/пустоты\", \"я почувствую, что я абсолютно одинок и никому не нужен\", \"моя самооценка будет уничтожена\". Что именно сломается внутри вас?)\n\nПредставьте гипотетическую, но абсолютно безвыходную ситуацию. Что Вы почувствуете в этот момент ? Какие эмоции или состояние вы ощутите?"
   ui_pos:
-    y: 98
     x: 2678
+    y: 98
 
 - id: note_1782220629095
   type: note
   input: ослабление сопротивления
   ui_pos:
-    x: 3097
     y: 566
+    x: 3097
 
 - id: note_1782221436115
   type: note
   input: пересчитываем данные с учетом новых данных от юзера
   ui_pos:
-    x: -682
     y: 241
+    x: -682
 
 - id: note_1782224256075
   type: note
@@ -223,15 +233,15 @@ nodes:
   agent: shadow_worker
   output_type: message
   ui_pos:
-    x: 3549
     y: 628
+    x: 3549
 
 - id: note_1784427848563
   type: note
   input: вычисление типа
   ui_pos:
-    x: 3824
     y: 582
+    x: 3824
 
 - id: combining_targets
   type: llm_worker
@@ -255,8 +265,8 @@ nodes:
   - key: НУЖНА РУКОСТЬ
     to: note_1785123862689
   ui_pos:
-    x: 282
     y: 82
+    x: 282
 
 - id: note_1785123862689
   type: note
@@ -265,6 +275,22 @@ nodes:
   ui_pos:
     x: 536
     y: -156
+
+- id: note_1785141025138
+  type: note
+  input: Объясняем юзеру правила составления запроса
+  system_message: |-
+    Психотерапевт может решать любые жизненные проблемы внутренние и помогать достигать целей. Всё что Вам необходимо сделать - это правильно объяснить свою проблему в чат.
+
+    некоторые примеры внутренних проблем:
+    - проблемы со здоровьем тела
+    - абсурдный внутренний блок на пути к своей цели.
+    - финансовые блоки
+    - проблемы в отношениях с людьми
+    - депрессии, вспышки ярости и т.п.
+  ui_pos:
+    x: -1159
+    y: 23
 
 edges:
 
@@ -301,6 +327,9 @@ edges:
 - from: call_provocateur
   to: synchronize_with_user
 
+- from: note_1785141025138
+  to: call_request_helper
+
 - from: call_decomposer
   to: note_1782220193985
 
@@ -315,6 +344,3 @@ edges:
 
 - from: call_soma_translator
   to: check_need_handedness
-
-- from: check_need_handedness
-  to: note_1785123862689
