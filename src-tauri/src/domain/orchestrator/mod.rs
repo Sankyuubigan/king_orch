@@ -5,7 +5,7 @@ use crate::domain::agent_manager::{load_agents, AgentProfile};
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner,
 };
-use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename};
+use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename, llm_history};
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
     has_incomplete_json_action, parse_orchestrator_response, parse_tool_call, strip_tool_call,
@@ -58,6 +58,23 @@ fn safe_truncate(s: &str, max_len: usize) -> String {
         .map(|(i, c)| i + c.len_utf8())
         .unwrap_or(max_len.min(s.len()));
     format!("{}...", &s[..end])
+}
+
+/// Компактное описание вызова агента для subcall (вместо полной копии системного
+/// промпта): только task и injected_reports — то, что реально различается между
+/// вызовами. Источник промпта — сам .md файл агента (SSOT).
+fn build_invocation_dump(task: &str, injected_reports: &str) -> String {
+    let mut dump = String::new();
+    if !task.trim().is_empty() {
+        dump.push_str(&format!("### [ЗАДАЧА]\n{}\n\n", task.trim()));
+    }
+    if !injected_reports.trim().is_empty() {
+        dump.push_str(&format!("### [ОТЧЕТЫ КОЛЛЕГ]\n{}\n\n", injected_reports.trim()));
+    }
+    if dump.is_empty() {
+        dump.push_str("(вызов без задачи)");
+    }
+    dump.trim().to_string()
 }
 
 fn log_agent_thought(log_cb: &dyn Fn(String), agent: &AgentProfile, action_type: &str, target: &str, thought: &str, thinking_sec: f32, depth: usize) {
@@ -306,8 +323,8 @@ where
 
     let mut llm_messages: Vec<LlmMessage> = vec![LlmMessage { role: "system".to_string(), content: system_prompt.clone() }];
 
-    for msg in messages.iter() {
-        if msg.msg_type == "thought" { continue; }
+    // История для LLM — единое правило (llm_history): не-thought сообщения, только content.
+    for msg in llm_history(messages) {
         
         let actual_author = msg.author.as_deref().unwrap_or("user");
         let role;
@@ -334,7 +351,10 @@ where
         llm_messages.push(LlmMessage { role: "user".to_string(), content: user_text.clone() });
     }
 
-    let initial_dump = format!("### [SYSTEM PROMPT]\n{}", system_prompt);
+    // Invocation-дамп для subcall: только то, что различается между вызовами
+    // (task + отчёты коллег). Полный системный промпт агента живёт в .md файле
+    // (SSOT) — его копия в сессии раздувала бы JSON на 5-11KB за каждый вызов.
+    let invocation_dump = build_invocation_dump(&user_text, &injected_reports);
 
     let mut final_response = String::new();
     let mut tool_calls = Vec::new();
@@ -463,22 +483,15 @@ where
                     messages.push(signal_msg);
                     *msg_counter += 1;
 
+                    // Результат (анализ) агента в messages[] сохраняет вызывающий
+                    // (узел workflow / legacy-коллер), иначе получается клон: один
+                    // и тот же ответ дважды. Здесь остаётся только сигнал.
                     let (analysis, _) = strip_tool_call(&response);
                     let analysis = if analysis.trim().is_empty() {
                         if thought.is_empty() { response.clone() } else { thought.clone() }
                     } else {
                         analysis
                     };
-                    let analysis_msg = ChatMessage {
-                        id: Some(format!("msg_{}", msg_counter)),
-                        msg_type: "thought".to_string(),
-                        content: analysis.clone(),
-                        sub_calls: None,
-                        author: Some(agent.id.clone()),
-                        model: Some(extract_model_filename(&engine.model_path)),
-                    };
-                    messages.push(analysis_msg);
-                    *msg_counter += 1;
 
                     log_cb(format!("💭 Мысль {} [d={}] (сигнал + анализ) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), safe_truncate(&analysis, 500)));
                     tool_calls.push(ToolCallInfo {
@@ -692,7 +705,7 @@ where
     }
 
     if depth > 0 {
-        let subcall = SubCall { agent_name: agent.name.clone(), prompt: initial_dump.trim().to_string(), response: final_response.clone(), time_sec: start_time.elapsed().as_secs_f32(), tool_calls };
+        let subcall = SubCall { agent_name: agent.name.clone(), prompt: invocation_dump.clone(), response: final_response.clone(), time_sec: start_time.elapsed().as_secs_f32(), tool_calls };
         subcall_cb(&subcall);
         all_sub_calls.push(subcall);
     }

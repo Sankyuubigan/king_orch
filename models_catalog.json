@@ -2,33 +2,39 @@
   {
     "name": "gemma-4-8b",
     "is_default": true,
+    "size_gb": "4",
     "download_url": "https://huggingface.co/SC117/gemma-4-E4B-it-heretic-QAT-GGUF/resolve/main/gemma-4-E4B-it-heretic-QAT-UD-Q4_K_XL.gguf?download=true",
-    "hf_model_id": "Xenova/gemma-tokenizer"
+    "tokenizer_id": "Xenova/gemma-tokenizer"
   },
   {
     "name": "gemma-4-12b",
+    "size_gb": "6.3",
     "download_url": "https://huggingface.co/SC117/gemma-4-12B-it-heretic-QAT-GGUF/resolve/main/gemma-4-12B-it-heretic-QAT-UD-Q4_K_XL.gguf?download=true",
     "mmproj_url": "https://huggingface.co/mradermacher/gemma-4-12B-it-abliterated-uncensored-GGUF/resolve/main/gemma-4-12B-it-abliterated-uncensored.mmproj-f16.gguf?download=true",
-    "hf_model_id": "Xenova/gemma-tokenizer"
+    "tokenizer_id": "Xenova/gemma-tokenizer"
   },
   {
     "name": "granite-4.1-8b",
+    "size_gb": "4.8",
     "download_url": "https://huggingface.co/mradermacher/granite-4.1-8b-heretic-i1-GGUF/resolve/main/granite-4.1-8b-heretic.i1-Q4_K_M.gguf?download=true",
-    "hf_model_id": "ibm-granite/granite-3.0-8b-instruct"
+    "tokenizer_id": "ibm-granite/granite-3.0-8b-instruct"
   },
   {
     "name": "ternary-bonsai-27b",
+    "size_gb": "7.1",
     "download_url": "https://huggingface.co/prism-ml/Ternary-Bonsai-27B-gguf/resolve/main/Ternary-Bonsai-27B-Q2_g64.gguf?download=true",
-    "hf_model_id": "Qwen/Qwen3.6-27B"
+    "tokenizer_id": "Qwen/Qwen3.6-27B"
   },
   {
     "name": "bonsai-27b-q1_0",
+    "size_gb": "3.6",
     "download_url": "https://huggingface.co/prism-ml/Bonsai-27B-gguf/resolve/main/Bonsai-27B-Q1_0.gguf?download=true",
-    "hf_model_id": "Qwen/Qwen3.6-27B"
+    "tokenizer_id": "Qwen/Qwen3.6-27B"
   },
   {
     "name": "gemma-4-4b",
+    "size_gb": "2.6",
     "download_url": "https://huggingface.co/FadedRedStar/gemma-4-E2B-it-qat-q4_0-heretic-GGUF/resolve/main/gemma-4-E2B-it-qat-q4_0-heretic-Q4_0_PURE.gguf?download=true",
-    "hf_model_id": "Xenova/gemma-tokenizer"
+    "tokenizer_id": "Xenova/gemma-tokenizer"
   }
 ]

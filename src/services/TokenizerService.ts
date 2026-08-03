@@ -8,17 +8,17 @@ let currentModelId: string | null = null;
  * Глобальный сервис подсчета токенов во фронтенде (Live preview).
  * Автоматически скачивает и кэширует tokenizer.json из HuggingFace.
  */
-export async function countTokens(text: string, hfModelId: string): Promise<number> {
+export async function countTokens(text: string, tokenizerId: string): Promise<number> {
     if (!text) return 0;
     try {
-        if (!tokenizerCache[hfModelId]) {
-            if (currentModelId !== hfModelId || !currentInitPromise) {
-                currentModelId = hfModelId;
-                currentInitPromise = AutoTokenizer.from_pretrained(hfModelId);
+        if (!tokenizerCache[tokenizerId]) {
+            if (currentModelId !== tokenizerId || !currentInitPromise) {
+                currentModelId = tokenizerId;
+                currentInitPromise = AutoTokenizer.from_pretrained(tokenizerId);
             }
-            tokenizerCache[hfModelId] = await currentInitPromise;
+            tokenizerCache[tokenizerId] = await currentInitPromise;
         }
-        const tokens = await tokenizerCache[hfModelId].encode(text, { add_special_tokens: false });
+        const tokens = await tokenizerCache[tokenizerId].encode(text, { add_special_tokens: false });
         return tokens.length;
     } catch (e) {
         console.warn("Ошибка токенизатора HF, используется резервный подсчет:", e);

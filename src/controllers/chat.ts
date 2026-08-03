@@ -114,10 +114,10 @@ export class ChatController {
 
     if (!modelPath || !agentId) return;
 
-    let hfModelId = "Xenova/Meta-Llama-3-8B-Instruct";
+    let tokenizerId = "Xenova/Meta-Llama-3-8B-Instruct";
     const catalogModel = store.modelsCatalog.find((m: CatalogEntry) => modelPath.includes(m.name) || m.name === modelPath);
-    if (catalogModel && catalogModel.hf_model_id) {
-        hfModelId = catalogModel.hf_model_id;
+    if (catalogModel && catalogModel.tokenizer_id) {
+        tokenizerId = catalogModel.tokenizer_id;
     }
 
     try {
@@ -132,7 +132,7 @@ export class ChatController {
             history: store.chatHistory
         });
 
-        const tokens = await countTokens(promptText, hfModelId);
+        const tokens = await countTokens(promptText, tokenizerId);
 
         const vramMb = await invoke<number>("get_prompt_memory", {
             modelPath,

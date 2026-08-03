@@ -16,6 +16,7 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::mtmd::{MtmdBitmap, mtmd_default_marker, MtmdInputText};
 
 use crate::infra::config::ModelParams;
+use crate::infra::detokenizer::compute_stream_diff;
 use crate::infra::sampler::{self, DryParams, XtcParams};
 use super::llm::LlamaEngine;
 use super::llm_types::{ChatAttachment, LlmMessage, GenerationResult};
@@ -268,7 +269,7 @@ impl LlamaEngine {
             if let Ok(bytes) = self.model.token_to_bytes(new_token, Special::Tokenize) {
                 generated_bytes.extend_from_slice(&bytes);
                 let current_text = String::from_utf8_lossy(&generated_bytes).into_owned();
-                let diff = current_text[result_text.len()..].to_string();
+                let diff = compute_stream_diff(&current_text, &result_text).to_string();
                 if !diff.is_empty() { (self.stream_cb)(diff); }
                 result_text = current_text;
             }

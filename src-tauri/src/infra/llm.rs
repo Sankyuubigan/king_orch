@@ -20,9 +20,10 @@ use llama_cpp_2::llama_batch::LlamaBatch;
 use llama_cpp_2::mtmd::{MtmdContext, MtmdContextParams};
 
 use crate::infra::config::ModelParams;
+use crate::infra::detokenizer::compute_stream_diff;
 use crate::infra::sampler::{self, DryParams, XtcParams};
 
-pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report, LlmMessage, extract_model_filename, GenerationResult};
+pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report, LlmMessage, extract_model_filename, GenerationResult, llm_history};
 pub use super::llm_gguf::{extract_string_from_gguf, extract_f32_from_gguf, extract_u32_from_gguf};
 
 /// Прогноз потребления VRAM для заданного размера контекста:
@@ -451,7 +452,7 @@ impl LlamaEngine {
             if let Ok(bytes) = self.model.token_to_bytes(new_token, Special::Tokenize) {
                 generated_bytes.extend_from_slice(&bytes);
                 let current_text = String::from_utf8_lossy(&generated_bytes).into_owned();
-                let diff = current_text[result_text.len()..].to_string();
+                let diff = compute_stream_diff(&current_text, &result_text).to_string();
                 if !diff.is_empty() { (self.stream_cb)(diff); }
                 result_text = current_text;
             }

@@ -85,6 +85,14 @@ pub fn push_report(messages: &mut Vec<ChatMessage>, msg: ChatMessage, single_rep
     messages.push(msg);
 }
 
+/// Единое правило «что такое история для LLM»: из сессии в промпт модели
+/// попадают только не-thought сообщения, и только их `content` (без `sub_calls` —
+/// это UI-метаданные, а не переписка). Используется и при инжекции истории
+/// агентам, и в шаблонах workflow (`{{ messages }}`).
+pub fn llm_history(messages: &[ChatMessage]) -> Vec<&ChatMessage> {
+    messages.iter().filter(|m| m.msg_type != "thought").collect()
+}
+
 impl ChatMessage {
     pub fn llm_role(&self) -> &str {
         match (self.msg_type.as_str(), self.author.as_deref()) {
@@ -236,5 +244,52 @@ impl PromptFormat {
             PromptFormat::Gemma4 => vec!["<turn|>", "<|turn|>"],
             PromptFormat::Llama3 => vec!["<|eot_id|>", "<|start_header_id|>"],
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn msg(id: &str, msg_type: &str, author: &str, content: &str) -> ChatMessage {
+        ChatMessage {
+            id: Some(id.to_string()),
+            msg_type: msg_type.to_string(),
+            content: content.to_string(),
+            sub_calls: None,
+            author: Some(author.to_string()),
+            model: None,
+        }
+    }
+
+    #[test]
+    fn llm_history_skips_thoughts() {
+        let msgs = vec![
+            msg("msg_0", "message", "user", "привет"),
+            msg("msg_1", "thought", "агент", "внутренняя мысль"),
+            msg("msg_2", "signal", "агент", "{\"key\": \"value\"}"),
+            msg("msg_3", "message", "агент", "ответ"),
+        ];
+        let history = llm_history(&msgs);
+        assert_eq!(history.len(), 3);
+        assert!(history.iter().all(|m| m.msg_type != "thought"));
+        assert!(history.iter().any(|m| m.msg_type == "signal"));
+    }
+
+    #[test]
+    fn llm_history_keeps_content_references_without_sub_calls() {
+        let with_sub_calls = ChatMessage {
+            sub_calls: Some(vec![SubCall {
+                agent_name: "агент".to_string(),
+                prompt: "полный системный промпт — не должен попадать в историю".to_string(),
+                response: "ответ".to_string(),
+                time_sec: 1.0,
+                tool_calls: vec![],
+            }]),
+            ..msg("msg_5", "message", "grounder", "содержимое")
+        };
+        let history = llm_history(&[with_sub_calls]);
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].content, "содержимое");
     }
 }

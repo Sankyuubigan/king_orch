@@ -152,7 +152,7 @@ pub struct CatalogEntry {
     pub name: String,
     pub download_url: String,
     #[serde(default)]
-    pub hf_model_id: Option<String>,
+    pub tokenizer_id: Option<String>,
     #[serde(default)]
     pub is_default: bool,
 }

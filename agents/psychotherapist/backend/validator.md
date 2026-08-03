@@ -64,6 +64,3 @@ emit_signal("validator_report", {
   "missing_data": "[Текст из поля Дефицит данных]",
   "somatic_detected": true/false
 })
-
-Если вердикт "ДАННЫХ ДОСТАТОЧНО" — также вызови:
-emit_signal("phase", "datamining")

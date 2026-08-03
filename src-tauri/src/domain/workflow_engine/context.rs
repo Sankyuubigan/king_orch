@@ -1,4 +1,4 @@
-use crate::infra::ChatMessage;
+use crate::infra::{ChatMessage, llm_history};
 use std::collections::HashMap;
 
 /// Контекст выполнения workflow — передаётся между узлами
@@ -49,9 +49,20 @@ impl WorkflowContext {
             result = result.replace("{{ signals }}", &signals_json);
         }
 
-        // {{ messages }} — сериализованный JSON последних сообщений
+        // {{ messages }} — история сессии для LLM: только не-thought сообщения
+        // и только их content (без sub_calls — это UI-метаданные, а не переписка).
         if result.contains("{{ messages }}") {
-            let msg_json = serde_json::to_string(&self.messages).unwrap_or_else(|_| "[]".to_string());
+            let history: Vec<serde_json::Value> = llm_history(&self.messages)
+                .iter()
+                .map(|m| {
+                    serde_json::json!({
+                        "type": m.msg_type,
+                        "author": m.author,
+                        "content": m.content
+                    })
+                })
+                .collect();
+            let msg_json = serde_json::to_string(&history).unwrap_or_else(|_| "[]".to_string());
             result = result.replace("{{ messages }}", &msg_json);
         }
 

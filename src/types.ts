@@ -85,5 +85,5 @@ export interface CatalogEntry {
     name: string;
     download_url: string;
     mmproj_url?: string;
-    hf_model_id?: string;
+    tokenizer_id?: string;
 }

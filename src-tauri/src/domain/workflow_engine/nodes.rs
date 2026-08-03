@@ -51,7 +51,7 @@ where
             if parsed.as_object().map_or(false, |o| o.is_empty()) {
                 (runner.log_cb)("[fact_extractor] JSON пустой, повтор с уточнением...".to_string());
                 let retry_prompt = format!(
-                    "{}\n\nВАЖНО: Ответь ТОЛЬКО JSON-объектом без какого-либо другого текста. Пример формата: {{\"has_somatic\": true, \"phase\": \"data_collection\"}}",
+                    "{}\n\nВАЖНО: Ответь ТОЛЬКО JSON-объектом без какого-либо другого текста. Пример формата: {{\"has_problem\": true, \"has_somatic\": true}}",
                     prompt
                 );
                 let retry_response = runner.call_llm_direct(&retry_prompt, &input, &resolved_params)?;
@@ -60,7 +60,7 @@ where
                         .and_then(|s| serde_json::from_str(&s).ok())
                         .unwrap_or_else(|| {
                             (runner.log_cb)("[fact_extractor] Повтор тоже без JSON, используем fallback".to_string());
-                            serde_json::json!({"has_somatic": true, "phase": "data_collection"})
+                            serde_json::json!({"has_problem": true, "has_somatic": true})
                         })
                 });
             }

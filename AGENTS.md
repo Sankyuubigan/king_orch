@@ -149,6 +149,9 @@ pub struct ChatMessage {
 
 ## 8. Сборка и тестирование (специфика King Orch)
 
+> ✅ **ТЕСТИРУЕМ ЧЕРЕЗ `build.bat` — просто запустить его, и всё.**
+> `build.bat` → `build.cjs` — готовая и правильная реализация запуска билда: автоопределение VS (`vswhere`), инициализация MSVC (`vcvarsall.bat`), `npm install`, обновление версии, генерация иконок, сборка Tauri (без установщика), запуск приложения. Ничего вручную вызывать не нужно.
+
 > ⚠️ **ЗАПРЕЩЁН прямой вызов `cargo build` / `cargo test` / `cargo check` / `npx tauri build` / `npx tauri dev`**
 > (см. `global_ai_docs/desktop_rust_tauri/rules.md:29`, `global_ai_docs/desktop_rust_tauri/rules.md:34`)
 > Только через `build.bat`, `test.bat` или `generate_installer.bat` — они сами находят VS (vswhere), вызывают `vcvarsall.bat` (инициализируют MSVC) и сбрасывают sccache-обёртки.
