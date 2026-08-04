@@ -10,6 +10,7 @@ pub mod graph;
 pub mod test;
 pub mod version;
 pub mod file_utils;
+pub mod llamacpp;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

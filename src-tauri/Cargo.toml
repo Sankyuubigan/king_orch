@@ -1,6 +1,6 @@
 [package]
 name = "king_orch"
-version = "26.8.8"
+version = "26.8.13"
 description = "Local LLM Multi-Agent Studio"
 authors = ["You"]
 edition = "2021"
@@ -32,4 +32,5 @@ base64 = "0.22"
 zip = "2"
 sysinfo = "0.30.0"
 nvml-wrapper = "0.10.0"
+sha2 = "0.10"
 

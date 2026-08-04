@@ -23,6 +23,17 @@ fn main() {
             let app_handle = app.handle();
             let _ = infra::session_manager::sessions_dir(&app_handle);
             api::chat::init_log_file();
+
+            // ── Движок llamacpp: PATH для CUDA DLL + фоновая проверка обновления ──
+            let engine_dir = api::llamacpp::get_engine_dir(&app_handle);
+            if infra::llamacpp_installer::is_installed(&engine_dir) {
+                api::llamacpp::add_to_path(&engine_dir);
+            }
+            let app_for_update = app_handle.clone();
+            tauri::async_runtime::spawn(async move {
+                let _ = api::llamacpp::check_engine_update(app_for_update).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -59,6 +70,12 @@ fn main() {
             api::version::get_app_version,
             infra::downloader::download_model,
             api::file_utils::write_text_file,
+            api::llamacpp::get_engine_status,
+            api::llamacpp::install_llamacpp,
+            api::llamacpp::check_engine_update,
+            api::llamacpp::install_engine_update,
+            api::llamacpp::remove_engine,
+            api::llamacpp::set_engine_dir,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

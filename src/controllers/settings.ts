@@ -42,6 +42,18 @@ export interface SettingsElements {
   modalFreeSpace: HTMLElement;
   btnModalCancel: HTMLButtonElement;
   btnModalConfirm: HTMLButtonElement;
+  engineStatus: HTMLElement;
+  engineGpu: HTMLElement;
+  enginePath: HTMLElement;
+  btnInstallEngine: HTMLButtonElement;
+  btnCheckEngineUpdate: HTMLButtonElement;
+  btnInstallEngineUpdate: HTMLButtonElement;
+  btnRemoveEngine: HTMLButtonElement;
+  btnSetEngineDir: HTMLButtonElement;
+  engineProgressContainer: HTMLDivElement;
+  engineProgressBar: HTMLDivElement;
+  engineStatusLabel: HTMLDivElement;
+  engineWarning: HTMLElement;
 }
 
 export class SettingsController {
@@ -170,7 +182,49 @@ export class SettingsController {
       bus.emit("config:loaded", config);
       await this.loadCatalog();
       await this.loadModelParams();
+      await this.refreshEngineStatus();
     } catch(e) { showToast(`Ошибка: ${e}`, "error"); }
+  }
+
+  async refreshEngineStatus() {
+    try {
+      const st: any = await invoke("get_engine_status");
+      this.el.engineStatus.textContent = st.message;
+      this.el.engineGpu.textContent = st.has_nvidia
+        ? `${st.gpu_name} (драйвер CUDA ${st.cuda_major}.${st.cuda_minor})`
+        : "Не обнаружена";
+      this.el.enginePath.textContent = st.path || "—";
+
+      if (st.installed) {
+        this.el.btnInstallEngine.style.display = "none";
+        this.el.btnCheckEngineUpdate.style.display = "inline-block";
+        this.el.btnRemoveEngine.style.display = "inline-block";
+        this.el.btnSetEngineDir.style.display = "inline-block";
+        this.el.engineWarning.style.display = "none";
+      } else {
+        this.el.btnInstallEngine.style.display = "inline-block";
+        this.el.btnCheckEngineUpdate.style.display = "none";
+        this.el.btnRemoveEngine.style.display = "none";
+        this.el.btnSetEngineDir.style.display = "inline-block";
+        this.el.btnInstallEngineUpdate.style.display = "none";
+        if (st.requires_driver_update) {
+          this.el.btnInstallEngine.disabled = true;
+          this.el.engineWarning.style.display = "block";
+          this.el.engineWarning.textContent =
+            `⚠️ Ваш драйвер NVIDIA поддерживает только CUDA ${st.cuda_major}.${st.cuda_minor}.\n` +
+            `Для GPU-ускорения обновите драйвер (нужна версия ≥ 527.41, CUDA 12+).\n` +
+            `Пока приложение работает в CPU-режиме.`;
+        } else if (!st.has_nvidia) {
+          this.el.btnInstallEngine.disabled = true;
+          this.el.engineWarning.style.display = "block";
+          this.el.engineWarning.textContent =
+            "⚠️ NVIDIA GPU не обнаружен. Движок CUDA установить нельзя — приложение работает в CPU-режиме.";
+        } else {
+          this.el.btnInstallEngine.disabled = false;
+          this.el.engineWarning.style.display = "none";
+        }
+      }
+    } catch (e) { showToast(`Ошибка статуса движка: ${e}`, "error"); }
   }
 
   private async loadAgents() {
@@ -311,9 +365,88 @@ export class SettingsController {
       } catch(e) { showToast(`Ошибка: ${e}`, "error"); }
       finally { this.el.btnDownloadModel.disabled = false; this.el.downloadProgressContainer.style.display = "none"; }
     });
+
+    // ─── Движок запуска нейромоделей (llamacpp) ───
+    this.el.btnInstallEngine?.addEventListener("click", async () => {
+      const btn = this.el.btnInstallEngine;
+      btn.disabled = true;
+      this.el.engineProgressContainer.style.display = "block";
+      this.el.engineStatusLabel.innerText = "Подготовка...";
+      this.el.engineProgressBar.style.width = "0%";
+      try {
+        await invoke("install_llamacpp");
+        await this.refreshEngineStatus();
+        showToast("Движок llamacpp установлен! GPU-ускорение активно.", "success");
+      } catch (e) {
+        showToast(`Ошибка установки движка: ${e}`, "error");
+      } finally {
+        btn.disabled = false;
+        this.el.engineProgressContainer.style.display = "none";
+      }
+    });
+
+    this.el.btnCheckEngineUpdate?.addEventListener("click", async () => {
+      const btn = this.el.btnCheckEngineUpdate;
+      const status = this.el.engineStatus;
+      btn.disabled = true;
+      this.el.btnInstallEngineUpdate.style.display = "none";
+      try {
+        const newTag: string | null = await invoke("check_engine_update");
+        if (newTag) {
+          status.textContent = `Доступно обновление движка: ${newTag}`;
+          this.el.btnInstallEngineUpdate.style.display = "inline-block";
+        } else {
+          status.textContent = "Движок llamacpp актуален";
+        }
+      } catch (e) {
+        status.textContent = "";
+        showToast(`Ошибка проверки обновления движка: ${e}`, "error");
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    this.el.btnInstallEngineUpdate?.addEventListener("click", async () => {
+      const btn = this.el.btnInstallEngineUpdate;
+      btn.disabled = true;
+      this.el.engineProgressContainer.style.display = "block";
+      this.el.engineStatusLabel.innerText = "Обновление...";
+      this.el.engineProgressBar.style.width = "0%";
+      try {
+        await invoke("install_engine_update");
+        this.el.btnInstallEngineUpdate.style.display = "none";
+        await this.refreshEngineStatus();
+        showToast("Движок llamacpp обновлён.", "success");
+      } catch (e) {
+        showToast(`Ошибка обновления движка: ${e}`, "error");
+      } finally {
+        btn.disabled = false;
+        this.el.engineProgressContainer.style.display = "none";
+      }
+    });
+
+    this.el.btnRemoveEngine?.addEventListener("click", async () => {
+      if (!confirm("Удалить движок llamacpp? Будет освобождено ~1 ГБ на диске. GPU-ускорение отключится.")) return;
+      try {
+        await invoke("remove_engine");
+        await this.refreshEngineStatus();
+        showToast("Движок llamacpp удалён.", "success");
+      } catch (e) { showToast(`Ошибка удаления движка: ${e}`, "error"); }
+    });
+
+    this.el.btnSetEngineDir?.addEventListener("click", async () => {
+      try {
+        const sel = await open({ directory: true });
+        if (!sel) return;
+        await invoke("set_engine_dir", { path: sel as string });
+        await this.refreshEngineStatus();
+        showToast("Путь движка изменён.", "success");
+      } catch (e) { showToast(`Ошибка изменения пути: ${e}`, "error"); }
+    });
   }
 
   private bindTauriEvents() {
     listen("download_progress", (e: any) => { const { downloaded, total } = e.payload; const pct = total > 0 ? (downloaded / total) * 100 : 0; this.el.downloadProgressBar.style.width = `${pct}%`; this.el.downloadStatusLabel.innerText = `${(downloaded/1024/1024).toFixed(1)} MB / ${(total/1024/1024).toFixed(1)} MB`; });
+    listen("engine_progress", (e: any) => { const { downloaded, total } = e.payload; const pct = total > 0 ? (downloaded / total) * 100 : 0; this.el.engineProgressBar.style.width = `${pct}%`; this.el.engineStatusLabel.innerText = `${(downloaded/1024/1024).toFixed(1)} MB / ${(total/1024/1024).toFixed(1)} MB`; });
   }
 }

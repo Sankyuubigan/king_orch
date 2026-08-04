@@ -57,6 +57,18 @@ function initApp() {
     modalFreeSpace: $<HTMLElement>("modal-free-space"),
     btnModalCancel: $<HTMLButtonElement>("btn-modal-cancel"),
     btnModalConfirm: $<HTMLButtonElement>("btn-modal-confirm"),
+    engineStatus: $<HTMLElement>("engine-status"),
+    engineGpu: $<HTMLElement>("engine-gpu"),
+    enginePath: $<HTMLElement>("engine-path"),
+    btnInstallEngine: $<HTMLButtonElement>("btn-install-engine"),
+    btnCheckEngineUpdate: $<HTMLButtonElement>("btn-check-engine-update"),
+    btnInstallEngineUpdate: $<HTMLButtonElement>("btn-install-engine-update"),
+    btnRemoveEngine: $<HTMLButtonElement>("btn-remove-engine"),
+    btnSetEngineDir: $<HTMLButtonElement>("btn-set-engine-dir"),
+    engineProgressContainer: $<HTMLDivElement>("engine-progress-container"),
+    engineProgressBar: $<HTMLDivElement>("engine-progress-bar"),
+    engineStatusLabel: $<HTMLDivElement>("engine-status-label"),
+    engineWarning: $<HTMLElement>("engine-warning"),
   });
 
   // ─── Контроллер чата (вкладка 💬) ───

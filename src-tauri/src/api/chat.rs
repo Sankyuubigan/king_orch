@@ -84,6 +84,15 @@ pub async fn chat_request(
     cfg.kv_quant_values = kv_quant_values;
     infra::save_config(&app, &cfg);
 
+    // ── Проверка установки движка llamacpp (CUDA DLL) ──
+    let engine_dir = crate::api::llamacpp::get_engine_dir(&app);
+    if !infra::llamacpp_installer::is_installed(&engine_dir) {
+        return Err(
+            "Движок llamacpp не установлен. Откройте Настройки → «Движок запуска нейромоделей» → «Установить»."
+                .to_string(),
+        );
+    }
+
     let format_type = cfg.prompt_format.clone();
     state.cancel_flag.store(false, Ordering::SeqCst);
     let cancel_flag = state.cancel_flag.clone();

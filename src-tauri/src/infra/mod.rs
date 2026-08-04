@@ -13,6 +13,8 @@ pub mod session_manager;
 pub mod mcp_client;
 pub mod downloader;
 pub mod bin_downloader;
+pub mod gpu_detector;
+pub mod llamacpp_installer;
 
 // ─── Публичные типы ───
 pub use config::{AppConfig, CatalogEntry, ModelParams, SamplingPresets};

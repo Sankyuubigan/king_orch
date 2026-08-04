@@ -78,6 +78,8 @@ pub struct AppConfig {
     pub show_folder_agents: bool,
     #[serde(default)]
     pub mmproj_files: HashMap<String, String>,
+    #[serde(default)]
+    pub llamacpp_dir: Option<String>,
 }
 
 pub fn auto_detect_mmproj(model_path: &str) -> Option<String> {
@@ -121,6 +123,7 @@ impl Default for AppConfig {
             show_advanced_features: default_show_advanced_features(),
             show_folder_agents: default_show_folder_agents(),
             mmproj_files: HashMap::new(),
+            llamacpp_dir: None,
         }
     }
 }
