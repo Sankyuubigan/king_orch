@@ -12,7 +12,50 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 fn main() {
-    tauri::Builder::default()
+    // ── Логирование с первой миллисекунды запуска ──
+    // Лог пишется РЯДОМ С EXE (king_orch.log), чтобы юзер мог прислать его,
+    // даже если приложение не открывается или падает на старте.
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    infra::startup_log::init(&exe_dir);
+    infra::startup_log::install_panic_hook();
+
+    infra::startup_log::append(
+        "INFO",
+        &format!("=== King Orch {}: запуск ===", env!("CARGO_PKG_VERSION")),
+    );
+    infra::startup_log::append(
+        "INFO",
+        &format!(
+            "exe: {}",
+            std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default()
+        ),
+    );
+    infra::startup_log::append(
+        "INFO",
+        &format!(
+            "OS: {} | arch: {} | CPU: {}",
+            std::env::var("OS").unwrap_or_default(),
+            std::env::consts::ARCH,
+            std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_default(),
+        ),
+    );
+    let gpu = infra::gpu_detector::detect_gpu();
+    infra::startup_log::append(
+        "INFO",
+        &format!(
+            "GPU: {} | CUDA драйвер: {}.{} | поддержка CUDA 12: {}",
+            if gpu.gpu_name.is_empty() { "не обнаружена" } else { &gpu.gpu_name },
+            gpu.cuda_major,
+            gpu.cuda_minor,
+            infra::gpu_detector::supports_cuda12(&gpu),
+        ),
+    );
+    infra::startup_log::append("INFO", "Tauri: создание приложения…");
+
+    let run_result = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -20,20 +63,28 @@ fn main() {
             cancel_flag: Arc::new(AtomicBool::new(false)),
         })
         .setup(|app| {
+            infra::startup_log::append("INFO", "setup(): начало");
             let app_handle = app.handle();
             let _ = infra::session_manager::sessions_dir(&app_handle);
             api::chat::init_log_file();
+            infra::startup_log::append("INFO", "setup(): сессии и чат-лог готовы");
 
-            // ── Движок llamacpp: PATH для CUDA DLL + фоновая проверка обновления ──
+            // ── Новая архитектура: движок llama.cpp — ОТДЕЛЬНЫЙ процесс ──
+            // Приложение НЕ линкует llama.cpp нативно (нет PE-импортов и DLL
+            // рядом с exe). Инференс идёт через llama-server.exe по HTTP,
+            // поэтому на старте нужен только сам движок в папке <exe>/llamacpp.
             let engine_dir = api::llamacpp::get_engine_dir(&app_handle);
             if infra::llamacpp_installer::is_installed(&engine_dir) {
-                api::llamacpp::add_to_path(&engine_dir);
+                infra::startup_log::append("INFO", "setup(): движок llama.cpp найден");
+            } else {
+                infra::startup_log::append("INFO", "setup(): движок llama.cpp НЕ установлен (инференс будет недоступен до установки)");
             }
             let app_for_update = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 let _ = api::llamacpp::check_engine_update(app_for_update).await;
             });
 
+            infra::startup_log::append("INFO", "setup(): OK");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -77,6 +128,10 @@ fn main() {
             api::llamacpp::remove_engine,
             api::llamacpp::set_engine_dir,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+
+    match run_result {
+        Ok(()) => infra::startup_log::append("INFO", "Приложение закрыто"),
+        Err(e) => infra::startup_log::append("FATAL", &format!("Приложение завершилось с ошибкой: {}", e)),
+    }
 }

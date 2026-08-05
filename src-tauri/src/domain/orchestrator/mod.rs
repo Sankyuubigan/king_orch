@@ -3,7 +3,7 @@ mod runtime;
 
 use crate::domain::agent_manager::{load_agents, AgentProfile};
 use crate::domain::workflow_engine::{
-    find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner,
+    find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner, NodeType, WorkflowDef,
 };
 use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename, llm_history};
 use crate::domain::parsers::{
@@ -93,10 +93,31 @@ fn valid_agent_ids(agents: &[AgentProfile], exclude_id: &str, exclude_mode: &str
         .collect()
 }
 
+/// Режим графа: системный промпт самого «тяжёлого» агента графа (worst-case).
+/// Пиковая VRAM определяется одним LLM-вызовом (движок работает последовательно),
+/// поэтому берём агента с самым длинным системным промптом. Sub-workflow узлы
+/// намеренно НЕ раскрываются — считаем только текущий граф.
+pub fn build_worst_agent_prompt(
+    agents: &[AgentProfile],
+    wf: &WorkflowDef,
+    history: &[ChatMessage],
+) -> String {
+    let worst_prompt = wf.nodes.iter()
+        .filter(|n| n.node_type == NodeType::LlmWorker)
+        .filter_map(|n| n.agent.as_deref())
+        .filter_map(|aid| agents.iter().find(|a| a.id == aid))
+        .map(|agent| build_system_prompt(agent, history, false, &[], 2048))
+        .max_by_key(|sp| sp.chars().count());
+
+    // Граф без llm_worker-узлов → пустой системный промпт (посчитаются только история + сообщение)
+    worst_prompt.unwrap_or_default()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run_chat<L, S, C, ST>(
     log_cb: L, status_cb: S, subcall_cb: C, stream_cb: ST,
     agents_dir: std::path::PathBuf, mcp_servers_dir: std::path::PathBuf, bins_dir: std::path::PathBuf,
+    engine_dir: std::path::PathBuf,
     model_path: String, agent_id: String, user_text: String, history: Vec<ChatMessage>,
     attachments: Vec<ChatAttachment>,
     context_size: u32, max_gen_tokens: u32, kv_quant_keys: bool, kv_quant_values: bool,     model_params: ModelParams, format_type: String,
@@ -110,11 +131,6 @@ where
     ST: Fn(String) + Clone + Send + Sync + 'static,
 {
     status_cb("Загрузка модели в память...".to_string(), 10);
-    let engine = if mmproj_path.is_some() {
-        LlamaEngine::new_with_mmproj(&model_path, mmproj_path.as_deref(), context_size, kv_quant_keys, kv_quant_values, &log_cb, stream_cb)?
-    } else {
-        LlamaEngine::new(&model_path, context_size, kv_quant_keys, kv_quant_values, &log_cb, stream_cb)?
-    };
     let agents = load_agents(&agents_dir)?;
     let max_gen_usize = max_gen_tokens as usize;
     let recent_history: Vec<ChatMessage> = history.iter()
@@ -124,6 +140,35 @@ where
     let mut recent_history = recent_history;
     if recent_history.len() > 8 { recent_history = recent_history[recent_history.len() - 8..].to_vec(); }
 
+    let workflows = load_workflows(&agents_dir).unwrap_or_default();
+    let workflow_match = find_workflow_by_stem(&workflows, &agent_id).filter(|wf| wf.visible);
+
+    // ── Worst-case оценка стартового контекста движка ──
+    // Токенизатор живёт ВНУТРИ движка (llama-server) и недоступен до его старта,
+    // а --ctx-size фиксируется при старте процесса. Оцениваем токены эвристикой
+    // (~3 символа на токен) + запас на токены изображений. Точная подгонка
+    // остаётся за циклом обрезки истории в run_agent_node (по точным /tokenize).
+    let worst_system_prompt = match &workflow_match {
+        Some(wf) => build_worst_agent_prompt(&agents, wf, &history),
+        None => agents.iter().find(|a| a.id == agent_id)
+            .map(|agent| build_system_prompt(agent, &history, false, &[], max_gen_usize))
+            .unwrap_or_default(),
+    };
+    let history_chars: usize = llm_history(&history).iter().map(|m| m.content.chars().count()).sum();
+    let total_chars = worst_system_prompt.chars().count() + history_chars + user_text.chars().count();
+    let image_tokens = attachments.len() as u32 * 2048;
+    let estimated_tokens = (total_chars / 3) as u32 + image_tokens;
+    let engine_ctx_limit = (estimated_tokens + max_gen_tokens + 128).min(context_size).max(2048);
+    log_cb(format!(
+        "📐 Стартовый контекст движка: {} токенов (worst-case промпт ~{} символов, история ~{}, изображения ~{} токенов)",
+        engine_ctx_limit, worst_system_prompt.chars().count(), history_chars, image_tokens
+    ));
+
+    let engine = if mmproj_path.is_some() {
+        LlamaEngine::new_with_mmproj(&engine_dir, &model_path, mmproj_path.as_deref(), engine_ctx_limit, kv_quant_keys, kv_quant_values, &log_cb, stream_cb)?
+    } else {
+        LlamaEngine::new(&engine_dir, &model_path, engine_ctx_limit, kv_quant_keys, kv_quant_values, &log_cb, stream_cb)?
+    };
     let mut messages_store = history.clone();
     for (i, msg) in messages_store.iter_mut().enumerate() {
         if msg.id.is_none() {
@@ -143,8 +188,6 @@ where
     };
 
     let mut all_sub_calls = Vec::new();
-    let workflows = load_workflows(&agents_dir).unwrap_or_default();
-    let workflow_match = find_workflow_by_stem(&workflows, &agent_id).filter(|wf| wf.visible);
 
     // Загружаем пресеты параметров LLM из sampling_presets.json (рядом с agents/)
     let project_dir = agents_dir.parent().unwrap_or(&agents_dir);
@@ -711,4 +754,67 @@ where
     }
 
     Ok(final_response)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_agent(id: &str, system_prompt: &str) -> AgentProfile {
+        AgentProfile {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: String::new(),
+            system_prompt: system_prompt.to_string(),
+            is_hidden: false,
+            mode: "worker".to_string(),
+            mcp_servers: Vec::new(),
+            subagents: Vec::new(),
+            folder: None,
+            single_report: false,
+            tools: Vec::new(),
+        }
+    }
+
+    fn parse_wf(yaml: &str) -> WorkflowDef {
+        serde_yaml::from_str(yaml).expect("Не удалось распарсить тестовый workflow")
+    }
+
+    #[test]
+    fn worst_agent_prompt_picks_longest_system_prompt() {
+        let agents = vec![
+            make_agent("short", "коротко"),
+            make_agent("long", &"очень длинный системный промпт ".repeat(20)),
+            make_agent("medium", &"средний ".repeat(5)),
+        ];
+        let wf = parse_wf(
+            "name: test\nnodes:\n  - id: n1\n    type: llm_worker\n    agent: short\n  - id: n2\n    type: llm_worker\n    agent: long\n  - id: n3\n    type: llm_worker\n    agent: medium\nedges: []\n",
+        );
+
+        let prompt = build_worst_agent_prompt(&agents, &wf, &[]);
+        assert!(prompt.contains("очень длинный системный промпт"), "должен выбраться самый длинный агент");
+        assert!(!prompt.contains("коротко"), "короткий агент не должен попасть в результат");
+    }
+
+    #[test]
+    fn worst_agent_prompt_ignores_sub_workflow_and_non_worker_nodes() {
+        let agents = vec![make_agent("worker_a", "промпт воркера А")];
+        let wf = parse_wf(
+            "name: test\nnodes:\n  - id: sub\n    type: sub_workflow\n    workflow: other_graph\n  - id: w\n    type: llm_worker\n    agent: worker_a\nedges: []\n",
+        );
+
+        let prompt = build_worst_agent_prompt(&agents, &wf, &[]);
+        assert!(prompt.contains("промпт воркера А"));
+    }
+
+    #[test]
+    fn worst_agent_prompt_empty_when_no_workers() {
+        let agents: Vec<AgentProfile> = vec![];
+        let wf = parse_wf(
+            "name: test\nnodes:\n  - id: r\n    type: return\nedges: []\n",
+        );
+
+        let prompt = build_worst_agent_prompt(&agents, &wf, &[]);
+        assert_eq!(prompt, "");
+    }
 }

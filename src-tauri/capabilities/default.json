@@ -12,6 +12,7 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "updater:default",
-    "shell:default"
+    "shell:default",
+    "shell:allow-open"
   ]
 }

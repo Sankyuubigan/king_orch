@@ -8,21 +8,36 @@ use crate::domain;
 use crate::infra::{self, ChatMessage, ChatAttachment, ModelParams, SubCall, LlmMessage};
 use crate::api::AppState;
 
-// ─── Лог-файл последнего запуска ───
-static LAST_LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
+// ─── Лог-файл ───
+// В release логи пишутся в king_orch.log РЯДОМ С EXE (infra::startup_log) —
+// чтобы юзер мог прислать лог, даже если приложение падает на старте.
+// В dev (debug_assertions) дополнительно дублируем в test/last_logs.txt.
+static DEV_LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
 pub fn init_log_file() {
-    let path = std::path::PathBuf::from("test").join("last_logs.txt");
-    let _ = std::fs::create_dir_all("test");
-    if let Ok(file) = std::fs::File::create(&path) {
-        if let Ok(mut guard) = LAST_LOG_FILE.lock() {
-            *guard = Some(file);
+    if !infra::startup_log::is_initialized() {
+        if let Ok(exe) = std::env::current_exe() {
+            if let Some(exe_dir) = exe.parent() {
+                infra::startup_log::init(exe_dir);
+            }
+        }
+    }
+    #[cfg(debug_assertions)]
+    {
+        let path = std::path::PathBuf::from("test").join("last_logs.txt");
+        let _ = std::fs::create_dir_all("test");
+        if let Ok(file) = std::fs::File::create(&path) {
+            if let Ok(mut guard) = DEV_LOG_FILE.lock() {
+                *guard = Some(file);
+            }
         }
     }
 }
 
 fn append_log(msg: &str) {
-    if let Ok(mut guard) = LAST_LOG_FILE.lock() {
+    infra::startup_log::append("LLM", msg);
+    #[cfg(debug_assertions)]
+    if let Ok(mut guard) = DEV_LOG_FILE.lock() {
         if let Some(ref mut file) = *guard {
             let _ = writeln!(file, "{}", msg);
         }
@@ -84,11 +99,14 @@ pub async fn chat_request(
     cfg.kv_quant_values = kv_quant_values;
     infra::save_config(&app, &cfg);
 
-    // ── Проверка установки движка llamacpp (CUDA DLL) ──
+    // ── Проверка установки движка llama.cpp (llama-server) ──
+    // Новая архитектура: движок — ОТДЕЛЬНЫЙ процесс, инференс возможен ТОЛЬКО
+    // через него (нет встроенного CPU-фолбэка). Если движка нет — понятная ошибка.
     let engine_dir = crate::api::llamacpp::get_engine_dir(&app);
     if !infra::llamacpp_installer::is_installed(&engine_dir) {
         return Err(
-            "Движок llamacpp не установлен. Откройте Настройки → «Движок запуска нейромоделей» → «Установить»."
+            "Движок llama.cpp не установлен (нет llama-server.exe).\n\
+             Откройте Настройки → «Движок запуска нейромоделей» и нажмите «Установить движок»."
                 .to_string(),
         );
     }
@@ -175,6 +193,7 @@ pub async fn chat_request(
             agents_dir,
             mcp_servers_dir,
             bins_dir,
+            engine_dir,
             model_path,
             agent_id,
             message,
@@ -209,25 +228,8 @@ pub async fn stop_processing(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-/// Режим графа: строит системный промпт самого «тяжёлого» агента графа.
-/// Пиковая VRAM определяется одним LLM-вызовом (движок работает последовательно),
-/// поэтому берём агента с самым длинным системным промптом (worst-case).
-/// Sub-workflow узлы намеренно НЕ раскрываются — считаем только текущий граф.
-fn build_worst_agent_prompt(
-    agents: &[domain::AgentProfile],
-    wf: &domain::WorkflowDef,
-    history: &[ChatMessage],
-) -> String {
-    let worst_prompt = wf.nodes.iter()
-        .filter(|n| n.node_type == domain::NodeType::LlmWorker)
-        .filter_map(|n| n.agent.as_deref())
-        .filter_map(|aid| agents.iter().find(|a| a.id == aid))
-        .map(|agent| domain::build_system_prompt(agent, history, false, &[], 2048))
-        .max_by_key(|sp| sp.chars().count());
-
-    // Граф без llm_worker-узлов → пустой системный промпт (посчитаются только история + сообщение)
-    worst_prompt.unwrap_or_default()
-}
+/// Режим графа: системный промпт самого «тяжёлого» агента графа — см.
+/// domain::orchestrator::build_worst_agent_prompt (переехал в домен, SSOT).
 
 /// Для Live-превью токенов: возвращает сырую строку промпта, как она будет выглядеть для LLM
 #[tauri::command]
@@ -249,7 +251,7 @@ pub fn get_prompt_preview(
             let workflows = crate::domain::load_workflows(&agents_dir)?;
             let wf = crate::domain::find_workflow_by_stem(&workflows, &agent_id)
                 .ok_or("Entry point не найден: нет ни .md агента, ни workflow с таким ID")?;
-            build_worst_agent_prompt(&agents, wf, &history)
+            crate::domain::build_worst_agent_prompt(&agents, wf, &history)
         }
     };
 
@@ -269,7 +271,7 @@ pub fn get_prompt_preview(
         });
     }
 
-    let pf = crate::infra::llm::PromptFormat::detect_from_path(&model_path);
+    let pf = crate::infra::PromptFormat::detect_from_path(&model_path);
     Ok(pf.format_messages(&llm_messages))
 }
 
@@ -288,67 +290,5 @@ pub fn get_prompt_memory(
     // Иначе оценка всегда завышена и не зависит от длины промпта.
     const CTX_RESERVE: u32 = 128;
     let effective_ctx = (prompt_tokens + max_gen + CTX_RESERVE).min(context_size);
-    Ok(crate::infra::llm::estimate_vram_mb(&model_path, effective_ctx, kv_quant_keys, kv_quant_values))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_agent(id: &str, system_prompt: &str) -> domain::AgentProfile {
-        domain::AgentProfile {
-            id: id.to_string(),
-            name: id.to_string(),
-            description: String::new(),
-            system_prompt: system_prompt.to_string(),
-            is_hidden: false,
-            mode: "worker".to_string(),
-            mcp_servers: Vec::new(),
-            subagents: Vec::new(),
-            folder: None,
-            single_report: false,
-        }
-    }
-
-    fn parse_wf(yaml: &str) -> domain::WorkflowDef {
-        serde_yaml::from_str(yaml).expect("Не удалось распарсить тестовый workflow")
-    }
-
-    #[test]
-    fn worst_agent_prompt_picks_longest_system_prompt() {
-        let agents = vec![
-            make_agent("short", "коротко"),
-            make_agent("long", &"очень длинный системный промпт ".repeat(20)),
-            make_agent("medium", &"средний ".repeat(5)),
-        ];
-        let wf = parse_wf(
-            "name: test\nnodes:\n  - id: n1\n    type: llm_worker\n    agent: short\n  - id: n2\n    type: llm_worker\n    agent: long\n  - id: n3\n    type: llm_worker\n    agent: medium\nedges: []\n",
-        );
-
-        let prompt = build_worst_agent_prompt(&agents, &wf, &[]);
-        assert!(prompt.contains("очень длинный системный промпт"), "должен выбраться самый длинный агент");
-        assert!(!prompt.contains("коротко"), "короткий агент не должен попасть в результат");
-    }
-
-    #[test]
-    fn worst_agent_prompt_ignores_sub_workflow_and_non_worker_nodes() {
-        let agents = vec![make_agent("worker_a", "промпт воркера А")];
-        let wf = parse_wf(
-            "name: test\nnodes:\n  - id: sub\n    type: sub_workflow\n    workflow: other_graph\n  - id: w\n    type: llm_worker\n    agent: worker_a\nedges: []\n",
-        );
-
-        let prompt = build_worst_agent_prompt(&agents, &wf, &[]);
-        assert!(prompt.contains("промпт воркера А"));
-    }
-
-    #[test]
-    fn worst_agent_prompt_empty_when_no_workers() {
-        let agents: Vec<domain::AgentProfile> = vec![];
-        let wf = parse_wf(
-            "name: test\nnodes:\n  - id: r\n    type: return\nedges: []\n",
-        );
-
-        let prompt = build_worst_agent_prompt(&agents, &wf, &[]);
-        assert_eq!(prompt, "");
-    }
+    Ok(crate::infra::estimate_vram_mb(&model_path, effective_ctx, kv_quant_keys, kv_quant_values))
 }

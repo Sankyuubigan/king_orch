@@ -1,23 +1,31 @@
-//! Установка движка llamacpp: скачивание CUDA runtime DLL
-//! из официальных релизов ggml-org/llama.cpp (cudart-llama-bin-win-...).
-//! Маркер версии — engine_meta.json рядом с DLL.
+//! Установка движка llamacpp: скачивание полного релиза llama.cpp
+//! (архив `llama-<tag>-bin-win-<variant>-x64.zip`) с GitHub.
+//!
+//! ВАЖНО (новая архитектура): движок — это ОТДЕЛЬНЫЙ ПРОЦЕСС `llama-server.exe`,
+//! который приложение запускает по HTTP (см. infra::llm). Приложение больше
+//! НЕ линкует llama.cpp (нет PE-импортов, нет DLL рядом с exe) — поэтому нужен
+//! полный архив движка, а не только CUDA runtime.
+//! Вариант движка (cpu / cuda-12.4) выбирается автоматически по GPU.
+//! Маркер версии — engine_meta.json в папке движка.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io::{Cursor, Read, Write};
 use std::path::{Path, PathBuf};
 
-/// Имя CUDA-варианта в ассетах llama.cpp. Наш exe слинкован с
-/// cublas64_12.dll — качаем всегда CUDA 12.4 (драйвер 13.x совместим).
-pub const CUDA_VARIANT: &str = "cuda-12.4";
-const ASSET_PREFIX: &str = "cudart-llama-bin-win-cuda-12";
+/// Варианты движка llama.cpp в ассетах релизов ggml-org/llama.cpp.
+pub const VARIANT_CUDA: &str = "cuda-12.4";
+pub const VARIANT_CPU: &str = "cpu";
+
 const LLAMA_CPP_API: &str = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest";
 const METADATA_FILE: &str = "engine_meta.json";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EngineMeta {
     pub tag: String,
-    pub cuda: String,
+    /// Вариант движка: "cpu" или "cuda-12.4"
+    #[serde(default)]
+    pub variant: String,
     pub installed_at: String,
 }
 
@@ -40,13 +48,36 @@ pub fn default_dir(exe_dir: &Path) -> PathBuf {
     exe_dir.join("llamacpp")
 }
 
+/// Выбор варианта движка по GPU: NVIDIA с драйвером CUDA 12+ → CUDA, иначе CPU.
+/// Вызывается и при установке (какой архив качать), и в логике запуска
+/// (какой бинарь ожидать в папке движка).
+pub fn select_variant() -> String {
+    let gpu = crate::infra::gpu_detector::detect_gpu();
+    if crate::infra::gpu_detector::supports_cuda12(&gpu) {
+        VARIANT_CUDA.to_string()
+    } else {
+        VARIANT_CPU.to_string()
+    }
+}
+
+/// Имена ассетов движка в релизах llama.cpp менялись:
+/// - старый формат: llama-<tag>-bin-win-<variant>-x64.zip (до b10275)
+/// - новый формат: cudart-llama-bin-win-<variant>-x64.zip (с b10275,
+///   единый универсальный архив со всеми бэкендами + CUDA runtime)
+fn asset_name_candidates(tag: &str, variant: &str) -> Vec<String> {
+    vec![
+        format!("llama-{}-bin-win-{}-x64.zip", tag, variant),
+        format!("cudart-llama-bin-win-{}-x64.zip", variant),
+    ]
+}
+
 pub fn meta_path(dir: &Path) -> PathBuf {
     dir.join(METADATA_FILE)
 }
 
-/// Установлен ли движок: главная CUDA DLL на месте
+/// Установлен ли движок: главный бинарь на месте
 pub fn is_installed(dir: &Path) -> bool {
-    dir.join("cublas64_12.dll").exists()
+    dir.join("llama-server.exe").exists()
 }
 
 /// Метаданные установленного движка (None если не установлен)
@@ -81,18 +112,28 @@ async fn fetch_latest_release(client: &reqwest::Client) -> Result<GitHubRelease,
         .map_err(|e| format!("Ошибка парсинга ответа GitHub: {}", e))
 }
 
-fn find_cudart_asset(release: &GitHubRelease) -> Option<&GitHubAsset> {
-    let exact = format!("{}-x64.zip", ASSET_PREFIX);
-    release
-        .assets
-        .iter()
-        .find(|a| a.name == exact || (a.name.starts_with(ASSET_PREFIX) && a.name.ends_with("-x64.zip")))
-        .or_else(|| {
-            release
-                .assets
-                .iter()
-                .find(|a| a.name.starts_with(ASSET_PREFIX) && a.name.ends_with(".zip"))
-        })
+fn find_engine_asset<'a>(release: &'a GitHubRelease, variant: &str) -> Option<&'a GitHubAsset> {
+    let tag = &release.tag_name;
+    let candidates = asset_name_candidates(tag, variant);
+    for name in &candidates {
+        if let Some(asset) = release.assets.iter().find(|a| a.name == *name) {
+            return Some(asset);
+        }
+    }
+    // Фолбэк по маске: могло измениться форматирование имени
+    release.assets.iter().find(|a| {
+        a.name.starts_with(&format!("llama-{}-bin-win-{}", tag, variant))
+            && a.name.ends_with("-x64.zip")
+    })
+    .or_else(|| {
+        // CPU-вариант в новых релизах не публикуется: как последний шанс для
+        // CPU-машин подходит универсальный cudart-архив (запустится без GPU).
+        if variant == VARIANT_CPU {
+            release.assets.iter().find(|a| a.name == "cudart-llama-bin-win-cuda-12.4-x64.zip")
+        } else {
+            None
+        }
+    })
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {
@@ -175,9 +216,9 @@ async fn download_asset<L: Fn(String), P: Fn(u64, u64)>(
     Ok(())
 }
 
-/// Извлечение всех .dll из архива в dest_dir
-fn extract_dlls<L: Fn(String)>(zip_path: &Path, dest_dir: &Path, on_log: &L) -> Result<u32, String> {
-    on_log("📦 Распаковка CUDA DLL...".to_string());
+/// Извлечение ВСЕГО содержимого архива в dest_dir (с подпапками, например backends/)
+fn extract_all<L: Fn(String)>(zip_path: &Path, dest_dir: &Path, on_log: &L) -> Result<u32, String> {
+    on_log("📦 Распаковка движка llama.cpp...".to_string());
     let data = fs::read(zip_path).map_err(|e| format!("Ошибка чтения zip: {}", e))?;
     let mut archive = zip::ZipArchive::new(Cursor::new(data))
         .map_err(|e| format!("Ошибка чтения zip: {}", e))?;
@@ -187,37 +228,69 @@ fn extract_dlls<L: Fn(String)>(zip_path: &Path, dest_dir: &Path, on_log: &L) -> 
         let mut entry = archive
             .by_index(i)
             .map_err(|e| format!("Ошибка чтения zip-записи: {}", e))?;
-        let name = entry.name().to_string();
-        if !name.to_lowercase().ends_with(".dll") {
+        let name = entry.name().replace('\\', "/");
+        let clean = name.trim_start_matches('/');
+        if clean.is_empty() || clean.ends_with('/') {
             continue;
         }
-        let file_name = name.rsplit(['/', '\\']).next().unwrap_or(&name);
-        let out_path = dest_dir.join(file_name);
+        let out_path = dest_dir.join(clean);
+        // Защита от path traversal: файл обязан остаться внутри dest_dir
+        if !out_path.starts_with(dest_dir) {
+            continue;
+        }
+        if let Some(parent) = out_path.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("Ошибка создания папки {}: {}", parent.display(), e))?;
+        }
         let mut out_file = fs::File::create(&out_path)
-            .map_err(|e| format!("Ошибка создания {}: {}", file_name, e))?;
+            .map_err(|e| format!("Ошибка создания {}: {}", out_path.display(), e))?;
         std::io::copy(&mut entry, &mut out_file)
-            .map_err(|e| format!("Ошибка распаковки {}: {}", file_name, e))?;
+            .map_err(|e| format!("Ошибка распаковки {}: {}", clean, e))?;
         count += 1;
     }
     Ok(count)
 }
 
-/// Установка (или обновление) движка llamacpp
+/// Удаление содержимого папки движка (перед распаковкой новой версии)
+fn clear_dir(dir: &Path) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let _ = fs::remove_dir_all(&path);
+            } else {
+                let _ = fs::remove_file(&path);
+            }
+        }
+    }
+}
+
+/// Установка (или обновление) движка llamacpp: полный архив llama-server
 pub async fn install<L: Fn(String), P: Fn(u64, u64)>(
     dir: &Path,
+    variant: &str,
     on_log: L,
     on_progress: P,
 ) -> Result<EngineMeta, String> {
     fs::create_dir_all(dir).map_err(|e| format!("Не удалось создать папку {}: {}", dir.display(), e))?;
 
+    // Удаляем старые файлы движка ДО скачивания (в середине нельзя: clear_dir
+    // удалил бы сам скачанный engine.zip, лежащий внутри dir).
+    clear_dir(dir);
+
     on_log("🔄 Получение информации о последнем релизе llama.cpp...".to_string());
     let client = http_client()?;
     let release = fetch_latest_release(&client).await?;
 
-    let asset = find_cudart_asset(&release)
-        .ok_or_else(|| format!("В релизе {} не найден ассет CUDA runtime (cudart-llama-bin-win-cuda-12*)", release.tag_name))?;
+    let asset = find_engine_asset(&release, variant).ok_or_else(|| {
+        format!(
+            "В релизе {} не найден ассет движка: {}",
+            release.tag_name,
+            asset_name_candidates(&release.tag_name, variant).join(" или ")
+        )
+    })?;
 
-    let zip_path = dir.join("cudart.zip");
+    let zip_path = dir.join("engine.zip");
     download_asset(&client, asset, &zip_path, &on_log, &on_progress).await?;
 
     if let Some(digest) = &asset.digest {
@@ -233,30 +306,24 @@ pub async fn install<L: Fn(String), P: Fn(u64, u64)>(
         on_log("✅ Контрольная сумма SHA-256 подтверждена".to_string());
     }
 
-    // Удаляем старые DLL перед распаковкой (чтобы не осталось хвостов прошлой версии)
-    if let Ok(entries) = fs::read_dir(dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("dll") {
-                let _ = fs::remove_file(&path);
-            }
-        }
-    }
-
-    let dll_count = extract_dlls(&zip_path, dir, &on_log)?;
+    let file_count = extract_all(&zip_path, dir, &on_log)?;
     let _ = fs::remove_file(&zip_path);
+
+    if !is_installed(dir) {
+        return Err("После распаковки llama-server.exe не найден — архив повреждён или изменил структуру.".to_string());
+    }
 
     let meta = EngineMeta {
         tag: release.tag_name.clone(),
-        cuda: CUDA_VARIANT.to_string(),
+        variant: variant.to_string(),
         installed_at: chrono_now(),
     };
     let data = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
     fs::write(meta_path(dir), data).map_err(|e| format!("Ошибка записи метаданных: {}", e))?;
 
     on_log(format!(
-        "✅ Движок llamacpp установлен: {} ({}). Извлечено {} DLL.",
-        release.tag_name, CUDA_VARIANT, dll_count
+        "✅ Движок llama.cpp установлен: {} (вариант {}). Распаковано файлов: {}.",
+        release.tag_name, variant, file_count
     ));
     Ok(meta)
 }
@@ -271,32 +338,24 @@ pub async fn check_update<L: Fn(String)>(dir: &Path, on_log: L) -> Result<Option
     let release = fetch_latest_release(&client).await?;
     if release.tag_name != meta.tag {
         on_log(format!(
-            "🔄 Доступно обновление движка llamacpp: {} → {}",
+            "🔄 Доступно обновление движка llama.cpp: {} → {}",
             meta.tag, release.tag_name
         ));
         Ok(Some(release.tag_name))
     } else {
-        on_log(format!("Движок llamacpp актуален: {}", meta.tag));
+        on_log(format!("Движок llama.cpp актуален: {}", meta.tag));
         Ok(None)
     }
 }
 
-/// Удаление движка (освобождает ~1 ГБ)
+/// Удаление движка (освобождает ~300-500 МБ)
 pub fn remove<L: Fn(String)>(dir: &Path, on_log: &L) -> Result<(), String> {
     if !dir.exists() {
         return Ok(());
     }
-    for entry in fs::read_dir(dir).map_err(|e| format!("Ошибка чтения папки: {}", e))? {
-        let entry = entry.map_err(|e| format!("Ошибка чтения папки: {}", e))?;
-        let path = entry.path();
-        if path.is_dir() {
-            fs::remove_dir_all(&path).map_err(|e| format!("Ошибка удаления папки: {}", e))?;
-        } else {
-            fs::remove_file(&path).map_err(|e| format!("Ошибка удаления файла: {}", e))?;
-        }
-    }
+    clear_dir(dir);
     let _ = fs::remove_dir(dir);
-    on_log("🗑️ Движок llamacpp удалён. GPU-ускорение отключено.".to_string());
+    on_log("🗑️ Движок llama.cpp удалён. Установите его заново, чтобы пользоваться чатом.".to_string());
     Ok(())
 }
 

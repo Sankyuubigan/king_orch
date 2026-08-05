@@ -7,6 +7,7 @@ use crate::infra;
 pub struct AutoDownloadInfo {
     pub model_name: String,
     pub model_url: String,
+    pub size_gb: Option<String>,
     pub save_path: String,
     pub free_space_gb: u64,
     pub drive_letter: String,
@@ -54,6 +55,7 @@ pub fn get_auto_download_info(app: AppHandle) -> Result<AutoDownloadInfo, String
     Ok(AutoDownloadInfo {
         model_name: default_entry.name.clone(),
         model_url: default_entry.download_url.clone(),
+        size_gb: default_entry.size_gb.clone(),
         save_path,
         free_space_gb: free_space / (1024 * 1024 * 1024),
         drive_letter,

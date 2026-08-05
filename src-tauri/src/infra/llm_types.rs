@@ -288,7 +288,8 @@ mod tests {
             }]),
             ..msg("msg_5", "message", "grounder", "содержимое")
         };
-        let history = llm_history(&[with_sub_calls]);
+        let msgs = [with_sub_calls];
+        let history = llm_history(&msgs);
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].content, "содержимое");
     }

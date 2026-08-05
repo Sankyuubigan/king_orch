@@ -1,4 +1,6 @@
-//! API движка llamacpp: статус, установка, обновление, удаление.
+//! API движка llama.cpp: статус, установка, обновление, удаление.
+//! Новая архитектура: движок — отдельный процесс `llama-server.exe` (полный релиз),
+//! инференс ТОЛЬКО через него. Приложение не линкует llama.cpp нативно.
 //! Весь прогресс дублируется в событие "log" (вкладка «Логи»).
 
 use serde::Serialize;
@@ -28,25 +30,21 @@ fn engine_dir(app: &AppHandle) -> PathBuf {
             return PathBuf::from(p);
         }
     }
-    let exe_dir = app
-        .path()
-        .executable_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
+    let exe_dir = match std::env::current_exe() {
+        Ok(p) => p
+            .parent()
+            .map(|d| d.to_path_buf())
+            .unwrap_or_else(|| PathBuf::from(".")),
+        Err(_) => app
+            .path()
+            .executable_dir()
+            .unwrap_or_else(|_| PathBuf::from(".")),
+    };
     llamacpp_installer::default_dir(&exe_dir)
 }
 
 pub fn get_engine_dir(app: &AppHandle) -> PathBuf {
     engine_dir(app)
-}
-
-/// Добавляет папку движка в PATH текущего процесса (для загрузки DLL загрузчиком)
-pub fn add_to_path(dir: &PathBuf) {
-    let dir_str = dir.to_string_lossy().to_string();
-    let path_env = std::env::var("PATH").unwrap_or_default();
-    let already = path_env.split(';').any(|p| p == dir_str);
-    if !already {
-        std::env::set_var("PATH", format!("{};{}", dir_str, path_env));
-    }
 }
 
 #[tauri::command]
@@ -55,12 +53,10 @@ pub fn get_engine_status(app: AppHandle) -> EngineStatus {
     let meta = llamacpp_installer::installed_meta(&dir);
     let gpu = gpu_detector::detect_gpu();
 
-    let message = if meta.is_some() {
-        format!(
-            "Установлен: {} (CUDA {})",
-            meta.as_ref().map(|m| m.tag.as_str()).unwrap_or("?"),
-            meta.as_ref().map(|m| m.cuda.as_str()).unwrap_or("?")
-        )
+    let message = if let Some(m) = &meta {
+        format!("Установлен: {} (вариант: {})", m.tag, m.variant)
+    } else if gpu.has_nvidia {
+        "Движок llama.cpp не установлен — инференс недоступен. Установите движок ниже.".to_string()
     } else {
         gpu_detector::describe_gpu(&gpu)
     };
@@ -68,7 +64,7 @@ pub fn get_engine_status(app: AppHandle) -> EngineStatus {
     EngineStatus {
         installed: meta.is_some(),
         tag: meta.as_ref().map(|m| m.tag.clone()),
-        cuda: meta.as_ref().map(|m| m.cuda.clone()),
+        cuda: meta.as_ref().map(|m| m.variant.clone()),
         path: dir.to_string_lossy().to_string(),
         has_nvidia: gpu.has_nvidia,
         requires_driver_update: gpu_detector::requires_driver_update(&gpu),
@@ -97,19 +93,11 @@ pub async fn install_llamacpp(app: AppHandle) -> Result<EngineStatus, String> {
 
     let gpu = gpu_detector::detect_gpu();
     log_cb(gpu_detector::describe_gpu(&gpu));
+    // Вариант движка (cpu / cuda-12.4) выбирается автоматически внутри инсталлера.
+    let variant = llamacpp_installer::select_variant();
+    log_cb(format!("Вариант движка: {}", variant));
 
-    if !gpu.has_nvidia {
-        return Err("NVIDIA GPU не обнаружен. Движок CUDA установить нельзя — приложение работает в CPU-режиме.".to_string());
-    }
-    if gpu_detector::requires_driver_update(&gpu) {
-        return Err(format!(
-            "Ваш драйвер NVIDIA поддерживает только CUDA {}.{}. Для GPU-ускорения обновите драйвер (нужна версия >= 527.41, CUDA 12+). Пока приложение работает в CPU-режиме.",
-            gpu.cuda_major, gpu.cuda_minor
-        ));
-    }
-
-    let _meta = llamacpp_installer::install(&dir, &log_cb, &progress_cb).await?;
-    add_to_path(&dir);
+    let _meta = llamacpp_installer::install(&dir, &variant, &log_cb, &progress_cb).await?;
     log_cb(format!("📂 Папка движка: {}", dir.display()));
 
     Ok(get_engine_status(app))

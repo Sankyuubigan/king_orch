@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open, save } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save } from "@tauri-apps/plugin-dialog";
+import { open as openUrl } from "@tauri-apps/plugin-shell";
 import { listen } from "@tauri-apps/api/event";
 import { check } from "@tauri-apps/plugin-updater";
 import { store } from "../store";
@@ -35,6 +36,7 @@ export interface SettingsElements {
   btnCheckUpdate: HTMLButtonElement;
   btnInstallUpdate: HTMLButtonElement;
   updateStatus: HTMLElement;
+  btnSupportProject: HTMLButtonElement;
   btnAutoDownload: HTMLButtonElement;
   autoDownloadModal: HTMLElement;
   modalModelName: HTMLElement;
@@ -248,7 +250,7 @@ export class SettingsController {
     try {
       store.modelsCatalog = await invoke("get_models_catalog");
       this.el.downloadModelSelect.innerHTML = '<option value="">-- Выберите модель --</option>';
-      store.modelsCatalog.forEach(m => { const o = document.createElement("option"); o.value = m.name; o.text = m.name; this.el.downloadModelSelect.appendChild(o); });
+      store.modelsCatalog.forEach(m => { const o = document.createElement("option"); o.value = m.name; o.text = m.size_gb ? `${m.name} (${m.size_gb} GB)` : m.name; this.el.downloadModelSelect.appendChild(o); });
     } catch(e) { this.el.downloadModelSelect.innerHTML = '<option value="">Ошибка</option>'; }
   }
 
@@ -285,8 +287,8 @@ export class SettingsController {
       await invoke("set_config_value", { key: "show_folder_agents", value: val });
       await this.loadAgents();
     });
-    this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await open({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });
-    this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await open({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });
+    this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });
+    this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });
     this.el.btnCheckUpdate?.addEventListener("click", async () => {
       const btn = this.el.btnCheckUpdate;
       const status = this.el.updateStatus;
@@ -330,6 +332,13 @@ export class SettingsController {
         this.el.btnCheckUpdate.disabled = false;
       }
     });
+    this.el.btnSupportProject?.addEventListener("click", async () => {
+      try {
+        await openUrl("https://interesting-knowledges.vercel.app/docs/otblagodarit-avtora.-pomosch-proektam");
+      } catch (e: any) {
+        showToast(`Не удалось открыть страницу: ${e}`, "error");
+      }
+    });
     this.el.btnDownloadModel?.addEventListener("click", async () => {
       const name = this.el.downloadModelSelect.value; if (!name) return;
       const model = store.modelsCatalog.find(m => m.name === name); if (!model) return;
@@ -345,7 +354,7 @@ export class SettingsController {
     this.el.btnAutoDownload?.addEventListener("click", async () => {
       try {
         const info: any = await invoke("get_auto_download_info");
-        this.el.modalModelName.innerText = info.model_name;
+        this.el.modalModelName.innerText = info.size_gb ? `${info.model_name} (${info.size_gb} GB)` : info.model_name;
         this.el.modalSavePath.innerText = info.save_path;
         this.el.modalFreeSpace.innerText = `${info.free_space_gb} GB`;
         this.el.autoDownloadModal.style.display = "flex";
@@ -436,7 +445,7 @@ export class SettingsController {
 
     this.el.btnSetEngineDir?.addEventListener("click", async () => {
       try {
-        const sel = await open({ directory: true });
+        const sel = await openDialog({ directory: true });
         if (!sel) return;
         await invoke("set_engine_dir", { path: sel as string });
         await this.refreshEngineStatus();

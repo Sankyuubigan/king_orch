@@ -73,7 +73,10 @@ fn detect_via_nvml() -> Result<GpuInfo, String> {
 }
 
 fn detect_via_nvidia_smi() -> Result<GpuInfo, String> {
-    let output = Command::new("nvidia-smi")
+    let mut cmd = Command::new("nvidia-smi");
+    #[cfg(target_os = "windows")]
+    { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); }
+    let output = cmd
         .output()
         .map_err(|e| format!("nvidia-smi not found: {}", e))?;
     if !output.status.success() {

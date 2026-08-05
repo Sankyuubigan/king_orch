@@ -155,6 +155,8 @@ pub struct CatalogEntry {
     pub name: String,
     pub download_url: String,
     #[serde(default)]
+    pub size_gb: Option<String>,
+    #[serde(default)]
     pub tokenizer_id: Option<String>,
     #[serde(default)]
     pub is_default: bool,

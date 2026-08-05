@@ -50,6 +50,7 @@ function initApp() {
     btnCheckUpdate: $<HTMLButtonElement>("btn-check-update"),
     btnInstallUpdate: $<HTMLButtonElement>("btn-install-update"),
     updateStatus: $<HTMLElement>("update-status"),
+    btnSupportProject: $<HTMLButtonElement>("btn-support-project"),
     btnAutoDownload: $<HTMLButtonElement>("btn-auto-download"),
     autoDownloadModal: $<HTMLElement>("auto-download-modal"),
     modalModelName: $<HTMLElement>("modal-model-name"),

@@ -3,22 +3,21 @@
 
 pub mod config;
 pub mod detokenizer;
-pub mod generation_core;
 pub mod llm;
 pub mod llm_types;
 pub mod llm_gguf;
 pub mod llm_multimodal;
-pub mod sampler;
 pub mod session_manager;
 pub mod mcp_client;
 pub mod downloader;
 pub mod bin_downloader;
 pub mod gpu_detector;
 pub mod llamacpp_installer;
+pub mod startup_log;
 
 // ─── Публичные типы ───
 pub use config::{AppConfig, CatalogEntry, ModelParams, SamplingPresets};
-pub use llm::{ChatMessage, ChatAttachment, LlamaEngine, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename, llm_history};
+pub use llm::{ChatMessage, ChatAttachment, LlamaEngine, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename, llm_history, PromptFormat, estimate_vram_mb};
 pub use session_manager::{ChatSession, SessionMeta};
 pub use mcp_client::McpClient;
 

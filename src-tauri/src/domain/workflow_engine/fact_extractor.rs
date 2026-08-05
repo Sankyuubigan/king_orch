@@ -147,7 +147,7 @@ fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], user_message: &st
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::{ChatMessage, LlamaEngine, ModelParams, LlmMessage};
+    use crate::infra::{LlamaEngine, ModelParams, LlmMessage};
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
@@ -180,7 +180,12 @@ Session signals: []";
         println!("{}", prompt);
         println!("=== END PROMPT ===");
 
-        let engine = LlamaEngine::new(&model_path, 8192, false, false, &|_| {}, |_| {}).unwrap();
+        let engine_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .map(|d| crate::infra::llamacpp_installer::default_dir(&d))
+            .unwrap_or_else(std::path::PathBuf::new);
+        let engine = LlamaEngine::new(&engine_dir, &model_path, 8192, false, false, &|_| {}, |_| {}).unwrap();
 
         let msgs = vec![
             LlmMessage {

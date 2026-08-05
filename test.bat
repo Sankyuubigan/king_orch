@@ -23,10 +23,12 @@ cd src-tauri
 REM Optional test filter: test.bat llm_history
 set "FILTER=%~1"
 
+REM NB: у пакета НЕТ lib-таргета (только bin king_orch), поэтому --lib невозможен.
+REM cargo test без флага покрывает все таргеты пакета (bin unit-тесты).
 if "%FILTER%"=="" (
-    cargo test --lib
+    cargo test
 ) else (
-    cargo test --lib %FILTER%
+    cargo test %FILTER%
 )
 
 if %ERRORLEVEL% NEQ 0 (

@@ -136,17 +136,18 @@ mod tests {
         assert_eq!(diff, " ");
         result_text = current_text;
 
-        // Токены 4-5: "Н" (0xD0, 0x8D)
+        // Токены 4-5: "Н" (0xD0, 0x9D)
         generated_bytes.extend_from_slice(&[0xD0]);
         let current_text = String::from_utf8_lossy(&generated_bytes).into_owned();
         let diff = compute_stream_diff(&current_text, &result_text).to_string();
         assert_eq!(diff, "\u{FFFD}");
         result_text = current_text;
 
-        generated_bytes.extend_from_slice(&[0x8D]);
+        generated_bytes.extend_from_slice(&[0x9D]);
         let current_text = String::from_utf8_lossy(&generated_bytes).into_owned();
         let diff = compute_stream_diff(&current_text, &result_text).to_string();
         assert_eq!(diff, "Н");
+        result_text = current_text;
 
         assert_eq!(result_text, "С Н");
     }
