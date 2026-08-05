@@ -20,6 +20,10 @@ pub struct EngineStatus {
     pub cuda_major: u32,
     pub cuda_minor: u32,
     pub gpu_name: String,
+    /// Compute capability вида "12.0" (пусто, если не определена)
+    pub compute_cap: String,
+    /// Какой вариант движка нужен этой машине: "cuda-12.4" / "cuda-13.3" / "cpu"
+    pub required_variant: String,
     pub message: String,
 }
 
@@ -53,6 +57,13 @@ pub fn get_engine_status(app: AppHandle) -> EngineStatus {
     let meta = llamacpp_installer::installed_meta(&dir);
     let gpu = gpu_detector::detect_gpu();
 
+    let compute_cap = if gpu.compute_major > 0 {
+        format!("{}.{}", gpu.compute_major, gpu.compute_minor)
+    } else {
+        String::new()
+    };
+    let required_variant = llamacpp_installer::select_variant();
+
     let message = if let Some(m) = &meta {
         format!("Установлен: {} (вариант: {})", m.tag, m.variant)
     } else if gpu.has_nvidia {
@@ -71,6 +82,8 @@ pub fn get_engine_status(app: AppHandle) -> EngineStatus {
         cuda_major: gpu.cuda_major,
         cuda_minor: gpu.cuda_minor,
         gpu_name: gpu.gpu_name,
+        compute_cap,
+        required_variant,
         message,
     }
 }

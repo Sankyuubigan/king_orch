@@ -113,6 +113,21 @@ pub fn build_worst_agent_prompt(
     worst_prompt.unwrap_or_default()
 }
 
+/// Результат чата: текст ответа + собранные sub-calls + обновлённый массив сообщений
+/// + диагностика движка (режим GPU/CPU и скорость) для UI-индикатора.
+#[derive(Debug, Clone)]
+pub struct ChatRunResult {
+    pub text: String,
+    pub sub_calls: Vec<SubCall>,
+    pub messages: Vec<ChatMessage>,
+    /// "gpu" / "cpu" — как реально работала модель в этом запросе
+    pub engine_mode: String,
+    /// Скорость последней генерации (tok/s)
+    pub engine_tok_per_sec: f64,
+    /// Причина CPU-режима (пусто, если GPU)
+    pub engine_mode_detail: String,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run_chat<L, S, C, ST>(
     log_cb: L, status_cb: S, subcall_cb: C, stream_cb: ST,
@@ -123,7 +138,7 @@ pub fn run_chat<L, S, C, ST>(
     context_size: u32, max_gen_tokens: u32, kv_quant_keys: bool, kv_quant_values: bool,     model_params: ModelParams, format_type: String,
     mmproj_path: Option<String>, cancel_flag: Arc<AtomicBool>,
     stream_meta: Arc<Mutex<StreamMeta>>,
-) -> Result<(String, Vec<SubCall>, Vec<ChatMessage>), String>
+) -> Result<ChatRunResult, String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
     S: Fn(String, u8) + Clone + Send + Sync + 'static,
@@ -221,7 +236,14 @@ where
         crate::domain::workflow_engine::run_workflow(
             workflow, &mut ctx, &mut runner,
         )?;
-        return Ok((String::new(), all_sub_calls, ctx.messages));
+        return Ok(ChatRunResult {
+            text: String::new(),
+            sub_calls: all_sub_calls,
+            messages: ctx.messages,
+            engine_mode: engine.engine_mode().to_string(),
+            engine_tok_per_sec: engine.tok_per_sec(),
+            engine_mode_detail: engine.engine_mode_detail().to_string(),
+        });
     }
 
     if let Some(primary_agent) = agents.iter().find(|a| a.id == agent_id) {
@@ -248,7 +270,14 @@ where
                 author: Some(primary_agent.id.clone()),
                 model: Some(extract_model_filename(&engine.model_path)),
             });
-            Ok((final_res, all_sub_calls, messages_store))
+            Ok(ChatRunResult {
+                text: final_res,
+                sub_calls: all_sub_calls,
+                messages: messages_store,
+                engine_mode: engine.engine_mode().to_string(),
+                engine_tok_per_sec: engine.tok_per_sec(),
+                engine_mode_detail: engine.engine_mode_detail().to_string(),
+            })
     } else {
         Err(format!("Entry point '{}' не найден: нет ни workflow, ни .md агента с таким ID", agent_id))
     }

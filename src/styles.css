@@ -110,6 +110,42 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .token-counter.warning { color: #e65100; border-color: #ff9800; }
 .token-counter.danger { color: #c62828; border-color: #e53935; }
 
+/* --- Engine Badge (GPU/CPU режим движка) --- */
+.engine-badge {
+  font-family: 'Consolas', monospace;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 8px;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  white-space: nowrap;
+  user-select: none;
+  cursor: default;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: color 0.3s, border-color 0.3s;
+}
+.engine-badge::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #90a4ae;
+  flex-shrink: 0;
+}
+.engine-badge.engine-gpu { color: #2e7d32; border-color: #2e7d32; }
+.engine-badge.engine-gpu::before { background: #4caf50; box-shadow: 0 0 6px #4caf50; }
+.engine-badge.engine-cpu { color: #e65100; border-color: #e65100; }
+.engine-badge.engine-cpu::before { background: #ff9800; }
+.engine-badge.engine-error { color: #c62828; border-color: #c62828; }
+.engine-badge.engine-error::before { background: #e53935; }
+.engine-badge.engine-idle { color: var(--text-muted, #888); }
+.engine-badge.engine-idle::before { background: #90a4ae; }
+.engine-badge.engine-none { color: #888; opacity: 0.8; }
+.engine-badge.engine-none::before { background: #888; }
+
 .group-box { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
 .group-title { font-weight: bold; margin-bottom: 10px; font-size: 14px; }
 .input-row { display: flex; gap: 10px; align-items: center; }

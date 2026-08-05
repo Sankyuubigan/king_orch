@@ -49,6 +49,12 @@ pub struct ChatResponse {
     text: String,
     sub_calls: Vec<SubCall>,
     messages: Vec<ChatMessage>,
+    /// "gpu" / "cpu" — как реально работала модель в этом запросе
+    engine_mode: String,
+    /// Скорость последней генерации (tok/s)
+    engine_tok_per_sec: f64,
+    /// Причина CPU-режима (пусто, если GPU)
+    engine_mode_detail: String,
 }
 
 
@@ -213,12 +219,25 @@ pub async fn chat_request(
     .await
     .map_err(|e| e.to_string())??;
 
-    log_cb_for_result(format!("DEBUG chat_request: result.messages.len={}, types_authors={:?}", result.2.len(), result.2.iter().map(|m| (m.msg_type.clone(), m.author.clone())).collect::<Vec<_>>()));
+    log_cb_for_result(format!("DEBUG chat_request: result.messages.len={}, types_authors={:?}", result.messages.len(), result.messages.iter().map(|m| (m.msg_type.clone(), m.author.clone())).collect::<Vec<_>>()));
+
+    // Событие для UI-индикатора «GPU/CPU» в шапке чата
+    let _ = app.emit(
+        "engine_mode",
+        serde_json::json!({
+            "mode": result.engine_mode,
+            "tok_per_sec": result.engine_tok_per_sec,
+            "detail": result.engine_mode_detail,
+        }),
+    );
 
     Ok(ChatResponse {
-        text: result.0,
-        sub_calls: result.1,
-        messages: result.2,
+        text: result.text,
+        sub_calls: result.sub_calls,
+        messages: result.messages,
+        engine_mode: result.engine_mode,
+        engine_tok_per_sec: result.engine_tok_per_sec,
+        engine_mode_detail: result.engine_mode_detail,
     })
 }
 

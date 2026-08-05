@@ -193,7 +193,7 @@ export class SettingsController {
       const st: any = await invoke("get_engine_status");
       this.el.engineStatus.textContent = st.message;
       this.el.engineGpu.textContent = st.has_nvidia
-        ? `${st.gpu_name} (драйвер CUDA ${st.cuda_major}.${st.cuda_minor})`
+        ? `${st.gpu_name} (драйвер CUDA ${st.cuda_major}.${st.cuda_minor}${st.compute_cap ? `, compute ${st.compute_cap}` : ""}; нужен вариант: ${st.required_variant || "?"})`
         : "Не обнаружена";
       this.el.enginePath.textContent = st.path || "—";
 

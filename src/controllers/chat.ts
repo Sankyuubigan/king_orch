@@ -54,6 +54,7 @@ export interface ChatElements {
   fileInput: HTMLInputElement;
   filePreview: HTMLDivElement;
   tokenCounter: HTMLDivElement;
+  engineBadge: HTMLDivElement;
 }
 
 export class ChatController {
@@ -82,6 +83,7 @@ export class ChatController {
     setTimeout(() => {
       this.updateAttachButtonState();
       this.triggerTokenCount();
+      this.refreshEngineBadgeInit();
     }, 100);
   }
 
@@ -394,6 +396,51 @@ export class ChatController {
     const hasMenu = uid !== undefined && (role === 'user' || role === 'agent');
     const msgEl = createMessageElement(role, content, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined);
     this.el.chatHistory.appendChild(msgEl); this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
+  }
+
+  private setEngineBadge(cls: string, text: string, title: string) {
+    const b = this.el.engineBadge;
+    if (!b) return;
+    b.className = `engine-badge ${cls}`;
+    b.innerText = text;
+    b.title = title;
+  }
+
+  /** Начальное состояние бейджа по get_engine_status (до первого запроса) */
+  private async refreshEngineBadgeInit() {
+    let st: any;
+    try {
+      st = await invoke("get_engine_status");
+    } catch (_) {
+      this.setEngineBadge("engine-none", "—", "Не удалось определить состояние движка");
+      return;
+    }
+    if (!st.installed) {
+      this.setEngineBadge("engine-none", "Нет движка", "Движок llama.cpp не установлен. Откройте Настройки → «Движок запуска нейромоделей».");
+      return;
+    }
+    const variant: string = st.cuda || "";
+    if (variant.startsWith("cpu")) {
+      this.setEngineBadge("engine-cpu", "CPU", `Движок: ${variant}. Модель будет работать на CPU.`);
+      return;
+    }
+    // Главный сценарий бага: установлен cuda-12.4, а нужен cuda-13.x (RTX 50xx)
+    const need: string = st.required_variant || "";
+    if (need.startsWith("cuda-13") && variant.startsWith("cuda-12")) {
+      this.setEngineBadge("engine-error", "GPU ⚠", `Установлен движок ${variant}, но ваша видеокарта (${st.gpu_name}) требует ${need}. Обновите движок в Настройках → «Движок запуска нейромоделей».`);
+      return;
+    }
+    this.setEngineBadge("engine-idle", "GPU · …", `Движок: ${variant}. Точный режим появится после первого запроса.`);
+  }
+
+  /** Обновление бейджа по событию engine_mode после каждого запроса */
+  private updateEngineBadge(mode: string, tokPerSec: number, detail: string) {
+    const tok = tokPerSec > 0 ? ` · ${Math.round(tokPerSec)} tok/s` : "";
+    if (mode === "gpu") {
+      this.setEngineBadge("engine-gpu", `GPU${tok}`, detail || "Модель работает в VRAM (GPU-ускорение)");
+    } else {
+      this.setEngineBadge("engine-cpu", `CPU${tok}`, detail || "Модель работает на процессоре (CPU)");
+    }
   }
 
   renderChatFromHistory() {
@@ -804,6 +851,11 @@ export class ChatController {
       if (store.activeThoughtsBlock) { addToThoughtsBlock(store.activeThoughtsBlock, item); }
       else { store.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(store.activeThoughtsBlock); }
       this.scrollToBottomIfNearEnd(this.el.chatHistory);
+    });
+
+    listen("engine_mode", (e) => {
+      const p = e.payload as { mode?: string, tok_per_sec?: number, detail?: string };
+      this.updateEngineBadge(p.mode || "cpu", p.tok_per_sec || 0, p.detail || "");
     });
   }
 

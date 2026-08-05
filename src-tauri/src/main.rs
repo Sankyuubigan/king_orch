@@ -46,11 +46,13 @@ fn main() {
     infra::startup_log::append(
         "INFO",
         &format!(
-            "GPU: {} | CUDA драйвер: {}.{} | поддержка CUDA 12: {}",
+            "GPU: {} | CUDA драйвер: {}.{} | compute: {}.{} | нужен вариант: {}",
             if gpu.gpu_name.is_empty() { "не обнаружена" } else { &gpu.gpu_name },
             gpu.cuda_major,
             gpu.cuda_minor,
-            infra::gpu_detector::supports_cuda12(&gpu),
+            gpu.compute_major,
+            gpu.compute_minor,
+            infra::llamacpp_installer::select_variant(),
         ),
     );
     infra::startup_log::append("INFO", "Tauri: создание приложения…");

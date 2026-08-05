@@ -103,6 +103,7 @@ function initApp() {
     fileInput: $<HTMLInputElement>("file-input"),
     filePreview: $<HTMLDivElement>("file-preview"),
     tokenCounter: $<HTMLDivElement>("token-counter"),
+    engineBadge: $<HTMLDivElement>("engine-badge"),
   });
 
   // ─── Контроллер графа (вкладка 🔀 в студии агентов) ───

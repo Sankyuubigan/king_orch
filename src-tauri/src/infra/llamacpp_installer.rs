@@ -5,7 +5,9 @@
 //! который приложение запускает по HTTP (см. infra::llm). Приложение больше
 //! НЕ линкует llama.cpp (нет PE-импортов, нет DLL рядом с exe) — поэтому нужен
 //! полный архив движка, а не только CUDA runtime.
-//! Вариант движка (cpu / cuda-12.4) выбирается автоматически по GPU.
+//! Вариант движка (cpu / cuda-12.4 / cuda-13.x) выбирается автоматически по GPU:
+//! для RTX 50xx (Blackwell, compute 12.x) сборка cuda-12.4 НЕ содержит ядер —
+//! нужен вариант cuda-13.x (см. gpu_detector::required_cuda_gen).
 //! Маркер версии — engine_meta.json в папке движка.
 
 use serde::{Deserialize, Serialize};
@@ -15,15 +17,47 @@ use std::path::{Path, PathBuf};
 
 /// Варианты движка llama.cpp в ассетах релизов ggml-org/llama.cpp.
 pub const VARIANT_CUDA: &str = "cuda-12.4";
+/// Актуальная сборка CUDA 13.x (мажорная версия может отличаться в новых релизах —
+/// реальное имя записывается в engine_meta.json по имени скачанного ассета).
+pub const VARIANT_CUDA13: &str = "cuda-13.3";
 pub const VARIANT_CPU: &str = "cpu";
 
 const LLAMA_CPP_API: &str = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest";
 const METADATA_FILE: &str = "engine_meta.json";
 
+/// Семейство варианта движка — по нему проверяется совместимость с GPU.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineFamily {
+    Cpu,
+    Cuda12,
+    Cuda13,
+}
+
+impl EngineFamily {
+    pub fn from_variant(variant: &str) -> EngineFamily {
+        let v = variant.to_lowercase();
+        if v.starts_with("cuda-13") {
+            EngineFamily::Cuda13
+        } else if v.starts_with("cuda-12") || v.contains("cuda") {
+            EngineFamily::Cuda12
+        } else {
+            EngineFamily::Cpu
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            EngineFamily::Cpu => "CPU",
+            EngineFamily::Cuda12 => "CUDA 12.x",
+            EngineFamily::Cuda13 => "CUDA 13.x",
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct EngineMeta {
     pub tag: String,
-    /// Вариант движка: "cpu" или "cuda-12.4"
+    /// Вариант движка: "cpu", "cuda-12.4" или "cuda-13.x" (фактический, из имени ассета)
     #[serde(default)]
     pub variant: String,
     pub installed_at: String,
@@ -48,15 +82,17 @@ pub fn default_dir(exe_dir: &Path) -> PathBuf {
     exe_dir.join("llamacpp")
 }
 
-/// Выбор варианта движка по GPU: NVIDIA с драйвером CUDA 12+ → CUDA, иначе CPU.
+/// Выбор варианта движка по GPU: Blackwell → cuda-13.x, остальные NVIDIA
+/// (драйвер CUDA 12+) → cuda-12.4, иначе CPU.
 /// Вызывается и при установке (какой архив качать), и в логике запуска
 /// (какой бинарь ожидать в папке движка).
 pub fn select_variant() -> String {
-    let gpu = crate::infra::gpu_detector::detect_gpu();
-    if crate::infra::gpu_detector::supports_cuda12(&gpu) {
-        VARIANT_CUDA.to_string()
-    } else {
-        VARIANT_CPU.to_string()
+    use crate::infra::gpu_detector::{detect_gpu, required_cuda_gen, CudaGen};
+    let gpu = detect_gpu();
+    match required_cuda_gen(&gpu) {
+        Some(CudaGen::Cuda13) => VARIANT_CUDA13.to_string(),
+        Some(CudaGen::Cuda12) => VARIANT_CUDA.to_string(),
+        None => VARIANT_CPU.to_string(),
     }
 }
 
@@ -69,6 +105,70 @@ fn asset_name_candidates(tag: &str, variant: &str) -> Vec<String> {
         format!("llama-{}-bin-win-{}-x64.zip", tag, variant),
         format!("cudart-llama-bin-win-{}-x64.zip", variant),
     ]
+}
+
+/// Фактический вариант из имени ассета:
+/// "llama-b10278-bin-win-cuda-13.3-x64.zip" → "cuda-13.3",
+/// "cudart-llama-bin-win-cuda-12.4-x64.zip" → "cuda-12.4",
+/// "llama-b10278-bin-win-cpu-x64.zip" → "cpu"
+fn variant_from_asset_name(name: &str) -> Option<String> {
+    let stem = name.strip_suffix("-x64.zip")?;
+    let idx = stem.rfind("-win-")?;
+    let v = &stem[idx + 5..];
+    if v.is_empty() {
+        return None;
+    }
+    Some(v.to_string())
+}
+
+/// Поиск ассета по семейству (cuda-12 / cuda-13): мажорная версия CUDA в имени
+/// может отличаться от ожидаемой (например cuda-13.4 вместо cuda-13.3).
+fn find_asset_by_family<'a>(release: &'a GitHubRelease, family: EngineFamily) -> Option<(&'a GitHubAsset, String)> {
+    let needle = match family {
+        EngineFamily::Cuda13 => "-win-cuda-13",
+        EngineFamily::Cuda12 => "-win-cuda-12",
+        EngineFamily::Cpu => return None,
+    };
+    for asset in &release.assets {
+        if !asset.name.ends_with("-x64.zip") {
+            continue;
+        }
+        if asset.name.contains(needle) {
+            let actual = variant_from_asset_name(&asset.name)
+                .unwrap_or_else(|| match family { EngineFamily::Cuda13 => "cuda-13", _ => "cuda-12" }.to_string());
+            return Some((asset, actual));
+        }
+    }
+    None
+}
+
+fn find_engine_asset<'a>(release: &'a GitHubRelease, variant: &str) -> Option<(&'a GitHubAsset, String)> {
+    let tag = &release.tag_name;
+    let candidates = asset_name_candidates(tag, variant);
+    for name in &candidates {
+        if let Some(asset) = release.assets.iter().find(|a| a.name == *name) {
+            return Some((asset, variant.to_string()));
+        }
+    }
+    // Фолбэк по маске: могло измениться форматирование имени
+    if let Some(asset) = release.assets.iter().find(|a| {
+        a.name.starts_with(&format!("llama-{}-bin-win-{}", tag, variant))
+            && a.name.ends_with("-x64.zip")
+    }) {
+        return Some((asset, variant.to_string()));
+    }
+    // Фолбэк по семейству: сменилась минорная версия CUDA (cuda-13.3 → cuda-13.4)
+    if let Some(hit) = find_asset_by_family(release, EngineFamily::from_variant(variant)) {
+        return Some(hit);
+    }
+    // CPU-вариант в новых релизах не публикуется: как последний шанс для
+    // CPU-машин подходит универсальный cudart-архив (запустится без GPU).
+    if variant == VARIANT_CPU {
+        if let Some(asset) = release.assets.iter().find(|a| a.name == "cudart-llama-bin-win-cuda-12.4-x64.zip") {
+            return Some((asset, VARIANT_CUDA.to_string()));
+        }
+    }
+    None
 }
 
 pub fn meta_path(dir: &Path) -> PathBuf {
@@ -110,30 +210,6 @@ async fn fetch_latest_release(client: &reqwest::Client) -> Result<GitHubRelease,
     resp.json::<GitHubRelease>()
         .await
         .map_err(|e| format!("Ошибка парсинга ответа GitHub: {}", e))
-}
-
-fn find_engine_asset<'a>(release: &'a GitHubRelease, variant: &str) -> Option<&'a GitHubAsset> {
-    let tag = &release.tag_name;
-    let candidates = asset_name_candidates(tag, variant);
-    for name in &candidates {
-        if let Some(asset) = release.assets.iter().find(|a| a.name == *name) {
-            return Some(asset);
-        }
-    }
-    // Фолбэк по маске: могло измениться форматирование имени
-    release.assets.iter().find(|a| {
-        a.name.starts_with(&format!("llama-{}-bin-win-{}", tag, variant))
-            && a.name.ends_with("-x64.zip")
-    })
-    .or_else(|| {
-        // CPU-вариант в новых релизах не публикуется: как последний шанс для
-        // CPU-машин подходит универсальный cudart-архив (запустится без GPU).
-        if variant == VARIANT_CPU {
-            release.assets.iter().find(|a| a.name == "cudart-llama-bin-win-cuda-12.4-x64.zip")
-        } else {
-            None
-        }
-    })
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {
@@ -289,11 +365,18 @@ pub async fn install<L: Fn(String), P: Fn(u64, u64)>(
             asset_name_candidates(&release.tag_name, variant).join(" или ")
         )
     })?;
+    let actual_variant = asset.1.clone();
+    if actual_variant != variant {
+        on_log(format!(
+            "ℹ️ Точный вариант {} в релизе не найден — используется {} (совместим).",
+            variant, actual_variant
+        ));
+    }
 
     let zip_path = dir.join("engine.zip");
-    download_asset(&client, asset, &zip_path, &on_log, &on_progress).await?;
+    download_asset(&client, asset.0, &zip_path, &on_log, &on_progress).await?;
 
-    if let Some(digest) = &asset.digest {
+    if let Some(digest) = &asset.0.digest {
         let expected = digest.strip_prefix("sha256:").unwrap_or(digest);
         let actual = sha256_file(&zip_path)?;
         if !actual.eq_ignore_ascii_case(expected) {
@@ -315,7 +398,7 @@ pub async fn install<L: Fn(String), P: Fn(u64, u64)>(
 
     let meta = EngineMeta {
         tag: release.tag_name.clone(),
-        variant: variant.to_string(),
+        variant: actual_variant.clone(),
         installed_at: chrono_now(),
     };
     let data = serde_json::to_string_pretty(&meta).map_err(|e| e.to_string())?;
@@ -323,7 +406,7 @@ pub async fn install<L: Fn(String), P: Fn(u64, u64)>(
 
     on_log(format!(
         "✅ Движок llama.cpp установлен: {} (вариант {}). Распаковано файлов: {}.",
-        release.tag_name, variant, file_count
+        release.tag_name, actual_variant, file_count
     ));
     Ok(meta)
 }
@@ -366,4 +449,83 @@ fn chrono_now() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     format!("{}", secs)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn variant_from_asset_name_parses_old_and_new_formats() {
+        assert_eq!(
+            variant_from_asset_name("llama-b10278-bin-win-cuda-13.3-x64.zip").unwrap(),
+            "cuda-13.3"
+        );
+        assert_eq!(
+            variant_from_asset_name("cudart-llama-bin-win-cuda-12.4-x64.zip").unwrap(),
+            "cuda-12.4"
+        );
+        assert_eq!(
+            variant_from_asset_name("llama-b10278-bin-win-cpu-x64.zip").unwrap(),
+            "cpu"
+        );
+        assert_eq!(variant_from_asset_name("llama-b10278-bin-win-cuda-13.3-x64.zip.asc"), None);
+    }
+
+    #[test]
+    fn family_from_variant() {
+        assert_eq!(EngineFamily::from_variant("cpu"), EngineFamily::Cpu);
+        assert_eq!(EngineFamily::from_variant("cuda-12.4"), EngineFamily::Cuda12);
+        assert_eq!(EngineFamily::from_variant("cuda-13.3"), EngineFamily::Cuda13);
+        assert_eq!(EngineFamily::from_variant("cuda-13.7"), EngineFamily::Cuda13);
+        assert_eq!(EngineFamily::from_variant(""), EngineFamily::Cpu);
+    }
+
+    fn release_with(names: &[&str]) -> GitHubRelease {
+        GitHubRelease {
+            tag_name: "b10278".to_string(),
+            assets: names
+                .iter()
+                .map(|n| GitHubAsset {
+                    name: n.to_string(),
+                    browser_download_url: format!("https://example.com/{}", n),
+                    size: 1000,
+                    digest: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn finds_asset_by_cuda13_family_when_minor_differs() {
+        // Релиз содержит cuda-13.7, а мы запросили cuda-13.3 — должен найтись
+        let release = release_with(&[
+            "llama-b10278-bin-win-cuda-13.7-x64.zip",
+            "llama-b10278-bin-win-cpu-x64.zip",
+        ]);
+        let (asset, actual) = find_engine_asset(&release, VARIANT_CUDA13).unwrap();
+        assert_eq!(asset.name, "llama-b10278-bin-win-cuda-13.7-x64.zip");
+        assert_eq!(actual, "cuda-13.7");
+    }
+
+    #[test]
+    fn exact_match_keeps_requested_variant() {
+        let release = release_with(&["llama-b10278-bin-win-cuda-13.3-x64.zip"]);
+        let (_asset, actual) = find_engine_asset(&release, VARIANT_CUDA13).unwrap();
+        assert_eq!(actual, "cuda-13.3");
+    }
+
+    #[test]
+    fn cpu_falls_back_to_universal_cudart_archive() {
+        let release = release_with(&["cudart-llama-bin-win-cuda-12.4-x64.zip"]);
+        let (asset, actual) = find_engine_asset(&release, VARIANT_CPU).unwrap();
+        assert_eq!(asset.name, "cudart-llama-bin-win-cuda-12.4-x64.zip");
+        assert_eq!(actual, "cuda-12.4");
+    }
+
+    #[test]
+    fn no_asset_returns_none() {
+        let release = release_with(&["llama-b10278-bin-win-vulkan-x64.zip"]);
+        assert!(find_engine_asset(&release, VARIANT_CUDA13).is_none());
+    }
 }

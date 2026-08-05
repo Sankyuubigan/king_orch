@@ -30,6 +30,11 @@ pub use super::llm_gguf::{extract_string_from_gguf, extract_f32_from_gguf, extra
 
 /// Таймаут ожидания готовности движка (загрузка модели в память)
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(120);
+/// Таймаут чтения потока генерации: если за это время от сервера не пришло
+/// НИ одного байта — движок завис (первый токен не пришёл / оборвался стрим).
+/// Работает как таймаут «первого токена», но НЕ обрезает длинную генерацию:
+/// при живом стриме данные идут чаще.
+const READ_TIMEOUT: Duration = Duration::from_secs(120);
 /// Диапазон портов для локального сервера
 const PORT_MIN: u16 = 17800;
 const PORT_RANGE: u16 = 1500;
@@ -74,6 +79,12 @@ pub struct LlamaEngine {
     port: u16,
     api_key: String,
     child: Option<Child>,
+    /// Режим работы: "gpu" (модель реально загружена в VRAM) или "cpu"
+    engine_mode: String,
+    /// Причина CPU-режима (пустая строка, если режим GPU)
+    engine_mode_detail: String,
+    /// Скорость последней генерации (tok/s)
+    last_tok_per_sec: std::cell::Cell<f64>,
 }
 
 // ─── Простой ГПСЧ для порта/ключа (без внешних зависимостей) ───
@@ -121,6 +132,9 @@ impl LlamaEngine {
             log_cb(format!("   CPU: {} | RAM: {} MB", cpu.brand(), total_ram_mb));
         }
 
+        let gpu_info = crate::infra::gpu_detector::detect_gpu();
+        log_cb(format!("   GPU: {}", crate::infra::gpu_detector::describe_gpu(&gpu_info)));
+
         let vram_before = match nvml_wrapper::Nvml::init() {
             Ok(nvml) => {
                 match nvml.device_by_index(0) {
@@ -130,7 +144,8 @@ impl LlamaEngine {
                                 let total_vram_mb = mem.total / 1024 / 1024;
                                 let used_vram_mb = mem.used / 1024 / 1024;
                                 let free_vram_mb = total_vram_mb - used_vram_mb;
-                                log_cb(format!("   GPU: NVIDIA | VRAM: {} MB (Свободно: {} MB)", total_vram_mb, free_vram_mb));
+                                let name = device.name().unwrap_or_else(|_| "NVIDIA GPU".to_string());
+                                log_cb(format!("   GPU: {} | VRAM: {} MB (Свободно: {} MB)", name, total_vram_mb, free_vram_mb));
                                 mem.used
                             },
                             Err(e) => { log_cb(format!("   GPU: NVML memory_info error: {}", e)); 0 }
@@ -157,15 +172,53 @@ impl LlamaEngine {
             ));
         }
 
-        let gpu_info = crate::infra::gpu_detector::detect_gpu();
-        let use_cuda = crate::infra::gpu_detector::supports_cuda12(&gpu_info);
-        let variant = if use_cuda { "cuda-12.4" } else { "cpu" };
+        // ── Совместимость установленного варианта движка с GPU ──
+        // Главный фикс: сборка cuda-12.4 не имеет ядер для RTX 50xx (Blackwell,
+        // compute 12.x) — llama-server молча падал в CPU. Теперь это явная ошибка
+        // с понятным решением, а не тихий CPU-фолбэк.
+        let required_gen = crate::infra::gpu_detector::required_cuda_gen(&gpu_info);
+        let installed_meta = crate::infra::llamacpp_installer::installed_meta(engine_dir);
+        let installed_variant = installed_meta.as_ref().map(|m| m.variant.clone()).unwrap_or_else(|| "не определён".to_string());
+        let installed_family = installed_meta.as_ref()
+            .map(|m| crate::infra::llamacpp_installer::EngineFamily::from_variant(&m.variant))
+            .unwrap_or(crate::infra::llamacpp_installer::EngineFamily::Cpu);
+
+        let use_cuda = match required_gen {
+            None => false,
+            Some(gen) => {
+                let required_family = match gen {
+                    crate::infra::gpu_detector::CudaGen::Cuda13 => crate::infra::llamacpp_installer::EngineFamily::Cuda13,
+                    crate::infra::gpu_detector::CudaGen::Cuda12 => crate::infra::llamacpp_installer::EngineFamily::Cuda12,
+                };
+                if required_family == crate::infra::llamacpp_installer::EngineFamily::Cuda13
+                    && installed_family == crate::infra::llamacpp_installer::EngineFamily::Cuda12
+                {
+                    return Err(format!(
+                        "Ваша видеокарта {} — RTX 50xx (Blackwell), а установлен движок без её поддержки (вариант {}).\n\
+                         Сборка cuda-12.4 не содержит ядер для Blackwell — модель работала бы только на CPU.\n\
+                         Решение: Настройки → «Движок запуска нейромоделей» → «Обновить движок» (будет скачан вариант {} с поддержкой RTX 50xx).",
+                        gpu_info.gpu_name, installed_variant, crate::infra::llamacpp_installer::VARIANT_CUDA13
+                    ));
+                }
+                if installed_family == crate::infra::llamacpp_installer::EngineFamily::Cpu {
+                    return Err(format!(
+                        "Установлен CPU-вариант движка ({}), но на компьютере есть NVIDIA GPU ({}).\n\
+                         Решение: Настройки → «Движок запуска нейромоделей» → «Обновить движок» — будет скачан CUDA-вариант.",
+                        installed_variant, gpu_info.gpu_name
+                    ));
+                }
+                true
+            }
+        };
         let gpu_layers: u32 = if use_cuda { 999 } else { 0 };
+        let engine_mode = if use_cuda { "gpu".to_string() } else { "cpu".to_string() };
         log_cb(format!(
-            "⚙️ Вариант движка: {} | GPU-слои: {} ({})",
-            variant,
+            "⚙️ Вариант движка: {} (установлен: {}, семейство {}) | GPU-слои: {} ({})",
+            required_gen.map(|g| g.label().to_string()).unwrap_or_else(|| "cpu".to_string()),
+            installed_variant,
+            installed_family.label(),
             gpu_layers,
-            if gpu_layers == 0 { "CUDA не обнаружена — CPU-режим" } else { "оффлоуд на GPU" }
+            if use_cuda { "оффлоуд на GPU" } else { "CUDA недоступна — CPU-режим" }
         ));
 
         let logical_cores = std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(8);
@@ -243,6 +296,9 @@ impl LlamaEngine {
             port,
             api_key,
             child: Some(child),
+            engine_mode: engine_mode.clone(),
+            engine_mode_detail: String::new(),
+            last_tok_per_sec: std::cell::Cell::new(0.0),
         };
 
         // ── Ожидание готовности (модель грузится в память) ──
@@ -281,7 +337,10 @@ impl LlamaEngine {
         }
         engine.child = Some(child);
 
-        log_cb(format!("✅ Движок llama-server запущен: {} (вариант {}), порт {}", engine.model_path, variant, engine.port));
+        log_cb(format!(
+            "✅ Движок llama-server запущен: {} (режим {}), порт {}",
+            engine.model_path, engine.engine_mode, engine.port
+        ));
 
         // ── Проверка: реально ли модель ушла в VRAM? ──
         if vram_before > 0 {
@@ -293,10 +352,27 @@ impl LlamaEngine {
 
             let diff = vram_after as i64 - vram_before as i64;
             if diff > 100_000_000 { // > 100 MB
+                engine.engine_mode = "gpu".to_string();
                 log_cb(format!("✅ GPU: Модель загружена в VRAM. Занято {} МБ видеопамяти.", diff / 1024 / 1024));
-            } else {
+            } else if use_cuda {
+                // Намерение было GPU, но VRAM не выросла — llama-server тихо ушёл в CPU.
+                // Сообщаем ПРИЧИНУ (из лога сервера), а не выдуманный диагноз.
+                engine.engine_mode = "cpu".to_string();
+                let diag = diagnose_cuda_fallback(&engine.server_log);
+                engine.engine_mode_detail = if !diag.is_empty() {
+                    format!("Модель не попала в VRAM: {}", diag)
+                } else {
+                    format!(
+                        "Модель не попала в VRAM: движок (вариант {}) не смог использовать GPU {} (драйвер CUDA {}.{}, compute {}.{}). Подробности — в хвосте llama_server.log.",
+                        installed_variant, gpu_info.gpu_name, gpu_info.cuda_major, gpu_info.cuda_minor,
+                        gpu_info.compute_major, gpu_info.compute_minor
+                    )
+                };
                 log_cb("❌ ВНИМАНИЕ: VRAM не увеличилась! Модель работает на CPU, а не на GPU!".to_string());
-                log_cb("❅ Причина: нет NVIDIA-драйвера или установлен CPU-вариант движка (Настройки → «Движок запуска нейромоделей»).".to_string());
+                log_cb(format!("❌ Диагноз: {}", engine.engine_mode_detail));
+                log_cb("❌ Решение: Настройки → «Движок запуска нейромоделей» → «Обновить движок».".to_string());
+            } else {
+                log_cb("ℹ️ GPU-ускорение не используется (CPU-режим) — VRAM не занята. Это ожидаемо.".to_string());
             }
         }
 
@@ -318,6 +394,21 @@ impl LlamaEngine {
         }
 
         Ok(engine)
+    }
+
+    /// Режим движка: "gpu" (модель в VRAM) или "cpu" (fallback)
+    pub fn engine_mode(&self) -> &str {
+        &self.engine_mode
+    }
+
+    /// Причина CPU-режима (пусто, если GPU)
+    pub fn engine_mode_detail(&self) -> &str {
+        &self.engine_mode_detail
+    }
+
+    /// Скорость последней генерации (tok/s), 0 до первой генерации
+    pub fn tok_per_sec(&self) -> f64 {
+        self.last_tok_per_sec.get()
     }
 
     pub fn build_prompt(&self, messages: &[LlmMessage], format_type: &str, log_cb: &impl Fn(String)) -> (String, PromptFormat) {
@@ -493,17 +584,36 @@ impl LlamaEngine {
             .header(AUTHORIZATION, self.auth_header())
             .json(&request)
             .send()
-            .map_err(|e| format!("Ошибка отправки запроса генерации: {}", e))?;
+            .map_err(|e| format!("Ошибка отправки запроса генерации: {}.{}", e, read_log_tail(&self.server_log)))?;
 
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().unwrap_or_default();
-            return Err(format!("llama-server: HTTP {} при генерации: {}", status, truncate_str(&text, 500)));
+            return Err(format!("llama-server: HTTP {} при генерации: {}.{}", status, truncate_str(&text, 500), read_log_tail(&self.server_log)));
         }
 
         let gen_start = Instant::now();
+        // Чтение стрима — в отдельном потоке: блокирующий read_line нельзя
+        // прервать по таймауту. Основной цикл ждёт строки с recv_timeout —
+        // так работает таймаут «первого токена» (и детект зависшего движка),
+        // при этом длинная живая генерация не обрезается.
+        let (lines_tx, lines_rx) = std::sync::mpsc::channel::<Result<Option<String>, String>>();
         let mut reader = BufReader::new(resp);
-        let mut line = String::new();
+        std::thread::spawn(move || {
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => { let _ = lines_tx.send(Ok(None)); break; }
+                    Ok(_) => {
+                        if lines_tx.send(Ok(Some(line.clone()))).is_err() {
+                            break; // основной цикл вышел — стрим больше не нужен
+                        }
+                    }
+                    Err(e) => { let _ = lines_tx.send(Err(e.to_string())); break; }
+                }
+            }
+        });
         let mut result_text = String::new();
         let mut generated_bytes: Vec<u8> = Vec::new();
         let mut generated_tokens: u32 = 0;
@@ -519,11 +629,25 @@ impl LlamaEngine {
                 break;
             }
 
-            line.clear();
-            let n = reader.read_line(&mut line).map_err(|e| format!("Ошибка чтения потока генерации: {}", e))?;
-            if n == 0 {
-                break;
-            }
+            let line = match lines_rx.recv_timeout(READ_TIMEOUT) {
+                Ok(Ok(Some(line))) => line,
+                Ok(Ok(None)) => break, // сервер закрыл стрим (EOF)
+                Ok(Err(e)) => {
+                    return Err(format!(
+                        "Ошибка чтения потока генерации: {}.{}",
+                        e,
+                        read_log_tail(&self.server_log)
+                    ));
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(format!(
+                        "Движок не прислал данные в течение {} сек (завис или слишком долго обрабатывает промпт на CPU).\n{}",
+                        READ_TIMEOUT.as_secs(),
+                        read_log_tail(&self.server_log)
+                    ));
+                }
+                Err(_) => break, // поток-читатель завершился без данных
+            };
             let trimmed = line.trim();
             let Some(data) = trimmed.strip_prefix("data:") else { continue };
             let data = data.trim();
@@ -601,6 +725,7 @@ impl LlamaEngine {
         let speed = predicted_per_second
             .or_else(|| final_timings.as_ref().map(|t| t.predicted_per_second))
             .unwrap_or_else(|| if gen_elapsed > 0.0 { generated_tokens as f64 / gen_elapsed } else { 0.0 });
+        self.last_tok_per_sec.set(speed);
         log_cb(format!(
             "⚙️ Сгенерировано {} токенов за {:.1}с ({:.0} tok/s). Причина: {}",
             generated_tokens, gen_elapsed, speed, stop_reason
@@ -750,5 +875,67 @@ fn read_log_tail(path: &Path) -> String {
             format!("\n--- хвост лога llama-server ---\n{}", tail)
         }
         Err(_) => String::new(),
+    }
+}
+
+/// Поиск в логе llama-server реальной причины CPU-фолбэка (почему CUDA не сработала).
+/// Возвращает человекочитаемый диагноз или пустую строку.
+fn diagnose_cuda_fallback(log_path: &Path) -> String {
+    let content = match std::fs::read_to_string(log_path) {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    let lower = content.to_lowercase();
+    // (паттерн в логе, человекочитаемое объяснение)
+    const PATTERNS: &[(&str, &str)] = &[
+        ("no kernel image", "в сборке движка нет ядер для вашей видеокарты (RTX 50xx нужен вариант cuda-13.x)"),
+        ("compute capability", "в сборке движка нет ядер для вашего GPU (compute capability)"),
+        ("failed to initialize cuda", "CUDA не инициализировалась — неполадка драйвера"),
+        ("cuda error", "ошибка CUDA"),
+        ("ggml_cuda", "ошибка CUDA-бэкенда"),
+        ("cuda", "CUDA-проблемы в логе движка"),
+    ];
+    for (needle, reason) in PATTERNS {
+        if !lower.contains(needle) {
+            continue;
+        }
+        for line in content.lines().rev().take(60) {
+            if line.to_lowercase().contains(needle) {
+                return format!("{} (из лога: {})", reason, line.trim());
+            }
+        }
+        return reason.to_string();
+    }
+    String::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cuda_fallback_diagnosis_finds_no_kernel_image() {
+        let dir = std::env::temp_dir().join(format!("ko_diag_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("llama_server.log");
+        std::fs::write(&log, concat!(
+            "load_backend: loaded CUDA backend\n",
+            "CUDA error: no kernel image is available for execution on the device (CUDA_ERROR_NO_KERNEL_IMAGE)\n",
+            "llama_model_load: error loading model: failed to load model\n"
+        )).unwrap();
+        let diag = diagnose_cuda_fallback(&log);
+        assert!(diag.contains("нет ядер"), "diag: {}", diag);
+        assert!(diag.contains("no kernel image"), "diag: {}", diag);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cuda_fallback_diagnosis_empty_on_clean_log() {
+        let dir = std::env::temp_dir().join(format!("ko_diag2_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let log = dir.join("llama_server.log");
+        std::fs::write(&log, "llama server listening on port 17800").unwrap();
+        assert_eq!(diagnose_cuda_fallback(&log), "");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
