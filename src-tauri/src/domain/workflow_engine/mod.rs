@@ -113,7 +113,7 @@ where
     }
 
     /// Зовёт LLM со свободным ответом (без системного промпта) — для llm_freeform
-    pub fn call_llm_freeform(&self, user_text: &str, history: &[ChatMessage]) -> Result<String, String> {
+    pub fn call_llm_freeform(&self, user_text: &str, history: &[ChatMessage], ctx_label: &str) -> Result<String, String> {
         let mut msgs: Vec<LlmMessage> = history.iter().map(|m| m.to_llm_message()).collect();
         msgs.push(LlmMessage {
             role: "user".to_string(),
@@ -127,6 +127,7 @@ where
                 self.model_params,
                 self.format_type,
                 self.cancel_flag.clone(),
+                ctx_label,
                 |_, _| {},
                 self.log_cb.clone(),
             )
@@ -135,7 +136,7 @@ where
     }
 
     /// Зовёт LLM напрямую (без .md агента) — для fact-экстрактора
-    pub fn call_llm_direct(&self, system_prompt: &str, user_text: &str, resolved_params: &ModelParams) -> Result<String, String> {
+    pub fn call_llm_direct(&self, system_prompt: &str, user_text: &str, resolved_params: &ModelParams, ctx_label: &str) -> Result<String, String> {
         let msgs = vec![
             LlmMessage {
                 role: "system".to_string(),
@@ -156,6 +157,7 @@ where
                 resolved_params,
                 self.format_type,
                 self.cancel_flag.clone(),
+                ctx_label,
                 |_, _| {},
                 self.log_cb.clone(),
             )

@@ -38,7 +38,7 @@ where
                 super::fact_extractor::build_extractor_prompt(&config, &input, &signals, Some(workflow_dir));
 
             let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
-            let llm_response = runner.call_llm_direct(&prompt, &input, &resolved_params)?;
+            let llm_response = runner.call_llm_direct(&prompt, &input, &resolved_params, &format!("graph:{}", node.id))?;
 
             let mut parsed: serde_json::Value =
                 serde_json::from_str(&llm_response).unwrap_or_else(|_| {
@@ -54,7 +54,7 @@ where
                     "{}\n\nВАЖНО: Ответь ТОЛЬКО JSON-объектом без какого-либо другого текста. Пример формата: {{\"has_problem\": true, \"has_somatic\": true}}",
                     prompt
                 );
-                let retry_response = runner.call_llm_direct(&retry_prompt, &input, &resolved_params)?;
+                let retry_response = runner.call_llm_direct(&retry_prompt, &input, &resolved_params, &format!("graph:{}#retry", node.id))?;
                 parsed = serde_json::from_str(&retry_response).unwrap_or_else(|_| {
                     extract_json(&retry_response)
                         .and_then(|s| serde_json::from_str(&s).ok())
@@ -361,7 +361,7 @@ where
 
         NodeType::LlmFreeform => {
             let user_text = context.resolve_template(node.input.as_deref().unwrap_or("{{ user_message }}"));
-            let result = runner.call_llm_freeform(&user_text, &context.history)?;
+            let result = runner.call_llm_freeform(&user_text, &context.history, &format!("graph:{}", node.id))?;
             Ok(NodeResult {
                 output: serde_json::json!({"result": result}),
                 next_node: None,

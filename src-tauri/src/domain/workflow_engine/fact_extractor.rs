@@ -206,6 +206,7 @@ Session signals: []";
                 &ModelParams::default(),
                 "Auto",
                 cancel,
+                "test:fact_extractor",
                 |_, _| {},
                 |_| {},
             )

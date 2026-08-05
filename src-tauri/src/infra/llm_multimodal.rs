@@ -24,6 +24,7 @@ impl LlamaEngine {
         model_params: &ModelParams,
         format_type: &str,
         cancel_flag: Arc<AtomicBool>,
+        ctx_label: &str,
         progress_cb: F,
         log_cb: L,
     ) -> Result<GenerationResult, String>
@@ -48,6 +49,7 @@ impl LlamaEngine {
             model_params,
             &stop_words,
             cancel_flag,
+            ctx_label,
             progress_cb,
             log_cb,
         )

@@ -14,6 +14,7 @@ pub mod bin_downloader;
 pub mod gpu_detector;
 pub mod llamacpp_installer;
 pub mod startup_log;
+pub mod mem_profiler;
 
 // ─── Публичные типы ───
 pub use config::{AppConfig, CatalogEntry, ModelParams, SamplingPresets};
@@ -25,3 +26,4 @@ pub use mcp_client::McpClient;
 pub use config::{load_config, save_config, load_catalog, load_sampling_presets, auto_detect_mmproj, find_agents_dir, find_mcp_servers_dir};
 pub use llm::{extract_f32_from_gguf, extract_u32_from_gguf};
 pub use session_manager::{get_session, get_sessions, save_session, delete_session, rename_session, open_session_folder};
+pub use mem_profiler::{MemSampler, MemGuard, peak_line, current_process_rss};

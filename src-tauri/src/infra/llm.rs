@@ -83,6 +83,8 @@ pub struct LlamaEngine {
     engine_mode: String,
     /// Причина CPU-режима (пустая строка, если режим GPU)
     engine_mode_detail: String,
+    /// Занятая VRAM (байты, device-level) ДО старта движка — база для дельты пиков
+    vram_before: u64,
     /// Скорость последней генерации (tok/s)
     last_tok_per_sec: std::cell::Cell<f64>,
 }
@@ -298,6 +300,7 @@ impl LlamaEngine {
             child: Some(child),
             engine_mode: engine_mode.clone(),
             engine_mode_detail: String::new(),
+            vram_before,
             last_tok_per_sec: std::cell::Cell::new(0.0),
         };
 
@@ -503,6 +506,7 @@ impl LlamaEngine {
     // ─── Генерация ───
 
     /// Общий цикл генерации: текст и мультимодалка (через multimodal_data).
+    /// `ctx_label` — контекст вызова для лога пиков памяти ("legacy:агент#N" / "graph:узел").
     pub(crate) fn run_completion<F, L>(
         &self,
         full_prompt: &str,
@@ -511,6 +515,7 @@ impl LlamaEngine {
         params: &ModelParams,
         stop_words: &[String],
         cancel_flag: Arc<AtomicBool>,
+        ctx_label: &str,
         mut progress_cb: F,
         log_cb: L,
     ) -> Result<GenerationResult, String>
@@ -578,6 +583,12 @@ impl LlamaEngine {
             cache_prompt: true,
             seed: -1,
         };
+
+        // ── Замер пиков памяти (RAM + VRAM) на время генерации ──
+        // Гвард останавливает семплер на любом пути выхода (успех/ошибка/cancel).
+        let server_pid = self.child.as_ref().map(|c| c.id());
+        let sampler = crate::infra::MemSampler::start(server_pid);
+        let mem_guard = crate::infra::MemGuard::new(sampler, ctx_label, &log_cb);
 
         let resp = self.client
             .post(self.url("/completion"))
@@ -738,19 +749,14 @@ impl LlamaEngine {
             log_cb(format!("📝 Первые {} символов: {}", take, preview.replace('\n', "\\n")));
         }
 
-        // ── Фактическое VRAM после инференса (сверка с ожидаемым) ──
+        // ── Пиковые показатели памяти за время генерации (сверка с прогнозом) ──
+        let report = mem_guard.finish();
         let total_mb = estimate_vram_mb(&self.model_path, self.global_ctx_limit, false, false);
-        match nvml_wrapper::Nvml::init() {
-            Ok(nvml) => {
-                if let Ok(device) = nvml.device_by_index(0) {
-                    if let Ok(mem) = device.memory_info() {
-                        let used_mb = mem.used / 1024 / 1024;
-                        log_cb(format!("📊 Фактическое VRAM после инференса: {} МБ (модель+контекст ~{:.0} МБ)", used_mb, total_mb));
-                    }
-                }
-            }
-            Err(_) => {}
-        }
+        let extra = format!(
+            "{} токенов за {:.1}с ({:.0} tok/s), причина: {}",
+            generated_tokens, gen_elapsed, speed, stop_reason
+        );
+        log_cb(crate::infra::peak_line(ctx_label, &report, self.vram_before, total_mb, &extra));
 
         Ok(GenerationResult { text: result_text, stop_reason })
     }
@@ -766,6 +772,7 @@ impl LlamaEngine {
         model_params: &ModelParams,
         format_type: &str,
         cancel_flag: Arc<AtomicBool>,
+        ctx_label: &str,
         progress_cb: F,
         log_cb: L,
     ) -> Result<GenerationResult, String>
@@ -774,7 +781,7 @@ impl LlamaEngine {
         log_cb(format!("🔤 Определен формат промпта: {:?}", actual_format));
         let words = actual_format.get_stop_words();
         let stop_words = merged_stop_words(&words);
-        self.run_completion(&full_prompt, None, max_tokens, model_params, &stop_words, cancel_flag, progress_cb, log_cb)
+        self.run_completion(&full_prompt, None, max_tokens, model_params, &stop_words, cancel_flag, ctx_label, progress_cb, log_cb)
     }
 }
 

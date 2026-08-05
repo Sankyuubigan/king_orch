@@ -191,7 +191,10 @@ pub async fn chat_request(
     );
     let log_cb_for_result = log_cb.clone();
     let result = tokio::task::spawn_blocking(move || {
-        domain::run_chat(
+        // ── Контроль утечек: RSS приложения до и после запроса ──
+        // Рост между последовательными запросами = утечка в приложении.
+        let app_rss_before = crate::infra::current_process_rss();
+        let run_result = domain::run_chat(
             log_cb.clone(),
             status_cb,
             subcall_cb,
@@ -214,7 +217,18 @@ pub async fn chat_request(
             mmproj_path,
             cancel_flag,
             stream_meta,
-        )
+        );
+        let app_rss_after = crate::infra::current_process_rss();
+        match (app_rss_before, app_rss_after) {
+            (Some(b), Some(a)) => log_cb(format!(
+                "📊 RSS приложения: до={} МБ, после={} МБ (дельта {} МБ)",
+                b / 1048576,
+                a / 1048576,
+                (a as i64 - b as i64) / 1048576
+            )),
+            _ => log_cb("⚠️ Не удалось измерить RSS приложения (sysinfo)".to_string()),
+        }
+        run_result
     })
     .await
     .map_err(|e| e.to_string())??;

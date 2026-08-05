@@ -338,7 +338,7 @@ pub(crate) fn run_agent_node<L, S, C>(
     attachments: &[ChatAttachment],
     max_gen_tokens: usize, model_params: &ModelParams, format_type: &str,
     cancel_flag: Arc<AtomicBool>, depth: usize,
-    all_sub_calls: &mut Vec<SubCall>, _caller_name: Option<String>,
+    all_sub_calls: &mut Vec<SubCall>, caller_name: Option<String>,
     mcp_servers_dir: &Path, bins_dir: &Path,
     messages: &mut Vec<ChatMessage>, msg_counter: &mut u32,
     injected_reports: String,
@@ -434,6 +434,9 @@ where
     let mut consecutive_failed_tools = 0;
     let mut consecutive_incomplete = 0;
     let mut consecutive_invalid_targets = 0;
+    // Метка режима для лога пиков памяти: llm_worker графа зовёт run_agent_node
+    // с caller_name == "workflow_engine", всё остальное — legacy (.md) режим.
+    let mem_mode = if caller_name.as_deref() == Some("workflow_engine") { "graph" } else { "legacy" };
 
     for iter in 1..=30 {
         if cancel_flag.load(Ordering::SeqCst) { return Err("Прервано пользователем".to_string()); }
@@ -457,15 +460,18 @@ where
 
         let gen_start = Instant::now();
         log_cb(format!(">>> [{}] LLM вызов #{}, msgs={}, max_gen={}, глубина={}", agent.name, iter, llm_messages.len(), max_gen_tokens, depth));
+        let ctx_label = format!("{}:{}#{}", mem_mode, agent.name, iter);
         let gen = if !attachments.is_empty() && engine.is_multimodal() {
             engine.generate_chat_multimodal(
                 &llm_messages, &attachments, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
+                &ctx_label,
                 |p, _| { status_cb(format!("{} обрабатывает медиа (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
                 log_cb.clone(),
             )?
         } else {
             engine.generate_chat(
                 &llm_messages, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
+                &ctx_label,
                 |p, _| { status_cb(format!("{} думает (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
                 log_cb.clone(),
             )?
