@@ -46,6 +46,15 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
                 cfg.show_folder_agents = v;
             }
         }
+        "allow_error_reports" => {
+            if let Some(v) = value.as_bool() {
+                cfg.allow_error_reports = v;
+                // Отключение действует мгновенно (panic-хук и события больше
+                // не отправляются); включение — со следующего запуска, т.к.
+                // плагин при старте мог не быть зарегистрирован.
+                crate::infra::telemetry::set_enabled(v);
+            }
+        }
         _ => {}
     }
     infra::save_config(&app, &cfg);

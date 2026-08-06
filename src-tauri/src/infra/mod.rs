@@ -15,6 +15,7 @@ pub mod gpu_detector;
 pub mod llamacpp_installer;
 pub mod startup_log;
 pub mod mem_profiler;
+pub mod telemetry;
 
 // ─── Публичные типы ───
 pub use config::{AppConfig, CatalogEntry, ModelParams, SamplingPresets};

@@ -72,6 +72,14 @@ pub fn append(level: &str, msg: &str) {
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
         let _ = f.write_all(line.as_bytes());
     }
+
+    // ── Телеметрия: критические ошибки дополнительно уходят в сервис
+    // анонимных отчётов (если юзер не отключил эту опцию в настройках).
+    // Уровень PANIC здесь НЕ дублируем: паника отправляется через panic-хук
+    // плагина телеметрии, а этот файл уже дописывает её в лог выше.
+    if matches!(level, "ERROR" | "FATAL" | "CRASH") {
+        crate::infra::telemetry::track_error(level, msg);
+    }
 }
 
 /// Установить panic-hook: любой паникующий поток допишет причину в лог-файл.

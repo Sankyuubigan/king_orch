@@ -8,10 +8,14 @@ import { ChatController, SessionController, SettingsController, GraphController,
 import { bus } from "./events";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
+import { initTelemetry } from "./telemetry";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
-function initApp() {
+async function initApp() {
+  // ─── Телеметрия: вешаем ловушки ошибок UI раньше всего остального ───
+  // (уважает настройку «Отправлять анонимные отчёты об ошибках»)
+  await initTelemetry();
   initConfirmDialog();
 
   // ─── Контроллер сессий (боковая панель) ───
@@ -45,6 +49,7 @@ function initApp() {
     btnAddModel: $<HTMLButtonElement>("btn-add-model"),
     chkShowAdvanced: $<HTMLInputElement>("chk-show-advanced"),
     chkShowFolderAgents: $<HTMLInputElement>("chk-show-folder-agents"),
+    chkErrorReports: $<HTMLInputElement>("chk-error-reports"),
     modelsList: $<HTMLDivElement>("models-list"),
     btnAddModelLlm: $<HTMLButtonElement>("btn-add-model-llm"),
     btnCheckUpdate: $<HTMLButtonElement>("btn-check-update"),

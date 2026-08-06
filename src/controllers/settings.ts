@@ -6,6 +6,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import { store } from "../store";
 import { bus } from "../events";
 import { showToast } from "../ui";
+import { setTelemetryEnabled } from "../telemetry";
 
 export interface SettingsElements {
   modelSelect: HTMLSelectElement;
@@ -31,6 +32,7 @@ export interface SettingsElements {
   btnAddModel: HTMLButtonElement;
   chkShowAdvanced: HTMLInputElement;
   chkShowFolderAgents: HTMLInputElement;
+  chkErrorReports: HTMLInputElement;
   modelsList: HTMLDivElement;
   btnAddModelLlm: HTMLButtonElement;
   btnCheckUpdate: HTMLButtonElement;
@@ -180,6 +182,10 @@ export class SettingsController {
         this.el.chkShowFolderAgents.checked = config.show_folder_agents;
         store.showFolderAgents = config.show_folder_agents;
       }
+      if (config.allow_error_reports !== undefined) {
+        this.el.chkErrorReports.checked = config.allow_error_reports;
+        setTelemetryEnabled(config.allow_error_reports);
+      }
       await this.loadAgents();
       bus.emit("config:loaded", config);
       await this.loadCatalog();
@@ -286,6 +292,12 @@ export class SettingsController {
       store.showFolderAgents = val;
       await invoke("set_config_value", { key: "show_folder_agents", value: val });
       await this.loadAgents();
+    });
+    this.el.chkErrorReports?.addEventListener("change", async () => {
+      const val = this.el.chkErrorReports.checked;
+      // Мгновенно синхронизируем состояние телеметрии и сохраняем настройку.
+      setTelemetryEnabled(val);
+      await invoke("set_config_value", { key: "allow_error_reports", value: val });
     });
     this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });
     this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });

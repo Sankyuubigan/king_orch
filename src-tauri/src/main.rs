@@ -11,7 +11,8 @@ use api::AppState;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-fn main() {
+#[tokio::main]
+async fn main() {
     // ── Логирование с первой миллисекунды запуска ──
     // Лог пишется РЯДОМ С EXE (king_orch.log), чтобы юзер мог прислать его,
     // даже если приложение не открывается или падает на старте.
@@ -57,16 +58,46 @@ fn main() {
     );
     infra::startup_log::append("INFO", "Tauri: создание приложения…");
 
-    let run_result = tauri::Builder::default()
+    // ── Телеметрия: решение принимаем ДО создания Tauri-приложения ──
+    // Читаем настройку «Отправлять анонимные отчёты об ошибках» (по умолчанию
+    // включена). Если юзер её снял — плагин Aptabase вообще не регистрируется,
+    // поэтому отправка данных физически невозможна.
+    let telemetry_enabled = infra::config::load_config_early().allow_error_reports;
+    infra::startup_log::append(
+        "INFO",
+        if telemetry_enabled {
+            "Телеметрия: включена (анонимные отчёты об ошибках)"
+        } else {
+            "Телеметрия: ОТКЛЮЧЕНА пользователем в настройках"
+        },
+    );
+
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_updater::Builder::new().build());
+
+    // Плагин телеметрии подключаем ТОЛЬКО при разрешении пользователя.
+    let builder = if telemetry_enabled {
+        builder.plugin(infra::telemetry::install_plugin())
+    } else {
+        builder
+    };
+
+    let run_result = builder
         .manage(AppState {
             cancel_flag: Arc::new(AtomicBool::new(false)),
         })
-        .setup(|app| {
+        .setup(move |app| {
             infra::startup_log::append("INFO", "setup(): начало");
             let app_handle = app.handle();
+
+            // Телеметрия: инициализация только если юзер не против.
+            if telemetry_enabled {
+                infra::telemetry::init(&app_handle);
+                infra::telemetry::track_event("app_started", serde_json::Value::Null);
+            }
+
             let _ = infra::session_manager::sessions_dir(&app_handle);
             api::chat::init_log_file();
             infra::startup_log::append("INFO", "setup(): сессии и чат-лог готовы");

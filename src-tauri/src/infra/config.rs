@@ -80,6 +80,8 @@ pub struct AppConfig {
     pub mmproj_files: HashMap<String, String>,
     #[serde(default)]
     pub llamacpp_dir: Option<String>,
+    #[serde(default = "default_allow_error_reports")]
+    pub allow_error_reports: bool,
 }
 
 pub fn auto_detect_mmproj(model_path: &str) -> Option<String> {
@@ -105,6 +107,7 @@ fn default_prompt_format() -> String { "Auto".to_string() }
 fn default_confidence_threshold() -> f32 { 0.8 }
 fn default_show_advanced_features() -> bool { false }
 fn default_show_folder_agents() -> bool { false }
+fn default_allow_error_reports() -> bool { true }
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -124,6 +127,7 @@ impl Default for AppConfig {
             show_folder_agents: default_show_folder_agents(),
             mmproj_files: HashMap::new(),
             llamacpp_dir: None,
+            allow_error_reports: default_allow_error_reports(),
         }
     }
 }
@@ -134,6 +138,33 @@ pub fn get_config_path(app: &AppHandle) -> PathBuf {
         let _ = fs::create_dir_all(&base);
     }
     base.join("app_config.json")
+}
+
+/// Имя папки данных приложения. ДОЛЖНО совпадать с `identifier` из
+/// tauri.conf.json (используется только для чтения конфига ДО создания
+/// Tauri-приложения, когда AppHandle ещё недоступен).
+pub const APP_DATA_DIR_NAME: &str = "com.kingorch.app";
+
+/// Папка данных приложения без AppHandle (APPDATA/<APP_DATA_DIR_NAME>).
+fn app_data_dir_early() -> PathBuf {
+    let base = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from))
+        .or_else(|| std::env::var_os("HOME").map(PathBuf::from))
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join(APP_DATA_DIR_NAME)
+}
+
+/// Читает конфиг ДО создания Tauri-приложения (main.rs: решение о телеметрии
+/// принимается до регистрации плагина). Если файл не читается — default
+/// (анонимные отчёты включены).
+pub fn load_config_early() -> AppConfig {
+    let path = app_data_dir_early().join("app_config.json");
+    if let Ok(data) = fs::read_to_string(path) {
+        serde_json::from_str(&data).unwrap_or_default()
+    } else {
+        AppConfig::default()
+    }
 }
 
 pub fn load_config(app: &AppHandle) -> AppConfig {
