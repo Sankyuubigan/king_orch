@@ -8,7 +8,8 @@ use crate::domain::workflow_engine::{
 use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename, llm_history};
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
-    has_incomplete_json_action, parse_orchestrator_response, parse_tool_call, strip_tool_call,
+    has_incomplete_json_action, is_thinking_truncated, parse_orchestrator_response, parse_tool_call,
+    split_thinking_and_answer, strip_tool_call,
 };
 use prompt::build_system_prompt;
 use std::collections::HashMap;
@@ -49,6 +50,173 @@ impl Drop for StreamGuard {
 }
 
 const AGENT_ERROR_PREFIX: &str = "⚠️ ОШИБКА_АГЕНТА:";
+
+/// True, если текст — сообщение об ошибке агента (workflow должен остановиться fail-fast).
+pub(crate) fn is_agent_error(text: &str) -> bool {
+    text.trim_start().starts_with(AGENT_ERROR_PREFIX)
+}
+
+// ── Параметры «продолжай-цикла» для обрыва генерации по лимиту токенов ──
+// Вместо «СГЕНЕРИРУЙ ЗАНОВО» (модель по кругу переписывает те же размышления и
+// снова упирается в max_gen) — продолжаем РОВНО с места обрыва (cache_prompt=true
+// позволяет движку переиспользовать KV префикса). Накопившиеся размышления при
+// перерастании лимита сжимаем отдельным малым LLM-вызовом в тезисы (~300 токенов).
+const MAX_CONTINUATIONS: usize = 12;          // предел «докачек» после обрыва
+const COMPACT_THRESHOLD_CHARS: usize = 9000;  // накопленных размышлений → сжать в тезисы
+const COMPACT_MAX_TOKENS: usize = 300;
+const THOUGHT_STORE_MAX_CHARS: usize = 2100;  // в сессию сохраняем мысль срезом (приоритет ответу)
+
+/// Хвост строки длиной ≤ `n` символов (без разрыва UTF-8).
+fn tail_chars(s: &str, n: usize) -> String {
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    if chars.len() <= n {
+        return s.to_string();
+    }
+    let idx = chars[chars.len() - n].0;
+    s[idx..].to_string()
+}
+
+/// Извлекает финальный ответ из накопленного текста (размышления вырезаны).
+fn extract_answer_from_combined(combined: &str, fallback: &str) -> String {
+    let (_, answer) = split_thinking_and_answer(combined);
+    let cleaned = clean_thought_tags(&answer);
+    if !cleaned.trim().is_empty() {
+        return cleaned;
+    }
+    // Нет распознанных маркеров размышлений → обычная чистка всего текста
+    let full = clean_thought_tags(combined);
+    if !full.trim().is_empty() { full } else { fallback.to_string() }
+}
+
+/// Один шаг «докачного» цикла: генерация оборвалась по лимиту токенов → продолжаем
+/// РОВНО с места обрыва (не регенерируем). При перерастании накопленных размышлений
+/// сжимаем их отдельным малым LLM-вызовом в тезисы, чтобы не раздувать KV.
+///
+/// Возвращает `Ok(true)` если лимит продолжений исчерпан (вызывающий формирует ошибку),
+/// `Ok(false)` — продолжай (вызывающий делает `continue` со следующей итерацией).
+#[allow(clippy::too_many_arguments)]
+fn push_continuation_for_cutoff(
+    log_cb: &dyn Fn(String),
+    agent_id: &str,
+    engine: &LlamaEngine,
+    model_params: &ModelParams,
+    format_type: &str,
+    cancel_flag: Arc<AtomicBool>,
+    ctx_label: &str,
+    stream_meta: Arc<Mutex<StreamMeta>>,
+    combined: &str,
+    parse_target: &str,
+    raw_response: &str,
+    llm_messages: &mut Vec<LlmMessage>,
+    continuation_raw: &mut String,
+    continuation_mark: &mut Option<usize>,
+    continuation_count: &mut usize,
+) -> Result<bool, String> {
+    *continuation_count += 1;
+    if *continuation_count >= MAX_CONTINUATIONS {
+        return Ok(true);
+    }
+
+    if continuation_mark.is_none() {
+        *continuation_mark = Some(llm_messages.len());
+    }
+    // Накопливаем сырой текст — он нужен для финального вырезания ответа из размышлений
+    *continuation_raw = if continuation_raw.is_empty() {
+        raw_response.to_string()
+    } else {
+        format!("{}\n{}", continuation_raw, raw_response)
+    };
+
+    // ── Сжатие накопленных размышлений в тезисы (малый отдельный LLM-вызов) ──
+    if let Some(mark) = *continuation_mark {
+        let acc_chars: usize = llm_messages[mark..]
+            .iter()
+            .filter(|m| m.role == "assistant")
+            .map(|m| m.content.chars().count())
+            .sum();
+        if acc_chars > COMPACT_THRESHOLD_CHARS {
+            let thinking = llm_messages[mark..]
+                .iter()
+                .filter(|m| m.role == "assistant")
+                .map(|m| m.content.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            log_cb(format!(
+                "🧠 Размышления разрослись ({} символов) — сжатие в тезисы ({} токенов)...",
+                thinking.chars().count(),
+                COMPACT_MAX_TOKENS
+            ));
+
+            let saved_kind = stream_meta.lock().map(|m| m.kind.clone()).unwrap_or_default();
+            if let Ok(mut m) = stream_meta.lock() {
+                m.kind = String::new(); // внутренняя генерация — не стримим в UI
+            }
+            let summary = engine.generate_chat(
+                &[
+                    LlmMessage {
+                        role: "system".to_string(),
+                        content: "Ты — инструмент сжатия внутренних размышлений агента. Сожми приложенные размышления до 10-14 коротких тезисов. Сохрани ВСЕ факты, термины, цифры и выводы. Пиши на языке исходного текста. Только тезисы, без вступлений.".to_string(),
+                    },
+                    LlmMessage {
+                        role: "user".to_string(),
+                        content: thinking,
+                    },
+                ],
+                COMPACT_MAX_TOKENS,
+                model_params,
+                format_type,
+                cancel_flag.clone(),
+                &format!("{}#compact", ctx_label),
+                |_, _| {},
+                log_cb,
+            );
+            if let Ok(mut m) = stream_meta.lock() {
+                m.kind = saved_kind;
+            }
+
+            match summary {
+                Ok(g) => {
+                    let summary_text = tail_chars(&clean_thought_tags(&g.text), 2500);
+                    llm_messages.truncate(mark);
+                    llm_messages.push(LlmMessage {
+                        role: "assistant".to_string(),
+                        content: summary_text,
+                    });
+                    *continuation_mark = Some(llm_messages.len());
+                    continuation_raw.clear();
+                    log_cb("🧠 Размышления сжаты в тезисы, продолжаем с места обрыва.".to_string());
+                }
+                Err(e) => log_cb(format!(
+                    "⚠️ Не удалось сжать размышления ({}), продолжаю без сжатия.",
+                    e
+                )),
+            }
+        }
+    }
+
+    // Точная точка обрыва: передаём модели последний сырой кусок + указание закончить
+    let in_json = parse_target.contains("{") || parse_target.contains("    \"target\"");
+    let hint = if in_json {
+        "❌ Твой ответ оборвался в ПОЛОВИНЕ JSON-объекта из-за лимита токенов. Продолжи РОВНО с места обрыва и ЗАКРОЙ начатый JSON (все кавычки и скобки). НЕ повторяй уже написанное и не начинай заново."
+    } else if is_thinking_truncated(combined) {
+        "❌ Твои размышления оборваны лимитом токенов. Продолжи РОВНО с места обрыва, без повторений: кратко заверши мысль и СРАЗУ напиши финальный ответ простым текстом (без JSON)."
+    } else {
+        "❌ Твой ответ оборвался из-за лимита токенов. Продолжи РОВНО с места обрыва, без повторений, и заверши ответ."
+    };
+    llm_messages.push(LlmMessage {
+        role: "assistant".to_string(),
+        content: raw_response.to_string(),
+    });
+    llm_messages.push(LlmMessage {
+        role: "user".to_string(),
+        content: hint.to_string(),
+    });
+    log_cb(format!(
+        "⏩ [{}] докача размышлений после обрыва (продолжение #{})",
+        agent_id, continuation_count
+    ));
+    Ok(false)
+}
 
 fn safe_truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len { return s.to_string(); }
@@ -251,7 +419,7 @@ where
         log_cb(format!("DEBUG run_chat: history.len={}, msg_0_author={:?}", history.len(), history.first().map(|m| m.author.clone())));
 
         let final_res = run_agent_node(
-            log_cb, status_cb, subcall_cb,
+            log_cb.clone(), status_cb, subcall_cb,
             &engine, primary_agent, &agents, user_text, recent_history,
             &attachments,
             max_gen_usize, &model_params, &format_type,
@@ -260,7 +428,13 @@ where
             String::new(),
             stream_meta.clone(), true,
         )?;
-        
+
+        // Fail-fast: если primary-агент вернул ошибку — не сохраняем её как ответ
+        if is_agent_error(&final_res) {
+            log_cb(format!("❌ Основной агент '{}' вернул ошибку: {}", primary_agent.id, final_res));
+            return Err(final_res);
+        }
+
         let sub_calls_opt = if all_sub_calls.is_empty() { None } else { Some(all_sub_calls.clone()) };
             messages_store.push(ChatMessage {
                 id: Some(format!("msg_{}", msg_counter)),
@@ -438,6 +612,11 @@ where
     // с caller_name == "workflow_engine", всё остальное — legacy (.md) режим.
     let mem_mode = if caller_name.as_deref() == Some("workflow_engine") { "graph" } else { "legacy" };
 
+    // ── Состояние «докачки» после обрыва генерации по лимиту токенов ──
+    let mut continuation_count = 0usize;      // сколько раз докачивали оборванную генерацию
+    let mut continuation_raw = String::new(); // накопленный сырой текст (для вырезания ответа)
+    let mut continuation_mark: Option<usize> = None; // граница сообщений, добавленных при докачке
+
     for iter in 1..=30 {
         if cancel_flag.load(Ordering::SeqCst) { return Err("Прервано пользователем".to_string()); }
 
@@ -485,43 +664,74 @@ where
         let mut action_found = false;
         let mut thought_logged = false;
 
-        if response.trim().is_empty() && (stop_reason == "STOP_WORD" || stop_reason == "MAX_TOKENS") {
-            consecutive_incomplete += 1;
-            if consecutive_incomplete >= 3 {
-                final_response = format!("{} Агент '{}' не смог сформировать ответ (3 пустых попытки: стоп-слово/лимит токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
-                break;
+        // ── Режим продолжения: парсим весь накопленный текст, а не последний кусок
+        // (JSON/ответ может быть разорван между итерациями докачки) ──
+        let is_continuation = continuation_mark.is_some();
+        let combined = if is_continuation {
+            format!("{}\n{}", continuation_raw, raw_response)
+        } else {
+            raw_response.clone()
+        };
+        let parse_target = if is_continuation {
+            clean_thought_tags(&combined)
+        } else {
+            response.clone()
+        };
+
+        if response.trim().is_empty() {
+            // Обрыв ВНУТРИ размышлений (thinking-модель): продолжаем с места обрыва,
+            // а не считаем «пустой попыткой» и не просим генерировать ЗАНОВО.
+            if stop_reason == "MAX_TOKENS" && is_thinking_truncated(&combined) {
+                if push_continuation_for_cutoff(
+                    &log_cb, &agent.id, engine, model_params, format_type, cancel_flag.clone(),
+                    &ctx_label, stream_meta.clone(), &combined, &parse_target, &raw_response,
+                    &mut llm_messages, &mut continuation_raw, &mut continuation_mark, &mut continuation_count,
+                )? {
+                    final_response = format!("{} Агент '{}' не смог завершить размышления после {} докачек (модель упирается в лимит токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id, MAX_CONTINUATIONS);
+                    break;
+                }
+                continue;
             }
-            let hint = if stop_reason == "MAX_TOKENS" {
-                "Твои размышления прерваны из-за лимита токенов. Сгенерируй ответ ЗАНОВО с самого начала. СИЛЬНО СОКРАТИ свои внутренние размышления (максимум 2-3 вывода) и сразу переходи к финальному результату."
-            } else {
-                "Ты прервал генерацию. Продолжи ответ ОБЫЧНЫМ ТЕКСТОМ без JSON."
-            };
-            llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
-            llm_messages.push(LlmMessage { role: "user".to_string(), content: hint.to_string() });
-            continue;
+            if stop_reason == "STOP_WORD" || stop_reason == "MAX_TOKENS" {
+                consecutive_incomplete += 1;
+                if consecutive_incomplete >= 3 {
+                    final_response = format!("{} Агент '{}' не смог сформировать ответ (3 пустых попытки: стоп-слово/лимит токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
+                    break;
+                }
+                let hint = if stop_reason == "MAX_TOKENS" {
+                    "Твои размышления прерваны из-за лимита токенов. Сгенерируй ответ ЗАНОВО с самого начала. СИЛЬНО СОКРАТИ свои внутренние размышления (максимум 2-3 вывода) и сразу переходи к финальному результату."
+                } else {
+                    "Ты прервал генерацию. Продолжи ответ ОБЫЧНЫМ ТЕКСТОМ без JSON."
+                };
+                llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+                llm_messages.push(LlmMessage { role: "user".to_string(), content: hint.to_string() });
+                continue;
+            }
         }
 
         // Внедряем архитектурную проверку на обрыв (MAX_TOKENS)
         let mut is_valid_json = false;
-        if response.contains('{') {
-            is_valid_json = crate::domain::parsers::is_valid_json_action(&response);
+        if parse_target.contains('{') {
+            is_valid_json = crate::domain::parsers::is_valid_json_action(&parse_target);
         }
-        
-        let resp_trim = response.trim();
+
+        let resp_trim = parse_target.trim();
         let is_final_text = resp_trim.ends_with('.') || resp_trim.ends_with('!') || resp_trim.ends_with('?') || resp_trim.ends_with('"') || resp_trim.ends_with('\'') || resp_trim.ends_with('`');
 
         if stop_reason == "MAX_TOKENS" && !is_valid_json && !is_final_text {
-            consecutive_incomplete += 1;
-            if consecutive_incomplete >= 3 {
-                final_response = format!("{} Агент '{}' не смог сформировать ответ (3 попытки оборваны по лимиту токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
+            // Обрыв по лимиту: докачиваем с места обрыва вместо перегенерации
+            if push_continuation_for_cutoff(
+                &log_cb, &agent.id, engine, model_params, format_type, cancel_flag.clone(),
+                &ctx_label, stream_meta.clone(), &combined, &parse_target, &raw_response,
+                &mut llm_messages, &mut continuation_raw, &mut continuation_mark, &mut continuation_count,
+            )? {
+                final_response = format!("{} Агент '{}' не смог завершить ответ после {} докачек (модель упирается в лимит токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id, MAX_CONTINUATIONS);
                 break;
             }
-            llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
-            llm_messages.push(LlmMessage { role: "user".to_string(), content: "Твой ответ прервался из-за лимита токенов. Сгенерируй его ЗАНОВО с самого начала. СИЛЬНО СОКРАТИ свои внутренние размышления (максимум 2-3 вывода) и сразу переходи к финальному результату.".to_string() });
             continue;
         }
 
-        if let Some((tool_name, arguments, thought)) = parse_tool_call(&response) {
+        if let Some((tool_name, arguments, thought)) = parse_tool_call(&parse_target) {
             action_found = true;
             consecutive_incomplete = 0;
             log_agent_thought(&log_cb, agent, "инструмент", &tool_name, &thought, gen_start.elapsed().as_secs_f32(), depth);
@@ -564,7 +774,7 @@ where
                     // Результат (анализ) агента в messages[] сохраняет вызывающий
                     // (узел workflow / legacy-коллер), иначе получается клон: один
                     // и тот же ответ дважды. Здесь остаётся только сигнал.
-                    let (analysis, _) = strip_tool_call(&response);
+                    let (analysis, _) = strip_tool_call(&parse_target);
                     let analysis = if analysis.trim().is_empty() {
                         if thought.is_empty() { response.clone() } else { thought.clone() }
                     } else {
@@ -604,7 +814,9 @@ where
                         final_response = format!("{} Синтаксическая ошибка (3 попытки): агент '{}' продолжает использовать 'tool' вместо 'target'. Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
                         break;
                     }
-                    llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+                    llm_messages.push(LlmMessage { role: "assistant".to_string(), content: if is_continuation { combined.clone() } else { raw_response.clone() } });
+                    continuation_raw.clear();
+                    continuation_mark = None;
                     llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("⚠️ ОШИБКА_СИНТАКСИСА: ты использовал 'tool' для вызова сабагента '{}'. Это сабагент, а не инструмент. Исправь: используй 'target'. Пример: {{\"thought\": \"...\", \"target\": \"{}\", \"task_or_response\": \"...\"}}.", tool_name, tool_name) });
                     continue;
                 }
@@ -617,24 +829,32 @@ where
                     break;
                 }
                 tool_calls.push(ToolCallInfo { tool_name: tool_name.clone(), arguments: args_str, result: output.clone() });
-                llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+                llm_messages.push(LlmMessage { role: "assistant".to_string(), content: if is_continuation { combined.clone() } else { raw_response.clone() } });
+                continuation_raw.clear();
+                continuation_mark = None;
                 llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\n⚠️ Инструмент вернул ошибку. Используй другой инструмент или заверши через {{\"target\": \"reply\"}}.", tool_name, output) });
                 continue;
             }
             consecutive_failed_tools = 0;
             tool_calls.push(ToolCallInfo { tool_name: tool_name.clone(), arguments: args_str, result: output.clone() });
-            llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+            llm_messages.push(LlmMessage { role: "assistant".to_string(), content: if is_continuation { combined.clone() } else { raw_response.clone() } });
+            continuation_raw.clear();
+            continuation_mark = None;
             llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\nЕсли задача выполнена — ответь ОБЫЧНЫМ ТЕКСТОМ.", tool_name, output) });
             continue;
         }
 
-        if let Some(parsed) = parse_orchestrator_response(&response) {
+        if let Some(parsed) = parse_orchestrator_response(&parse_target) {
             action_found = true;
             consecutive_incomplete = 0;
 
             if parsed.target == "reply" || parsed.target == "user" {
                 if parsed.content.is_empty() {
-                    final_response = response.clone();
+                    final_response = if is_continuation {
+                        extract_answer_from_combined(&combined, &response)
+                    } else {
+                        response.clone()
+                    };
                 } else {
                     final_response = parsed.content;
                 }
@@ -695,7 +915,9 @@ where
 
                 let new_sys = build_system_prompt(agent, messages, has_tools_for_prompt, &all_tools, max_gen_tokens);
                 if let Some(f) = llm_messages.first_mut() { if f.role == "system" { f.content = new_sys; } }
-                llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+                llm_messages.push(LlmMessage { role: "assistant".to_string(), content: if is_continuation { combined.clone() } else { raw_response.clone() } });
+                continuation_raw.clear();
+                continuation_mark = None;
                 llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("Отчет от {}:\n{}\n\nЕсли достаточно — ответь ОБЫЧНЫМ ТЕКСТОМ.", subagent.name, truncate_result(&sub_result, 2000)) });
                 continue;
             } else {
@@ -705,7 +927,9 @@ where
                     final_response = format!("{} Агент '{}' вызывает несуществующего сабагента '{}'. Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id, parsed.target);
                     break;
                 }
-                llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+                llm_messages.push(LlmMessage { role: "assistant".to_string(), content: if is_continuation { combined.clone() } else { raw_response.clone() } });
+                continuation_raw.clear();
+                continuation_mark = None;
                 let valid_ids = valid_agent_ids(agents, &agent.id, "primary");
                 let error_msg = if valid_ids.is_empty() {
                     format!("Ошибка: Агент '{}' не найден.", parsed.target)
@@ -718,26 +942,30 @@ where
         }
 
         if !thought_logged && !response.is_empty() {
-            let extracted = extract_think_content(&raw_response);
+            // В режиме докачки мысли ищем в накопленном сыром тексте
+            let thought_source = if is_continuation { &combined } else { &raw_response };
+            let extracted = extract_think_content(thought_source);
             for t in &extracted {
-                log_cb(format!("💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), t));
+                let stored = safe_truncate(t, THOUGHT_STORE_MAX_CHARS);
+                log_cb(format!("💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), stored));
                 messages.push(ChatMessage {
                     id: Some(format!("msg_{}", msg_counter)),
                     msg_type: "thought".to_string(),
-                    content: t.clone(),
+                    content: stored,
                     sub_calls: None,
                     author: Some(agent.id.clone()),
                     model: Some(extract_model_filename(&engine.model_path)),
                 });
                 *msg_counter += 1;
             }
-            if extracted.is_empty() && !raw_response.contains("<think") {
-                if let Some(t) = extract_thought_from_partial_json(&raw_response) {
-                    log_cb(format!("💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), t));
+            if extracted.is_empty() && !thought_source.contains("<think") {
+                if let Some(t) = extract_thought_from_partial_json(thought_source) {
+                    let stored = safe_truncate(&t, THOUGHT_STORE_MAX_CHARS);
+                    log_cb(format!("💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), stored));
                     messages.push(ChatMessage {
                         id: Some(format!("msg_{}", msg_counter)),
                         msg_type: "thought".to_string(),
-                        content: t.clone(),
+                        content: stored,
                         sub_calls: None,
                         author: Some(agent.id.clone()),
                         model: Some(extract_model_filename(&engine.model_path)),
@@ -758,19 +986,23 @@ where
             } else {
                 "Ты прервал генерацию. Продолжи ответ ОБЫЧНЫМ ТЕКСТОМ."
             };
-            llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+            llm_messages.push(LlmMessage { role: "assistant".to_string(), content: if is_continuation { combined.clone() } else { raw_response.clone() } });
+            continuation_raw.clear();
+            continuation_mark = None;
             llm_messages.push(LlmMessage { role: "user".to_string(), content: hint.to_string() });
             continue;
         }
 
         if !action_found && has_tools_for_prompt {
-            if has_incomplete_json_action(&response) || has_json_thought_without_action(&response) {
+            if has_incomplete_json_action(&parse_target) || has_json_thought_without_action(&parse_target) {
                 consecutive_incomplete += 1;
                 if consecutive_incomplete >= 5 {
                     final_response = format!("{} Агент '{}' не смог завершить действие (5 попыток). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
                     break;
                 }
-                llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+                llm_messages.push(LlmMessage { role: "assistant".to_string(), content: if is_continuation { combined.clone() } else { raw_response.clone() } });
+                continuation_raw.clear();
+                continuation_mark = None;
                 llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты начал размышлять в JSON, но не указал действие. Пиши кратко и СРАЗУ укажи \"target\" или \"tool\".".to_string() });
                 continue;
             }
@@ -778,7 +1010,11 @@ where
 
         let preview = safe_truncate(&response, 300).replace('\n', " ");
         log_cb(format!("✅ Агент {} завершил ответом ({} символов): {}", agent.name, response.len(), preview));
-        final_response = response;
+        final_response = if is_continuation {
+            extract_answer_from_combined(&combined, &response)
+        } else {
+            response
+        };
         break;
     }
 

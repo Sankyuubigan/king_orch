@@ -119,6 +119,16 @@ where
             let result = runner.call_agent(agent, &task, &mut context.messages, &injected_reports, allow_stream, &resolved_params)?;
             let end_len = runner.all_sub_calls.len();
 
+            // Fail-fast: ошибка агента останавливает workflow (иначе каскад ненужных
+            // вызовов продолжится, а результат ошибки попадёт в отчёты как текст).
+            if crate::domain::orchestrator::is_agent_error(&result) {
+                (runner.log_cb)(format!(
+                    "[worker] '{}' вернул ошибку агента — останавливаем workflow: {}",
+                    agent_id, result
+                ));
+                return Err(result);
+            }
+
             let node_sub_calls = if start_len < end_len {
                 Some(runner.all_sub_calls[start_len..end_len].to_vec())
             } else {

@@ -236,3 +236,197 @@ pub fn has_incomplete_json_action(text: &str) -> bool {
 fn decode_json_escapes(s: &str) -> String {
     s.replace("\\n", "\n").replace("\\\"", "\"").replace("\\t", "\t").replace("\\\\", "\\")
 }
+
+// ─── Разделение размышлений и ответа (thinking mode) ───
+//
+// Поддерживаем два формата «мышления вслух», которые модели используют до ответа:
+//  1. Gemma4-каналы:   `<|channel>thought\n...<channel|>\n<|channel>response\n...`
+//  2. Qwen/R1/Bonsai thinking-режим: маркер `思考`/`thinking` ... закрытие ` 响应`/` response`
+//     (блок может быть незакрытым — генерация оборвалась лимитом токенов).
+
+/// Контент Gemma4-канала `<|channel>KIND ... <channel|>` (или незакрытого).
+fn extract_gemma_channel(raw: &str, kind: &str) -> Option<String> {
+    let mut search = 0usize;
+    while let Some(rel) = raw[search..].find("<|channel>") {
+        let abs = search + rel;
+        let after_open = &raw[abs + "<|channel>".len()..];
+        let kind_end = after_open.find(['\n', '<']).unwrap_or(after_open.len());
+        if after_open[..kind_end].trim() == kind {
+            let content = &after_open[kind_end..];
+            let end = content
+                .find("<channel|>")
+                .or_else(|| content.find("</|channel>"))
+                .unwrap_or(content.len());
+            let c = content[..end].trim().to_string();
+            if !c.is_empty() {
+                return Some(c);
+            }
+        }
+        search = abs + "<|channel>".len();
+    }
+    None
+}
+
+/// Разделяет сырой ответ LLM на (размышления, финальный ответ).
+/// Если маркеры размышлений не распознаны — всё считается ответом.
+pub fn split_thinking_and_answer(raw: &str) -> (String, String) {
+    if raw.contains("<|channel>") {
+        let thinking = extract_gemma_channel(raw, "thought")
+            .or_else(|| extract_gemma_channel(raw, "thinking"));
+        let answer = extract_gemma_channel(raw, "response")
+            .or_else(|| extract_gemma_channel(raw, "content"));
+        if thinking.is_some() || answer.is_some() {
+            return (thinking.unwrap_or_default(), answer.unwrap_or_default());
+        }
+    }
+
+    // Самозакрывающийся `<think/>` — размышлений нет, всё после — ответ
+    if let Some(pos) = raw.find("<think/>").or_else(|| raw.find("<think />")) {
+        let after = raw[pos..].find('>').map(|i| pos + i + 1).unwrap_or(raw.len());
+        return (String::new(), raw[after..].trim().to_string());
+    }
+
+    // `<think>...</think>` теги (или незакрытый `<think>` в конце генерации)
+    if let Some(start) = raw.find("<think") {
+        let after_tag = raw[start..]
+            .find('>')
+            .map(|i| start + i + 1)
+            .unwrap_or(start + "<think>".len());
+        if let Some(close_rel) = raw[after_tag..].find("</think") {
+            let close_start = after_tag + close_rel;
+            let close_end = raw[close_start..]
+                .find('>')
+                .map(|i| close_start + i + 1)
+                .unwrap_or(raw.len());
+            return (
+                raw[after_tag..close_start].trim().to_string(),
+                raw[close_end..].trim().to_string(),
+            );
+        }
+        return (raw[after_tag..].trim().to_string(), String::new());
+    }
+
+    // Qwen/R1 thinking-режим: ответ начинается с маркера размышлений.
+    // Закрывающий маркер опционален (модель могла оборваться в середине).
+    const OPEN_ZH: &str = "\u{601d}\u{8003}"; // 思考
+    const OPEN_EN: &str = "thinking";
+    const CLOSE_ZH: &str = "\u{54cd}\u{5e94}"; // 响应
+    const CLOSE_EN: &str = "response";
+
+    let trimmed = raw.trim_start();
+    let body_start = if trimmed.starts_with(OPEN_ZH) {
+        OPEN_ZH.len()
+    } else if trimmed.starts_with(OPEN_EN) {
+        OPEN_EN.len()
+    } else {
+        return (String::new(), raw.to_string());
+    };
+
+    // Позиция в исходном тексте сразу после открывающего маркера
+    let full_start = raw.len() - trimmed.len() + body_start;
+    let body = &raw[full_start..];
+
+    let close_zh = body.find(CLOSE_ZH);
+    let close_en = body.find(CLOSE_EN);
+    match (close_zh, close_en) {
+        (Some(p), _) => {
+            let thinking = body[..p].trim().to_string();
+            let answer = body[p + CLOSE_ZH.len()..].trim().to_string();
+            (thinking, answer)
+        }
+        (None, Some(p)) => {
+            let thinking = body[..p].trim().to_string();
+            let answer = body[p + CLOSE_EN.len()..].trim().to_string();
+            (thinking, answer)
+        }
+        (None, None) => (body.trim().to_string(), String::new()),
+    }
+}
+
+/// True, если генерация оборвалась ВНУТРИ размышлений и финального ответа ещё нет.
+/// Используется, чтобы продолжить генерацию с места обрыва, а не генерировать ЗАНОВО.
+pub fn is_thinking_truncated(raw: &str) -> bool {
+    if raw.trim().is_empty() {
+        return false;
+    }
+    let (thinking, answer) = split_thinking_and_answer(raw);
+    if !thinking.trim().is_empty() && answer.trim().is_empty() {
+        return true;
+    }
+    // Незакрытый `<think ... ` (без ` response`/`</think>`)
+    if raw.contains("<think") && !raw.contains("</think") && !raw.contains(" thought") {
+        return true;
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn split_qwen_thinking_closed() {
+        let raw = " 思考\nПроанализирую задачу.\n 响应\nИтоговый ответ.";
+        let (t, a) = split_thinking_and_answer(raw);
+        assert_eq!(t, "Проанализирую задачу.");
+        assert_eq!(a, "Итоговый ответ.");
+    }
+
+    #[test]
+    fn split_qwen_thinking_english_markers() {
+        let raw = " thinking\nSome reasoning here.\n response\nFinal answer.";
+        let (t, a) = split_thinking_and_answer(raw);
+        assert_eq!(t, "Some reasoning here.");
+        assert_eq!(a, "Final answer.");
+    }
+
+    #[test]
+    fn split_qwen_thinking_truncated() {
+        let raw = " 思考\nРазмышления оборваны в середине предложе";
+        let (t, a) = split_thinking_and_answer(raw);
+        assert_eq!(a, "");
+        assert!(!t.is_empty());
+        assert!(is_thinking_truncated(raw));
+    }
+
+    #[test]
+    fn split_plain_text_is_answer() {
+        let raw = "Обычный ответ без размышлений.";
+        let (t, a) = split_thinking_and_answer(raw);
+        assert_eq!(t, "");
+        assert_eq!(a, raw);
+        assert!(!is_thinking_truncated(raw));
+    }
+
+    #[test]
+    fn split_gemma4_channels() {
+        let raw = "<|channel>thought\nвнутренние размышления<channel|>\n<|channel>response\nфинальный ответ";
+        let (t, a) = split_thinking_and_answer(raw);
+        assert_eq!(t, "внутренние размышления");
+        assert_eq!(a, "финальный ответ");
+    }
+
+    #[test]
+    fn split_gemma4_thought_only() {
+        let raw = "<|channel>thought\nмысли без ответа";
+        let (t, a) = split_thinking_and_answer(raw);
+        assert_eq!(t, "мысли без ответа");
+        assert_eq!(a, "");
+        assert!(is_thinking_truncated(raw));
+    }
+
+    #[test]
+    fn split_think_tag_closed() {
+        let raw = "<think>размышления</think>\nОтвет после тега.";
+        let (t, a) = split_thinking_and_answer(raw);
+        assert_eq!(t, "размышления");
+        assert_eq!(a, "Ответ после тега.");
+    }
+
+    #[test]
+    fn is_agent_error_detects_prefix() {
+        assert!(crate::domain::orchestrator::is_agent_error("⚠️ ОШИБКА_АГЕНТА: Агент 'x' не смог"));
+        assert!(!crate::domain::orchestrator::is_agent_error("нормальный ответ агента"));
+        assert!(!crate::domain::orchestrator::is_agent_error(""));
+    }
+}
