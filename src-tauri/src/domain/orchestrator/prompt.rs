@@ -1,17 +1,15 @@
 use crate::domain::agent_manager::AgentProfile;
 use crate::infra::ChatMessage;
 
-const TRUTH_PROTOCOL: &str = "ОТВЕЧАЙ ТОЛЬКО ПРАВДУ. Если не знаешь — скажи 'я не знаю'. Запрещено выдумывать факты, давать ложные утверждения или строить догадки. Приоритет — точность, а не скорость.\nRespond strictly based on verified facts. If you do not have sufficient information to answer confidently, you must output exactly 'я не знаю' or 'I lack the data' without any guessing.";
+const TRUTH_PROTOCOL: &str = "ОТВЕЧАЙ ТОЛЬКО ПРАВДУ. Если не знаешь, скажи 'я не знаю'. Запрещено выдумывать факты, давать ложные утверждения или строить догадки. Приоритет — точность, а не скорость.\nRespond strictly based on verified facts. If you do not have sufficient information to answer confidently, you must output exactly 'я не знаю' or 'I lack the data' without any guessing.";
 
-fn get_user_query_from_messages(messages: &[ChatMessage]) -> Option<&str> {
-    messages.iter()
-        .find(|m| m.msg_type == "message" && m.author.as_deref() == Some("user") && !m.content.trim().is_empty())
-        .map(|m| m.content.as_str())
-}
+/// Глобальное ограничение для всех агентов (единый источник — SSOT).
+/// Дублируется на этапе сборки worst-case промпта для оценки контекста.
+pub const CRITICAL_LIMIT_BLOCK: &str = "Твой максимальный лимит генерации строго ограничен. Твои внутренние размышления должны состоять максимум из 3-4 предложений, после чего сразу должен идти финальный ответ или вызов.";
 
 pub fn build_system_prompt(
     agent: &AgentProfile,
-    messages: &[ChatMessage],
+    _messages: &[ChatMessage],
     has_tools: bool,
     all_tools: &[(String, String, serde_json::Value)],
     max_gen_tokens: usize,
@@ -24,11 +22,6 @@ pub fn build_system_prompt(
     sp.push_str("\n\n[ПРОТОКОЛ ЧЕСТНОСТИ]\n");
     sp.push_str(TRUTH_PROTOCOL);
     sp.push_str("\n\n⚠️ ВАЖНО: ОТВЕЧАЙ НА ТОМ ЖЕ ЯЗЫКЕ, ЧТО И ПОЛЬЗОВАТЕЛЬ.");
-
-    // Запрос пользователя — для контекста всем агентам
-    if let Some(uq) = get_user_query_from_messages(messages) {
-        sp.push_str(&format!("\n\n[ЗАПРОС ПОЛЬЗОВАТЕЛЯ]\n{}\n", uq));
-    }
 
     if has_tools {
         sp.push_str("\n\n[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]\nЕсли нужен инструмент — верни ОДИН JSON-блок (```json ... ```).\nВ JSON обязательно поле \"thought\".\n\n⚠️ ВАЖНО: Если задача ВЫПОЛНЕНА — пиши ОБЫЧНЫЙ ТЕКСТ без JSON!\n");

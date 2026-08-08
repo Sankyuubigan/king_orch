@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Единый контракт сигналов emit_signal",
+  "description": "Единый источник правды (SSOT) для сигналов emit-агентов: маппинг agent_id → (сигнальный key + JSON Schema value). Оркестратор при завершении ответа агента делает ВТОРОЙ вызов LLM под json_schema конверта emit_signal (value подставляется инлайн, БЕЗ $ref — вложенные $ref сломаны в llama.cpp, ggml-org/llama.cpp#8073).",
+  "agents": {
+    "validator": {
+      "key": "validator_report",
+      "value": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "verdict": {
+            "type": "string",
+            "enum": ["ДАННЫХ ДОСТАТОЧНО", "УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО"]
+          },
+          "found_markers": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "missing_data": {
+            "type": "string"
+          },
+          "somatic_detected": {
+            "type": "boolean"
+          }
+        },
+        "required": ["verdict"]
+      }
+    },
+    "cluster_checker": {
+      "key": "cluster_checker",
+      "value": {
+        "type": "string",
+        "enum": ["Конкретная проблема", "Кластер"]
+      }
+    },
+    "soma_translator": {
+      "key": "soma_translator",
+      "value": {
+        "type": "string",
+        "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"]
+      }
+    },
+    "synthesizer": {
+      "key": "destructor_type",
+      "value": {
+        "type": "string",
+        "pattern": "^[1-9]$"
+      }
+    },
+    "destructor_detector": {
+      "key": "diagnostic_report",
+      "value": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "idol": { "type": "string" },
+          "threat": { "type": "string" },
+          "destructor": { "type": "string" },
+          "pleasure_ban": { "type": "string" },
+          "paradoxical_loop": { "type": "string" }
+        },
+        "required": ["idol", "threat", "destructor", "pleasure_ban", "paradoxical_loop"]
+      }
+    }
+  }
+}

@@ -100,7 +100,7 @@ pub fn install_panic_hook() {
 }
 
 /// Читаемый таймстамп YYYY-MM-DD HH:MM:SS (без внешних крейтов)
-fn timestamp() -> String {
+pub(crate) fn timestamp() -> String {
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

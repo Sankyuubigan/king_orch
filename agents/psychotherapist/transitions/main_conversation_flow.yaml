@@ -267,6 +267,9 @@ nodes:
   cases_priority:
   - key: НУЖНА РУКОСТЬ
     to: note_1785123862689
+  - key: РУКОСТЬ ИЗВЕСТНА
+    to: check_grounding
+  default: check_grounding
   ui_pos:
     y: 82
     x: 282

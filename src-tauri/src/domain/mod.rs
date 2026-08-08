@@ -5,6 +5,7 @@
 pub mod orchestrator;
 pub mod parsers;
 pub mod agent_manager;
+pub mod signals;
 pub mod workflow_engine;
 
 // ─── Публичные типы ───
@@ -15,6 +16,7 @@ pub use orchestrator::run_chat;
 pub use orchestrator::build_worst_agent_prompt;
 pub use orchestrator::StreamMeta;
 pub use orchestrator::prompt::build_system_prompt;
+pub use orchestrator::builtin_tools;
 pub use agent_manager::load_agents;
 pub use agent_manager::load_entry_points;
 pub use workflow_engine::{find_workflow_by_stem, load_workflows};

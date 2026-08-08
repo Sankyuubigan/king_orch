@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use crate::infra::config::ModelParams;
 use super::llm::LlamaEngine;
-use super::llm_types::{ChatAttachment, LlmMessage, GenerationResult};
+use super::llm_types::{ChatAttachment, LlmMessage, GenerationResult, GrammarSpec, build_base_grammar};
 
 /// Маркер вставки медиа в промпт (эквивалент mtmd_default_marker() из llama.cpp)
 const MTMD_MEDIA_MARKER: &str = "<__media__>";
@@ -42,12 +42,16 @@ impl LlamaEngine {
         let words = actual_format.get_stop_words();
         let stop_words = super::llm::merged_stop_words(&words);
 
+        let pending = self.take_pending_grammar();
+        let grammar = pending.or_else(|| build_base_grammar(&actual_format).map(|gbnf| GrammarSpec { gbnf: Some(gbnf), json_schema: None }));
+
         self.run_completion(
             &full_prompt,
             Some(multimodal_data),
             max_tokens,
             model_params,
             &stop_words,
+            grammar,
             cancel_flag,
             ctx_label,
             progress_cb,

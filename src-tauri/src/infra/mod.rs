@@ -19,7 +19,7 @@ pub mod telemetry;
 
 // ─── Публичные типы ───
 pub use config::{AppConfig, CatalogEntry, ModelParams, SamplingPresets};
-pub use llm::{ChatMessage, ChatAttachment, LlamaEngine, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename, llm_history, PromptFormat, estimate_vram_mb};
+pub use llm::{ChatMessage, ChatAttachment, LlamaEngine, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename, llm_history, PromptFormat, estimate_vram_mb, GrammarSpec, build_json_only_grammar};
 pub use session_manager::{ChatSession, SessionMeta};
 pub use mcp_client::McpClient;
 

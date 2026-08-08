@@ -33,6 +33,59 @@ pub struct GenerationResult {
     pub stop_reason: String,
 }
 
+/// Грамматика llama.cpp для генерации: свободный текст ИЛИ строгий JSON.
+/// Передаётся на /completion в поле `grammar` (GBNF), либо в поле
+/// `json_schema` (JSON Schema, конвертируется движком в GBNF на лету).
+#[derive(Debug, Clone, Default)]
+pub struct GrammarSpec {
+    /// GBNF-грамматика (сырой текст)
+    pub gbnf: Option<String>,
+    /// JSON Schema для конвертации движком в GBNF
+    pub json_schema: Option<serde_json::Value>,
+}
+
+/// Общие JSON-правила для GBNF (строгий JSON + свободный текст).
+/// Используется как база для всех форматов промптов (кроме Auto).
+fn json_grammar_rules() -> &'static str {
+    concat!(
+        "json-object ::= \"{\" ws members ws \"}\"\n",
+        "members ::= (member (\",\" ws member)*)?\n",
+        "member ::= json-string ws \":\" ws json-value\n",
+        "json-array ::= \"[\" ws elements ws \"]\"\n",
+        "elements ::= (json-value (\",\" ws json-value)*)?\n",
+        "json-value ::= json-string | json-number | json-object | json-array | json-bool | \"null\"\n",
+        "json-string ::= \"\\\"\" string-char* \"\\\"\"\n",
+        "string-char ::= [^\"\\\\] | escape\n",
+        "escape ::= \"\\\\\" (\"\\\\\" | \"\\\"\" | \"n\" | \"t\" | \"r\" | \"b\" | \"f\" | \"u\" [0-9a-f] [0-9a-f] [0-9a-f] [0-9a-f])\n",
+        "json-number ::= \"-\"? (\"0\" | [1-9] [0-9]*) (\".\" [0-9]+)? ([eE] [-+]? [0-9]+)?\n",
+        "json-bool ::= \"true\" | \"false\"\n",
+        "ws ::= (\" \" | \"\\t\" | \"\\n\" | \"\\r\")*\n",
+    )
+}
+
+/// Базовая GBNF-грамматика движка: свободный текст ИЛИ строгий JSON.
+/// Защищает структурную целостность: если модель начала выводить JSON
+/// (встретился `{`), то обязана закрыть его корректно; свободная проза
+/// (без фигурных скобок и обратного слэша) не ограничивается.
+/// Для `PromptFormat::Auto` (Jinja-шаблон) грамматика НЕ задаётся —
+/// формат токенов недетерминирован.
+pub fn build_base_grammar(format: &PromptFormat) -> Option<String> {
+    if *format == PromptFormat::Auto { return None; }
+    Some(format!(
+        "root ::= seq\n\
+         seq ::= (plain-char | \"\\n\" | \"\\r\" | \"\\t\" | json-object)*\n\
+         plain-char ::= [^{{}}]\n\
+         {}",
+        json_grammar_rules()
+    ))
+}
+
+/// Строго-JSON грамматика (корень — только JSON-значение). Для агентов,
+/// чей контракт — исключительно машиночитаемый JSON (напр. fact_extractor).
+pub fn build_json_only_grammar() -> String {
+    format!("root ::= json-object\n{}", json_grammar_rules())
+}
+
 /// Лёгкий тип для промпта LLM — только role + content.
 /// Используется временно при вызове generate_chat(), не сохраняется в сессию.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,5 +345,25 @@ mod tests {
         let history = llm_history(&msgs);
         assert_eq!(history.len(), 1);
         assert_eq!(history[0].content, "содержимое");
+    }
+
+    #[test]
+    fn base_grammar_none_for_auto() {
+        assert!(build_base_grammar(&PromptFormat::Auto).is_none());
+    }
+
+    #[test]
+    fn base_grammar_some_for_chatml_and_json_rules() {
+        let chatml = build_base_grammar(&PromptFormat::ChatML).expect("ChatML grammar");
+        assert!(chatml.starts_with("root ::= seq"), "{}", chatml);
+        assert!(chatml.contains("json-object ::="));
+        assert!(chatml.contains("plain-char ::= [^{}]"), "{}", chatml);
+    }
+
+    #[test]
+    fn json_only_grammar_root_is_object() {
+        let g = build_json_only_grammar();
+        assert!(g.starts_with("root ::= json-object"));
+        assert!(g.contains("json-value ::="));
     }
 }

@@ -2,6 +2,27 @@ use std::path::{Path, PathBuf};
 use crate::infra::McpClient;
 use crate::infra::bin_downloader;
 
+/// Встроенные инструменты (единый источник — SSOT). Подмешиваются в промпт
+/// каждого агента при РЕАЛЬНОМ вызове и в worst-case оценку контекста.
+pub fn builtin_tools() -> Vec<(String, String, serde_json::Value)> {
+    vec![(
+        "_builtin".to_string(),
+        "emit_signal".to_string(),
+        serde_json::json!({
+            "name": "emit_signal",
+            "description": "Сохранить сигнал/маркер в сессию. Другие агенты, экстрактор и phase_router увидят его. Принимает key (имя сигнала) и value (произвольный JSON-объект с данными).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "key": {"type": "string", "description": "Имя сигнала, например 'validator_report' или 'phase'"},
+                    "value": {"type": "object", "description": "Произвольный JSON с данными сигнала"}
+                },
+                "required": ["key", "value"]
+            }
+        }),
+    )]
+}
+
 pub fn get_mcp_server_path(mcp_servers_dir: &Path, name: &str) -> Result<PathBuf, String> {
     let possible_paths = vec![
         mcp_servers_dir.join(format!("{}.cjs", name)),

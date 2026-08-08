@@ -1,11 +1,14 @@
 pub mod prompt;
 mod runtime;
 
+pub use runtime::builtin_tools;
+
 use crate::domain::agent_manager::{load_agents, AgentProfile};
+use crate::domain::signals::{SignalContract, build_signal_envelope_schema, load_signal_contract};
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner, NodeType, WorkflowDef,
 };
-use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename, llm_history};
+use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename, llm_history, GrammarSpec};
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
     has_incomplete_json_action, is_thinking_truncated, parse_orchestrator_response, parse_tool_call,
@@ -261,10 +264,56 @@ fn valid_agent_ids(agents: &[AgentProfile], exclude_id: &str, exclude_mode: &str
         .collect()
 }
 
+/// Загружает per-agent GBNF-грамматику из `grammars_dir/<agent_id>.gbnf`.
+/// Если файла нет — агент работает без per-agent грамматики (только база движка).
+fn load_agent_grammar(grammars_dir: &Path, agent_id: &str) -> Option<String> {
+    let path = grammars_dir.join(format!("{}.gbnf", agent_id));
+    match std::fs::read_to_string(&path) {
+        Ok(content) if !content.trim().is_empty() => Some(content),
+        Ok(_) => None,
+        Err(e) => {
+            eprintln!("[grammar] {}: {}", path.display(), e);
+            None
+        }
+    }
+}
+
+/// Ищет директорию с per-agent GBNF-грамматиками.
+/// Структура: `agents/<набор агентов>/grammars/*.gbnf` (напр. `agents/psychotherapist/grammars/`).
+/// Приоритет: 1) рядом с workflow (`workflow.parent_dir` = `.../transitions` → `.../grammars`);
+/// 2) первая найденная подпапка `<agents_dir>/<папка>/grammars`; 3) fallback `<agents_dir>/grammars`.
+pub fn resolve_grammars_dir(agents_dir: &Path, workflow: Option<&WorkflowDef>) -> std::path::PathBuf {
+    if let Some(wf) = workflow {
+        let candidate = Path::new(&wf.parent_dir)
+            .parent()
+            .unwrap_or(agents_dir)
+            .join("grammars");
+        if candidate.is_dir() {
+            return candidate;
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(agents_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                let g = entry.path().join("grammars");
+                if g.is_dir() {
+                    return g;
+                }
+            }
+        }
+    }
+    agents_dir.join("grammars")
+}
+
 /// Режим графа: системный промпт самого «тяжёлого» агента графа (worst-case).
 /// Пиковая VRAM определяется одним LLM-вызовом (движок работает последовательно),
 /// поэтому берём агента с самым длинным системным промптом. Sub-workflow узлы
 /// намеренно НЕ раскрываются — считаем только текущий граф.
+///
+/// Собирается ТАК ЖЕ, как в run_agent_node (SSOT): инструменты (builtin + агентские)
+/// и [КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ]. Схемы MCP-инструментов доступны только после
+/// запуска серверов (рантайм), поэтому для них оценка — нижняя граница; точная
+/// подгонка истории — после старта движка через /tokenize (цикл обрезки).
 pub fn build_worst_agent_prompt(
     agents: &[AgentProfile],
     wf: &WorkflowDef,
@@ -274,7 +323,14 @@ pub fn build_worst_agent_prompt(
         .filter(|n| n.node_type == NodeType::LlmWorker)
         .filter_map(|n| n.agent.as_deref())
         .filter_map(|aid| agents.iter().find(|a| a.id == aid))
-        .map(|agent| build_system_prompt(agent, history, false, &[], 2048))
+        .map(|agent| {
+            let tools = runtime::builtin_tools();
+            let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
+            let mut sp = build_system_prompt(agent, history, has_tools, &tools, 2048);
+            sp.push_str("\n\n");
+            sp.push_str(prompt::CRITICAL_LIMIT_BLOCK);
+            sp
+        })
         .max_by_key(|sp| sp.chars().count());
 
     // Граф без llm_worker-узлов → пустой системный промпт (посчитаются только история + сообщение)
@@ -372,6 +428,10 @@ where
 
     let mut all_sub_calls = Vec::new();
 
+    // Per-agent GBNF-грамматики лежат рядом с агентами: agents/<папка>/grammars/
+    let grammars_dir = resolve_grammars_dir(&agents_dir, workflow_match.as_deref());
+    log_cb(format!("🎯 Директория грамматик: {}", grammars_dir.display()));
+
     // Загружаем пресеты параметров LLM из sampling_presets.json (рядом с agents/)
     let project_dir = agents_dir.parent().unwrap_or(&agents_dir);
     let sampling_presets = crate::infra::load_sampling_presets(project_dir);
@@ -396,6 +456,7 @@ where
             cancel_flag: cancel_flag.clone(),
             mcp_servers_dir: &mcp_servers_dir,
             bins_dir: &bins_dir,
+            grammars_dir: &grammars_dir,
             all_sub_calls: &mut all_sub_calls,
             msg_counter: &mut msg_counter,
             stream_meta: stream_meta.clone(),
@@ -424,6 +485,7 @@ where
             &attachments,
             max_gen_usize, &model_params, &format_type,
             cancel_flag, 0, &mut all_sub_calls, None, &mcp_servers_dir, &bins_dir,
+            &grammars_dir,
             &mut messages_store, &mut msg_counter,
             String::new(),
             stream_meta.clone(), true,
@@ -514,6 +576,7 @@ pub(crate) fn run_agent_node<L, S, C>(
     cancel_flag: Arc<AtomicBool>, depth: usize,
     all_sub_calls: &mut Vec<SubCall>, caller_name: Option<String>,
     mcp_servers_dir: &Path, bins_dir: &Path,
+    grammars_dir: &Path,
     messages: &mut Vec<ChatMessage>, msg_counter: &mut u32,
     injected_reports: String,
     stream_meta: Arc<Mutex<StreamMeta>>,
@@ -544,18 +607,7 @@ where
 
     let has_real_tools = !all_tools.is_empty() || !agent.tools.is_empty();
 
-    all_tools.push(("_builtin".to_string(), "emit_signal".to_string(), serde_json::json!({
-        "name": "emit_signal",
-        "description": "Сохранить сигнал/маркер в сессию. Другие агенты, экстрактор и phase_router увидят его. Принимает key (имя сигнала) и value (произвольный JSON-объект с данными).",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "key": {"type": "string", "description": "Имя сигнала, например 'validator_report' или 'phase'"},
-                "value": {"type": "object", "description": "Произвольный JSON с данными сигнала"}
-            },
-            "required": ["key", "value"]
-        }
-    })));
+    all_tools.extend(runtime::builtin_tools());
 
     let has_tools_for_prompt = has_real_tools;
     let mut system_prompt = build_system_prompt(agent, messages, has_tools_for_prompt, &all_tools, max_gen_tokens);
@@ -565,7 +617,8 @@ where
     }
     
     // Глобальное правило для всех мыслящих моделей, чтобы не пробивали лимит 2048 токенов
-    system_prompt.push_str("\n\n[КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ]\nТвой максимальный лимит генерации строго ограничен. Твои внутренние размышления должны состоять максимум из 3-4 предложений, после чего сразу должен идти финальный ответ или вызов.");
+    system_prompt.push_str("\n\n[КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ]\n");
+    system_prompt.push_str(prompt::CRITICAL_LIMIT_BLOCK);
 
     let mut llm_messages: Vec<LlmMessage> = vec![LlmMessage { role: "system".to_string(), content: system_prompt.clone() }];
 
@@ -602,15 +655,42 @@ where
     // (SSOT) — его копия в сессии раздувала бы JSON на 5-11KB за каждый вызов.
     let invocation_dump = build_invocation_dump(&user_text, &injected_reports);
 
-    let mut final_response = String::new();
+let mut final_response = String::new();
     let mut tool_calls = Vec::new();
     let start_time = Instant::now();
     let mut consecutive_failed_tools = 0;
     let mut consecutive_incomplete = 0;
     let mut consecutive_invalid_targets = 0;
+    // ── Второй сигнальный вызов: агент сначала отвечает текстом (свободно),
+    // затем оркестратор ВТОРОЙ итерацией просит emit_signal под json_schema.
+    let mut signal_attempted = false;   // второй вызов уже сделан (не зацикливаться)
+    let mut signal_saved = false;       // сигнал успешно сохранён
+    let mut signal_analysis = String::new(); // текст первого (пользовательского) ответа
     // Метка режима для лога пиков памяти: llm_worker графа зовёт run_agent_node
     // с caller_name == "workflow_engine", всё остальное — legacy (.md) режим.
     let mem_mode = if caller_name.as_deref() == Some("workflow_engine") { "graph" } else { "legacy" };
+
+    // ── Per-agent грамматика: agents/<...>/grammars/<agent_id>.gbnf ──
+    // Задаётся для ПЕРВОГО вызова LLM агента (consume-and-clear в движке),
+    // докачки/компакты/результаты инструментов идут уже с базовой грамматикой.
+    // Сигнальные агенты (есть контракт в signals/root.schema.json) НЕ ограничены
+    // GBNF: сигнал эмитится ВТОРЫМ вызовом под json_schema конверта.
+    let signal_contract: Option<SignalContract> = {
+        let signals_dir = grammars_dir.parent().unwrap_or(grammars_dir).join("signals");
+        load_signal_contract(&signals_dir, &agent.id)
+    };
+    let agent_grammar = if signal_contract.is_none() {
+        load_agent_grammar(grammars_dir, &agent.id)
+    } else {
+        None
+    };
+    if let Some(gbnf) = &agent_grammar {
+        engine.set_grammar(Some(GrammarSpec { gbnf: Some(gbnf.clone()), json_schema: None }));
+        log_cb(format!("🎯 Агент '{}': применена грамматика {} символов", agent.id, gbnf.len()));
+    } else {
+        engine.set_grammar(None);
+        log_cb(format!("⚠️ Грамматика не найдена для агента '{}' (искал в {})", agent.id, grammars_dir.display()));
+    }
 
     // ── Состояние «докачки» после обрыва генерации по лимиту токенов ──
     let mut continuation_count = 0usize;      // сколько раз докачивали оборванную генерацию
@@ -630,8 +710,15 @@ where
                 break;
             }
             if llm_messages.len() > 2 {
+                let removed = &llm_messages[1];
+                let chars = removed.content.chars().count();
+                let snippet: String = removed.content.chars().take(120).collect();
+                log_cb(format!(
+                    "⚠️ Превышен лимит контекста: промпт {} + генерация {} > лимита {}. Удалено самое старое сообщение [{}], {} симв.: {}",
+                    current_tokens, max_gen_tokens, ideal_ctx, removed.role, chars,
+                    if chars > 120 { format!("{}…", snippet) } else { snippet }
+                ));
                 llm_messages.remove(1);
-                log_cb("⚠️ Превышен лимит контекста! Удалено самое старое сообщение из памяти LLM.".to_string());
             } else {
                 break;
             }
@@ -760,6 +847,7 @@ where
 
                 if let (Some(key), Some(value)) = (key, value) {
                     consecutive_failed_tools = 0;
+                    signal_saved = true;
                     let signal_msg = ChatMessage {
                         id: Some(format!("msg_{}", msg_counter)),
                         msg_type: "signal".to_string(),
@@ -787,7 +875,13 @@ where
                         arguments: args_str.clone(),
                         result: format!("✅ Сигнал '{}' сохранён", key),
                     });
-                    final_response = analysis;
+                    // На втором (сигнальном) вызове пользовательский ответ агента —
+                    // это результат ПЕРВОГО вызова: возвращаем его, а не голый JSON.
+                    final_response = if signal_analysis.is_empty() {
+                        analysis
+                    } else {
+                        signal_analysis.clone()
+                    };
                     break;
                 } else {
                     let key_str = arguments.get("key").map(|v| v.to_string()).unwrap_or_else(|| "отсутствует".to_string());
@@ -858,6 +952,27 @@ where
                 } else {
                     final_response = parsed.content;
                 }
+
+                // ── Второй сигнальный вызов (та же логика, что в конце цикла):
+                // агент ответил через reply, но сигнал по контракту не эмичен.
+                if !signal_attempted && !signal_saved {
+                    if let Some(contract) = &signal_contract {
+                        signal_attempted = true;
+                        signal_analysis = final_response.clone();
+                        let schema = build_signal_envelope_schema(contract);
+                        engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
+                        log_cb(format!("📡 Второй сигнальный вызов агента '{}' (из reply): emit_signal('{}') под json_schema", agent.id, contract.key));
+                        llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+                        llm_messages.push(LlmMessage {
+                            role: "user".to_string(),
+                            content: format!(
+                                "Отлично. Теперь сохрани результат анализа как сигнал: вызови инструмент emit_signal с key=\"{}\" и value по контракту (точно той структуры, как описано в системном промпте). Ответь ТОЛЬКО JSON с вызовом эмиссии — без пояснений.",
+                                contract.key
+                            ),
+                        });
+                        continue;
+                    }
+                }
                 break;
             }
 
@@ -875,6 +990,7 @@ where
                     &[],
                     max_gen_tokens, model_params, format_type,
                     cancel_flag.clone(), depth + 1, all_sub_calls, Some(agent.name.clone()), mcp_servers_dir, bins_dir,
+                    grammars_dir,
                     messages, msg_counter,
                     String::new(),
                     stream_meta.clone(), false,
@@ -1015,6 +1131,28 @@ where
         } else {
             response
         };
+
+        // ── Второй сигнальный вызов: агент ответил свободно, но не вызвал
+        // emit_signal. Если для него есть контракт сигнала — делаем ещё ОДИН
+        // LLM-вызов СТРОГО под json_schema конверта (анализ остаётся первым).
+        if !signal_attempted && !signal_saved {
+            if let Some(contract) = &signal_contract {
+                signal_attempted = true;
+                signal_analysis = final_response.clone();
+                let schema = build_signal_envelope_schema(contract);
+                engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
+                log_cb(format!("📡 Второй сигнальный вызов агента '{}': emit_signal('{}') под json_schema", agent.id, contract.key));
+                llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+                llm_messages.push(LlmMessage {
+                    role: "user".to_string(),
+                    content: format!(
+                        "Отлично. Теперь сохрани результат анализа как сигнал: вызови инструмент emit_signal с key=\"{}\" и value по контракту (точно той структуры, как описано в системном промпте). Ответь ТОЛЬКО JSON с вызовом эмиссии — без пояснений.",
+                        contract.key
+                    ),
+                });
+                continue;
+            }
+        }
         break;
     }
 

@@ -11,7 +11,10 @@ use crate::api::AppState;
 // ─── Лог-файл ───
 // В release логи пишутся в king_orch.log РЯДОМ С EXE (infra::startup_log) —
 // чтобы юзер мог прислать лог, даже если приложение падает на старте.
-// В dev (debug_assertions) дополнительно дублируем в test/last_logs.txt.
+// В dev-комплекте (в рабочем каталоге есть папка test/) дополнительно
+// дублируем в test/last_logs.txt. Проверка runtime (а не cfg(debug_assertions)):
+// релизные сборки запускаются из каталога проекта, где test/ лежит рядом,
+// и логи нужны для диагностики даже без debug-профиля.
 static DEV_LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
 pub fn init_log_file() {
@@ -22,10 +25,11 @@ pub fn init_log_file() {
             }
         }
     }
-    #[cfg(debug_assertions)]
-    {
+    // ПРОВЕРКА ДО НАПИСАНИЯ: каталог test/ существует в CWD → пишем dev-лог.
+    // Создаём только при наличии метки dev-комплекта, чтобы не плодить папку
+    // у конечного пользователя.
+    if std::path::Path::new("test").is_dir() {
         let path = std::path::PathBuf::from("test").join("last_logs.txt");
-        let _ = std::fs::create_dir_all("test");
         if let Ok(file) = std::fs::File::create(&path) {
             if let Ok(mut guard) = DEV_LOG_FILE.lock() {
                 *guard = Some(file);
@@ -36,10 +40,9 @@ pub fn init_log_file() {
 
 fn append_log(msg: &str) {
     infra::startup_log::append("LLM", msg);
-    #[cfg(debug_assertions)]
     if let Ok(mut guard) = DEV_LOG_FILE.lock() {
         if let Some(ref mut file) = *guard {
-            let _ = writeln!(file, "{}", msg);
+            let _ = writeln!(file, "[{}] [LLM] {}", infra::startup_log::timestamp(), msg);
         }
     }
 }
@@ -279,7 +282,11 @@ pub fn get_prompt_preview(
     // Системный промпт: либо конкретного .md-агента, либо — в режиме графа —
     // самого «тяжёлого» агента графа (worst-case для оценки VRAM).
     let system_prompt = match agents.iter().find(|a| a.id == agent_id) {
-        Some(agent) => crate::domain::build_system_prompt(agent, &history, false, &[], 2048),
+        Some(agent) => {
+            let tools = crate::domain::builtin_tools();
+            let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
+            crate::domain::build_system_prompt(agent, &history, has_tools, &tools, 2048)
+        }
         None => {
             let workflows = crate::domain::load_workflows(&agents_dir)?;
             let wf = crate::domain::find_workflow_by_stem(&workflows, &agent_id)

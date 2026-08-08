@@ -163,6 +163,7 @@ pub async fn run_iterative_test(
             None, // caller_name
             &mcp_servers_dir,
             &bins_dir,
+            &domain::orchestrator::resolve_grammars_dir(&agents_dir, None),
             &mut current_chat_messages,
             &mut msg_counter,
             String::new(), // injected_reports

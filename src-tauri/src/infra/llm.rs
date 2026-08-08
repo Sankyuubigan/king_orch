@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize};
 use crate::infra::config::ModelParams;
 use crate::infra::detokenizer::compute_stream_diff;
 
-pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report, LlmMessage, extract_model_filename, GenerationResult, llm_history};
+pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report, LlmMessage, extract_model_filename, GenerationResult, llm_history, GrammarSpec, build_base_grammar, build_json_only_grammar};
 pub use super::llm_gguf::{extract_string_from_gguf, extract_f32_from_gguf, extract_u32_from_gguf};
 
 /// Таймаут ожидания готовности движка (загрузка модели в память)
@@ -87,6 +87,10 @@ pub struct LlamaEngine {
     vram_before: u64,
     /// Скорость последней генерации (tok/s)
     last_tok_per_sec: std::cell::Cell<f64>,
+    /// Грамматика для СЛЕДУЮЩЕГО вызова generate_chat (consume-and-clear).
+    /// Per-node/per-agent грамматика задаётся через set_grammar() перед вызовом;
+    /// если не задана — generate_chat подставляет базовую (текст|JSON).
+    pending_grammar: std::sync::Mutex<Option<GrammarSpec>>,
 }
 
 // ─── Простой ГПСЧ для порта/ключа (без внешних зависимостей) ───
@@ -302,6 +306,7 @@ impl LlamaEngine {
             engine_mode_detail: String::new(),
             vram_before,
             last_tok_per_sec: std::cell::Cell::new(0.0),
+            pending_grammar: std::sync::Mutex::new(None),
         };
 
         // ── Ожидание готовности (модель грузится в память) ──
@@ -514,12 +519,20 @@ impl LlamaEngine {
         max_tokens: usize,
         params: &ModelParams,
         stop_words: &[String],
+        grammar: Option<GrammarSpec>,
         cancel_flag: Arc<AtomicBool>,
         ctx_label: &str,
         mut progress_cb: F,
         log_cb: L,
     ) -> Result<GenerationResult, String>
     where F: FnMut(f32, &str), L: Fn(String) {
+        if let Some(g) = &grammar {
+            if let Some(gbnf) = &g.gbnf {
+                log_cb(format!("🎯 Грамматика GBNF: {} символов, корень: {}", gbnf.len(), gbnf.lines().next().unwrap_or("?")));
+            } else if g.json_schema.is_some() {
+                log_cb("🎯 Грамматика: json_schema (конвертируется движком)".to_string());
+            }
+        }
         let actual_min_p = params.min_p.max(0.0);
         let actual_rep_pen = params.repetition_penalty.max(1.0);
         let actual_temp = params.temperature.max(0.01);
@@ -552,6 +565,10 @@ impl LlamaEngine {
             stop: &'a [String],
             cache_prompt: bool,
             seed: i32,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            grammar: Option<&'a str>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            json_schema: Option<&'a serde_json::Value>,
         }
 
         let prompt_value = match &multimodal_data {
@@ -582,6 +599,8 @@ impl LlamaEngine {
             stop: stop_words,
             cache_prompt: true,
             seed: -1,
+            grammar: grammar.as_ref().and_then(|g| g.gbnf.as_deref()),
+            json_schema: grammar.as_ref().and_then(|g| g.json_schema.as_ref()),
         };
 
         // ── Замер пиков памяти (RAM + VRAM) на время генерации ──
@@ -765,6 +784,19 @@ impl LlamaEngine {
         self.is_multimodal_engine
     }
 
+    /// Задаёт грамматику для СЛЕДУЮЩЕГО вызова generate_chat/generate_chat_multimodal.
+    /// Грамматика «потребляется» одним вызовом (consume-and-clear), поэтому
+    /// повторные итерации цикла агента (докачки, компакты, результаты tools)
+    /// автоматически получают базовую грамматику, а не per-agent.
+    pub fn set_grammar(&self, spec: Option<GrammarSpec>) {
+        *self.pending_grammar.lock().unwrap() = spec;
+    }
+
+    /// Забирает заданную грамматику для текущего вызова (consume-and-clear).
+    pub(crate) fn take_pending_grammar(&self) -> Option<GrammarSpec> {
+        self.pending_grammar.lock().unwrap().take()
+    }
+
     pub fn generate_chat<F, L>(
         &self,
         messages: &[LlmMessage],
@@ -781,7 +813,9 @@ impl LlamaEngine {
         log_cb(format!("🔤 Определен формат промпта: {:?}", actual_format));
         let words = actual_format.get_stop_words();
         let stop_words = merged_stop_words(&words);
-        self.run_completion(&full_prompt, None, max_tokens, model_params, &stop_words, cancel_flag, ctx_label, progress_cb, log_cb)
+        let pending = self.take_pending_grammar();
+        let grammar = pending.or_else(|| build_base_grammar(&actual_format).map(|gbnf| GrammarSpec { gbnf: Some(gbnf), json_schema: None }));
+        self.run_completion(&full_prompt, None, max_tokens, model_params, &stop_words, grammar, cancel_flag, ctx_label, progress_cb, log_cb)
     }
 }
 

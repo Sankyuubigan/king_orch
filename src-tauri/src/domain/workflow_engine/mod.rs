@@ -15,7 +15,7 @@ pub use parser::WorkflowConfig;
 use crate::domain::agent_manager::AgentProfile;
 use crate::domain::orchestrator;
 use crate::domain::parsers::clean_thought_tags;
-use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SamplingPresets, SubCall, LlmMessage};
+use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SamplingPresets, SubCall, LlmMessage, GrammarSpec, build_json_only_grammar};
 use nodes::find_next_node;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -36,6 +36,8 @@ pub struct WorkflowRunner<'a, L, S, C> {
     pub cancel_flag: Arc<AtomicBool>,
     pub mcp_servers_dir: &'a Path,
     pub bins_dir: &'a Path,
+    /// agents/<папка>/grammars/ — per-agent GBNF для llm_worker узлов
+    pub grammars_dir: &'a Path,
     pub all_sub_calls: &'a mut Vec<SubCall>,
     pub msg_counter: &'a mut u32,
     pub stream_meta: Arc<Mutex<orchestrator::StreamMeta>>,
@@ -104,6 +106,7 @@ where
             Some("workflow_engine".to_string()),
             self.mcp_servers_dir,
             self.bins_dir,
+            self.grammars_dir,
             messages,
             self.msg_counter,
             injected_reports.to_string(),
@@ -148,6 +151,11 @@ where
             },
         ];
         (self.log_cb)("[direct] LLM вызов (fact_extractor)...".to_string());
+        // fact-экстрактор обязан вернуть строгий JSON-объект — жёсткая грамматика
+        self.engine.set_grammar(Some(GrammarSpec {
+            gbnf: Some(build_json_only_grammar()),
+            json_schema: None,
+        }));
         let start = std::time::Instant::now();
 
         let gen = self.engine
@@ -162,7 +170,7 @@ where
                 self.log_cb.clone(),
             )
             .map_err(|e| format!("Ошибка LLM: {}", e));
-        (self.log_cb)(format!("[direct] LLM ответ за {:.1}с", start.elapsed().as_secs_f32()));
+        (self.log_cb)(format!("[llm] LLM ответ за {:.1}с", start.elapsed().as_secs_f32()));
         gen.map(|g| g.text)
     }
 }
