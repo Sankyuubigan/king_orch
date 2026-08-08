@@ -6,7 +6,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import { store } from "../store";
 import { bus } from "../events";
 import { showToast } from "../ui";
-import { setTelemetryEnabled } from "../telemetry";
+import { setTelemetryEnabled, trackError } from "../telemetry";
 
 export interface SettingsElements {
   modelSelect: HTMLSelectElement;
@@ -148,7 +148,7 @@ export class SettingsController {
           this.updateModelSelect(cfg);
           this.renderModelsList(cfg);
           showToast("Модель удалена из списка.", "success");
-        } catch (e) { showToast(`Ошибка: ${e}`, "error"); }
+        } catch (e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.removeModel", e); }
       });
 
       row.appendChild(info);
@@ -191,7 +191,7 @@ export class SettingsController {
       await this.loadCatalog();
       await this.loadModelParams();
       await this.refreshEngineStatus();
-    } catch(e) { showToast(`Ошибка: ${e}`, "error"); }
+    } catch(e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.loadConfig", e); }
   }
 
   async refreshEngineStatus() {
@@ -232,7 +232,7 @@ export class SettingsController {
           this.el.engineWarning.style.display = "none";
         }
       }
-    } catch (e) { showToast(`Ошибка статуса движка: ${e}`, "error"); }
+    } catch (e) { showToast(`Ошибка статуса движка: ${e}`, "error"); void trackError("settings.engineStatus", e); }
   }
 
   private async loadAgents() {
@@ -249,7 +249,7 @@ export class SettingsController {
           this.el.agentSelect.appendChild(o);
         }
       }
-    } catch(e) {}
+    } catch(e) { void trackError("settings.loadAgents", e); }
   }
 
   private async loadCatalog() {
@@ -257,7 +257,7 @@ export class SettingsController {
       store.modelsCatalog = await invoke("get_models_catalog");
       this.el.downloadModelSelect.innerHTML = '<option value="">-- Выберите модель --</option>';
       store.modelsCatalog.forEach(m => { const o = document.createElement("option"); o.value = m.name; o.text = m.size_gb ? `${m.name} (${m.size_gb} GB)` : m.name; this.el.downloadModelSelect.appendChild(o); });
-    } catch(e) { this.el.downloadModelSelect.innerHTML = '<option value="">Ошибка</option>'; }
+    } catch(e) { this.el.downloadModelSelect.innerHTML = '<option value="">Ошибка</option>'; void trackError("settings.loadCatalog", e); }
   }
 
   private bindDomEvents() {
@@ -299,8 +299,8 @@ export class SettingsController {
       setTelemetryEnabled(val);
       await invoke("set_config_value", { key: "allow_error_reports", value: val });
     });
-    this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });
-    this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); } });
+    this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
+    this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
     this.el.btnCheckUpdate?.addEventListener("click", async () => {
       const btn = this.el.btnCheckUpdate;
       const status = this.el.updateStatus;
@@ -320,6 +320,7 @@ export class SettingsController {
       } catch (e: any) {
         status.textContent = "";
         showToast(`Ошибка проверки обновлений: ${e}`, "error");
+        void trackError("settings.checkUpdate", e);
       } finally {
         btn.disabled = false;
       }
@@ -339,6 +340,7 @@ export class SettingsController {
       } catch (e: any) {
         status.textContent = "";
         showToast(`Ошибка установки: ${e}`, "error");
+        void trackError("settings.installUpdate", e);
       } finally {
         btn.disabled = false;
         this.el.btnCheckUpdate.disabled = false;
@@ -359,7 +361,7 @@ export class SettingsController {
         this.el.btnDownloadModel.disabled = true; this.el.downloadProgressContainer.style.display = "block";
         await invoke("download_model", { url: model.download_url, savePath }); await invoke("add_model", { path: savePath });
         await this.loadConfig(); showToast(`Модель ${model.name} скачана!`, "success");
-      } catch(e) { showToast(`Ошибка: ${e}`, "error"); }
+      } catch(e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.downloadModel", e); }
       finally { this.el.btnDownloadModel.disabled = false; this.el.downloadProgressContainer.style.display = "none"; }
     });
 
@@ -383,7 +385,7 @@ export class SettingsController {
         await invoke("auto_download_default_model", { savePath: info.save_path });
         await this.loadConfig();
         showToast(`Модель ${info.model_name} скачана!`, "success");
-      } catch(e) { showToast(`Ошибка: ${e}`, "error"); }
+      } catch(e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.autoDownload", e); }
       finally { this.el.btnDownloadModel.disabled = false; this.el.downloadProgressContainer.style.display = "none"; }
     });
 
@@ -400,6 +402,7 @@ export class SettingsController {
         showToast("Движок llamacpp установлен! GPU-ускорение активно.", "success");
       } catch (e) {
         showToast(`Ошибка установки движка: ${e}`, "error");
+        void trackError("settings.installEngine", e);
       } finally {
         btn.disabled = false;
         this.el.engineProgressContainer.style.display = "none";
@@ -422,6 +425,7 @@ export class SettingsController {
       } catch (e) {
         status.textContent = "";
         showToast(`Ошибка проверки обновления движка: ${e}`, "error");
+        void trackError("settings.checkEngineUpdate", e);
       } finally {
         btn.disabled = false;
       }
@@ -440,6 +444,7 @@ export class SettingsController {
         showToast("Движок llamacpp обновлён.", "success");
       } catch (e) {
         showToast(`Ошибка обновления движка: ${e}`, "error");
+        void trackError("settings.installEngineUpdate", e);
       } finally {
         btn.disabled = false;
         this.el.engineProgressContainer.style.display = "none";
@@ -452,7 +457,7 @@ export class SettingsController {
         await invoke("remove_engine");
         await this.refreshEngineStatus();
         showToast("Движок llamacpp удалён.", "success");
-      } catch (e) { showToast(`Ошибка удаления движка: ${e}`, "error"); }
+      } catch (e) { showToast(`Ошибка удаления движка: ${e}`, "error"); void trackError("settings.removeEngine", e); }
     });
 
     this.el.btnSetEngineDir?.addEventListener("click", async () => {
@@ -462,7 +467,7 @@ export class SettingsController {
         await invoke("set_engine_dir", { path: sel as string });
         await this.refreshEngineStatus();
         showToast("Путь движка изменён.", "success");
-      } catch (e) { showToast(`Ошибка изменения пути: ${e}`, "error"); }
+      } catch (e) { showToast(`Ошибка изменения пути: ${e}`, "error"); void trackError("settings.setEngineDir", e); }
     });
   }
 

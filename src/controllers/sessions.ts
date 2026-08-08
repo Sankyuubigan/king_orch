@@ -2,6 +2,7 @@ import { store } from "../store";
 import { bus } from "../events";
 import { showToast, confirmDialog } from "../ui";
 import { fetchSessions, deleteSession, renameSession, openSessionFolder } from "../services";
+import { trackError } from "../telemetry";
 
 export interface SessionElements {
   sessionList: HTMLDivElement;
@@ -29,12 +30,14 @@ export class SessionController {
         const menuBtn = div.querySelector('.btn-session-menu');
         const dropdown = div.querySelector('.session-menu-dropdown');
         menuBtn?.addEventListener("click", (e) => { e.stopPropagation(); document.querySelectorAll('.session-menu-dropdown.show').forEach(dd => { if (dd !== dropdown) dd.classList.remove('show'); }); dropdown?.classList.toggle('show'); });
-        div.querySelector('.btn-rename')?.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); const cur = (e.target as HTMLElement).getAttribute('data-title') || ''; const newT = prompt("Новое название:", cur); if (newT && newT.trim() !== "" && newT !== cur) { try { await renameSession(s.id, newT.trim()); this.loadSessionsListUI(); } catch(err) { showToast(`Ошибка: ${err}`, "error"); } } });
-        div.querySelector('.btn-explore')?.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); try { await openSessionFolder(s.id); } catch(err) {} });
+        div.querySelector('.btn-rename')?.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); const cur = (e.target as HTMLElement).getAttribute('data-title') || ''; const newT = prompt("Новое название:", cur); if (newT && newT.trim() !== "" && newT !== cur) { try { await renameSession(s.id, newT.trim()); this.loadSessionsListUI(); } catch(err) { showToast(`Ошибка: ${err}`, "error"); void trackError("sessions.rename", err); } } });
+        div.querySelector('.btn-explore')?.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); try { await openSessionFolder(s.id); } catch(err) { void trackError("sessions.openFolder", err); } });
         div.querySelector('.btn-delete')?.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); await this.deleteSessionUI(s.id); });
         this.el.sessionList.appendChild(div);
       }
-    } catch(e) {}
+    } catch(e) {
+      void trackError("sessions.loadList", e);
+    }
   }
 
   private async deleteSessionUI(id: string) {
@@ -45,7 +48,7 @@ export class SessionController {
       if (store.currentSessionId === id) bus.emit("session:new");
       else this.loadSessionsListUI();
       showToast("Удалено.", "success");
-    } catch(e) { showToast(`Ошибка: ${e}`, "error"); }
+    } catch(e) { showToast(`Ошибка: ${e}`, "error"); void trackError("sessions.delete", e); }
   }
 
   private bindDomEvents() {

@@ -21,6 +21,7 @@ use reqwest::blocking::Client;
 use reqwest::header::AUTHORIZATION;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use crate::infra::config::ModelParams;
 use crate::infra::detokenizer::compute_stream_diff;
@@ -169,10 +170,16 @@ impl LlamaEngine {
         let model_size_mb = std::fs::metadata(model_path).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
         log_cb(format!("💽 Файл модели: ~{:.1} МБ.", model_size_mb));
 
+        // ── Единая точка выхода с ошибкой: пишем в лог-файл + телеметрию ──
+        let fail = |msg: String| -> Result<Self, String> {
+            crate::infra::startup_log::append("ERROR", &format!("LlamaEngine::new: {}", msg));
+            Err(msg)
+        };
+
         // ── Проверка установки движка ──
         let server_exe = engine_dir.join("llama-server.exe");
         if !server_exe.exists() {
-            return Err(format!(
+            return fail(format!(
                 "Движок llama.cpp не установлен (llama-server.exe не найден в {}).\nОткройте Настройки → «Движок запуска нейромоделей» и нажмите «Установить движок».",
                 engine_dir.display()
             ));
@@ -199,7 +206,7 @@ impl LlamaEngine {
                 if required_family == crate::infra::llamacpp_installer::EngineFamily::Cuda13
                     && installed_family == crate::infra::llamacpp_installer::EngineFamily::Cuda12
                 {
-                    return Err(format!(
+                    return fail(format!(
                         "Ваша видеокарта {} — RTX 50xx (Blackwell), а установлен движок без её поддержки (вариант {}).\n\
                          Сборка cuda-12.4 не содержит ядер для Blackwell — модель работала бы только на CPU.\n\
                          Решение: Настройки → «Движок запуска нейромоделей» → «Обновить движок» (будет скачан вариант {} с поддержкой RTX 50xx).",
@@ -207,7 +214,7 @@ impl LlamaEngine {
                     ));
                 }
                 if installed_family == crate::infra::llamacpp_installer::EngineFamily::Cpu {
-                    return Err(format!(
+                    return fail(format!(
                         "Установлен CPU-вариант движка ({}), но на компьютере есть NVIDIA GPU ({}).\n\
                          Решение: Настройки → «Движок запуска нейромоделей» → «Обновить движок» — будет скачан CUDA-вариант.",
                         installed_variant, gpu_info.gpu_name
@@ -241,7 +248,7 @@ impl LlamaEngine {
             }
         }
         if port == 0 {
-            return Err("Не удалось найти свободный порт для движка llama.cpp".to_string());
+            return fail("Не удалось найти свободный порт для движка llama.cpp".to_string());
         }
         let api_key: String = (0..32).map(|_| {
             const HEX: &[u8] = b"0123456789abcdef";
@@ -281,15 +288,21 @@ impl LlamaEngine {
             mmproj_path.unwrap_or("нет")
         ));
 
-        let client = Client::builder()
+        let client = match Client::builder()
             .connect_timeout(Duration::from_secs(5))
             .build()
-            .map_err(|e| format!("Ошибка создания HTTP-клиента: {}", e))?;
+        {
+            Ok(c) => c,
+            Err(e) => return fail(format!("Ошибка создания HTTP-клиента: {}", e)),
+        };
 
         #[cfg(target_os = "windows")]
         { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); }
 
-        let child = cmd.spawn().map_err(|e| format!("Ошибка запуска llama-server: {}", e))?;
+        let child = match cmd.spawn() {
+            Ok(c) => c,
+            Err(e) => return fail(format!("Ошибка запуска llama-server: {}", e)),
+        };
 
         let mut engine = Self {
             global_ctx_limit,
@@ -314,9 +327,13 @@ impl LlamaEngine {
         let deadline = Instant::now() + HEALTH_TIMEOUT;
         let mut last_progress_log = Instant::now();
         loop {
-            if let Some(code) = child.try_wait().map_err(|e| format!("Ошибка ожидания llama-server: {}", e))? {
+            let exit_state = match child.try_wait() {
+                Ok(state) => state,
+                Err(e) => return fail(format!("Ошибка ожидания llama-server: {}", e)),
+            };
+            if let Some(code) = exit_state {
                 engine.child = Some(child);
-                return Err(format!(
+                return fail(format!(
                     "Движок llama-server завершился при запуске (код {}). {}",
                     code,
                     read_log_tail(&engine.server_log)
@@ -328,7 +345,7 @@ impl LlamaEngine {
             if Instant::now() > deadline {
                 let _ = child.kill();
                 engine.child = Some(child);
-                return Err(format!(
+                return fail(format!(
                     "Таймаут запуска движка llama.cpp ({} сек). Модель не загрузилась. {}",
                     HEALTH_TIMEOUT.as_secs(),
                     read_log_tail(&engine.server_log)
@@ -382,6 +399,21 @@ impl LlamaEngine {
             } else {
                 log_cb("ℹ️ GPU-ускорение не используется (CPU-режим) — VRAM не занята. Это ожидаемо.".to_string());
             }
+        }
+
+        // ── Предупреждение о нехватке памяти (не блокирует запуск) ──
+        // Оценка (модель + KV-кэш) сравнивается со свободной RAM. На CPU-режиме
+        // модель живёт в RAM (вместе с KV), на GPU — файл всё равно мапится.
+        let need_mb = estimate_vram_mb(model_path, global_ctx_limit, kv_quant_keys, kv_quant_values) + 512.0;
+        let free_ram_mb = sys.free_memory() as f64 / (1024.0 * 1024.0);
+        if need_mb > free_ram_mb {
+            let warn = format!(
+                "⚠️ ВАЖНО: модели с контекстом нужно ~{} МБ памяти, свободно всего {} МБ. \
+                 Загрузка может упасть или работа будет очень медленной. Уменьшите размер контекста в настройках.",
+                need_mb as i64, free_ram_mb as i64
+            );
+            log_cb(warn.clone());
+            crate::infra::startup_log::append("WARN", &warn);
         }
 
         let mut gguf_params = Vec::new();
@@ -508,6 +540,39 @@ impl LlamaEngine {
         Ok(resp.tokens)
     }
 
+    // ─── Диагностика ошибок генерации ───
+
+    /// Полный текст ошибки генерации: причина + пики памяти + хвост лога
+    /// llama-server. Пики берутся из `MemReport` (см. err path).
+    fn err_details(&self, report: &crate::infra::mem_profiler::MemReport, reason: &str) -> String {
+        let mem = if report.samples > 0 {
+            format!(
+                " | пик памяти: llama-server RSS={} МБ, приложение RSS={} МБ, VRAM={} МБ",
+                report.rss_server_peak / (1024 * 1024),
+                report.rss_app_peak / (1024 * 1024),
+                report.vram_used_peak / (1024 * 1024),
+            )
+        } else {
+            String::new()
+        };
+        format!("{}{}.{}", reason, mem, read_log_tail(&self.server_log))
+    }
+
+    /// Ошибка генерации гарантированно уходит в лог-файл и телеметрию.
+    fn report_generation_error(&self, ctx_label: &str, report: &crate::infra::mem_profiler::MemReport, message: &str) {
+        crate::infra::startup_log::append("ERROR", &format!("LLM генерация [{}]: {}", ctx_label, message));
+        crate::infra::telemetry::track_event(
+            "llm_error",
+            json!({
+                "ctx": ctx_label,
+                "model": extract_model_filename(&self.model_path),
+                "mode": self.engine_mode,
+                "samples": report.samples,
+                "error": message,
+            }),
+        );
+    }
+
     // ─── Генерация ───
 
     /// Общий цикл генерации: текст и мультимодалка (через multimodal_data).
@@ -603,6 +668,18 @@ impl LlamaEngine {
             json_schema: grammar.as_ref().and_then(|g| g.json_schema.as_ref()),
         };
 
+        // ── Телеметрия: старт генерации ──
+        crate::infra::telemetry::track_event(
+            "llm_started",
+            json!({
+                "ctx": ctx_label,
+                "model": extract_model_filename(&self.model_path),
+                "mode": self.engine_mode,
+                "ctx_limit": self.global_ctx_limit,
+                "max_tokens": max_tokens,
+            }),
+        );
+
         // ── Замер пиков памяти (RAM + VRAM) на время генерации ──
         // Гвард останавливает семплер на любом пути выхода (успех/ошибка/cancel).
         let server_pid = self.child.as_ref().map(|c| c.id());
@@ -614,12 +691,22 @@ impl LlamaEngine {
             .header(AUTHORIZATION, self.auth_header())
             .json(&request)
             .send()
-            .map_err(|e| format!("Ошибка отправки запроса генерации: {}.{}", e, read_log_tail(&self.server_log)))?;
+            .map_err(|e| format!(
+                "Ошибка отправки запроса генерации: {}.{}",
+                chain_err(&e, 3),
+                read_log_tail(&self.server_log)
+            ))?;
 
         let status = resp.status();
         if !status.is_success() {
             let text = resp.text().unwrap_or_default();
-            return Err(format!("llama-server: HTTP {} при генерации: {}.{}", status, truncate_str(&text, 500), read_log_tail(&self.server_log)));
+            let report = mem_guard.finish();
+            let message = self.err_details(
+                &report,
+                &format!("llama-server: HTTP {} при генерации: {}", status, truncate_str(&text, 500)),
+            );
+            self.report_generation_error(ctx_label, &report, &message);
+            return Err(message);
         }
 
         let gen_start = Instant::now();
@@ -663,18 +750,22 @@ impl LlamaEngine {
                 Ok(Ok(Some(line))) => line,
                 Ok(Ok(None)) => break, // сервер закрыл стрим (EOF)
                 Ok(Err(e)) => {
-                    return Err(format!(
-                        "Ошибка чтения потока генерации: {}.{}",
-                        e,
-                        read_log_tail(&self.server_log)
-                    ));
+                    let report = mem_guard.finish();
+                    let message = self.err_details(&report, &format!("Ошибка чтения потока генерации: {}", e));
+                    self.report_generation_error(ctx_label, &report, &message);
+                    return Err(message);
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
-                    return Err(format!(
-                        "Движок не прислал данные в течение {} сек (завис или слишком долго обрабатывает промпт на CPU).\n{}",
-                        READ_TIMEOUT.as_secs(),
-                        read_log_tail(&self.server_log)
-                    ));
+                    let report = mem_guard.finish();
+                    let message = self.err_details(
+                        &report,
+                        &format!(
+                            "Движок не прислал данные в течение {} сек (завис или слишком долго обрабатывает промпт на CPU)",
+                            READ_TIMEOUT.as_secs()
+                        ),
+                    );
+                    self.report_generation_error(ctx_label, &report, &message);
+                    return Err(message);
                 }
                 Err(_) => break, // поток-читатель завершился без данных
             };
@@ -688,7 +779,13 @@ impl LlamaEngine {
                 Ok(e) => e,
                 Err(_) => {
                     if data.contains("\"error\"") {
-                        return Err(format!("llama-server: ошибка генерации: {}", truncate_str(data, 500)));
+                        let report = mem_guard.finish();
+                        let message = self.err_details(
+                            &report,
+                            &format!("llama-server: ошибка генерации: {}", truncate_str(data, 500)),
+                        );
+                        self.report_generation_error(ctx_label, &report, &message);
+                        return Err(message);
                     }
                     continue;
                 }
@@ -776,6 +873,24 @@ impl LlamaEngine {
             generated_tokens, gen_elapsed, speed, stop_reason
         );
         log_cb(crate::infra::peak_line(ctx_label, &report, self.vram_before, total_mb, &extra));
+
+        // ── Телеметрия: итоги генерации ──
+        crate::infra::telemetry::track_event(
+            "llm_finished",
+            json!({
+                "ctx": ctx_label,
+                "model": extract_model_filename(&self.model_path),
+                "mode": self.engine_mode,
+                "tokens": generated_tokens,
+                "elapsed_s": (gen_elapsed * 10.0).round() / 10.0,
+                "tok_per_sec": (speed * 10.0).round() / 10.0,
+                "stop_reason": stop_reason,
+                "rss_server_mb": report.rss_server_peak / (1024 * 1024),
+                "rss_app_mb": report.rss_app_peak / (1024 * 1024),
+                "vram_mb": report.vram_used_peak / (1024 * 1024),
+                "vram_ok": report.vram_ok,
+            }),
+        );
 
         Ok(GenerationResult { text: result_text, stop_reason })
     }
@@ -906,6 +1021,23 @@ fn truncate_str(s: &str, max: usize) -> String {
         .map(|(i, c)| i + c.len_utf8())
         .unwrap_or(max.min(s.len()));
     format!("{}", &s[..end])
+}
+
+/// Полная цепочка источников ошибки (reqwest → hyper → io/tls), до 3 уровней.
+/// Одиночный to_string() у reqwest скрывает реальную причину (порт закрыт
+/// и т.п.), цепочка source() показывает её.
+fn chain_err(e: &dyn std::error::Error, max: usize) -> String {
+    let mut msg = String::new();
+    let mut cur: Option<&dyn std::error::Error> = Some(e);
+    for _ in 0..=max {
+        let Some(c) = cur else { break };
+        if !msg.is_empty() {
+            msg.push_str(" → ");
+        }
+        msg.push_str(&c.to_string());
+        cur = c.source();
+    }
+    msg
 }
 
 /// Хвост лога движка для диагностики ошибок запуска

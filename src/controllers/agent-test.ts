@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { showToast } from "../ui";
 import { store } from "../store";
+import { trackError } from "../telemetry";
 import type { TestCaseDef, SingleTestResult } from "../types";
 
 export interface AgentTestElements {
@@ -60,6 +61,7 @@ export class AgentTestController {
       this.agentsLoaded = true;
     } catch (e) {
       this.el.testAgentList.innerHTML = `<span class="test-hint">Ошибка загрузки: ${e}</span>`;
+      void trackError("agentTest.loadAgents", e);
     }
   }
 
@@ -85,6 +87,7 @@ export class AgentTestController {
       this.modelsLoaded = true;
     } catch (e) {
       this.el.testModelList.innerHTML = `<span class="test-hint">Ошибка загрузки: ${e}</span>`;
+      void trackError("agentTest.loadModels", e);
     }
   }
 
@@ -113,6 +116,7 @@ export class AgentTestController {
       await this.parseTestFile(path);
     } catch (e) {
       showToast(`Ошибка выбора файла: ${e}`, "error");
+      void trackError("agentTest.selectFile", e);
     }
   }
 
@@ -123,6 +127,7 @@ export class AgentTestController {
     } catch (e) {
       showToast(`Ошибка чтения файла: ${e}`, "error");
       this.testCases = [];
+      void trackError("agentTest.parseTestFile", e);
     }
     this.updateRunButton();
   }
@@ -162,6 +167,7 @@ export class AgentTestController {
     } catch (e) {
       this.el.testStatusLabel.textContent = `Ошибка: ${e}`;
       showToast(`Ошибка тестирования: ${e}`, "error");
+      void trackError("agentTest.run", e);
     } finally {
       this.el.btnRunTest.disabled = false;
     }
@@ -197,6 +203,7 @@ export class AgentTestController {
       showToast(`Результаты сохранены: ${savePath}`, "success");
     } catch (e) {
       showToast(`Ошибка сохранения: ${e}`, "error");
+      void trackError("agentTest.saveResults", e);
     }
   }
 

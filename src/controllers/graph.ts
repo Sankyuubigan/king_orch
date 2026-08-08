@@ -3,6 +3,7 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import Drawflow from "drawflow";
 import "drawflow/dist/drawflow.min.css";
 import { showToast } from "../ui";
+import { trackError } from "../telemetry";
 
 interface GraphSnapshot {
   data: Record<string, any>;
@@ -644,6 +645,7 @@ export class GraphController {
           this.editor!.addConnection(edge.from, edge.to, `output_1`, "input_1");
         } catch (connErr) {
           console.error("addConnection error:", connErr);
+          void trackError("graph.restoreConnection", connErr);
         }
       }
 
@@ -668,6 +670,7 @@ export class GraphController {
             this.editor!.addConnection(node.id, target.to, `output_${outIdx + 1}`, "input_1");
           } catch (connErr) {
             console.error("addConnection error:", connErr);
+            void trackError("graph.restoreConnection.switch", connErr);
           }
         }
       }
@@ -677,6 +680,7 @@ export class GraphController {
     } catch (e) {
       console.error("handleOpen error:", e);
       showToast(`Ошибка загрузки: ${e}`, "error");
+      void trackError("graph.open", e);
     }
   }
 
@@ -751,6 +755,7 @@ export class GraphController {
       // Оставляем dirty-флаг — данные на холсте считаются несохранёнными.
       console.error("[handleSave] Сохранение НЕ выполнено, файл не перезаписан:", e);
       showToast(`❌ Не сохранено: ${e}`, "error");
+      void trackError("graph.save", e);
     }
   }
 

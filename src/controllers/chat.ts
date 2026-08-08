@@ -7,6 +7,7 @@ import type { Role, MessageMenuCallbacks } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, CatalogEntry } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { renderMarkdown, stripStreamArtifacts, extractChannelThought } from "../utils";
+import { trackError } from "../telemetry";
 import mermaid from "mermaid";
 
 mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
@@ -15,6 +16,7 @@ async function renderMermaid() {
     await mermaid.run();
   } catch(e) {
     console.error('Mermaid render error:', e);
+    void trackError("mermaid.render", e);
   }
   document.querySelectorAll('pre.mermaid').forEach(el => {
     if (!el.querySelector('svg')) {
@@ -163,6 +165,7 @@ export class ChatController {
         }
     } catch (e) {
         console.error("Ошибка обновления счетчика токенов:", e);
+        void trackError("chat.updateTokenCounter", e);
     }
   }
 
@@ -194,6 +197,7 @@ export class ChatController {
       showToast("Сообщение скопировано в буфер обмена", "success");
     } catch (err) {
       showToast(`Ошибка копирования: ${err}`, "error");
+      void trackError("chat.copyMessage", err);
     }
   }
 
@@ -337,6 +341,7 @@ export class ChatController {
         showToast(`Ошибка: ${error}`, "error");
         store.chatHistory.push({ type: "message", author: "system", content: `⚠️ Ошибка: ${error}` });
         store.msgUidList.push(store.nextUid());
+        void trackError("chat.send.runFrom", error);
       }
       this.renderChatFromHistory();
       if (store.currentSessionId) {
@@ -413,6 +418,7 @@ export class ChatController {
       st = await invoke("get_engine_status");
     } catch (_) {
       this.setEngineBadge("engine-none", "—", "Не удалось определить состояние движка");
+      void trackError("chat.engineBadgeInit", _);
       return;
     }
     if (!st.installed) {
@@ -586,6 +592,7 @@ export class ChatController {
           showToast(`Ошибка: ${error}`, "error");
           store.chatHistory.push({ type: "message", author: "system", content: `⚠️ Ошибка: ${error}` });
           store.msgUidList.push(store.nextUid());
+          void trackError("chat.send", error);
       }
       this.renderChatFromHistory();
       if (store.currentSessionId) {
@@ -629,7 +636,10 @@ export class ChatController {
       store.uidCounter = 0; store.msgUidList = store.chatHistory.map(() => store.nextUid());
       this.renderChatFromHistory(); bus.emit("session:changed"); bus.emit("tab:switch", 'chat');
       this.triggerTokenCount();
-    } catch(e) { showToast(`Ошибка: ${e}`, "error"); }
+    } catch(e) {
+      showToast(`Ошибка: ${e}`, "error");
+      void trackError("chat.openSession", e);
+    }
   }
 
   private async updateAttachButtonState() {

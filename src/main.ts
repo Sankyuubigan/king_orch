@@ -8,7 +8,7 @@ import { ChatController, SessionController, SettingsController, GraphController,
 import { bus } from "./events";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
-import { initTelemetry } from "./telemetry";
+import { initTelemetry, trackError } from "./telemetry";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 
@@ -218,6 +218,7 @@ async function initApp() {
       showToast(`Логи сохранены: ${savePath}`, "success");
     } catch (e) {
       showToast(`Ошибка сохранения: ${e}`, "error");
+      void trackError("logs.save", e);
     }
   });
 
@@ -236,4 +237,10 @@ async function initApp() {
   settingsCtrl.loadConfig();
 }
 
-document.addEventListener("DOMContentLoaded", initApp);
+document.addEventListener("DOMContentLoaded", () => {
+  initApp().catch((e) => {
+    console.error("initApp failed:", e);
+    showToast(`Ошибка инициализации: ${e}`, "error");
+    void trackError("init", e);
+  });
+});

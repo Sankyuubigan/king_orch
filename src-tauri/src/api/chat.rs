@@ -47,6 +47,11 @@ fn append_log(msg: &str) {
     }
 }
 
+/// Отмены пользователем (Stop) — не сбои: они не попадают в телеметрию.
+fn is_user_cancel(msg: &str) -> bool {
+    msg.contains("Отменено") || msg.contains("Прервано")
+}
+
 #[derive(Serialize)]
 pub struct ChatResponse {
     text: String,
@@ -113,11 +118,11 @@ pub async fn chat_request(
     // через него (нет встроенного CPU-фолбэка). Если движка нет — понятная ошибка.
     let engine_dir = crate::api::llamacpp::get_engine_dir(&app);
     if !infra::llamacpp_installer::is_installed(&engine_dir) {
-        return Err(
-            "Движок llama.cpp не установлен (нет llama-server.exe).\n\
+        let msg = "Движок llama.cpp не установлен (нет llama-server.exe).\n\
              Откройте Настройки → «Движок запуска нейромоделей» и нажмите «Установить движок»."
-                .to_string(),
-        );
+            .to_string();
+        infra::startup_log::append("WARN", &msg);
+        return Err(msg);
     }
 
     let format_type = cfg.prompt_format.clone();
@@ -193,7 +198,7 @@ pub async fn chat_request(
         &app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
     );
     let log_cb_for_result = log_cb.clone();
-    let result = tokio::task::spawn_blocking(move || {
+    let run_result = tokio::task::spawn_blocking(move || {
         // ── Контроль утечек: RSS приложения до и после запроса ──
         // Рост между последовательными запросами = утечка в приложении.
         let app_rss_before = crate::infra::current_process_rss();
@@ -233,8 +238,30 @@ pub async fn chat_request(
         }
         run_result
     })
-    .await
-    .map_err(|e| e.to_string())??;
+    .await;
+
+    // Ошибки запроса ОБЯЗАНЫ попасть в лог и телеметрию (не только в UI).
+    // Отмены пользователем — не сбои, их не трекаем.
+    let result = match run_result {
+        Err(join_err) => {
+            let m = format!("chat_request (spawn_blocking): {}", join_err);
+            infra::startup_log::append("ERROR", &m);
+            return Err(m);
+        }
+        Ok(Err(e)) => {
+            if !is_user_cancel(&e) {
+                infra::startup_log::append("ERROR", &format!("chat_request (run_chat): {}", e));
+            }
+            return Err(e);
+        }
+        Ok(Ok(r)) => r,
+    };
+    if result.messages.is_empty() {
+        infra::startup_log::append(
+            "WARN",
+            "chat_request: run_chat вернул Ok, но messages[] пуст (фронтенд получит пустой ответ)",
+        );
+    }
 
     log_cb_for_result(format!("DEBUG chat_request: result.messages.len={}, types_authors={:?}", result.messages.len(), result.messages.iter().map(|m| (m.msg_type.clone(), m.author.clone())).collect::<Vec<_>>()));
 
