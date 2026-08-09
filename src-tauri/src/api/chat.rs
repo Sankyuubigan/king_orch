@@ -117,7 +117,7 @@ pub async fn chat_request(
     // Новая архитектура: движок — ОТДЕЛЬНЫЙ процесс, инференс возможен ТОЛЬКО
     // через него (нет встроенного CPU-фолбэка). Если движка нет — понятная ошибка.
     let engine_dir = crate::api::llamacpp::get_engine_dir(&app);
-    if !infra::llamacpp_installer::is_installed(&engine_dir) {
+    if !infra::llamacpp_installer::has_any_installed(&engine_dir) {
         let msg = "Движок llama.cpp не установлен (нет llama-server.exe).\n\
              Откройте Настройки → «Движок запуска нейромоделей» и нажмите «Установить движок»."
             .to_string();

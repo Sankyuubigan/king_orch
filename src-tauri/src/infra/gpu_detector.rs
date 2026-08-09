@@ -11,11 +11,15 @@ pub const MIN_CUDA_MAJOR: u32 = 12;
 /// Сборка `cuda-12.4` НЕ содержит ядер Blackwell (sm_120, RTX 50xx) —
 /// они появились только в сборках CUDA >= 12.8 (см. ggml/src/ggml-cuda/CMakeLists.txt:
 /// "# 120 == Blackwell, needs CUDA v12.8"). Для Blackwell нужен вариант `cuda-13.x`.
+/// Сборка `cuda-13.x` (в отличие от мифа «только для 50xx») содержит ядра
+/// sm_75..sm_120 — включая RTX 40xx (sm_89). Выбор между cuda-12/13 на не-Blackwell
+/// определяется свежестью драйвера, как в Jan (см. janhq/jan backend.rs,
+/// `get_supported_features`: на Windows cuda-13 доступен при драйвере >= 580).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CudaGen {
-    /// Сборка cuda-12.4 — для GPU с compute capability 5.0..11.x (все RTX до 40xx)
+    /// Сборка cuda-12.4 — для драйверов CUDA 12.x (sm_5x..sm_11x, все RTX до 40xx)
     Cuda12,
-    /// Сборка cuda-13.x — для Blackwell (compute capability >= 12.0)
+    /// Сборка cuda-13.x — для Blackwell (sm_120) и свежих драйверов CUDA 13+ (R580+)
     Cuda13,
 }
 
@@ -76,6 +80,12 @@ pub fn supports_cuda12(info: &GpuInfo) -> bool {
 
 /// Какую сборку движка (cuda-12.4 / cuda-13.x) требует установленная GPU.
 /// None = CUDA не используется (нет NVIDIA / старый драйвер / нет данных).
+///
+/// Правила (обновлены по логике Jan, см. `janhq/jan` backend.rs):
+/// - Blackwell (sm_120): только cuda-13.x — сборка cuda-12.4 не имеет ядер;
+/// - свежий драйвер CUDA 13+ (R580+): cuda-13.x — она содержит ядра sm_75..sm_120,
+///   включая RTX 40xx, и является приоритетным выбором (как у Jan);
+/// - остальные NVIDIA с драйвером CUDA 12: cuda-12.4.
 pub fn required_cuda_gen(info: &GpuInfo) -> Option<CudaGen> {
     if !supports_cuda12(info) {
         return None;
@@ -84,9 +94,12 @@ pub fn required_cuda_gen(info: &GpuInfo) -> Option<CudaGen> {
     if info.compute_major >= 12 {
         return Some(CudaGen::Cuda13);
     }
-    // Все остальные (sm_5x..sm_11x): подходит cuda-12.4.
-    // Если compute capability не определилась — берём cuda-12.4 как
-    // самый совместимый вариант (работает на всём, кроме Blackwell).
+    // Свежий драйвер CUDA 13+ → cuda-13.x (предпочтителен, как в Jan).
+    // Если compute capability не определилась — полагаемся на драйвер.
+    if info.cuda_major >= 13 {
+        return Some(CudaGen::Cuda13);
+    }
+    // Драйвер CUDA 12.x: cuda-12.4 — самый совместимый вариант.
     Some(CudaGen::Cuda12)
 }
 
@@ -261,9 +274,23 @@ mod tests {
     }
 
     #[test]
+    fn rtx40_with_cuda13_driver_prefers_cuda13() {
+        // RTX 4070 Ti Super: compute 8.9, но свежий драйвер CUDA 13 (R580+) —
+        // сборка cuda-13.x содержит ядра sm_89, поэтому она предпочтительна (как в Jan).
+        let info = gpu(true, 13, 8, 9);
+        assert_eq!(required_cuda_gen(&info), Some(CudaGen::Cuda13));
+        // RTX 3080 с драйвером CUDA 13 — тоже cuda-13.x
+        let info = gpu(true, 13, 8, 6);
+        assert_eq!(required_cuda_gen(&info), Some(CudaGen::Cuda13));
+    }
+
+    #[test]
     fn unknown_compute_cap_falls_back_to_cuda12() {
         let info = gpu(true, 12, 0, 0);
         assert_eq!(required_cuda_gen(&info), Some(CudaGen::Cuda12));
+        // Compute не определился, но драйвер свежий CUDA 13 → cuda-13.x
+        let info = gpu(true, 13, 0, 0);
+        assert_eq!(required_cuda_gen(&info), Some(CudaGen::Cuda13));
     }
 
     #[test]

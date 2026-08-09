@@ -82,6 +82,10 @@ pub struct AppConfig {
     pub mmproj_files: HashMap<String, String>,
     #[serde(default)]
     pub llamacpp_dir: Option<String>,
+    /// Предпочтение юзера: какой бекенд движка использовать ("auto" / "cpu" /
+    /// "cuda-12.4" / "cuda-13.3" / "vulkan" / "hip-radeon"). None = авто.
+    #[serde(default)]
+    pub engine_variant: Option<String>,
     #[serde(default = "default_allow_error_reports")]
     pub allow_error_reports: bool,
 }
@@ -130,6 +134,7 @@ impl Default for AppConfig {
             show_folder_agents: default_show_folder_agents(),
             mmproj_files: HashMap::new(),
             llamacpp_dir: None,
+            engine_variant: None,
             allow_error_reports: default_allow_error_reports(),
         }
     }

@@ -424,16 +424,22 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     }
     const variant: string = st.cuda || "";
     if (variant.startsWith("cpu")) {
-      this.setEngineBadge("engine-cpu", "CPU", `Движок: ${variant}. Модель будет работать на CPU.`);
+      this.setEngineBadge("engine-cpu", "CPU", `Бекенд: ${variant}. Модель работает на CPU.`);
       return;
     }
-    // Главный сценарий бага: установлен cuda-12.4, а нужен cuda-13.x (RTX 50xx)
-    const need: string = st.required_variant || "";
-    if (need.startsWith("cuda-13") && variant.startsWith("cuda-12")) {
-      this.setEngineBadge("engine-error", "GPU ⚠", `Установлен движок ${variant}, но ваша видеокарта (${st.gpu_name}) требует ${need}. Обновите движок в Настройках → «Движок запуска нейромоделей».`);
+    // Физическая несовместимость (не зависит от выбора юзера — движок не запустится на GPU):
+    const computeMajor = parseFloat(st.compute_cap ?? "");
+    if (variant.startsWith("cuda-12") && computeMajor >= 12) {
+      // Сборка cuda-12.x не содержит ядер Blackwell (sm_120, RTX 50xx)
+      this.setEngineBadge("engine-error", "GPU ⚠", `Установлен движок ${variant}, но в нём нет ядер для вашей видеокарты (${st.gpu_name}, compute ${st.compute_cap}). Нужен бекенд ${st.required_variant || "cuda-13.x"}. Смените в Настройках → «Движок запуска нейромоделей».`);
       return;
     }
-    this.setEngineBadge("engine-idle", "GPU · …", `Движок: ${variant}. Точный режим появится после первого запроса.`);
+    if (variant.startsWith("cuda-13") && st.cuda_major > 0 && st.cuda_major < 13) {
+      // Сборка cuda-13.x слинкована с cudart 13 — нужен драйвер R580+ / CUDA 13
+      this.setEngineBadge("engine-error", "GPU ⚠", `Установлен движок ${variant}, но драйвер NVIDIA поддерживает только CUDA ${st.cuda_major}.${st.cuda_minor}. Обновите драйвер (нужна версия 580+ / CUDA 13) или выберите бекенд ${st.required_variant || "cuda-12.4"} в Настройках → «Движок запуска нейромоделей».`);
+      return;
+    }
+    this.setEngineBadge("engine-idle", "GPU · …", `Бекенд: ${st.resolved_variant || variant}. Точный режим появится после первого запроса.`);
   }
 
   /** Обновление бейджа по событию engine_mode после каждого запроса */

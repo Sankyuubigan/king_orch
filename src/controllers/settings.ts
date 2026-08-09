@@ -49,6 +49,9 @@ export interface SettingsElements {
   engineStatus: HTMLElement;
   engineGpu: HTMLElement;
   enginePath: HTMLElement;
+  engineVariantSelect: HTMLSelectElement;
+  engineVariantHint: HTMLElement;
+  btnApplyEngineVariant: HTMLButtonElement;
   btnInstallEngine: HTMLButtonElement;
   btnCheckEngineUpdate: HTMLButtonElement;
   btnInstallEngineUpdate: HTMLButtonElement;
@@ -200,9 +203,34 @@ export class SettingsController {
       const st: any = await invoke("get_engine_status");
       this.el.engineStatus.textContent = st.message;
       this.el.engineGpu.textContent = st.has_nvidia
-        ? `${st.gpu_name} (драйвер CUDA ${st.cuda_major}.${st.cuda_minor}${st.compute_cap ? `, compute ${st.compute_cap}` : ""}; нужен вариант: ${st.required_variant || "?"})`
+        ? `${st.gpu_name} (драйвер CUDA ${st.cuda_major}.${st.cuda_minor}${st.compute_cap ? `, compute ${st.compute_cap}` : ""}; рекомендуемый вариант: ${st.required_variant || "?"})`
         : "Не обнаружена";
       this.el.enginePath.textContent = st.path || "—";
+
+      // ── Дропдаун выбора бекенда ──
+      const sel = this.el.engineVariantSelect;
+      const prev = sel.value;
+      sel.innerHTML = "";
+      const autoOpt = document.createElement("option");
+      autoOpt.value = "auto";
+      autoOpt.text = "Авто (рекомендуется)";
+      sel.appendChild(autoOpt);
+      for (const v of st.available_variants || []) {
+        const o = document.createElement("option");
+        o.value = v.id;
+        o.text = v.installed
+          ? `${v.label} — установлен`
+          : v.recommended
+            ? `${v.label} (рекомендуется)`
+            : v.label;
+        sel.appendChild(o);
+      }
+      sel.value = st.selected_variant || "auto";
+      sel.dataset.applied = sel.value;
+      this.updateEngineVariantHint(st, sel.value);
+      // Кнопка «Применить» — только если выбранное отличается от текущего
+      this.el.btnApplyEngineVariant.style.display =
+        sel.value === (st.selected_variant || "auto") ? "none" : "inline-block";
 
       if (st.installed) {
         this.el.btnInstallEngine.style.display = "none";
@@ -224,16 +252,40 @@ export class SettingsController {
             `Для GPU-ускорения обновите драйвер (нужна версия ≥ 527.41, CUDA 12+).\n` +
             `Пока приложение работает в CPU-режиме.`;
         } else if (!st.has_nvidia) {
-          this.el.btnInstallEngine.disabled = true;
-          this.el.engineWarning.style.display = "block";
-          this.el.engineWarning.textContent =
-            "⚠️ NVIDIA GPU не обнаружен. Движок CUDA установить нельзя — приложение работает в CPU-режиме.";
+          this.el.btnInstallEngine.disabled = false;
+          this.el.engineWarning.style.display = "none";
         } else {
           this.el.btnInstallEngine.disabled = false;
           this.el.engineWarning.style.display = "none";
         }
       }
     } catch (e) { showToast(`Ошибка статуса движка: ${e}`, "error"); void trackError("settings.engineStatus", e); }
+  }
+
+  /** Подсказка под дропдауном: что выбрано, что установлено */
+  private updateEngineVariantHint(st: any, value: string) {
+    const hint = this.el.engineVariantHint;
+    if (!hint) return;
+    const lines: string[] = [];
+    if (value === "auto") {
+      const resolved = (st.available_variants || []).find((v: any) => v.id === st.resolved_variant);
+      lines.push(`Авто-подбор для этой машины: ${resolved ? resolved.label : (st.resolved_variant || "—")}.`);
+    } else {
+      const v = (st.available_variants || []).find((x: any) => x.id === value);
+      if (v && v.note) lines.push(v.note);
+    }
+    const installed = st.installed_variants || [];
+    if (installed.length > 0) {
+      const names = (st.available_variants || [])
+        .filter((x: any) => installed.includes(x.id))
+        .map((x: any) => x.label)
+        .join(", ");
+      lines.push(`Установлены: ${names || installed.join(", ")}.`);
+    } else {
+      lines.push("Ни один бекенд ещё не установлен.");
+    }
+    lines.push("Смена бекенда применится при следующем запуске модели.");
+    hint.textContent = lines.join("\n");
   }
 
   private async loadAgents(lastAgent?: string) {
@@ -395,6 +447,45 @@ export class SettingsController {
     });
 
     // ─── Движок запуска нейромоделей (llamacpp) ───
+    this.el.engineVariantSelect?.addEventListener("change", () => {
+      // Подсказка под дропдауном + показать/спрятать кнопку «Применить»
+      const st: any = { available_variants: [], installed_variants: [], resolved_variant: "" };
+      const prevValue = this.el.engineVariantSelect.dataset.applied || "auto";
+      this.updateEngineVariantHint(st, this.el.engineVariantSelect.value);
+      this.el.btnApplyEngineVariant.style.display =
+        this.el.engineVariantSelect.value === prevValue ? "none" : "inline-block";
+      void invoke("get_engine_status").then((s: any) => {
+        this.updateEngineVariantHint(s, this.el.engineVariantSelect.value);
+      }).catch(() => {});
+    });
+
+    this.el.btnApplyEngineVariant?.addEventListener("click", async () => {
+      const btn = this.el.btnApplyEngineVariant;
+      const variant = this.el.engineVariantSelect.value;
+      btn.disabled = true;
+      let installedVariants: string[] = [];
+      try {
+        const st: any = await invoke("get_engine_status");
+        installedVariants = st.installed_variants || [];
+      } catch { /* не критично — прогресс покажем в любом случае */ }
+      if (!installedVariants.includes(variant)) {
+        this.el.engineProgressContainer.style.display = "block";
+        this.el.engineStatusLabel.innerText = "Скачивание бекенда...";
+        this.el.engineProgressBar.style.width = "0%";
+      }
+      try {
+        await invoke("set_engine_variant", { variant });
+        showToast(variant === "auto" ? "Бекенд: авто-подбор." : "Бекенд применён.", "success");
+      } catch (e) {
+        showToast(`Ошибка смены бекенда: ${e}`, "error");
+        void trackError("settings.engineVariant", e);
+      } finally {
+        btn.disabled = false;
+        this.el.engineProgressContainer.style.display = "none";
+        await this.refreshEngineStatus();
+      }
+    });
+
     this.el.btnInstallEngine?.addEventListener("click", async () => {
       const btn = this.el.btnInstallEngine;
       btn.disabled = true;
@@ -404,7 +495,7 @@ export class SettingsController {
       try {
         await invoke("install_llamacpp");
         await this.refreshEngineStatus();
-        showToast("Движок llamacpp установлен! GPU-ускорение активно.", "success");
+        showToast("Движок llamacpp установлен!", "success");
       } catch (e) {
         showToast(`Ошибка установки движка: ${e}`, "error");
         void trackError("settings.installEngine", e);

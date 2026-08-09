@@ -177,61 +177,73 @@ impl LlamaEngine {
         };
 
         // ── Проверка установки движка ──
-        let server_exe = engine_dir.join("llama-server.exe");
+        // Бекенд выбирается юзером в настройках (engine_variant в app_config.json,
+        // "auto" → подбор по GPU). Каждый вариант живёт в backends/<variant>/.
+        let cfg_early = crate::infra::config::load_config_early();
+        let pref = cfg_early.engine_variant.as_deref();
+        let selected_variant = crate::infra::llamacpp_installer::resolve_variant(pref);
+        let installed_family = crate::infra::llamacpp_installer::EngineFamily::from_variant(&selected_variant);
+
+        let mut server_exe = crate::infra::llamacpp_installer::variant_dir(engine_dir, &selected_variant).join("llama-server.exe");
+        if !server_exe.exists() {
+            // Legacy-фолбэк: бинарь в корне папки движка (старый формат до миграции)
+            server_exe = engine_dir.join("llama-server.exe");
+        }
         if !server_exe.exists() {
             return fail(format!(
-                "Движок llama.cpp не установлен (llama-server.exe не найден в {}).\nОткройте Настройки → «Движок запуска нейромоделей» и нажмите «Установить движок».",
+                "Движок llama.cpp не установлен (llama-server.exe не найден для варианта «{}» в {}).\nОткройте Настройки → «Движок запуска нейромоделей» и установите движок.",
+                crate::infra::llamacpp_installer::variant_label(&selected_variant),
                 engine_dir.display()
             ));
         }
 
-        // ── Совместимость установленного варианта движка с GPU ──
-        // Главный фикс: сборка cuda-12.4 не имеет ядер для RTX 50xx (Blackwell,
-        // compute 12.x) — llama-server молча падал в CPU. Теперь это явная ошибка
-        // с понятным решением, а не тихий CPU-фолбэк.
+        // ── Совместимость выбранного бекенда с GPU ──
+        // Раньше несовместимость (cuda-12.4 на RTX 50xx) была жёсткой ошибкой.
+        // Теперь выбор бекенда — осознанное решение юзера: предупреждаем, но
+        // запускаем (llama-server сам упадёт в CPU, а VRAM-проверка ниже это
+        // поймает и объяснит причину).
         let required_gen = crate::infra::gpu_detector::required_cuda_gen(&gpu_info);
-        let installed_meta = crate::infra::llamacpp_installer::installed_meta(engine_dir);
-        let installed_variant = installed_meta.as_ref().map(|m| m.variant.clone()).unwrap_or_else(|| "не определён".to_string());
-        let installed_family = installed_meta.as_ref()
-            .map(|m| crate::infra::llamacpp_installer::EngineFamily::from_variant(&m.variant))
-            .unwrap_or(crate::infra::llamacpp_installer::EngineFamily::Cpu);
-
-        let use_cuda = match required_gen {
-            None => false,
-            Some(gen) => {
-                let required_family = match gen {
-                    crate::infra::gpu_detector::CudaGen::Cuda13 => crate::infra::llamacpp_installer::EngineFamily::Cuda13,
-                    crate::infra::gpu_detector::CudaGen::Cuda12 => crate::infra::llamacpp_installer::EngineFamily::Cuda12,
-                };
-                if required_family == crate::infra::llamacpp_installer::EngineFamily::Cuda13
-                    && installed_family == crate::infra::llamacpp_installer::EngineFamily::Cuda12
-                {
-                    return fail(format!(
-                        "Ваша видеокарта {} — RTX 50xx (Blackwell), а установлен движок без её поддержки (вариант {}).\n\
-                         Сборка cuda-12.4 не содержит ядер для Blackwell — модель работала бы только на CPU.\n\
-                         Решение: Настройки → «Движок запуска нейромоделей» → «Обновить движок» (будет скачан вариант {} с поддержкой RTX 50xx).",
-                        gpu_info.gpu_name, installed_variant, crate::infra::llamacpp_installer::VARIANT_CUDA13
-                    ));
-                }
-                if installed_family == crate::infra::llamacpp_installer::EngineFamily::Cpu {
-                    return fail(format!(
-                        "Установлен CPU-вариант движка ({}), но на компьютере есть NVIDIA GPU ({}).\n\
-                         Решение: Настройки → «Движок запуска нейромоделей» → «Обновить движок» — будет скачан CUDA-вариант.",
-                        installed_variant, gpu_info.gpu_name
-                    ));
-                }
-                true
+        let required_label = required_gen.map(|g| g.label().to_string()).unwrap_or_else(|| "cpu".to_string());
+        if let Some(gen) = required_gen {
+            let required_family = match gen {
+                crate::infra::gpu_detector::CudaGen::Cuda13 => crate::infra::llamacpp_installer::EngineFamily::Cuda13,
+                crate::infra::gpu_detector::CudaGen::Cuda12 => crate::infra::llamacpp_installer::EngineFamily::Cuda12,
+            };
+            if required_family == crate::infra::llamacpp_installer::EngineFamily::Cuda13
+                && installed_family == crate::infra::llamacpp_installer::EngineFamily::Cuda12
+                && gpu_info.compute_major >= 12
+            {
+                // Жёсткая несовместимость только для Blackwell: сборка cuda-12.x
+                // не содержит ядер sm_120. Для 40xx cuda-13.x — лишь предпочтение
+                // свежего драйвера, cuda-12.x при этом работает нормально.
+                log_cb(format!(
+                    "⚠️ Ваша видеокарта {} (Blackwell, compute {}.{}) — бекенд {} не содержит ядер Blackwell. Модель будет работать только на CPU.\n\
+                     Решение: Настройки → «Движок запуска нейромоделей» → выберите «{}».",
+                    gpu_info.gpu_name,
+                    gpu_info.compute_major,
+                    gpu_info.compute_minor,
+                    crate::infra::llamacpp_installer::variant_label(&selected_variant),
+                    crate::infra::llamacpp_installer::variant_label(crate::infra::llamacpp_installer::VARIANT_CUDA13)
+                ));
             }
-        };
-        let gpu_layers: u32 = if use_cuda { 999 } else { 0 };
-        let engine_mode = if use_cuda { "gpu".to_string() } else { "cpu".to_string() };
+            if installed_family == crate::infra::llamacpp_installer::EngineFamily::Cpu {
+                log_cb(format!(
+                    "ℹ️ Выбран CPU-бекенд, хотя на компьютере есть NVIDIA GPU ({}). GPU-ускорение не будет использоваться. Выбрать CUDA можно в Настройках → «Движок запуска нейромоделей».",
+                    gpu_info.gpu_name
+                ));
+            }
+        }
+
+        let use_gpu = installed_family.is_gpu();
+        let gpu_layers: u32 = if use_gpu { 999 } else { 0 };
+        let engine_mode = if use_gpu { "gpu".to_string() } else { "cpu".to_string() };
         log_cb(format!(
-            "⚙️ Вариант движка: {} (установлен: {}, семейство {}) | GPU-слои: {} ({})",
-            required_gen.map(|g| g.label().to_string()).unwrap_or_else(|| "cpu".to_string()),
-            installed_variant,
-            installed_family.label(),
+            "⚙️ Бекенд: {} ({}; авто-подбор для этой машины: {}) | GPU-слои: {} ({})",
+            crate::infra::llamacpp_installer::variant_label(&selected_variant),
+            selected_variant,
+            required_label,
             gpu_layers,
-            if use_cuda { "оффлоуд на GPU" } else { "CUDA недоступна — CPU-режим" }
+            if use_gpu { "оффлоуд на GPU" } else { "CPU-режим" }
         ));
 
         let logical_cores = std::thread::available_parallelism().map(|n| n.get() as i32).unwrap_or(8);
@@ -379,7 +391,7 @@ impl LlamaEngine {
             if diff > 100_000_000 { // > 100 MB
                 engine.engine_mode = "gpu".to_string();
                 log_cb(format!("✅ GPU: Модель загружена в VRAM. Занято {} МБ видеопамяти.", diff / 1024 / 1024));
-            } else if use_cuda {
+            } else if use_gpu {
                 // Намерение было GPU, но VRAM не выросла — llama-server тихо ушёл в CPU.
                 // Сообщаем ПРИЧИНУ (из лога сервера), а не выдуманный диагноз.
                 engine.engine_mode = "cpu".to_string();
@@ -388,14 +400,14 @@ impl LlamaEngine {
                     format!("Модель не попала в VRAM: {}", diag)
                 } else {
                     format!(
-                        "Модель не попала в VRAM: движок (вариант {}) не смог использовать GPU {} (драйвер CUDA {}.{}, compute {}.{}). Подробности — в хвосте llama_server.log.",
-                        installed_variant, gpu_info.gpu_name, gpu_info.cuda_major, gpu_info.cuda_minor,
+                        "Модель не попала в VRAM: бекенд ({}) не смог использовать GPU {} (драйвер CUDA {}.{}, compute {}.{}). Подробности — в хвосте llama_server.log.",
+                        selected_variant, gpu_info.gpu_name, gpu_info.cuda_major, gpu_info.cuda_minor,
                         gpu_info.compute_major, gpu_info.compute_minor
                     )
                 };
                 log_cb("❌ ВНИМАНИЕ: VRAM не увеличилась! Модель работает на CPU, а не на GPU!".to_string());
                 log_cb(format!("❌ Диагноз: {}", engine.engine_mode_detail));
-                log_cb("❌ Решение: Настройки → «Движок запуска нейромоделей» → «Обновить движок».".to_string());
+                log_cb("❌ Решение: Настройки → «Движок запуска нейромоделей» → выберите подходящий бекенд.".to_string());
             } else {
                 log_cb("ℹ️ GPU-ускорение не используется (CPU-режим) — VRAM не занята. Это ожидаемо.".to_string());
             }
@@ -1061,7 +1073,8 @@ fn diagnose_cuda_fallback(log_path: &Path) -> String {
     let lower = content.to_lowercase();
     // (паттерн в логе, человекочитаемое объяснение)
     const PATTERNS: &[(&str, &str)] = &[
-        ("no kernel image", "в сборке движка нет ядер для вашей видеокарты (RTX 50xx нужен вариант cuda-13.x)"),
+        ("no kernel image", "в сборке движка нет ядер для вашей видеокарты (для RTX 50xx / Blackwell нужен вариант cuda-13.x)"),
+        ("driver version is insufficient", "драйвер NVIDIA слишком старый для этой CUDA-сборки (для cuda-13.x нужен драйвер 580+ / CUDA 13, для cuda-12.4 — 527.41+)"),
         ("compute capability", "в сборке движка нет ядер для вашего GPU (compute capability)"),
         ("failed to initialize cuda", "CUDA не инициализировалась — неполадка драйвера"),
         ("cuda error", "ошибка CUDA"),

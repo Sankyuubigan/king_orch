@@ -1,6 +1,8 @@
-//! API движка llama.cpp: статус, установка, обновление, удаление.
+//! API движка llama.cpp: статус, установка, обновление, удаление, выбор бекенда.
 //! Новая архитектура: движок — отдельный процесс `llama-server.exe` (полный релиз),
 //! инференс ТОЛЬКО через него. Приложение не линкует llama.cpp нативно.
+//! Несколько бекендов (cpu / cuda-12.4 / cuda-13.3 / vulkan / hip-radeon) могут
+//! быть установлены одновременно в `backends/<variant>/` — переключение мгновенное.
 //! Весь прогресс дублируется в событие "log" (вкладка «Логи»).
 
 use serde::Serialize;
@@ -22,8 +24,16 @@ pub struct EngineStatus {
     pub gpu_name: String,
     /// Compute capability вида "12.0" (пусто, если не определена)
     pub compute_cap: String,
-    /// Какой вариант движка нужен этой машине: "cuda-12.4" / "cuda-13.3" / "cpu"
+    /// Какой вариант движка нужен этой машине по авто-подбору: "cuda-12.4" / "cuda-13.3" / "cpu"
     pub required_variant: String,
+    /// Выбор юзера из конфига: "auto" или конкретный вариант
+    pub selected_variant: String,
+    /// Реально используемый вариант (auto → сработан по GPU)
+    pub resolved_variant: String,
+    /// Установленные на диске варианты
+    pub installed_variants: Vec<String>,
+    /// Все варианты для дропдауна (с подписями и статусом установки)
+    pub available_variants: Vec<llamacpp_installer::VariantInfo>,
     pub message: String,
 }
 
@@ -51,11 +61,34 @@ pub fn get_engine_dir(app: &AppHandle) -> PathBuf {
     engine_dir(app)
 }
 
+/// Выбор бекенда из конфига юзера ("auto" по умолчанию)
+fn preferred_variant(app: &AppHandle) -> String {
+    let cfg = crate::infra::load_config(app);
+    cfg.engine_variant.clone().unwrap_or_else(|| llamacpp_installer::VARIANT_AUTO.to_string())
+}
+
+/// Плавная миграция старого формата движка (корень папки) → backends/<variant>/
+fn ensure_migrated(app: &AppHandle) {
+    let dir = engine_dir(app);
+    if let Ok(Some(variant)) = llamacpp_installer::migrate_legacy_layout(&dir) {
+        crate::infra::startup_log::append(
+            "INFO",
+            &format!("Миграция движка в новый формат завершена: backends/{}", variant),
+        );
+    }
+}
+
 #[tauri::command]
 pub fn get_engine_status(app: AppHandle) -> EngineStatus {
     let dir = engine_dir(&app);
-    let meta = llamacpp_installer::installed_meta(&dir);
+    ensure_migrated(&app);
+
     let gpu = gpu_detector::detect_gpu();
+    let selected = preferred_variant(&app);
+    let resolved = llamacpp_installer::resolve_variant(Some(&selected));
+    let meta = llamacpp_installer::installed_meta(&dir, &resolved);
+    let installed_variants = llamacpp_installer::list_installed_variants(&dir);
+    let available = llamacpp_installer::available_variants(&dir);
 
     let compute_cap = if gpu.compute_major > 0 {
         format!("{}.{}", gpu.compute_major, gpu.compute_minor)
@@ -65,11 +98,27 @@ pub fn get_engine_status(app: AppHandle) -> EngineStatus {
     let required_variant = llamacpp_installer::select_variant();
 
     let message = if let Some(m) = &meta {
-        format!("Установлен: {} (вариант: {})", m.tag, m.variant)
-    } else if gpu.has_nvidia {
-        "Движок llama.cpp не установлен — инференс недоступен. Установите движок ниже.".to_string()
+        format!(
+            "Установлен: {} (вариант: {})",
+            m.tag,
+            llamacpp_installer::variant_label(&m.variant)
+        )
+    } else if installed_variants.is_empty() {
+        if gpu.has_nvidia {
+            "Движок llama.cpp не установлен — инференс недоступен. Установите движок ниже.".to_string()
+        } else {
+            gpu_detector::describe_gpu(&gpu)
+        }
     } else {
-        gpu_detector::describe_gpu(&gpu)
+        format!(
+            "Выбран вариант «{}», но он ещё не установлен (установлены: {}). Нажмите «Установить».",
+            llamacpp_installer::variant_label(&resolved),
+            installed_variants
+                .iter()
+                .map(|v| llamacpp_installer::variant_label(v))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )
     };
 
     EngineStatus {
@@ -84,6 +133,10 @@ pub fn get_engine_status(app: AppHandle) -> EngineStatus {
         gpu_name: gpu.gpu_name,
         compute_cap,
         required_variant,
+        selected_variant: selected,
+        resolved_variant: resolved,
+        installed_variants,
+        available_variants: available,
         message,
     }
 }
@@ -103,12 +156,18 @@ pub async fn install_llamacpp(app: AppHandle) -> Result<EngineStatus, String> {
     };
 
     let dir = engine_dir(&app);
+    ensure_migrated(&app);
 
     let gpu = gpu_detector::detect_gpu();
     log_cb(gpu_detector::describe_gpu(&gpu));
-    // Вариант движка (cpu / cuda-12.4) выбирается автоматически внутри инсталлера.
-    let variant = llamacpp_installer::select_variant();
-    log_cb(format!("Вариант движка: {}", variant));
+    // Вариант бекенда: выбор юзера из конфига, "auto" → подбор по GPU.
+    let selected = preferred_variant(&app);
+    let variant = llamacpp_installer::resolve_variant(Some(&selected));
+    log_cb(format!(
+        "Вариант бекенда: {} ({})",
+        variant,
+        llamacpp_installer::variant_label(&variant)
+    ));
 
     let _meta = llamacpp_installer::install(&dir, &variant, &log_cb, &progress_cb).await?;
     log_cb(format!("📂 Папка движка: {}", dir.display()));
@@ -116,17 +175,55 @@ pub async fn install_llamacpp(app: AppHandle) -> Result<EngineStatus, String> {
     Ok(get_engine_status(app))
 }
 
+/// Смена бекенда: сохраняет выбор юзера в конфиг; если вариант ещё не установлен —
+/// скачивает его. Уже установленные варианты не трогаются.
+#[tauri::command]
+pub async fn set_engine_variant(app: AppHandle, variant: String) -> Result<EngineStatus, String> {
+    let valid = variant == llamacpp_installer::VARIANT_AUTO
+        || llamacpp_installer::is_known_variant(&variant);
+    if !valid {
+        return Err(format!("Неизвестный вариант бекенда: {}", variant));
+    }
+
+    let mut cfg = crate::infra::load_config(&app);
+    cfg.engine_variant = if variant == llamacpp_installer::VARIANT_AUTO {
+        None
+    } else {
+        Some(variant.clone())
+    };
+    crate::infra::save_config(&app, &cfg);
+
+    let dir = engine_dir(&app);
+    let resolved = llamacpp_installer::resolve_variant(Some(&variant));
+    if !llamacpp_installer::is_installed(&dir, &resolved) {
+        // Устанавливаем выбранный бекенд (с прогрессом в те же события)
+        install_llamacpp(app.clone()).await?;
+    } else {
+        let app_log = app.clone();
+        let log_cb = move |msg: String| {
+            let _ = app_log.emit("log", &msg);
+        };
+        log_cb(format!(
+            "⚙️ Выбран бекенд: {} (уже установлен — переключение мгновенное).",
+            llamacpp_installer::variant_label(&resolved)
+        ));
+    }
+
+    Ok(get_engine_status(app))
+}
+
 #[tauri::command]
 pub async fn check_engine_update(app: AppHandle) -> Result<Option<String>, String> {
     let dir = engine_dir(&app);
+    let variant = llamacpp_installer::resolve_variant(Some(&preferred_variant(&app)));
     let app_log = app.clone();
     let log_cb = move |msg: String| {
         let _ = app_log.emit("log", &msg);
     };
-    llamacpp_installer::check_update(&dir, &log_cb).await
+    llamacpp_installer::check_update(&dir, &variant, &log_cb).await
 }
 
-/// Обновление = переустановка с той же папкой (старая версия удаляется после успеха)
+/// Обновление = переустановка выбранного варианта (старая версия удаляется после успеха)
 #[tauri::command]
 pub async fn install_engine_update(app: AppHandle) -> Result<EngineStatus, String> {
     install_llamacpp(app).await
@@ -135,11 +232,12 @@ pub async fn install_engine_update(app: AppHandle) -> Result<EngineStatus, Strin
 #[tauri::command]
 pub fn remove_engine(app: AppHandle) -> Result<EngineStatus, String> {
     let dir = engine_dir(&app);
+    let variant = llamacpp_installer::resolve_variant(Some(&preferred_variant(&app)));
     let app_log = app.clone();
     let log_cb = move |msg: String| {
         let _ = app_log.emit("log", &msg);
     };
-    llamacpp_installer::remove(&dir, &log_cb)?;
+    llamacpp_installer::remove(&dir, &variant, &log_cb)?;
     Ok(get_engine_status(app))
 }
 

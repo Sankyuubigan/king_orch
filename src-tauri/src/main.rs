@@ -107,7 +107,7 @@ async fn main() {
             // рядом с exe). Инференс идёт через llama-server.exe по HTTP,
             // поэтому на старте нужен только сам движок в папке <exe>/llamacpp.
             let engine_dir = api::llamacpp::get_engine_dir(&app_handle);
-            if infra::llamacpp_installer::is_installed(&engine_dir) {
+            if infra::llamacpp_installer::has_any_installed(&engine_dir) {
                 infra::startup_log::append("INFO", "setup(): движок llama.cpp найден");
             } else {
                 infra::startup_log::append("INFO", "setup(): движок llama.cpp НЕ установлен (инференс будет недоступен до установки)");
@@ -156,6 +156,7 @@ async fn main() {
             api::file_utils::write_text_file,
             api::llamacpp::get_engine_status,
             api::llamacpp::install_llamacpp,
+            api::llamacpp::set_engine_variant,
             api::llamacpp::check_engine_update,
             api::llamacpp::install_engine_update,
             api::llamacpp::remove_engine,
