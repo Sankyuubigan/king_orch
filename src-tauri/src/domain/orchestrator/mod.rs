@@ -404,9 +404,9 @@ where
     ));
 
     let engine = if mmproj_path.is_some() {
-        LlamaEngine::new_with_mmproj(&engine_dir, &model_path, mmproj_path.as_deref(), engine_ctx_limit, kv_quant_keys, kv_quant_values, &log_cb, stream_cb)?
+        LlamaEngine::new_with_mmproj(&engine_dir, &model_path, mmproj_path.as_deref(), engine_ctx_limit, kv_quant_keys, kv_quant_values, log_cb.clone(), stream_cb)?
     } else {
-        LlamaEngine::new(&engine_dir, &model_path, engine_ctx_limit, kv_quant_keys, kv_quant_values, &log_cb, stream_cb)?
+        LlamaEngine::new(&engine_dir, &model_path, engine_ctx_limit, kv_quant_keys, kv_quant_values, log_cb.clone(), stream_cb)?
     };
     let mut messages_store = history.clone();
     for (i, msg) in messages_store.iter_mut().enumerate() {

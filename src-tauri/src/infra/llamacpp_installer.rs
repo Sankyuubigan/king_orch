@@ -204,9 +204,12 @@ pub fn variant_label(variant: &str) -> &'static str {
 }
 
 /// Имена ассетов движка в релизах llama.cpp менялись:
-/// - старый формат: llama-<tag>-bin-win-<variant>-x64.zip (до b10275)
-/// - новый формат: cudart-llama-bin-win-<variant>-x64.zip (с b10275,
-///   единый универсальный архив со всеми бэкендами + CUDA runtime)
+/// - llama-<tag>-bin-win-<variant>-x64.zip — движок (llama-server.exe + ggml-бэкенды).
+///   В релизах b10275+ НЕ содержит CUDA-рантайм (cublas64_*.dll): его нужно
+///   докачать отдельным архивом cudart-llama-bin (см. find_cudart_asset).
+/// - cudart-llama-bin-win-<variant>-x64.zip — CUDA-рантайм (cublas64_13.dll,
+///   cublasLt64_13.dll, cudart64_13.dll). В старых релизах (эпоха b10275) —
+///   полный движок со всеми бэкендами (вложенная структура backends/<tag>/...).
 fn asset_name_candidates(tag: &str, variant: &str) -> Vec<String> {
     vec![
         format!("llama-{}-bin-win-{}-x64.zip", tag, variant),
@@ -281,6 +284,36 @@ fn find_engine_asset<'a>(release: &'a GitHubRelease, variant: &str) -> Option<(&
     if variant == VARIANT_CPU {
         if let Some(asset) = release.assets.iter().find(|a| a.name == "cudart-llama-bin-win-cuda-12.4-x64.zip") {
             return Some((asset, VARIANT_CUDA.to_string()));
+        }
+    }
+    None
+}
+
+/// Ищет отдельный архив CUDA-рантайма (cudart-llama-bin-win-<variant>-x64.zip).
+/// В новых релизах (b10275+) CUDA-библиотеки (cublas64_*.dll, cublasLt64_*.dll,
+/// cudart64_*.dll) вынесены из основного архива движка в этот. Без них
+/// ggml-cuda.dll не грузится и llama-server тихо работает на CPU.
+/// Архив содержит ТОЛЬКО DLL (без llama-server.exe) — качается дополнением.
+fn find_cudart_asset<'a>(release: &'a GitHubRelease, variant: &str) -> Option<(&'a GitHubAsset, String)> {
+    // Точное имя
+    let exact = format!("cudart-llama-bin-win-{}-x64.zip", variant);
+    if let Some(asset) = release.assets.iter().find(|a| a.name == exact) {
+        return Some((asset, variant.to_string()));
+    }
+    // Фолбэк по семейству: минорная версия CUDA могла смениться (13.3 → 13.7)
+    let family = EngineFamily::from_variant(variant);
+    let needle = match family {
+        EngineFamily::Cuda13 => "-win-cuda-13",
+        EngineFamily::Cuda12 => "-win-cuda-12",
+        _ => return None,
+    };
+    for asset in &release.assets {
+        if asset.name.starts_with("cudart-llama-bin")
+            && asset.name.ends_with("-x64.zip")
+            && asset.name.contains(needle)
+        {
+            let actual = variant_from_asset_name(&asset.name).unwrap_or_else(|| variant.to_string());
+            return Some((asset, actual));
         }
     }
     None
@@ -639,6 +672,39 @@ pub async fn install<L: Fn(String), P: Fn(u64, u64)>(
     // Jan-архивы и cudart-архивы имеют вложенную структуру — поднимаем бинарь наверх
     lift_server_files(&target, &on_log)?;
 
+    // ── CUDA-рантайм (дополнение) ──
+    // В релизах b10275+ CUDA-библиотеки вынесены в отдельный архив cudart-llama-bin.
+    // Основной архив llama-<tag>-bin-win-cuda-* содержит только llama-server.exe:
+    // без cublas64_*.dll рядом ggml-cuda.dll не грузится и движок тихо уходит в CPU.
+    let main_asset_is_cudart = asset.0.name.starts_with("cudart-llama-bin");
+    let family = EngineFamily::from_variant(&actual_variant);
+    if !main_asset_is_cudart && matches!(family, EngineFamily::Cuda12 | EngineFamily::Cuda13) {
+        if let Some(cudart) = find_cudart_asset(&release, &actual_variant) {
+            on_log(format!("⬇️ Дополнение CUDA-рантайма: {}", cudart.0.name));
+            let cudart_zip = target.join("cudart.zip");
+            download_asset(&client, cudart.0, &cudart_zip, &on_log, &on_progress).await?;
+            if let Some(digest) = &cudart.0.digest {
+                let expected = digest.strip_prefix("sha256:").unwrap_or(digest);
+                let actual = sha256_file(&cudart_zip)?;
+                if !actual.eq_ignore_ascii_case(expected) {
+                    let _ = fs::remove_file(&cudart_zip);
+                    return Err(format!(
+                        "Контрольная сумма CUDA-рантайма не совпала! Ожидалось {}, получено {}. Загрузка повреждена.",
+                        expected, actual
+                    ));
+                }
+            }
+            let cudart_count = extract_all(&cudart_zip, &target, &on_log)?;
+            let _ = fs::remove_file(&cudart_zip);
+            on_log(format!("✅ CUDA-рантайм распакован: {} файлов", cudart_count));
+        } else {
+            on_log(format!(
+                "⚠️ В релизе {} не найден архив CUDA-рантайма (cudart-llama-bin-win-*-x64.zip) — GPU-режим может не работать.",
+                release.tag_name
+            ));
+        }
+    }
+
     let meta = EngineMeta {
         tag: release.tag_name.clone(),
         variant: actual_variant.clone(),
@@ -810,6 +876,35 @@ mod tests {
     fn no_asset_returns_none() {
         let release = release_with(&["llama-b10278-bin-win-vulkan-x64.zip"]);
         assert!(find_engine_asset(&release, VARIANT_CUDA13).is_none());
+    }
+
+    #[test]
+    fn finds_cudart_supplement_exact_match() {
+        let release = release_with(&["cudart-llama-bin-win-cuda-13.3-x64.zip"]);
+        let (asset, actual) = find_cudart_asset(&release, "cuda-13.3").unwrap();
+        assert_eq!(asset.name, "cudart-llama-bin-win-cuda-13.3-x64.zip");
+        assert_eq!(actual, "cuda-13.3");
+    }
+
+    #[test]
+    fn finds_cudart_supplement_by_family_when_minor_differs() {
+        let release = release_with(&["cudart-llama-bin-win-cuda-13.7-x64.zip"]);
+        let (asset, actual) = find_cudart_asset(&release, "cuda-13.3").unwrap();
+        assert_eq!(asset.name, "cudart-llama-bin-win-cuda-13.7-x64.zip");
+        assert_eq!(actual, "cuda-13.7");
+    }
+
+    #[test]
+    fn cudart_supplement_ignores_non_cuda_variants() {
+        let release = release_with(&["cudart-llama-bin-win-cuda-13.3-x64.zip"]);
+        assert!(find_cudart_asset(&release, "vulkan").is_none());
+        assert!(find_cudart_asset(&release, "cpu").is_none());
+    }
+
+    #[test]
+    fn cudart_supplement_none_when_release_lacks_it() {
+        let release = release_with(&["llama-b10331-bin-win-cuda-13.3-x64.zip"]);
+        assert!(find_cudart_asset(&release, "cuda-13.3").is_none());
     }
 
     #[test]

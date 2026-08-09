@@ -147,6 +147,22 @@
       <div id="view-settings" class="view" style="overflow-y: auto;">
         
         <div class="group-box">
+          <div class="group-title">О приложении</div>
+          <div class="input-row">
+            <label>Версия:</label>
+            <span id="app-version">—</span>
+          </div>
+          <div class="input-row" style="margin-top: 10px;">
+            <button id="btn-check-update" class="btn-primary">Проверить обновления</button>
+            <button id="btn-install-update" class="btn-primary" style="display: none; margin-left: 10px;">Обновить</button>
+            <span id="update-status" style="font-size: 13px; color: var(--text-muted); margin-left: 10px;"></span>
+          </div>
+          <div class="input-row" style="margin-top: 12px;">
+            <button id="btn-support-project" class="btn-secondary">❤ Поддержка проекта</button>
+          </div>
+        </div>
+
+        <div class="group-box">
           <div class="group-title">Движок запуска нейромоделей</div>
           <div class="input-row">
             <label>Статус:</label>
@@ -183,23 +199,7 @@
         </div>
 
         <div class="group-box">
-          <div class="group-title">О приложении</div>
-          <div class="input-row">
-            <label>Версия:</label>
-            <span id="app-version">—</span>
-          </div>
-          <div class="input-row" style="margin-top: 10px;">
-            <button id="btn-check-update" class="btn-primary">Проверить обновления</button>
-            <button id="btn-install-update" class="btn-primary" style="display: none; margin-left: 10px;">Обновить</button>
-            <span id="update-status" style="font-size: 13px; color: var(--text-muted); margin-left: 10px;"></span>
-          </div>
-          <div class="input-row" style="margin-top: 12px;">
-            <button id="btn-support-project" class="btn-secondary">❤ Поддержка проекта</button>
-          </div>
-        </div>
-
-        <div class="group-box">
-          <div class="group-title">1. Скачать новую модель</div>
+          <div class="group-title">Скачать новую модель</div>
           <div class="input-row">
             <select id="download-model-select" style="flex: 1;">
               <option value="">Загрузка каталога...</option>
@@ -224,7 +224,7 @@
         </div>
 
         <div class="group-box">
-          <div class="group-title">2. Параметры генерации (для выбранной модели)</div>
+          <div class="group-title">Параметры генерации (для выбранной модели)</div>
           
           <div class="input-row" style="margin-top: 10px;" title="Температура (Temperature).">
             <label for="temp-slider" style="min-width: 180px;">Температура: <strong id="temp-value">0.5</strong></label>
@@ -257,7 +257,7 @@
         </div>
 
         <div class="group-box">
-          <div class="group-title">3. Общие системные настройки (Динамическая память)</div>
+          <div class="group-title">Общие системные настройки (Динамическая память)</div>
           <div class="input-row">
             <label>Тема интерфейса:</label>
             <select id="theme-select">

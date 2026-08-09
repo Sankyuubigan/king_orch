@@ -120,15 +120,16 @@ impl Prng {
 
 impl LlamaEngine {
     pub fn new<L, S>(engine_dir: &Path, model_path: &str, global_ctx_limit: u32, kv_quant_keys: bool, kv_quant_values: bool, log_cb: L, stream_cb: S) -> Result<Self, String>
-    where L: Fn(String), S: Fn(String) + Send + Sync + 'static
+    where L: Fn(String) + Send + Sync + 'static, S: Fn(String) + Send + Sync + 'static
     {
         Self::new_with_mmproj(engine_dir, model_path, None, global_ctx_limit, kv_quant_keys, kv_quant_values, log_cb, stream_cb)
     }
 
     #[allow(clippy::too_many_arguments)]
     pub fn new_with_mmproj<L, S>(engine_dir: &Path, model_path: &str, mmproj_path: Option<&str>, global_ctx_limit: u32, kv_quant_keys: bool, kv_quant_values: bool, log_cb: L, stream_cb: S) -> Result<Self, String>
-    where L: Fn(String), S: Fn(String) + Send + Sync + 'static
+    where L: Fn(String) + Send + Sync + 'static, S: Fn(String) + Send + Sync + 'static
     {
+        let log_cb: std::sync::Arc<dyn Fn(String) + Send + Sync> = std::sync::Arc::new(log_cb);
         log_cb("⚡ Запуск движка llama.cpp (llama-server)...".to_string());
 
         // ── Логирование аппаратного обеспечения ──
@@ -195,6 +196,32 @@ impl LlamaEngine {
                 crate::infra::llamacpp_installer::variant_label(&selected_variant),
                 engine_dir.display()
             ));
+        }
+
+        // ── Предлётная проверка CUDA-рантайма ──
+        // В релизах llama.cpp b10275+ cublas64_*.dll вынесены из архива движка
+        // в отдельный архив cudart-llama-bin. Без них ggml-cuda.dll не грузится
+        // и движок ТИХО уходит в CPU — проверяем заранее и говорим явно.
+        let cuda_runtime_dll = match installed_family {
+            crate::infra::llamacpp_installer::EngineFamily::Cuda13 => Some("cublas64_13.dll"),
+            crate::infra::llamacpp_installer::EngineFamily::Cuda12 => Some("cublas64_12.dll"),
+            _ => None,
+        };
+        if let Some(dll_name) = cuda_runtime_dll {
+            let server_dir = std::path::Path::new(&server_exe)
+                .parent()
+                .map(|p| p.to_path_buf())
+                .unwrap_or_else(|| engine_dir.to_path_buf());
+            let nearby = server_dir.join(dll_name);
+            let in_system = std::path::Path::new(r"C:\Windows\System32").join(dll_name);
+            if !nearby.exists() && !in_system.exists() {
+                return fail(format!(
+                    "CUDA-библиотека {} не найдена рядом с llama-server.exe (в {}) и в System32.\n\
+                     Без неё GPU-режим не работает — движок тихо уходит в CPU.\n\
+                     Решение: Настройки → «Движок запуска нейромоделей» → переустановите движок (установщик докачает CUDA-рантайм автоматически).",
+                    dll_name, server_dir.display()
+                ));
+            }
         }
 
         // ── Совместимость выбранного бекенда с GPU ──
@@ -311,10 +338,32 @@ impl LlamaEngine {
         #[cfg(target_os = "windows")]
         { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); }
 
-        let child = match cmd.spawn() {
+        // CUDA/ggml-ошибки идут в stderr (не в --log-file) — захватываем их
+        cmd.stderr(std::process::Stdio::piped());
+
+        let mut child = match cmd.spawn() {
             Ok(c) => c,
             Err(e) => return fail(format!("Ошибка запуска llama-server: {}", e)),
         };
+
+        // Поток чтения stderr llama-server: ggml_cuda_init, CUDA-ошибки, варнинги
+        if let Some(stderr) = child.stderr.take() {
+            let log_cb = log_cb.clone();
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                let reader = std::io::BufReader::new(stderr);
+                for line in reader.lines() {
+                    let line = match line {
+                        Ok(l) => l,
+                        Err(_) => break,
+                    };
+                    let line = line.trim();
+                    if !line.is_empty() {
+                        log_cb(format!("[llama-server] {}", line));
+                    }
+                }
+            });
+        }
 
         let mut engine = Self {
             global_ctx_limit,
