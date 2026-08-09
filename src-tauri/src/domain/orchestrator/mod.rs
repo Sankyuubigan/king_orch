@@ -352,6 +352,32 @@ pub struct ChatRunResult {
     pub engine_mode_detail: String,
 }
 
+/// Запас на спецтокены и JSON-разметку инструментов при оценке стартового контекста.
+const TOKEN_ESTIMATE_RESERVE: u32 = 512;
+
+/// Делитель «символы → токены» для эвристики стартового контекста.
+/// Латиница токенизируется ~3 симв/токен, кириллица — плотнее (~2 симв/токен):
+/// эвристика /3 для русских промптов занижает оценку, и движок стартует с
+/// маленьким контекстом, а обрезка истории срабатывает преждевременно.
+/// Делитель выбирается по доле кириллицы во всём будущем промпте.
+fn estimate_chars_per_token(worst_system_prompt: &str, history_text: &str, user_text: &str) -> usize {
+    let total = worst_system_prompt.chars().count() + history_text.chars().count() + user_text.chars().count();
+    if total == 0 {
+        return 3;
+    }
+    let cyrillic = worst_system_prompt
+        .chars()
+        .chain(history_text.chars())
+        .chain(user_text.chars())
+        .filter(|c| ('\u{0400}'..='\u{04FF}').contains(c))
+        .count();
+    if cyrillic * 10 >= total * 3 {
+        2
+    } else {
+        3
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn run_chat<L, S, C, ST>(
     log_cb: L, status_cb: S, subcall_cb: C, stream_cb: ST,
@@ -385,7 +411,8 @@ where
     // ── Worst-case оценка стартового контекста движка ──
     // Токенизатор живёт ВНУТРИ движка (llama-server) и недоступен до его старта,
     // а --ctx-size фиксируется при старте процесса. Оцениваем токены эвристикой
-    // (~3 символа на токен) + запас на токены изображений. Точная подгонка
+    // (делитель зависит от языка промпта: ~3 симв/токен для латиницы, ~2 для
+    // кириллицы) + запас на спецтокены/JSON и токены изображений. Точная подгонка
     // остаётся за циклом обрезки истории в run_agent_node (по точным /tokenize).
     let worst_system_prompt = match &workflow_match {
         Some(wf) => build_worst_agent_prompt(&agents, wf, &history),
@@ -393,10 +420,12 @@ where
             .map(|agent| build_system_prompt(agent, &history, false, &[], max_gen_usize))
             .unwrap_or_default(),
     };
-    let history_chars: usize = llm_history(&history).iter().map(|m| m.content.chars().count()).sum();
+    let history_text: String = llm_history(&history).iter().map(|m| m.content.as_str()).collect();
+    let history_chars = history_text.chars().count();
     let total_chars = worst_system_prompt.chars().count() + history_chars + user_text.chars().count();
     let image_tokens = attachments.len() as u32 * 2048;
-    let estimated_tokens = (total_chars / 3) as u32 + image_tokens;
+    let chars_per_token = estimate_chars_per_token(&worst_system_prompt, &history_text, &user_text);
+    let estimated_tokens = (total_chars / chars_per_token) as u32 + image_tokens + TOKEN_ESTIMATE_RESERVE;
     let engine_ctx_limit = (estimated_tokens + max_gen_tokens + 128).min(context_size).max(2048);
     log_cb(format!(
         "📐 Стартовый контекст движка: {} токенов (worst-case промпт ~{} символов, история ~{}, изображения ~{} токенов)",
@@ -1187,6 +1216,15 @@ mod tests {
 
     fn parse_wf(yaml: &str) -> WorkflowDef {
         serde_yaml::from_str(yaml).expect("Не удалось распарсить тестовый workflow")
+    }
+
+    #[test]
+    fn estimate_chars_per_token_picks_by_cyrillic_share() {
+        assert_eq!(estimate_chars_per_token("привет мир", "", ""), 2);
+        assert_eq!(estimate_chars_per_token("hello world", "", ""), 3);
+        assert_eq!(estimate_chars_per_token("hello world", "привет", ""), 2);
+        assert_eq!(estimate_chars_per_token("hello world", "abcdef", "й"), 3);
+        assert_eq!(estimate_chars_per_token("", "", ""), 3);
     }
 
     #[test]

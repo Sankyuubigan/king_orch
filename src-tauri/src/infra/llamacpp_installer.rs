@@ -210,10 +210,11 @@ pub fn variant_label(variant: &str) -> &'static str {
 /// - cudart-llama-bin-win-<variant>-x64.zip — CUDA-рантайм (cublas64_13.dll,
 ///   cublasLt64_13.dll, cudart64_13.dll). В старых релизах (эпоха b10275) —
 ///   полный движок со всеми бэкендами (вложенная структура backends/<tag>/...).
+/// ВАЖНО: cudart-архив НЕ кандидат в движок — в новых релизах (b10275+)
+/// он содержит только DLL и не включает llama-server.exe.
 fn asset_name_candidates(tag: &str, variant: &str) -> Vec<String> {
     vec![
         format!("llama-{}-bin-win-{}-x64.zip", tag, variant),
-        format!("cudart-llama-bin-win-{}-x64.zip", variant),
     ]
 }
 
@@ -242,6 +243,9 @@ fn find_asset_by_family<'a>(release: &'a GitHubRelease, family: EngineFamily) ->
         EngineFamily::Cpu => return None,
     };
     for asset in &release.assets {
+        if asset.name.starts_with("cudart-llama-bin") {
+            continue; // cudart-архив — только CUDA DLL, это не движок
+        }
         if !asset.name.ends_with("-x64.zip") {
             continue;
         }
@@ -279,13 +283,11 @@ fn find_engine_asset<'a>(release: &'a GitHubRelease, variant: &str) -> Option<(&
     if let Some(hit) = find_asset_by_family(release, EngineFamily::from_variant(variant)) {
         return Some(hit);
     }
-    // CPU-вариант в новых релизах не публикуется: как последний шанс для
-    // CPU-машин подходит универсальный cudart-архив (запустится без GPU).
-    if variant == VARIANT_CPU {
-        if let Some(asset) = release.assets.iter().find(|a| a.name == "cudart-llama-bin-win-cuda-12.4-x64.zip") {
-            return Some((asset, VARIANT_CUDA.to_string()));
-        }
-    }
+    // CPU-ассет (llama-<tag>-bin-win-cpu-x64.zip) публикуется в каждом релизе,
+    // включая новые (проверено на b10331), поэтому точное имя/маска выше
+    // находят его. Фолбэк на cudart-архив здесь невозможен: в релизах b10275+
+    // он содержит только CUDA DLL и не включает llama-server.exe — установка
+    // «движка» из него сломана.
     None
 }
 
@@ -865,11 +867,27 @@ mod tests {
     }
 
     #[test]
-    fn cpu_falls_back_to_universal_cudart_archive() {
+    fn cpu_does_not_fall_back_to_cudart_archive() {
+        // cudart-архив содержит только CUDA DLL (без llama-server.exe) и
+        // не может быть движком — CPU-фолбэк на него запрещён
         let release = release_with(&["cudart-llama-bin-win-cuda-12.4-x64.zip"]);
+        assert!(find_engine_asset(&release, VARIANT_CPU).is_none());
+    }
+
+    #[test]
+    fn cpu_finds_exact_cpu_asset() {
+        // CPU-вариант публикуется в каждом релизе (в т.ч. b10331)
+        let release = release_with(&["llama-b10278-bin-win-cpu-x64.zip"]);
         let (asset, actual) = find_engine_asset(&release, VARIANT_CPU).unwrap();
-        assert_eq!(asset.name, "cudart-llama-bin-win-cuda-12.4-x64.zip");
-        assert_eq!(actual, "cuda-12.4");
+        assert_eq!(asset.name, "llama-b10278-bin-win-cpu-x64.zip");
+        assert_eq!(actual, "cpu");
+    }
+
+    #[test]
+    fn family_lookup_skips_cudart_archive() {
+        // В релизе только cudart-дополнение, но не движок cuda-13 — движок не найден
+        let release = release_with(&["cudart-llama-bin-win-cuda-13.3-x64.zip"]);
+        assert!(find_engine_asset(&release, VARIANT_CUDA13).is_none());
     }
 
     #[test]
