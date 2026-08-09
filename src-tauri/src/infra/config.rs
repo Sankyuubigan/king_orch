@@ -55,6 +55,8 @@ pub struct AppConfig {
     pub models: Vec<String>,
     pub last_model: Option<String>,
     #[serde(default)]
+    pub last_agent: Option<String>,
+    #[serde(default)]
     pub models_dir: Option<String>,
     #[serde(default)]
     pub model_params: HashMap<String, ModelParams>,
@@ -114,6 +116,7 @@ impl Default for AppConfig {
         Self {
             models: Vec::new(),
             last_model: None,
+            last_agent: None,
             models_dir: None,
             model_params: HashMap::new(),
             context_size: default_context_size(),

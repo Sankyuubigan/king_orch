@@ -173,7 +173,7 @@ export class ChatController {
     const idx = store.msgUidList.indexOf(uid); if (idx === -1) return;
     store.chatHistory.splice(idx, 1); store.msgUidList.splice(idx, 1);
     this.renderChatFromHistory();
-    if (store.currentSessionId) await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
+    if (store.currentSessionId) await this.persistSession();
     this.triggerTokenCount();
     showToast("Сообщение удалено.", "success");
   }
@@ -182,7 +182,7 @@ export class ChatController {
     const idx = store.msgUidList.indexOf(uid); if (idx === -1) return;
     const clonedHistory = store.chatHistory.slice(0, idx + 1);
     const newId = Date.now().toString();
-    await saveSession(newId, clonedHistory, "");
+    await saveSession(newId, clonedHistory, "", this.el.modelSelect?.value, this.el.agentSelect?.value);
     showToast("Клон сессии создан!", "success");
     bus.emit("session:changed");
     bus.emit("session:open", newId);
@@ -215,7 +215,7 @@ export class ChatController {
     this.renderEditor(msgEl, contentDiv, originalContent, (newContent) => {
       msg.content = newContent;
       this.renderChatFromHistory();
-      if (store.currentSessionId) saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
+      if (store.currentSessionId) this.persistSession();
       this.triggerTokenCount();
       showToast("Сообщение обновлено.", "success");
     });
@@ -280,13 +280,12 @@ export class ChatController {
 
     this.setProcessingState(true);
 
-    if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
-    await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
+if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
+    await this.persistSession();
     bus.emit("session:changed");
 
     const preSendLength = store.chatHistory.length;
     const startTime = performance.now();
-
     try {
       const _p = store.currentModelParams;
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value), dry_multiplier: _p?.dry_multiplier ?? 0.0, dry_base: _p?.dry_base ?? 1.75, dry_allowed_length: _p?.dry_allowed_length ?? 2, dry_penalty_last_n: _p?.dry_penalty_last_n ?? 0, xtc_probability: _p?.xtc_probability ?? 0.0, xtc_threshold: _p?.xtc_threshold ?? 0.1 };
@@ -330,7 +329,7 @@ export class ChatController {
       }
 
       this.renderChatFromHistory();
-      await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
+      await this.persistSession();
       this.triggerTokenCount();
 
     } catch (error) {
@@ -344,9 +343,7 @@ export class ChatController {
         void trackError("chat.send.runFrom", error);
       }
       this.renderChatFromHistory();
-      if (store.currentSessionId) {
-        await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
-      }
+      await this.persistSession();
     } finally {
       this.setProcessingState(false);
     }
@@ -370,7 +367,7 @@ export class ChatController {
       return;
     }
     this.renderChatFromHistory();
-    if (store.currentSessionId) await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
+    await this.persistSession();
     showToast("Блок мыслей удален.", "success");
   }
 
@@ -381,7 +378,7 @@ export class ChatController {
     const cloneIdx = first - 1; if (cloneIdx < 0) { showToast("Нельзя клонировать.", "error"); return; }
     const clonedHistory = store.chatHistory.slice(0, cloneIdx + 1);
     const newId = Date.now().toString();
-    await saveSession(newId, clonedHistory, "");
+    await saveSession(newId, clonedHistory, "", this.el.modelSelect?.value, this.el.agentSelect?.value);
     showToast("Клон сессии создан!", "success");
     bus.emit("session:changed");
     bus.emit("session:open", newId);
@@ -515,6 +512,21 @@ export class ChatController {
     bus.emit("processing:changed", state);
   }
 
+  /** Сохранение текущей сессии с привязкой выбранных модели и агента. */
+  private persistSession(draft?: string) {
+    const id = store.currentSessionId;
+    if (!id) return;
+    const model = this.el.modelSelect?.value || undefined;
+    const agent = this.el.agentSelect?.value || undefined;
+    const d = draft !== undefined ? draft : this.el.chatInput.value;
+    return saveSession(id, store.chatHistory, d, model, agent);
+  }
+
+  private hasOption(select: HTMLSelectElement | null, value: string): boolean {
+    if (!select) return false;
+    return Array.from(select.options).some(o => o.value === value);
+  }
+
   async handleSend() {
     const text = this.el.chatInput.value.trim(); if (!text && this.attachments.length === 0) return; if (store.isProcessing) return;
     const activeAgent = this.el.agentSelect.value; const modelPath = this.el.modelSelect.value;
@@ -531,7 +543,8 @@ export class ChatController {
     const historyBefore = store.chatHistory.length;
     const preSendLength = historyBefore + 1;
     store.chatHistory.push({ type: "message", author: "user", content: displayText });
-    await saveSession(store.currentSessionId, store.chatHistory, ""); bus.emit("session:changed");
+    await this.persistSession("");
+    bus.emit("session:changed");
     const startTime = performance.now();
     try {
       const displayName = this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace(/^[📁📊]\s*/, '');
@@ -583,7 +596,7 @@ export class ChatController {
         store.msgUidList.push(store.nextUid());
         this.renderChatFromHistory();
       }
-      await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
+      await this.persistSession();
     } catch (error) {
       if (String(error).includes("Отменено") || String(error).includes("Прервано")) {
           store.chatHistory.push({ type: "message", author: "system", content: "⚠️ Прервано." });
@@ -595,9 +608,7 @@ export class ChatController {
           void trackError("chat.send", error);
       }
       this.renderChatFromHistory();
-      if (store.currentSessionId) {
-        await saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value);
-      }
+      await this.persistSession();
     } finally { 
         this.setProcessingState(false); 
         this.triggerTokenCount();
@@ -608,10 +619,10 @@ export class ChatController {
     if (store.isProcessing) return;
     if (!store.currentSessionId && this.el.chatInput.value.trim() !== "") {
       store.currentSessionId = Date.now().toString(); store.chatHistory = [];
-      saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value).then(() => bus.emit("session:changed"));
+      this.persistSession().then(() => bus.emit("session:changed"));
     } else if (store.currentSessionId) {
       clearTimeout(store.draftTimeout);
-      store.draftTimeout = window.setTimeout(() => { saveSession(store.currentSessionId!, store.chatHistory, this.el.chatInput.value); }, 500);
+      store.draftTimeout = window.setTimeout(() => { this.persistSession(); }, 500);
     }
   }
 
@@ -633,8 +644,16 @@ export class ChatController {
       store.currentSessionId = id; store.chatHistory = session.messages;
       this.el.chatInput.value = session.draft || "";
       setTimeout(() => { this.el.chatInput.style.height = "auto"; this.el.chatInput.style.height = `${this.el.chatInput.scrollHeight}px`; }, 0);
+      if (session.model && this.hasOption(this.el.modelSelect, session.model)) {
+        this.el.modelSelect.value = session.model;
+        bus.emit("model:changed", session.model);
+      }
+      if (session.agent && this.hasOption(this.el.agentSelect, session.agent)) {
+        this.el.agentSelect.value = session.agent;
+      }
       store.uidCounter = 0; store.msgUidList = store.chatHistory.map(() => store.nextUid());
       this.renderChatFromHistory(); bus.emit("session:changed"); bus.emit("tab:switch", 'chat');
+      this.updateAttachButtonState();
       this.triggerTokenCount();
     } catch(e) {
       showToast(`Ошибка: ${e}`, "error");
@@ -723,11 +742,11 @@ export class ChatController {
         this.triggerDraftSave(); 
         this.triggerTokenCount();
     });
-    this.el.chatInput.addEventListener("blur", () => { if (store.currentSessionId && !store.isProcessing) { clearTimeout(store.draftTimeout); saveSession(store.currentSessionId, store.chatHistory, this.el.chatInput.value); } });
+    this.el.chatInput.addEventListener("blur", () => { if (store.currentSessionId && !store.isProcessing) { clearTimeout(store.draftTimeout); this.persistSession(); } });
     this.el.btnAttach?.addEventListener("click", () => { if (!this.el.btnAttach.disabled) this.el.fileInput.click(); });
     this.el.fileInput?.addEventListener("change", (e) => this.handleFileSelect((e.target as HTMLInputElement).files));
-    this.el.modelSelect?.addEventListener("change", () => { this.updateAttachButtonState(); this.triggerTokenCount(); });
-    this.el.agentSelect?.addEventListener("change", () => { this.triggerTokenCount(); });
+    this.el.modelSelect?.addEventListener("change", () => { this.updateAttachButtonState(); this.triggerTokenCount(); if (store.currentSessionId) this.persistSession(); });
+    this.el.agentSelect?.addEventListener("change", () => { this.triggerTokenCount(); if (store.currentSessionId) this.persistSession(); });
   }
 
   private thoughtDedupSet = new Set<string>();

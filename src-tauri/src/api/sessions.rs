@@ -18,6 +18,8 @@ pub fn save_session(
     id: String,
     messages: Vec<infra::ChatMessage>,
     draft: String,
+    model: Option<String>,
+    agent: Option<String>,
 ) -> Result<(), String> {
     let title = messages
         .iter()
@@ -31,7 +33,7 @@ pub fn save_session(
             }
         })
         .unwrap_or_else(|| "Новая сессия".to_string());
-    infra::save_session(&app, &id, &title, messages, draft)
+    infra::save_session(&app, &id, &title, messages, draft, model, agent)
 }
 
 #[tauri::command]

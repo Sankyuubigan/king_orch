@@ -68,6 +68,7 @@ export class SettingsController {
     this.el = el;
     this.bindDomEvents();
     this.bindTauriEvents();
+    this.bindBusEvents();
   }
 
   async loadModelParams() {
@@ -186,7 +187,7 @@ export class SettingsController {
         this.el.chkErrorReports.checked = config.allow_error_reports;
         setTelemetryEnabled(config.allow_error_reports);
       }
-      await this.loadAgents();
+      await this.loadAgents(config.last_agent);
       bus.emit("config:loaded", config);
       await this.loadCatalog();
       await this.loadModelParams();
@@ -235,7 +236,7 @@ export class SettingsController {
     } catch (e) { showToast(`Ошибка статуса движка: ${e}`, "error"); void trackError("settings.engineStatus", e); }
   }
 
-  private async loadAgents() {
+  private async loadAgents(lastAgent?: string) {
     try {
       const entries: any[] = await invoke("get_agents");
       this.el.agentSelect.innerHTML = '';
@@ -248,6 +249,9 @@ export class SettingsController {
           o.text = `${prefix} ${folderPart}${e.name} (${e.id})`;
           this.el.agentSelect.appendChild(o);
         }
+      }
+      if (lastAgent && Array.from(this.el.agentSelect.options).some(o => o.value === lastAgent)) {
+        this.el.agentSelect.value = lastAgent;
       }
     } catch(e) { void trackError("settings.loadAgents", e); }
   }
@@ -281,6 +285,7 @@ export class SettingsController {
     for (const [s, l] of sliders) s?.addEventListener("input", () => { l.innerText = s.value; this.saveModelParams(); });
     this.el.btnResetParams?.addEventListener("click", async () => { const p = this.el.modelSelect.value; if (!p) return; await invoke("reset_model_params", { modelPath: p }); await this.loadModelParams(); showToast("Параметры сброшены.", "success"); });
     this.el.modelSelect?.addEventListener("change", async () => { await invoke("set_last_model", { path: this.el.modelSelect.value }); await this.loadModelParams(); });
+    this.el.agentSelect?.addEventListener("change", async () => { await invoke("set_config_value", { key: "last_agent", value: this.el.agentSelect.value }); });
     this.el.chkShowAdvanced?.addEventListener("change", async () => {
       const val = this.el.chkShowAdvanced.checked;
       store.showAdvancedFeatures = val;
@@ -474,5 +479,11 @@ export class SettingsController {
   private bindTauriEvents() {
     listen("download_progress", (e: any) => { const { downloaded, total } = e.payload; const pct = total > 0 ? (downloaded / total) * 100 : 0; this.el.downloadProgressBar.style.width = `${pct}%`; this.el.downloadStatusLabel.innerText = `${(downloaded/1024/1024).toFixed(1)} MB / ${(total/1024/1024).toFixed(1)} MB`; });
     listen("engine_progress", (e: any) => { const { downloaded, total } = e.payload; const pct = total > 0 ? (downloaded / total) * 100 : 0; this.el.engineProgressBar.style.width = `${pct}%`; this.el.engineStatusLabel.innerText = `${(downloaded/1024/1024).toFixed(1)} MB / ${(total/1024/1024).toFixed(1)} MB`; });
+  }
+
+  private bindBusEvents() {
+    bus.on("model:changed", (modelPath: string) => {
+      if (this.el.modelSelect.value === modelPath) this.loadModelParams();
+    });
   }
 }

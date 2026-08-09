@@ -25,14 +25,29 @@ export class SessionController {
       for (const s of sessions) {
         const div = document.createElement("div");
         div.className = `session-item ${s.id === store.currentSessionId ? 'active' : ''}`;
-        div.innerHTML = `<span class="session-title" title="${s.title}">${s.title}</span><div class="session-item-actions"><button class="btn-session-menu">⋮</button><div class="session-menu-dropdown"><button class="session-menu-item btn-rename" data-id="${s.id}" data-title="${s.title}">✏️ Переименовать</button><button class="session-menu-item btn-explore" data-id="${s.id}">📁 Проводник</button><button class="session-menu-item danger btn-delete" data-id="${s.id}">🗑️ Удалить</button></div></div>`;
+        const titleSpan = document.createElement("span");
+        titleSpan.className = "session-title";
+        titleSpan.title = s.title;
+        titleSpan.textContent = s.title;
+        const actions = document.createElement("div");
+        actions.className = "session-item-actions";
+        actions.innerHTML = `<button class="btn-session-menu">⋮</button><div class="session-menu-dropdown"><button class="session-menu-item btn-rename">✏️ Переименовать</button><button class="session-menu-item btn-explore">📁 Проводник</button><button class="session-menu-item danger btn-delete">🗑️ Удалить</button></div>`;
+        const renameBtn = actions.querySelector('.btn-rename') as HTMLElement;
+        renameBtn.dataset.id = s.id;
+        renameBtn.dataset.title = s.title;
+        const exploreBtn = actions.querySelector('.btn-explore') as HTMLElement;
+        exploreBtn.dataset.id = s.id;
+        const deleteBtn = actions.querySelector('.btn-delete') as HTMLElement;
+        deleteBtn.dataset.id = s.id;
+        div.appendChild(titleSpan);
+        div.appendChild(actions);
         div.addEventListener("click", (e) => { if (!(e.target as HTMLElement).closest('.session-item-actions')) bus.emit("session:open", s.id); });
         const menuBtn = div.querySelector('.btn-session-menu');
         const dropdown = div.querySelector('.session-menu-dropdown');
         menuBtn?.addEventListener("click", (e) => { e.stopPropagation(); document.querySelectorAll('.session-menu-dropdown.show').forEach(dd => { if (dd !== dropdown) dd.classList.remove('show'); }); dropdown?.classList.toggle('show'); });
-        div.querySelector('.btn-rename')?.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); const cur = (e.target as HTMLElement).getAttribute('data-title') || ''; const newT = prompt("Новое название:", cur); if (newT && newT.trim() !== "" && newT !== cur) { try { await renameSession(s.id, newT.trim()); this.loadSessionsListUI(); } catch(err) { showToast(`Ошибка: ${err}`, "error"); void trackError("sessions.rename", err); } } });
-        div.querySelector('.btn-explore')?.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); try { await openSessionFolder(s.id); } catch(err) { void trackError("sessions.openFolder", err); } });
-        div.querySelector('.btn-delete')?.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); await this.deleteSessionUI(s.id); });
+        renameBtn.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); const cur = renameBtn.dataset.title || ''; const newT = prompt("Новое название:", cur); if (newT && newT.trim() !== "" && newT !== cur) { try { await renameSession(s.id, newT.trim()); this.loadSessionsListUI(); } catch(err) { showToast(`Ошибка: ${err}`, "error"); void trackError("sessions.rename", err); } } });
+        exploreBtn.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); try { await openSessionFolder(s.id); } catch(err) { void trackError("sessions.openFolder", err); } });
+        deleteBtn.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); await this.deleteSessionUI(s.id); });
         this.el.sessionList.appendChild(div);
       }
     } catch(e) {

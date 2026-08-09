@@ -46,6 +46,11 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
                 cfg.show_folder_agents = v;
             }
         }
+        "last_agent" => {
+            if let Some(v) = value.as_str() {
+                cfg.last_agent = Some(v.to_string());
+            }
+        }
         "allow_error_reports" => {
             if let Some(v) = value.as_bool() {
                 cfg.allow_error_reports = v;

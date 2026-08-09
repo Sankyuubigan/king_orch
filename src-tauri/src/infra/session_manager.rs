@@ -24,6 +24,12 @@ pub struct ChatSession {
     pub created_at: Option<u64>,
     #[serde(default)]
     pub draft: String,
+    #[serde(default)]
+    pub title_manual: bool,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub agent: Option<String>,
     pub messages: Vec<ChatMessage>,
 }
 
@@ -85,23 +91,30 @@ pub fn save_session(
     title: &str,
     messages: Vec<ChatMessage>,
     draft: String,
+    model: Option<String>,
+    agent: Option<String>,
 ) -> Result<(), String> {
     let path = sessions_dir(app).join(format!("{}.json", id));
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
     let mut session_created_at = now;
+    let mut old_session: Option<ChatSession> = None;
 
     if path.exists() {
-        if let Ok((_, old_session)) = load_session(&path) {
-            session_created_at = old_session.created_at.unwrap_or(old_session.updated_at);
+        if let Ok((_, loaded)) = load_session(&path) {
+            session_created_at = loaded.created_at.unwrap_or(loaded.updated_at);
+            old_session = Some(loaded);
         }
     }
 
     let session = ChatSession {
         id: id.to_string(),
-        title: title.to_string(),
+        title: resolve_title(old_session.as_ref(), title),
         updated_at: now,
         created_at: Some(session_created_at),
         draft,
+        title_manual: old_session.as_ref().map_or(false, |s| s.title_manual),
+        model: model.or_else(|| old_session.as_ref().and_then(|s| s.model.clone())),
+        agent: agent.or_else(|| old_session.as_ref().and_then(|s| s.agent.clone())),
         messages,
     };
     save_session_raw(&path, &session)?;
@@ -110,6 +123,16 @@ pub fn save_session(
     let last_path = PathBuf::from("test").join("last_session.json");
     let _ = fs::create_dir_all("test");
     save_session_raw(&last_path, &session)
+}
+
+/// Решает, какое название сохранить. Если пользователь вручную переименовал
+/// сессию (title_manual == true) — ручное имя неприкосновенно. Иначе —
+/// авто-имя (обычно из первого сообщения пользователя).
+fn resolve_title(existing: Option<&ChatSession>, computed: &str) -> String {
+    match existing {
+        Some(s) if s.title_manual => s.title.clone(),
+        _ => computed.to_string(),
+    }
 }
 
 pub fn delete_session(app: &AppHandle, id: &str) -> Result<(), String> {
@@ -134,6 +157,12 @@ pub fn rename_session(app: &AppHandle, id: &str, new_title: &str) -> Result<(), 
     let (mut value, _) = load_session(&path)?;
     if let Some(obj) = value.as_object_mut() {
         obj.insert("title".to_string(), Value::String(new_title.to_string()));
+        // Пользователь поставил имя вручную — авто-переименование больше
+        // не должно трогать title при последующих save_session.
+        obj.insert(
+            "title_manual".to_string(),
+            Value::Bool(!new_title.trim().is_empty()),
+        );
     }
     let content =
         serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
@@ -151,4 +180,40 @@ pub fn open_session_folder(app: &AppHandle, _id: &str) -> Result<(), String> {
             .map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+fn sample_session(title: &str, title_manual: bool) -> ChatSession {
+    ChatSession {
+        id: "test".to_string(),
+        title: title.to_string(),
+        updated_at: 1000,
+        created_at: Some(1000),
+        draft: String::new(),
+        title_manual,
+        model: None,
+        agent: None,
+        messages: Vec::new(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_title_uses_computed_for_new_session() {
+        assert_eq!(resolve_title(None, "Вопрос юзера..."), "Вопрос юзера...");
+    }
+
+    #[test]
+    fn resolve_title_keeps_manual_title() {
+        let existing = sample_session("Мой любимый чат", true);
+        assert_eq!(resolve_title(Some(&existing), "Вопрос юзера..."), "Мой любимый чат");
+    }
+
+    #[test]
+    fn resolve_title_replaces_auto_title() {
+        let existing = sample_session("Новая сессия", false);
+        assert_eq!(resolve_title(Some(&existing), "Вопрос юзера..."), "Вопрос юзера...");
+    }
 }

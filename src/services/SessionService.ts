@@ -16,9 +16,11 @@ export async function loadSession(id: string): Promise<any> {
 export async function saveSession(
     id: string,
     messages: any[],
-    draft: string
+    draft: string,
+    model?: string,
+    agent?: string
 ): Promise<void> {
-    await invoke("save_session", { id, messages, draft });
+    await invoke("save_session", { id, messages, draft, model: model ?? null, agent: agent ?? null });
 }
 
 export async function deleteSession(id: string): Promise<void> {
