@@ -3,7 +3,7 @@ name: Docs Researcher
 description: Режим SEARCH (Read-Only). Ищет в интернете актуальную документацию, примеры кода и решения ошибок.
 mode: worker
 temperature: 0.2
-mcp_servers: ["ddg_search", "docs_fetcher"]
+mcp_servers: ["web_search", "docs_fetcher"]
 tools:
   write: false
   bash: false

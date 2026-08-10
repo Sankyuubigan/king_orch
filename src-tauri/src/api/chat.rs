@@ -90,6 +90,52 @@ fn parse_thought_from_log(msg: &str) -> Option<(String, String, f32)> {
     if thought.is_empty() { None } else { Some((agent_name, thought, time_sec)) }
 }
 
+#[derive(Serialize, Clone)]
+pub struct ToolCallEvent {
+    author: String,
+    tool: String,
+    /// Есть только в событии старта вызова (аргументы JSON)
+    args: Option<String>,
+    /// Есть только в событии результата (ужатый вывод инструмента)
+    result: Option<String>,
+}
+
+/// Парсинг логов вида:
+///   "🔧 Агент 'X' вызвал инструмент Y: args"           — старт вызова
+///   "🔧 Инструмент 'Y' (агент 'X') вернул результат ..." — результат
+fn parse_tool_from_log(msg: &str) -> Option<ToolCallEvent> {
+    let rest = msg.strip_prefix("🔧 ")?;
+
+    // Старт вызова: "Агент 'X' вызвал инструмент Y: args"
+    if let Some(pos) = rest.find(" вызвал инструмент ") {
+        let agent_name = rest[..pos].trim_matches('\'').to_string();
+        let after = &rest[pos + " вызвал инструмент ".len()..];
+        let (tool, args) = match after.split_once(": ") {
+            Some((t, a)) => (t.to_string(), Some(a.to_string())),
+            None => (after.to_string(), None),
+        };
+        return Some(ToolCallEvent { author: agent_name, tool, args, result: None });
+    }
+
+    // Результат: "Инструмент 'Y' (агент 'X') вернул результат (N символов): out"
+    if let Some(pos) = rest.find(" вернул результат (") {
+        let before = &rest[..pos]; // "Инструмент 'Y' (агент 'X')"
+        let q1 = before.find('\'')?;
+        let q2 = before[q1 + 1..].find('\'')? + q1 + 1;
+        let tool = before[q1 + 1..q2].to_string();
+        let agent_start = before.find("(агент '")?;
+        let agent_name = before[agent_start + 8..]
+            .trim_end_matches(')')
+            .trim_end_matches('\'')
+            .to_string();
+        let tail = &rest[pos + " вернул результат (".len()..];
+        let (_, output) = tail.split_once(" символов): ")?;
+        return Some(ToolCallEvent { author: agent_name, tool, args: None, result: Some(output.to_string()) });
+    }
+
+    None
+}
+
 #[tauri::command]
 pub async fn chat_request(
     app: AppHandle,
@@ -141,6 +187,9 @@ pub async fn chat_request(
                 "agent_thought",
                 serde_json::json!({ "author": agent_name, "thought": thought, "time_sec": time_sec }),
             );
+        }
+        if let Some(evt) = parse_tool_from_log(&msg) {
+            let _ = app_log.emit("agent_tool_call", evt);
         }
     };
 
@@ -318,7 +367,8 @@ pub fn get_prompt_preview(
             let workflows = crate::domain::load_workflows(&agents_dir)?;
             let wf = crate::domain::find_workflow_by_stem(&workflows, &agent_id)
                 .ok_or("Entry point не найден: нет ни .md агента, ни workflow с таким ID")?;
-            crate::domain::build_worst_agent_prompt(&agents, wf, &history)
+            let (system_prompt, _) = crate::domain::build_worst_agent_prompt(&agents, wf, &history);
+            system_prompt
         }
     };
 

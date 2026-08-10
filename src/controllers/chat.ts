@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { store } from "../store";
 import { bus } from "../events";
-import { createMessageElement, createSubcallElement, createToolCallElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, showToast } from "../ui";
+import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, showToast } from "../ui";
 import type { Role, MessageMenuCallbacks } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, CatalogEntry } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
@@ -459,7 +459,12 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
       const msg = store.chatHistory[i]; const uid = store.msgUidList[i];
       if (msg.type === 'thought' || msg.type === 'signal') {
         const content = msg.type === 'signal' ? `[Сигнал] ${msg.content}` : msg.content;
-        thoughtsItems.push(createThoughtElement(msg.author || 'Система', content, msg.time_sec));
+        const tool = this.parseToolThought(msg.content);
+        if (tool) {
+          thoughtsItems.push(createToolThoughtElement(msg.author || 'Система', tool.tool, tool.args, tool.result, true));
+        } else {
+          thoughtsItems.push(createThoughtElement(msg.author || 'Система', content, msg.time_sec));
+        }
         thoughtsUids.push(uid);
 
         if (msg.sub_calls && msg.sub_calls.length > 0) {
@@ -486,6 +491,22 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     }
     if (thoughtsItems.length > 0) this.el.chatHistory.appendChild(createThoughtsBlock(thoughtsItems, lastAssistantUid, this.thoughtMenuCallbacks, thoughtsUids));
     this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
+  }
+
+  /** Разбор сохранённой мысли-инструмента вида
+   *  "🔧 Вызван инструмент WebSearch: {...}\nРезультат: ..." */
+  private parseToolThought(content?: string): { tool: string; args: string; result: string } | null {
+    if (!content || !content.startsWith("🔧 Вызван инструмент ")) return null;
+    const resIdx = content.indexOf("\nРезультат: ");
+    if (resIdx === -1) return null;
+    const head = content.slice("🔧 Вызван инструмент ".length, resIdx);
+    const sp = head.indexOf(": ");
+    if (sp === -1) return null;
+    return {
+      tool: head.slice(0, sp),
+      args: head.slice(sp + 2),
+      result: content.slice(resIdx + "\nРезультат: ".length),
+    };
   }
 
   private showSubchat(subCall: any) {
@@ -883,6 +904,27 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
       if (this.thoughtDedupSet.has(dedupKey)) return;
       this.thoughtDedupSet.add(dedupKey);
       const item = createThoughtElement(payload.author, payload.thought, payload.time_sec);
+      if (store.activeThoughtsBlock) { addToThoughtsBlock(store.activeThoughtsBlock, item); }
+      else { store.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(store.activeThoughtsBlock); }
+      this.scrollToBottomIfNearEnd(this.el.chatHistory);
+    });
+
+    listen("agent_tool_call", (e) => {
+      const p = e.payload as { author: string, tool: string, args?: string, result?: string };
+      const key = `${p.author}:${p.tool}`;
+      if (p.result !== undefined) {
+        const item = store.activeThoughtsBlock?.querySelector(`[data-tool-key="${key}"]`);
+        if (item) {
+          item.querySelector(".tool-thought-status")?.remove();
+          const resultDiv = document.createElement("div");
+          resultDiv.className = "tool-thought-result";
+          resultDiv.textContent = `→ ${p.result}`;
+          item.appendChild(resultDiv);
+          this.scrollToBottomIfNearEnd(this.el.chatHistory);
+        }
+        return;
+      }
+      const item = createToolThoughtElement(p.author, p.tool, p.args);
       if (store.activeThoughtsBlock) { addToThoughtsBlock(store.activeThoughtsBlock, item); }
       else { store.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(store.activeThoughtsBlock); }
       this.scrollToBottomIfNearEnd(this.el.chatHistory);

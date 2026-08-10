@@ -318,8 +318,8 @@ pub fn build_worst_agent_prompt(
     agents: &[AgentProfile],
     wf: &WorkflowDef,
     history: &[ChatMessage],
-) -> String {
-    let worst_prompt = wf.nodes.iter()
+) -> (String, bool) {
+    let worst = wf.nodes.iter()
         .filter(|n| n.node_type == NodeType::LlmWorker)
         .filter_map(|n| n.agent.as_deref())
         .filter_map(|aid| agents.iter().find(|a| a.id == aid))
@@ -329,12 +329,12 @@ pub fn build_worst_agent_prompt(
             let mut sp = build_system_prompt(agent, history, has_tools, &tools, 2048);
             sp.push_str("\n\n");
             sp.push_str(prompt::CRITICAL_LIMIT_BLOCK);
-            sp
+            (sp, has_tools)
         })
-        .max_by_key(|sp| sp.chars().count());
+        .max_by_key(|(sp, _)| sp.chars().count());
 
     // Граф без llm_worker-узлов → пустой системный промпт (посчитаются только история + сообщение)
-    worst_prompt.unwrap_or_default()
+    worst.unwrap_or_else(|| (String::new(), false))
 }
 
 /// Результат чата: текст ответа + собранные sub-calls + обновлённый массив сообщений
@@ -354,6 +354,12 @@ pub struct ChatRunResult {
 
 /// Запас на спецтокены и JSON-разметку инструментов при оценке стартового контекста.
 const TOKEN_ESTIMATE_RESERVE: u32 = 512;
+
+/// Резерв на рабочий цикл инструментов (JSON tool call + результат(ы) за вызов).
+/// Для поисковых агентов выдача движка ~870 токенов: без этого резерва реальный
+/// промпт после tool call переполняет оценку, и цикл деградации выбрасывает из
+/// контекста вопрос пользователя и сам tool call (см. баг с выдуманной погодой).
+const TOOL_WORKING_BUDGET: u32 = 1024;
 
 /// Делитель «символы → токены» для эвристики стартового контекста.
 /// Латиница токенизируется ~3 симв/токен, кириллица — плотнее (~2 симв/токен):
@@ -414,22 +420,29 @@ where
     // (делитель зависит от языка промпта: ~3 симв/токен для латиницы, ~2 для
     // кириллицы) + запас на спецтокены/JSON и токены изображений. Точная подгонка
     // остаётся за циклом обрезки истории в run_agent_node (по точным /tokenize).
-    let worst_system_prompt = match &workflow_match {
+    let (worst_system_prompt, worst_has_tools) = match &workflow_match {
         Some(wf) => build_worst_agent_prompt(&agents, wf, &history),
         None => agents.iter().find(|a| a.id == agent_id)
-            .map(|agent| build_system_prompt(agent, &history, false, &[], max_gen_usize))
-            .unwrap_or_default(),
+            .map(|agent| {
+                let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
+                let tools = if has_tools { runtime::builtin_tools() } else { Vec::new() };
+                (build_system_prompt(agent, &history, has_tools, &tools, max_gen_usize), has_tools)
+            })
+            .unwrap_or_else(|| (String::new(), false)),
     };
     let history_text: String = llm_history(&history).iter().map(|m| m.content.as_str()).collect();
     let history_chars = history_text.chars().count();
     let total_chars = worst_system_prompt.chars().count() + history_chars + user_text.chars().count();
     let image_tokens = attachments.len() as u32 * 2048;
     let chars_per_token = estimate_chars_per_token(&worst_system_prompt, &history_text, &user_text);
-    let estimated_tokens = (total_chars / chars_per_token) as u32 + image_tokens + TOKEN_ESTIMATE_RESERVE;
+    let tool_budget = if worst_has_tools { TOOL_WORKING_BUDGET } else { 0 };
+    let estimated_tokens = (total_chars / chars_per_token) as u32 + image_tokens + TOKEN_ESTIMATE_RESERVE + tool_budget;
     let engine_ctx_limit = (estimated_tokens + max_gen_tokens + 128).min(context_size).max(2048);
     log_cb(format!(
-        "📐 Стартовый контекст движка: {} токенов (worst-case промпт ~{} символов, история ~{}, изображения ~{} токенов)",
-        engine_ctx_limit, worst_system_prompt.chars().count(), history_chars, image_tokens
+        "📐 Стартовый контекст движка: {} токенов (worst-case промпт ~{} символов{}, история ~{} симв., изображения ~{} токенов, резерв JSON {}, бюджет инструментов {}, max_gen {})",
+        engine_ctx_limit, worst_system_prompt.chars().count(),
+        if worst_has_tools { " с инструментами" } else { "" },
+        history_chars, image_tokens, TOKEN_ESTIMATE_RESERVE, tool_budget, max_gen_tokens
     ));
 
     let engine = if mmproj_path.is_some() {
@@ -855,6 +868,7 @@ let mut final_response = String::new();
 
             status_cb(format!("Выполнение {}...", tool_name), 60);
             let args_str = arguments.to_string();
+            log_cb(format!("🔧 Агент '{}' вызвал инструмент {}: {}", agent.name, tool_name, safe_truncate(&args_str, 200)));
             let mut tool_output = None;
             let mut tool_found = false;
 
@@ -945,6 +959,21 @@ let mut final_response = String::new();
                 }
             }
             let output = tool_output.unwrap_or_else(|| format!("Ошибка: Инструмент '{}' не найден.", tool_name));
+            log_cb(format!("🔧 Инструмент '{}' (агент '{}') вернул результат ({} символов): {}", tool_name, agent.name, output.chars().count(), safe_truncate(&output, 300)));
+
+            if depth == 0 && tool_found && tool_name != "emit_signal" {
+                let stored = safe_truncate(&output, THOUGHT_STORE_MAX_CHARS);
+                messages.push(ChatMessage {
+                    id: Some(format!("msg_{}", msg_counter)),
+                    msg_type: "thought".to_string(),
+                    content: format!("🔧 Вызван инструмент {}: {}\nРезультат: {}", tool_name, safe_truncate(&args_str, 200), stored),
+                    sub_calls: None,
+                    author: Some(agent.id.clone()),
+                    model: Some(extract_model_filename(&engine.model_path)),
+                });
+                *msg_counter += 1;
+            }
+
             if !tool_found || output.starts_with("Ошибка") {
                 consecutive_failed_tools += 1;
                 if consecutive_failed_tools >= 3 {
@@ -1238,9 +1267,10 @@ mod tests {
             "name: test\nnodes:\n  - id: n1\n    type: llm_worker\n    agent: short\n  - id: n2\n    type: llm_worker\n    agent: long\n  - id: n3\n    type: llm_worker\n    agent: medium\nedges: []\n",
         );
 
-        let prompt = build_worst_agent_prompt(&agents, &wf, &[]);
+        let (prompt, has_tools) = build_worst_agent_prompt(&agents, &wf, &[]);
         assert!(prompt.contains("очень длинный системный промпт"), "должен выбраться самый длинный агент");
         assert!(!prompt.contains("коротко"), "короткий агент не должен попасть в результат");
+        assert!(!has_tools, "у тестовых агентов нет инструментов");
     }
 
     #[test]
@@ -1250,7 +1280,7 @@ mod tests {
             "name: test\nnodes:\n  - id: sub\n    type: sub_workflow\n    workflow: other_graph\n  - id: w\n    type: llm_worker\n    agent: worker_a\nedges: []\n",
         );
 
-        let prompt = build_worst_agent_prompt(&agents, &wf, &[]);
+        let (prompt, _) = build_worst_agent_prompt(&agents, &wf, &[]);
         assert!(prompt.contains("промпт воркера А"));
     }
 
@@ -1261,7 +1291,41 @@ mod tests {
             "name: test\nnodes:\n  - id: r\n    type: return\nedges: []\n",
         );
 
-        let prompt = build_worst_agent_prompt(&agents, &wf, &[]);
+        let (prompt, has_tools) = build_worst_agent_prompt(&agents, &wf, &[]);
         assert_eq!(prompt, "");
+        assert!(!has_tools, "без llm_worker-узлов инструментов нет");
+    }
+
+    #[test]
+    fn legacy_agent_with_mcp_servers_gets_tools_in_prompt() {
+        let mut agent = make_agent("search", "ты поисковик");
+        agent.mcp_servers = vec!["web_search".to_string()];
+        let tools = runtime::builtin_tools();
+        let sp = build_system_prompt(&agent, &[], true, &tools, 2048);
+        assert!(sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"), "legacy-ветка: агент с mcp_servers обязан получать список инструментов");
+        assert!(sp.contains("emit_signal"));
+        assert!(sp.contains("[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]"));
+    }
+
+    #[test]
+    fn legacy_agent_without_tools_has_no_tools_section() {
+        let agent = make_agent("plain", "просто агент");
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048);
+        assert!(!sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"));
+        assert!(!sp.contains("[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]"));
+    }
+
+    #[test]
+    fn worst_agent_prompt_marks_tools_when_worker_has_mcp_servers() {
+        let mut agent = make_agent("search", "промпт поисковика");
+        agent.mcp_servers = vec!["web_search".to_string(), "docs_fetcher".to_string()];
+        let wf = parse_wf(
+            "name: test\nnodes:\n  - id: n1\n    type: llm_worker\n    agent: search\nedges: []\n",
+        );
+
+        let (prompt, has_tools) = build_worst_agent_prompt(&[agent], &wf, &[]);
+        assert!(has_tools, "агент с mcp_servers даёт has_tools=true → run_chat добавит TOOL_WORKING_BUDGET к оценке контекста");
+        assert!(prompt.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"));
+        assert!(prompt.contains("emit_signal"));
     }
 }

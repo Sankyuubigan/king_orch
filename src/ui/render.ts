@@ -68,8 +68,45 @@ export function createSubcallElement(call: any, onSubcallClick: (call: any) => v
   return callDiv;
 }
 
-export function createToolCallElement(toolName: string, args: string, result: string): HTMLDivElement {
+/** Компактный элемент вызова инструмента для блока мыслей (реалтайм и история).
+ *  Событие-вызов создаёт элемент со статусом ⏳, событие-результат дополняет его. */
+export function createToolThoughtElement(
+  author: string,
+  tool: string,
+  args?: string,
+  result?: string,
+  ready = false
+): HTMLDivElement {
   const div = document.createElement("div");
+  div.className = "message message-thought tool-thought";
+  div.dataset.toolKey = `${author}:${tool}`;
+
+  const text = document.createElement("span");
+  text.textContent = `🔧 ${author} → ${tool}`;
+  div.appendChild(text);
+
+  if (args !== undefined) {
+    const argsDiv = document.createElement("div");
+    argsDiv.className = "tool-thought-args";
+    argsDiv.textContent = args;
+    div.appendChild(argsDiv);
+  }
+
+  if (result !== undefined) {
+    const resultDiv = document.createElement("div");
+    resultDiv.className = "tool-thought-result";
+    resultDiv.textContent = `→ ${result}`;
+    div.appendChild(resultDiv);
+  } else if (!ready) {
+    const status = document.createElement("span");
+    status.className = "tool-thought-status";
+    status.textContent = " ⏳";
+    div.appendChild(status);
+  }
+  return div;
+}
+
+export function createToolCallElement(toolName: string, args: string, result: string): HTMLDivElement {  const div = document.createElement("div");
   div.className = "tool-call-block message";
   
   const header = document.createElement("div");

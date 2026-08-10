@@ -20,13 +20,19 @@
     "tokenizer_id": "ibm-granite/granite-3.0-8b-instruct"
   },
   {
+    "name": "granite-4.1-8b",
+    "size_gb": "4.85",
+    "download_url": "https://huggingface.co/mradermacher/granite4.1-8B-Heretic-i1-GGUF/resolve/main/granite4.1-8B-Heretic.i1-IQ4_NL.gguf?download=true",
+    "tokenizer_id": "ibm-granite/granite-4.1-8b"
+  },
+  {
     "name": "ternary-bonsai-27b",
     "size_gb": "7.1",
     "download_url": "https://huggingface.co/prism-ml/Ternary-Bonsai-27B-gguf/resolve/main/Ternary-Bonsai-27B-Q2_g64.gguf?download=true",
     "tokenizer_id": "Qwen/Qwen3.6-27B"
   },
   {
-    "name": "bonsai-27b-q1_0",
+    "name": "bonsai-27b",
     "size_gb": "3.6",
     "download_url": "https://huggingface.co/prism-ml/Bonsai-27B-gguf/resolve/main/Bonsai-27B-Q1_0.gguf?download=true",
     "tokenizer_id": "Qwen/Qwen3.6-27B"
@@ -36,5 +42,23 @@
     "size_gb": "2.6",
     "download_url": "https://huggingface.co/FadedRedStar/gemma-4-E2B-it-qat-q4_0-heretic-GGUF/resolve/main/gemma-4-E2B-it-qat-q4_0-heretic-Q4_0_PURE.gguf?download=true",
     "tokenizer_id": "Xenova/gemma-tokenizer"
+  },
+  {
+    "name": "nanbeige-4.2-3b",
+    "size_gb": "2.6",
+    "download_url": "https://huggingface.co/WaveCut/Nanbeige4.2-3B-heretic-GGUF/resolve/main/Nanbeige4.2-3B-heretic-Q4_K_M.gguf?download=true",
+    "tokenizer_id": "Nanbeige/Nanbeige4.2-3B"
+  },
+  {
+    "name": "instella-moe-16b",
+    "size_gb": "10.5",
+    "download_url": "https://huggingface.co/DevQuasar/amd.Instella-MoE-16B-A3B-Think-GGUF/resolve/main/Q4_K_M/amd.Instella-MoE-16B-A3B-Think.f16.gguf.Q4_K_M.gguf?download=true",
+    "tokenizer_id": "amd/Instella-MoE-16B-A3B-Think"
+  },
+  {
+    "name": "lfm2.5-8b-a1b",
+    "size_gb": "4.51",
+    "download_url": "https://huggingface.co/FadedRedStar/LFM2.5-8B-A1B-heretic-imatrix-GGUF/resolve/main/LFM2.5-8B-A1B-heretic-IQ4_NL-imatrix.gguf?download=true",
+    "tokenizer_id": "LiquidAI/LFM2.5-8B-A1B"
   }
 ]

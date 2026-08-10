@@ -1,7 +1,7 @@
 // 🚪 ПУБЛИЧНЫЙ КОНТРАКТ UI-модуля
 // Контроллеры могут импортировать ТОЛЬКО отсюда
 
-export { createMessageElement, createThoughtElement, createSubcallElement, createToolCallElement } from './render'
+export { createMessageElement, createThoughtElement, createToolThoughtElement, createSubcallElement, createToolCallElement } from './render'
 export type { Role } from './render'
 
 export { createThoughtsBlock, addToThoughtsBlock } from './thoughts-block'
