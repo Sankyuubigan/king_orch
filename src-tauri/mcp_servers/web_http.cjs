@@ -21,6 +21,29 @@ function decodeBody(buf, headers) {
     return buf;
 }
 
+// Классификация сетевых ошибок по фазе соединения, чтобы в логах была точная причина:
+//   connect — TCP ещё не установлен (DNS/маршрут)
+//   tls     — TCP установлен, TLS-рукопожатие не завершилось (drop/фильтр на TLS)
+//   http    — TLS установлен, но сервер не отвечает на запрос (фильтрация приложения)
+function classifyNetworkError(err, hostname, phase, timedOut) {
+    const code = err && err.code;
+    let out;
+    if (timedOut) {
+        if (phase === 'connect') out = new Error(`Таймаут соединения (TCP) с '${hostname}' — сервер не отвечает`);
+        else if (phase === 'tls') out = new Error(`Таймаут на TLS-рукопожатии с '${hostname}' — сервер не отвечает на TLS (вероятна региональная блокировка: домен не обслуживает IP из РФ)`);
+        else out = new Error(`Соединение с '${hostname}' установлено (TLS OK), но сервер не отвечает на запрос (вероятна региональная фильтрация на уровне приложения)`);
+    } else if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') out = new Error(`Не удалось разрешить DNS для '${hostname}' (${code})`);
+    else if (code === 'ECONNREFUSED') out = new Error(`Соединение с '${hostname}' отклонено (${code})`);
+    else if (code === 'ENETUNREACH' || code === 'EHOSTUNREACH') out = new Error(`Сеть недоступна до '${hostname}' (${code})`);
+    else if (code === 'ETIMEDOUT') out = new Error(`Таймаут соединения с '${hostname}' (${code})`);
+    else if (code === 'ECONNRESET' && phase === 'tls') out = new Error(`TLS-рукопожатие с '${hostname}' оборвано (ECONNRESET) — соединение сброшено фильтром`);
+    else if (code === 'ECONNRESET') out = new Error(`Соединение с '${hostname}' разорвано до завершения ответа (${code})`);
+    else if (code === 'EPROTO' || (typeof code === 'string' && code.startsWith('ERR_SSL'))) out = new Error(`Ошибка TLS с '${hostname}' (${code})`);
+    else out = err;
+    out.phase = phase; // фаза соединения для логики авто-retry с другим TLS-профилем
+    return out;
+}
+
 /**
  * HTTP-запрос с ручными редиректами (каждый хоп проходит через opts.checkUrl).
  * @param {string} url
@@ -42,43 +65,71 @@ async function request(url, opts = {}) {
         const lib = isHttps ? https : http;
         const cookieHeader = [...cookieJar.values()].join('; ');
 
-        const result = await new Promise((resolve, reject) => {
-            const req = lib.request({
-                hostname: parsed.hostname,
-                port: parsed.port || undefined,
-                path: parsed.pathname + parsed.search,
-                method,
-                headers: {
-                    'User-Agent': opts.userAgent || DEFAULT_UA,
-                    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-                    'Accept-Encoding': 'gzip, deflate, br',
-                    'Accept-Language': 'ru,en;q=0.8',
-                    ...(cookieHeader ? { 'Cookie': cookieHeader } : {}),
-                    ...(opts.headers || {}),
-                },
-                timeout: timeoutMs,
-            }, (res) => {
-                const chunks = [];
-                let size = 0;
-                let tooLarge = false;
-                res.on('data', (c) => {
-                    size += c.length;
-                    if (size > maxBytes) { tooLarge = true; res.destroy(); return; }
-                    chunks.push(c);
+        // Авто-retry на TLS-фазе: некоторые серверы/фильтры (например, searx.space)
+        // периодически режут дефолтный TLS-фингерпринт Node (ECONNRESET на рукопожатии).
+        // Пробуем фиксированные профили TLS 1.3 и TLS 1.2, прежде чем сдаться.
+        const tlsProfiles = [null, { minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' }, { minVersion: 'TLSv1.2', maxVersion: 'TLSv1.2' }];
+        let lastErr = null;
+        let result = null;
+        for (const tlsOpts of tlsProfiles) {
+            try {
+                result = await new Promise((resolve, reject) => {
+                    let phase = 'connect'; // connect → tls (для https) → http
+                    let timedOut = false;
+                    const req = lib.request({
+                        hostname: parsed.hostname,
+                        port: parsed.port || undefined,
+                        path: parsed.pathname + parsed.search,
+                        method,
+                        ...(isHttps && tlsOpts ? tlsOpts : {}),
+                        headers: {
+                            'User-Agent': opts.userAgent || DEFAULT_UA,
+                            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+                            'Accept-Encoding': 'gzip, deflate, br',
+                            'Accept-Language': 'ru,en;q=0.8',
+                            ...(cookieHeader ? { 'Cookie': cookieHeader } : {}),
+                            ...(opts.headers || {}),
+                        },
+                        timeout: timeoutMs,
+                    }, (res) => {
+                        const chunks = [];
+                        let size = 0;
+                        let tooLarge = false;
+                        res.on('data', (c) => {
+                            size += c.length;
+                            if (size > maxBytes) { tooLarge = true; res.destroy(); return; }
+                            chunks.push(c);
+                        });
+                        res.on('end', () => {
+                            if (tooLarge) { reject(new Error(`Ответ больше лимита ${maxBytes} байт`)); return; }
+                            resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) });
+                        });
+                    });
+                    // Отслеживаем фазу соединения, чтобы точно назвать причину таймаута/сброса.
+                    req.on('socket', (socket) => {
+                        if (isHttps) {
+                            socket.on('connect', () => { if (phase === 'connect') phase = 'tls'; });
+                            socket.on('secureConnect', () => { phase = 'http'; });
+                        } else {
+                            socket.on('connect', () => { phase = 'http'; });
+                        }
+                    });
+                    // Жёсткий таймаут: destroy наверняка (срабатывает и при зависшем DNS/connect-фазе).
+                    const killer = setTimeout(() => { timedOut = true; req.destroy(new Error('Таймаут запроса')); }, timeoutMs + 1000);
+                    req.on('timeout', () => { timedOut = true; req.destroy(new Error('Таймаут запроса')); });
+                    req.on('close', () => clearTimeout(killer));
+                    req.on('error', (err) => reject(classifyNetworkError(err, parsed.hostname, phase, timedOut)));
+                    if (opts.body !== undefined && opts.body !== null) req.write(opts.body);
+                    req.end();
                 });
-                res.on('end', () => {
-                    if (tooLarge) { reject(new Error(`Ответ больше лимита ${maxBytes} байт`)); return; }
-                    resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) });
-                });
-            });
-            // Жёсткий таймаут: destroy наверняка (срабатывает и при зависшем DNS/connect-фазе).
-            const killer = setTimeout(() => req.destroy(new Error('Таймаут запроса')), timeoutMs + 1000);
-            req.on('timeout', () => req.destroy(new Error('Таймаут запроса')));
-            req.on('close', () => clearTimeout(killer));
-            req.on('error', (err) => reject(err));
-            if (opts.body !== undefined && opts.body !== null) req.write(opts.body);
-            req.end();
-        });
+                break;
+            } catch (err) {
+                lastErr = err;
+                if (!isHttps || err.phase !== 'tls' || !err.message) break; // только TLS-фаза https лечится профилями
+                await new Promise((r) => setTimeout(r, 300));
+            }
+        }
+        if (!result) throw lastErr;
 
         const setCookies = result.headers['set-cookie'];
         if (Array.isArray(setCookies)) {

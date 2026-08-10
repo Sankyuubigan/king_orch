@@ -23,6 +23,8 @@ pub struct AgentProfile {
     pub single_report: bool,
     #[serde(default)]
     pub tools: Vec<String>,
+    #[serde(default)]
+    pub current_date: bool,
 }
 
 /// Единая точка входа в UI — может быть .md агентом или YAML графом
@@ -99,6 +101,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             let mut description = String::new();
             let mut visible = false;
             let mut single_report = false;
+            let mut current_date = false;
             let mut mcp_servers = Vec::new();
             let mut tools = Vec::new();
             for line in frontmatter.lines() {
@@ -107,10 +110,11 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 else if line.starts_with("description:") { description = line["description:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string(); }
                 else if line.starts_with("visible:") { visible = line["visible:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("single_report:") { single_report = line["single_report:".len()..].trim().parse().unwrap_or(false); }
+                else if line.starts_with("current_date:") { current_date = line["current_date:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("mcp_servers:") { if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["mcp_servers:".len()..].trim()) { mcp_servers = parsed; } }
                 else if line.starts_with("tools:") { if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["tools:".len()..].trim()) { tools = parsed; } }
             }
-            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, single_report, tools }); }
+            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, single_report, tools, current_date }); }
         }
     }
     None

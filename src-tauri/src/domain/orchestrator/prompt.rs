@@ -1,11 +1,29 @@
 use crate::domain::agent_manager::AgentProfile;
 use crate::infra::ChatMessage;
+use chrono::Datelike;
 
 const TRUTH_PROTOCOL: &str = "ОТВЕЧАЙ ТОЛЬКО ПРАВДУ. Если не знаешь, скажи 'я не знаю'. Запрещено выдумывать факты, давать ложные утверждения или строить догадки. Приоритет — точность, а не скорость.\nRespond strictly based on verified facts. If you do not have sufficient information to answer confidently, you must output exactly 'я не знаю' or 'I lack the data' without any guessing.";
 
 /// Глобальное ограничение для всех агентов (единый источник — SSOT).
 /// Дублируется на этапе сборки worst-case промпта для оценки контекста.
 pub const CRITICAL_LIMIT_BLOCK: &str = "Твой максимальный лимит генерации строго ограничен. Твои внутренние размышления должны состоять максимум из 3-4 предложений, после чего сразу должен идти финальный ответ или вызов.";
+
+/// Блок текущей даты — инжектится в промпт агентов с флагом `current_date: true`.
+pub fn current_date_block() -> String {
+    const WEEKDAYS: [&str; 7] = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"];
+    const MONTHS: [&str; 12] = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
+    let now = chrono::Local::now();
+    let weekday = WEEKDAYS[now.weekday().num_days_from_monday() as usize];
+    let month = MONTHS[now.month0() as usize];
+    format!(
+        "[ТЕКУЩАЯ ДАТА]\nСегодня {}, {} {} {}. Текущее местное время: {}.\nЭто ЕДИНСТВЕННЫЙ источник истины о текущей дате и времени. Не полагайся на свои внутренние «знания» о том, какой сейчас год/месяц — они устарели. При оценке актуальности информации, расчёте дат и упоминании «сегодня» ориентируйся строго на эту дату.",
+        weekday,
+        now.day(),
+        month,
+        now.year(),
+        now.format("%H:%M"),
+    )
+}
 
 pub fn build_system_prompt(
     agent: &AgentProfile,
@@ -15,6 +33,11 @@ pub fn build_system_prompt(
     max_gen_tokens: usize,
 ) -> String {
     let mut sp = agent.system_prompt.clone();
+
+    // Агентам с флагом current_date: true инжектим актуальную дату/время при каждом вызове.
+    if agent.current_date {
+        sp = format!("{}\n\n{}", current_date_block(), sp);
+    }
     
     // ДОБАВЛЯЕМ ЛИМИТ ГЕНЕРАЦИИ ДЛЯ ЗАЩИТЫ ОТ ОБРЫВОВ
     sp.push_str(&format!("\n\n[ЛИМИТ ОТВЕТА]\nТвой жесткий лимит генерации — {} токенов. Строй свой ответ так, чтобы гарантированно успеть завершить мысль. Писать длинно НЕ обязательно. Если можешь ответить кратко — отвечай кратко.", max_gen_tokens));

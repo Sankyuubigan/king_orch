@@ -23,6 +23,16 @@ function withDeadline(promise, ms, name) {
 
 const UA_CHROME_112 = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36';
 
+// Человекочитаемое описание HTTP-ошибок движков (пишется в лог [ENGINE]).
+function httpStatusError(status) {
+    if (status === 429) return 'лимит запросов (rate-limit) — попробуй позже';
+    if (status === 521) return 'антибот-защита сайта (521)';
+    if (status === 403) return 'доступ запрещён (403) — вероятна блокировка сервисом';
+    if (status === 404) return 'HTTP 404 (страница/эндпоинт не найден)';
+    if (status === 503) return 'сервис временно недоступен (503)';
+    return 'HTTP ' + status;
+}
+
 // ─────────────────────────── DuckDuckGo (primary) ───────────────────────────
 
 // DDG при автоматизированных запросах отдаёт антибот-страницу "anomaly" (202, JS-challenge).
@@ -85,7 +95,7 @@ async function searchDuckDuckGo(query, limit) {
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Referer': 'https://html.duckduckgo.com/' },
                     timeoutMs: 10000,
                 });
-                if (res.status !== 200) throw new Error('HTTP ' + res.status);
+                if (res.status !== 200) throw new Error(httpStatusError(res.status));
                 if (isAnomaly(res.status, res.text)) { throw new Error('аномальная страница (anomaly)'); }
                 for (const block of parseBlocksByClass(res.text, 'result')) {
                     const a = block.match(/class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
@@ -112,7 +122,7 @@ async function searchDuckDuckGo(query, limit) {
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Referer': 'https://lite.duckduckgo.com/' },
                 timeoutMs: 10000,
             });
-            if (res.status !== 200) throw new Error('HTTP ' + res.status);
+            if (res.status !== 200) throw new Error(httpStatusError(res.status));
             if (isAnomaly(res.status, res.text)) { throw new Error('аномальная страница (anomaly)'); }
             const linkRe = /<a[^>]+class='result-link'[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>|<a[^>]+href="([^"]+)"[^>]+class='result-link'[^>]*>([\s\S]*?)<\/a>/g;
             let m;
@@ -152,7 +162,7 @@ async function searchBrave(query, limit) {
             timeoutMs: 10000,
         }
     );
-    if (res.status !== 200) throw new Error('HTTP ' + res.status);
+    if (res.status !== 200) throw new Error(httpStatusError(res.status));
     if (/verify you are human|unusual traffic|access denied/i.test(res.text) && !/data-pos="/.test(res.text)) {
         throw new Error('заблокирован (капча)');
     }
@@ -184,7 +194,7 @@ async function searchBrave(query, limit) {
 
 async function searchStartpage(query, limit) {
     const home = await request('https://www.startpage.com/', { timeoutMs: 10000 });
-    if (home.status !== 200) throw new Error('HTTP ' + home.status);
+    if (home.status !== 200) throw new Error(httpStatusError(home.status));
     // Startpage закрыт Anubis PoW-челленджем (JS proof-of-work) — без браузера не пройти.
     if (home.text.includes('anubis_challenge') || home.text.includes('anubis')) {
         throw new Error('Anubis PoW-челлендж — нужен браузер, движок не работает без него');
@@ -204,7 +214,7 @@ async function searchStartpage(query, limit) {
         headers: postHeaders,
         timeoutMs: 10000,
     });
-    if (res.status !== 200) throw new Error('HTTP ' + res.status);
+    if (res.status !== 200) throw new Error(httpStatusError(res.status));
 
     // Интерстициальная страница: первый запрос возвращает скрипт с payload, который надо отправить ещё раз.
     const dataMatch = res.text.match(/var data = (\{[\s\S]*?\});/);
@@ -219,7 +229,7 @@ async function searchStartpage(query, limit) {
                 headers: postHeaders,
                 timeoutMs: 10000,
             });
-            if (res.status !== 200) throw new Error('HTTP ' + res.status);
+            if (res.status !== 200) throw new Error(httpStatusError(res.status));
         }
     }
     if (/\/sp\/captcha|verify you are human|unusual traffic/i.test(res.text)) {
@@ -261,7 +271,7 @@ async function searchSogou(query, limit) {
         `https://www.sogou.com/web?query=${encodeURIComponent(query)}&page=1&ie=utf8`,
         { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0 Safari/537.36', 'Referer': 'https://www.sogou.com/' }, timeoutMs: 10000 }
     );
-    if (res.status !== 200) throw new Error('HTTP ' + res.status);
+    if (res.status !== 200) throw new Error(httpStatusError(res.status));
     if (/antispider|请输入验证码|访问过于频繁|搜狗搜索验证/i.test(res.text)) {
         throw new Error('заблокирован (челлендж)');
     }
@@ -294,7 +304,7 @@ async function searchBaidu(query, limit) {
         `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&pn=0&ie=utf-8&tn=baidu`,
         { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36', 'Accept-Language': 'zh-CN,zh;q=0.9' }, timeoutMs: 10000 }
     );
-    if (res.status !== 200) throw new Error('HTTP ' + res.status);
+    if (res.status !== 200) throw new Error(httpStatusError(res.status));
     if (/wappass|百度安全验证|访问过于频繁|请输入验证码/i.test(res.text)) {
         throw new Error('заблокирован (антибот)');
     }
@@ -343,7 +353,7 @@ async function searchBing(query, limit) {
     try {
         res = await request(
             `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=10&setlang=ru-ru`,
-            { headers, timeoutMs: 10000 }
+            { headers, timeoutMs: 8000 }
         );
     } catch (e) {
         res = null;
@@ -351,10 +361,10 @@ async function searchBing(query, limit) {
     if (!res || res.status !== 200) {
         res = await request(
             `https://cn.bing.com/search?q=${encodeURIComponent(query)}&count=10&setlang=ru-ru&ensearch=0`,
-            { headers, timeoutMs: 10000 }
+            { headers, timeoutMs: 8000 }
         );
     }
-    if (res.status !== 200) throw new Error('HTTP ' + res.status);
+    if (res.status !== 200) throw new Error(httpStatusError(res.status));
     if (isBingBlocked(res.text)) throw new Error('заблокирован (капча) — попробуйте позже');
     const out = [];
     for (const block of parseBlocksByClass(res.text, 'b_algo')) {
@@ -380,7 +390,7 @@ async function searchBing(query, limit) {
 async function searchJuejin(query, limit) {
     const url = `https://api.juejin.cn/search_api/v1/search?aid=2608&uuid=7259393293459605051&spider=0&query=${encodeURIComponent(query)}&id_type=0&cursor=0&limit=${Math.min(limit, 20)}&search_type=0&sort_type=0&version=1`;
     const res = await request(url, { headers: { 'Host': 'api.juejin.cn', 'User-Agent': UA_CHROME_112, 'Accept': 'application/json' }, timeoutMs: 10000 });
-    if (res.status !== 200) throw new Error('HTTP ' + res.status);
+    if (res.status !== 200) throw new Error(httpStatusError(res.status));
     let json;
     try { json = JSON.parse(res.text); } catch { throw new Error('невалидный JSON'); }
     if (json.err_no !== 0) throw new Error('err_no=' + json.err_no);
@@ -406,7 +416,7 @@ async function searchCsdn(query, limit) {
         headers: { 'User-Agent': 'Apifox/1.0.0 (https://apifox.com)', 'Host': 'so.csdn.net', 'Accept': 'application/json' },
         timeoutMs: 10000,
     });
-    if (res.status !== 200) throw new Error('HTTP ' + res.status);
+    if (res.status !== 200) throw new Error(httpStatusError(res.status));
     let json;
     try { json = JSON.parse(res.text); } catch { throw new Error('невалидный JSON'); }
     const out = [];
@@ -440,7 +450,7 @@ async function searchExa(query, limit) {
             'Accept': '*/*',
         },
     });
-    if (res.status !== 200) throw new Error('HTTP ' + res.status);
+    if (res.status !== 200) throw new Error(httpStatusError(res.status));
     let json;
     try { json = JSON.parse(res.text); } catch { throw new Error('невалидный JSON'); }
     const out = [];
@@ -467,7 +477,7 @@ const ENGINES = {
     csdn: searchCsdn,
     exa: searchExa,
 };
-const DEFAULT_ORDER = ['duckduckgo', 'brave', 'startpage', 'sogou', 'juejin', 'csdn', 'baidu', 'bing', 'exa'];
+const DEFAULT_ORDER = ['brave', 'duckduckgo', 'startpage', 'sogou', 'juejin', 'csdn', 'baidu', 'bing', 'exa'];
 
 function dedupe(results) {
     const seen = new Set();

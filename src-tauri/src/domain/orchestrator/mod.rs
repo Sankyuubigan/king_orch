@@ -1240,6 +1240,7 @@ mod tests {
             folder: None,
             single_report: false,
             tools: Vec::new(),
+            current_date: false,
         }
     }
 
@@ -1313,6 +1314,25 @@ mod tests {
         let sp = build_system_prompt(&agent, &[], false, &[], 2048);
         assert!(!sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"));
         assert!(!sp.contains("[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]"));
+    }
+
+    #[test]
+    fn agent_with_current_date_flag_gets_date_block() {
+        let mut agent = make_agent("dated", "поисковый агент");
+        agent.current_date = true;
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048);
+        assert!(sp.contains("[ТЕКУЩАЯ ДАТА]"), "агент с current_date: true обязан получать блок даты");
+        assert!(sp.starts_with("[ТЕКУЩАЯ ДАТА]"), "блок даты должен быть в начале промпта");
+        assert!(sp.contains("Сегодня"), "блок обязан содержать слово «Сегодня»");
+        assert!(sp.contains("ЕДИНСТВЕННЫЙ источник истины"));
+        assert!(sp.contains("поисковый агент"), "тело агента сохраняется после блока даты");
+    }
+
+    #[test]
+    fn agent_without_current_date_flag_has_no_date_block() {
+        let agent = make_agent("plain", "обычный агент");
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048);
+        assert!(!sp.contains("[ТЕКУЩАЯ ДАТА]"), "агент без флага не должен получать блок даты");
     }
 
     #[test]

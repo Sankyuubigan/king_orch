@@ -90,6 +90,12 @@ fn ensure_mcp_deps<L: Fn(String) + Clone + Send + Sync>(
             }
         }
     }
+    // searxng_search хранит кеш пула инстансов (searxng_cache.json) в bins_dir.
+    if mcp_name == "searxng_search" {
+        if let Some(bins_str) = bins_dir.to_str() {
+            return vec![("KING_ORCH_BINS_DIR", bins_str.to_string())];
+        }
+    }
     vec![]
 }
 
