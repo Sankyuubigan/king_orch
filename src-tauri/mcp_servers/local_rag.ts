@@ -1,8 +1,9 @@
-const fs = require('fs');
-const path = require('path');
-const { createMcpServer } = require('./mcp_base.cjs');
+// MCP-сервер локального RAG-индекса кода (Deno). Инструменты: index_directory, search_code.
+import fs from "node:fs";
+import path from "node:path";
+import { createMcpServer } from "./mcp_base.ts";
 
-let indexedFiles = [];
+let indexedFiles: { path: string; chunks: { text: string; lineStart: number }[] }[] = [];
 
 createMcpServer({
     name: "local-rag-mcp",
@@ -33,10 +34,10 @@ createMcpServer({
     }
 });
 
-function indexDirectory(dirPath) {
+function indexDirectory(dirPath: string): number {
     indexedFiles = [];
-    const walk = (dir) => {
-        let files;
+    const walk = (dir: string) => {
+        let files: string[];
         try { files = fs.readdirSync(dir); } catch (e) { return; }
         for (const file of files) {
             const fullPath = path.join(dir, file);
@@ -51,7 +52,7 @@ function indexDirectory(dirPath) {
                     try {
                         const content = fs.readFileSync(fullPath, 'utf8');
                         const lines = content.split('\n');
-                        const chunks = [];
+                        const chunks: { text: string; lineStart: number }[] = [];
                         const chunkSize = 40;
                         const overlap = 10;
                         for (let i = 0; i < lines.length; i += (chunkSize - overlap)) {
@@ -68,10 +69,10 @@ function indexDirectory(dirPath) {
     return indexedFiles.length;
 }
 
-function searchCode(query) {
+function searchCode(query: string) {
     const queryTerms = query.toLowerCase().split(/\s+/).filter(t => t.length > 1);
     if (queryTerms.length === 0) return [];
-    const results = [];
+    const results: { path: string; lineStart: number; text: string; score: number }[] = [];
     for (const file of indexedFiles) {
         for (const chunk of file.chunks) {
             let score = 0;

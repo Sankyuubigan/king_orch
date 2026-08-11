@@ -1,6 +1,7 @@
-const fs = require('fs');
-const path = require('path');
-const { createMcpServer } = require('./mcp_base.cjs');
+// MCP-сервер записи файлов (Deno). Инструмент: Write.
+import fs from "node:fs";
+import path from "node:path";
+import { createMcpServer } from "./mcp_base.ts";
 
 createMcpServer({
     name: "fs-write-mcp",

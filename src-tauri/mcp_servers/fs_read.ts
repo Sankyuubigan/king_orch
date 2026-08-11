@@ -1,6 +1,7 @@
-const fs = require('fs');
-const path = require('path');
-const { createMcpServer } = require('./mcp_base.cjs');
+// MCP-сервер чтения файлов (Deno). Инструменты: Read, LS, Grep, Glob.
+import fs from "node:fs";
+import path from "node:path";
+import { createMcpServer } from "./mcp_base.ts";
 
 createMcpServer({
     name: "fs-read-mcp",
@@ -83,11 +84,11 @@ createMcpServer({
     }
 });
 
-function globDir(dir, pattern) {
-    let results = [];
+function globDir(dir: string, pattern: string): string[] {
+    let results: string[] = [];
     const regexPattern = '^' + pattern.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$';
     const regex = new RegExp(regexPattern, 'i');
-    
+
     try {
         const items = fs.readdirSync(dir);
         for (const item of items) {

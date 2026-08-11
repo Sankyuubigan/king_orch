@@ -143,9 +143,10 @@ pub struct ChatMessage {
 ## 7. MCP-серверы
 
 - Расположение: `src-tauri/mcp_servers/`
-- Формат: `.cjs` (Node.js) или `.ts` (Deno)
+- Формат: `.ts` (Deno, один рантайм для всех серверов)
 - Протокол: JSON-RPC 2.0 через stdin/stdout
-- Базовый фреймворк: `mcp_base.cjs`
+- Базовый фреймворк: `mcp_base.ts`
+- Права Deno выдаются гранулярно per-server (`runtime.rs` → `deno_permissions`)
 
 ## 8. Сборка и тестирование (специфика King Orch)
 

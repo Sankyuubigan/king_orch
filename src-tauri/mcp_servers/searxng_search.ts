@@ -9,13 +9,13 @@
 // кеш рабочих инстансов (searxng_cache.json).
 //
 // Логирование — в stderr (попадает в лог приложения как [MCP Stderr]).
-const fs = require('fs');
-const path = require('path');
-const os = require('os');
-const { createMcpServer } = require('./mcp_base.cjs');
-const {
+import fs from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { createMcpServer } from "./mcp_base.ts";
+import {
     request, stripTags, normalizeHttpUrl,
-} = require('./web_http.cjs');
+} from "./web_http.ts";
 
 const SEARX_SPACE_URL = 'https://searx.space/data/instances.json';
 // Резервные источники списка инстансов (на случай недоступности searx.space):
@@ -59,7 +59,7 @@ const COOLDOWN_MS = 5 * 60 * 1000;              // кулдаун после о�
 const HARD_COOLDOWN_MS = 30 * 60 * 1000;        // после капчи/челленджа
 
 // Браузерные заголовки: без них инстансы редиректят /search → / (index).
-const BROWSER_HEADERS = {
+const BROWSER_HEADERS: Record<string, string> = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
     'Referer': 'https://www.google.com/',
     'sec-ch-ua': '"Chromium";v="126", "Google Chrome";v="126", "Not:A-Brand";v="99"',
@@ -72,28 +72,28 @@ const BROWSER_HEADERS = {
     'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
 };
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-function withDeadline(promise, ms, name) {
-    let timer;
-    const timeout = new Promise((_, reject) => {
+function withDeadline<T>(promise: Promise<T>, ms: number, name: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout>;
+    const timeout = new Promise<T>((_, reject) => {
         timer = setTimeout(() => reject(new Error('инстанс завис (дедлайн)')), ms);
     });
     return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
-function searxLog(status, extra) {
+function searxLog(status: string, extra?: string) {
     console.error(`[SEARX] ${status}${extra ? ' — ' + extra : ''}`);
 }
 
 // ─────────────────────────── Кеш рабочих инстансов ───────────────────────────
 
-function cachePath() {
-    const dir = process.env.KING_ORCH_BINS_DIR || os.tmpdir();
+function cachePath(): string {
+    const dir = Deno.env.get("KING_ORCH_BINS_DIR") || os.tmpdir();
     return path.join(dir, CACHE_FILE);
 }
 
-function loadCache() {
+function loadCache(): { version: number; working: WorkingInstance[] } | null {
     try {
         const raw = JSON.parse(fs.readFileSync(cachePath(), 'utf8'));
         if (raw && raw.version === CACHE_VERSION && Array.isArray(raw.working)) return raw;
@@ -101,28 +101,28 @@ function loadCache() {
     return null;
 }
 
-function saveCache(data) {
+function saveCache(data: unknown) {
     try {
         fs.mkdirSync(path.dirname(cachePath()), { recursive: true });
         fs.writeFileSync(cachePath(), JSON.stringify(data), 'utf8');
-    } catch (e) { searxLog('не удалось сохранить кеш', e.message); }
+    } catch (e) { searxLog('не удалось сохранить кеш', (e as Error).message); }
 }
 
 // ─────────────────────────── Discovery (searx.space + фолбэки) ───────────────────────────
 
 // Скоринг инстанса по данным searx.space: аптайм, сеть, версия, живые движки.
-function scoreInstance(info) {
+function scoreInstance(info: Record<string, unknown>): number {
     let score = 0;
-    const up = info.uptime || {};
-    const day = up.uptimeDay ?? 0;
-    const week = up.uptimeWeek ?? 0;
+    const up = (info.uptime as Record<string, unknown>) || {};
+    const day = up.uptimeDay as number ?? 0;
+    const week = up.uptimeWeek as number ?? 0;
     if (day >= 99) score += 3;
     else if (day >= 95) score += 2;
     else if (day >= 90) score += 1;
     else return 0;
     if (week >= 95) score += 1;
 
-    const net = info.network || {};
+    const net = (info.network as Record<string, unknown>) || {};
     if (net.error) return 0;
     if (net.ipv6) score += 1;
     if (net.dnssec) score += 1;
@@ -134,24 +134,24 @@ function scoreInstance(info) {
         if (major >= 2025) score += 1;
     }
 
-    const eng = info.engines || {};
+    const eng = (info.engines as Record<string, unknown>) || {};
     let alive = 0;
     for (const want of ['google', 'google web', 'bing', 'brave', 'duckduckgo', 'duckduckgo web']) {
-        const e = eng[want];
-        if (e && (e.error_rate ?? -1) <= 25) alive++;
+        const e = eng[want] as Record<string, unknown> | undefined;
+        if (e && ((e.error_rate as number) ?? -1) <= 25) alive++;
     }
     score += Math.min(alive, 4);
     return score;
 }
 
 // Источник №1: searx.space (статистика + скоринг живых движков).
-async function discoverFromSearxSpace() {
+async function discoverFromSearxSpace(): Promise<string[]> {
     const res = await request(SEARX_SPACE_URL, { timeoutMs: DISCOVERY_TIMEOUT_MS, maxBytes: DISCOVERY_MAX_BYTES });
     if (res.status !== 200) throw new Error(`searx.space HTTP ${res.status}`);
-    let json;
+    let json: { instances?: Record<string, Record<string, unknown>> };
     try { json = JSON.parse(res.text); } catch { throw new Error('searx.space: невалидный JSON'); }
-    const entries = [];
-    const seen = new Set();
+    const entries: { url: string; score: number }[] = [];
+    const seen = new Set<string>();
     for (const [rawUrl, info] of Object.entries(json.instances || {})) {
         const url = normalizeHttpUrl(rawUrl, '');
         if (!url || seen.has(url)) continue;
@@ -165,8 +165,8 @@ async function discoverFromSearxSpace() {
 
 // Источник №2: официальный курируемый список searxng/searx-instances (строки `https://domain: {}`
 // и `https://domain:` с onion-зеркалами в additional_urls).
-function parseInstancesYaml(text) {
-    const urls = [];
+function parseInstancesYaml(text: string): string[] {
+    const urls: string[] = [];
     for (const line of text.split('\n')) {
         const m = line.match(/^\s*https:\/\/([^\s:{}]+(?::\d+)?)\s*:\s*(?:\{\})?\s*$/);
         if (m) urls.push('https://' + m[1].replace(/\/+$/, ''));
@@ -174,7 +174,7 @@ function parseInstancesYaml(text) {
     return urls;
 }
 
-async function discoverFromInstancesYml() {
+async function discoverFromInstancesYml(): Promise<string[]> {
     const res = await request(INSTANCES_YML_URL, { timeoutMs: DISCOVERY_TIMEOUT_MS, maxBytes: DISCOVERY_MAX_BYTES });
     if (res.status !== 200) throw new Error(`instances.yml HTTP ${res.status}`);
     const urls = parseInstancesYaml(res.text);
@@ -183,14 +183,14 @@ async function discoverFromInstancesYml() {
 }
 
 // Источник №3: NoPlagiarism/instances-list (JSON, домены без схемы).
-async function discoverFromNoPlagiarism() {
+async function discoverFromNoPlagiarism(): Promise<string[]> {
     const res = await request(NOPLAGIARISM_JSON_URL, { timeoutMs: DISCOVERY_TIMEOUT_MS, maxBytes: DISCOVERY_MAX_BYTES });
     if (res.status !== 200) throw new Error(`NoPlagiarism HTTP ${res.status}`);
-    let json;
+    let json: { instances?: unknown[] };
     try { json = JSON.parse(res.text); } catch { throw new Error('NoPlagiarism: невалидный JSON'); }
     const urls = (json.instances || [])
         .map((d) => normalizeHttpUrl('https://' + String(d).trim(), ''))
-        .filter(Boolean)
+        .filter((u): u is string => Boolean(u))
         .map((u) => u.replace(/\/+$/, ''));
     if (!urls.length) throw new Error('NoPlagiarism: пусто');
     return urls;
@@ -198,21 +198,21 @@ async function discoverFromNoPlagiarism() {
 
 // Каскад discovery: searx.space (со скорингом) → instances.yml → NoPlagiarism → seed-лист.
 // Первый успешный источник становится основным; остальные обогащают пул уникальными URL.
-async function discoverCandidates() {
+async function discoverCandidates(): Promise<string[]> {
     const sources = [
         { name: 'searx.space', fn: discoverFromSearxSpace },
         { name: 'instances.yml', fn: discoverFromInstancesYml },
         { name: 'NoPlagiarism', fn: discoverFromNoPlagiarism },
     ];
-    const seen = new Set();
-    const all = [];
-    let primary = null;
+    const seen = new Set<string>();
+    const all: string[] = [];
+    let primary: string | null = null;
     for (const src of sources) {
-        let urls;
+        let urls: string[];
         try {
             urls = await src.fn();
         } catch (e) {
-            searxLog(`discovery: ${src.name} недоступен`, e.message);
+            searxLog(`discovery: ${src.name} недоступен`, (e as Error).message);
             continue;
         }
         if (!primary) {
@@ -235,19 +235,21 @@ async function discoverCandidates() {
 
 // ─────────────────────────── Состояние сессии (кулдауны, рабочее) ───────────────────────────
 
-const cooldowns = new Map(); // url → timestamp до которого не трогаем
-let working = [];            // [{url, mode: 'json'|'html', lastOkTs}]
+interface WorkingInstance { url: string; mode: 'json' | 'html'; lastOkTs: number; }
 
-function isInCooldown(url) {
+const cooldowns = new Map<string, number>(); // url → timestamp до которого не трогаем
+let working: WorkingInstance[] = [];          // [{url, mode: 'json'|'html', lastOkTs}]
+
+function isInCooldown(url: string): boolean {
     const until = cooldowns.get(url);
     return !!until && Date.now() < until;
 }
 
-function markFailed(url, hard) {
+function markFailed(url: string, hard: boolean) {
     cooldowns.set(url, Date.now() + (hard ? HARD_COOLDOWN_MS : COOLDOWN_MS));
 }
 
-function markWorking(url, mode) {
+function markWorking(url: string, mode: 'json' | 'html') {
     const w = working.find((x) => x.url === url);
     if (w) {
         w.mode = mode; // json приоритетнее html
@@ -261,11 +263,13 @@ function saveWorkingCache() {
     saveCache({ version: CACHE_VERSION, fetchedAt: Date.now(), working });
 }
 
+interface Attempt { url: string; mode: 'json' | 'html' | null; }
+
 // Сборка пула для поиска: известные рабочие (JSON → HTML) + свежие кандидаты.
-function buildAttemptList() {
-    const attempts = [];
-    const seen = new Set();
-    const fresh = (x) => Date.now() - x.lastOkTs < CACHE_TTL_MS;
+function buildAttemptList(): Attempt[] {
+    const attempts: Attempt[] = [];
+    const seen = new Set<string>();
+    const fresh = (x: WorkingInstance) => Date.now() - x.lastOkTs < CACHE_TTL_MS;
     for (const w of working.filter((x) => fresh(x) && x.mode === 'json').slice(0, MAX_JSON_ATTEMPTS)) {
         if (!seen.has(w.url)) { seen.add(w.url); attempts.push({ url: w.url, mode: 'json' }); }
     }
@@ -280,7 +284,7 @@ function buildAttemptList() {
     return attempts.filter((a) => !isInCooldown(a.url));
 }
 
-let candidates = []; // свежие кандидаты (для lazy-пробы)
+let candidates: string[] = []; // свежие кандидаты (для lazy-пробы)
 
 // Загрузить кеш и кандидатов. Требует одного discovery-запроса, если нет кеша.
 async function ensurePool() {
@@ -296,15 +300,17 @@ async function ensurePool() {
         candidates = await discoverCandidates();
         searxLog(`кандидатов для lazy-пробы: ${candidates.length}`);
     } catch (e) {
-        searxLog('discovery не удался', e.message);
+        searxLog('discovery не удался', (e as Error).message);
         if (cached && cached.working.length > 0) working = cached.working;
-        else throw new Error(`Не удалось получить список инстансов SearXNG: ${e.message}`);
+        else throw new Error(`Не удалось получить список инстансов SearXNG: ${(e as Error).message}`);
     }
 }
 
 // ─────────────────────────── Поиск по одному инстансу ───────────────────────────
 
-function buildQueryUrl(base, query, opts, json) {
+interface SearchOpts { limit: number; language: string; time_range: string; minScore: number | null; }
+
+function buildQueryUrl(base: string, query: string, opts: SearchOpts, json: boolean): string {
     const params = new URLSearchParams({
         q: query,
         safesearch: '0',
@@ -312,25 +318,35 @@ function buildQueryUrl(base, query, opts, json) {
         categories: 'general',
     });
     if (opts.time_range) params.set('time_range', opts.time_range);
-    if (opts.pageno) params.set('pageno', String(opts.pageno));
+    if ((opts as Record<string, unknown>).pageno) params.set('pageno', String((opts as Record<string, unknown>).pageno));
     if (json) params.set('format', 'json');
     return `${base}/search?${params.toString()}`;
 }
 
-function normalizeJsonResult(r) {
-    const url = normalizeHttpUrl(r.url, '');
-    const title = stripTags(r.title || '');
+interface SearchResult {
+    title: string;
+    url: string;
+    snippet: string;
+    source: string;
+    engines: string;
+    score: number | null;
+    published: string;
+}
+
+function normalizeJsonResult(r: Record<string, unknown>): SearchResult | null {
+    const url = normalizeHttpUrl(String(r.url || ''), '');
+    const title = stripTags(String(r.title || ''));
     if (!url || !title) return null;
     let source = '';
     try { source = new URL(url).hostname; } catch { /* ignore */ }
     return {
         title: title.slice(0, 200),
         url,
-        snippet: stripTags(r.content || '').slice(0, 400),
+        snippet: stripTags(String(r.content || '')).slice(0, 400),
         source,
-        engines: Array.isArray(r.engines) ? r.engines.join(', ') : (r.engine || ''),
+        engines: Array.isArray(r.engines) ? r.engines.join(', ') : String(r.engine || ''),
         score: typeof r.score === 'number' ? r.score : null,
-        published: r.publishedDate || '',
+        published: String(r.publishedDate || ''),
     };
 }
 
@@ -338,7 +354,7 @@ function normalizeJsonResult(r) {
 
 // Точная причина по статусу/заголовкам/телу ответа: rate-limit, Cloudflare, WAF,
 // гео-блок, капча, требование searxng_token, либо просто бот-гейт (endpoint=index).
-function classifyHttpFailure(status, headers, body) {
+function classifyHttpFailure(status: number, headers: Record<string, string>, body: string): { type: string; msg: string } {
     const h = headers || {};
     const server = String(h.server || '').toLowerCase();
     const cf = /cloudflare/i.test(server) || /cf-mitigated|cf-chl|challenge-platform|__cf_chl_opt/i.test(body);
@@ -362,7 +378,7 @@ function classifyHttpFailure(status, headers, body) {
 }
 
 // Тип причины для сводки в итоговом логе (матчится по уже сформированному сообщению).
-function classifyMsg(msg) {
+function classifyMsg(msg: string): string {
     if (/rate limit|ratelimit/i.test(msg)) return 'rate-limit';
     if (/Cloudflare/i.test(msg)) return 'cloudflare';
     if (/WAF/i.test(msg)) return 'waf';
@@ -377,12 +393,19 @@ function classifyMsg(msg) {
     return 'other';
 }
 
-function reasonSummary(counts) {
+function reasonSummary(counts: Record<string, number>): string {
     const parts = Object.entries(counts).map(([k, v]) => `${k}: ${v}`);
     return parts.length ? `, причины: ${parts.join(', ')}` : '';
 }
 
-async function searchJson(base, query, opts) {
+interface SearchPayload {
+    results: SearchResult[];
+    answers: string[];
+    infoboxes: unknown[];
+    corrections: string[];
+}
+
+async function searchJson(base: string, query: string, opts: SearchOpts): Promise<SearchPayload> {
     const res = await request(buildQueryUrl(base, query, opts, true), {
         timeoutMs: SEARCH_TIMEOUT_MS,
         headers: Object.assign({ 'Accept': 'application/json' }, BROWSER_HEADERS),
@@ -391,23 +414,23 @@ async function searchJson(base, query, opts) {
         const f = classifyHttpFailure(res.status, res.headers, res.text);
         throw new Error(f.msg);
     }
-    let j;
+    let j: { results?: unknown[]; answers?: unknown[]; infoboxes?: unknown[]; corrections?: unknown[] };
     try { j = JSON.parse(res.text); } catch { throw new Error('не-JSON (JSON API выключен)'); }
     if (!Array.isArray(j.results)) throw new Error('нет results в ответе');
     return {
-        results: j.results.map(normalizeJsonResult).filter(Boolean),
+        results: j.results.map((r) => normalizeJsonResult(r as Record<string, unknown>)).filter((r): r is SearchResult => Boolean(r)),
         answers: Array.isArray(j.answers) ? j.answers.map((a) => stripTags(String(a))).filter(Boolean) : [],
         infoboxes: Array.isArray(j.infoboxes) ? j.infoboxes : [],
-        corrections: Array.isArray(j.corrections) ? j.corrections : [],
+        corrections: Array.isArray(j.corrections) ? j.corrections.map((c) => String(c)) : [],
     };
 }
 
 // Парсер HTML-результатов нового тема SearXNG:
 // <article class="result ..."><a class="url_header">…</a><h3><a href="URL">title</a></h3><p class="content">…</p><div class="engines"><span>bing</span></div></article>
-function parseHtmlResults(html, base) {
-    const out = [];
+function parseHtmlResults(html: string, base: string): SearchResult[] {
+    const out: SearchResult[] = [];
     const re = /<article\b[^>]*class="[^"]*result[^"]*"[^>]*>[\s\S]*?<\/article>/gi;
-    let m;
+    let m: RegExpExecArray | null;
     while ((m = re.exec(html)) !== null) {
         const block = m[0];
         const a = block.match(/<h3[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>\s*<\/h3>/i);
@@ -433,7 +456,7 @@ function parseHtmlResults(html, base) {
     return out;
 }
 
-async function searchHtml(base, query, opts) {
+async function searchHtml(base: string, query: string, opts: SearchOpts): Promise<SearchPayload> {
     const res = await request(buildQueryUrl(base, query, opts, false), {
         timeoutMs: SEARCH_TIMEOUT_MS,
         headers: BROWSER_HEADERS,
@@ -455,8 +478,8 @@ async function searchHtml(base, query, opts) {
 
 // ─────────────────────────── Failover по пулу ───────────────────────────
 
-function dedupe(results) {
-    const seen = new Set();
+function dedupe(results: SearchResult[]): SearchResult[] {
+    const seen = new Set<string>();
     return results.filter((r) => {
         if (!r.url || seen.has(r.url)) return false;
         seen.add(r.url);
@@ -464,18 +487,25 @@ function dedupe(results) {
     });
 }
 
-function applyMinScore(results, minScore) {
+function applyMinScore(results: SearchResult[], minScore: number | null | undefined): SearchResult[] {
     if (!minScore) return results;
     return results.filter((r) => r.score === null || r.score >= minScore);
 }
 
-async function runChain(attempts, query, opts) {
+interface RunResult {
+    all: SearchResult[];
+    failures: string[];
+    used: string[];
+    meta: { answers: string[]; infoboxes: unknown[]; corrections: string[] };
+}
+
+async function runChain(attempts: Attempt[], query: string, opts: SearchOpts): Promise<RunResult> {
     const start = Date.now();
-    const all = [];
-    const failures = [];
-    const used = [];
-    const reasonCounts = {};
-    const meta = { answers: [], infoboxes: [], corrections: [] };
+    const all: SearchResult[] = [];
+    const failures: string[] = [];
+    const used: string[] = [];
+    const reasonCounts: Record<string, number> = {};
+    const meta = { answers: [] as string[], infoboxes: [] as unknown[], corrections: [] as string[] };
     let tried = 0;
     let freshProbed = 0;
 
@@ -502,7 +532,7 @@ async function runChain(attempts, query, opts) {
                 searxLog(`пусто ${att.url} (${att.mode === 'json' ? 'JSON' : 'HTML'})`);
             }
         } catch (e) {
-            const msg = e.message || String(e);
+            const msg = (e as Error).message || String(e);
             const hard = /капча|challenge|403|451|unusual|аномал|WAF|Cloudflare|searxng_token/i.test(msg);
             markFailed(att.url, hard);
             const sec = ((Date.now() - t0) / 1000).toFixed(1);
@@ -514,7 +544,6 @@ async function runChain(attempts, query, opts) {
         if (all.length < opts.limit) await sleep(STEP_PAUSE_MS);
     }
 
-    const freshCount = attempts.filter((a) => a.mode === null).length;
     searxLog(`итог: ${all.length} рез. за ${((Date.now() - start) / 1000).toFixed(1)}с из ${tried} попыток (${used.length} ок, ${failures.length} ошибок${freshProbed ? `, новых рабочих: ${freshProbed}` : ''})${reasonSummary(reasonCounts)}`);
     if (used.length > 0) saveWorkingCache();
     return { all, failures, used, meta };
@@ -522,12 +551,12 @@ async function runChain(attempts, query, opts) {
 
 // Fan-out: параллельно опрашиваем до MAX_ATTEMPTS РАЗНЫХ инстансов, результаты сливаем.
 // Безопасно: каждый инстанс получает ровно один запрос (rate-limit ломают повторы в один).
-async function runFanout(attempts, query, opts) {
+async function runFanout(attempts: Attempt[], query: string, opts: SearchOpts): Promise<RunResult> {
     const start = Date.now();
     const pool = attempts.slice(0, MAX_ATTEMPTS);
     if (pool.length === 0) return runChain(attempts, query, opts);
-    const meta = { answers: [], infoboxes: [], corrections: [] };
-    const reasonCounts = {};
+    const meta = { answers: [] as string[], infoboxes: [] as unknown[], corrections: [] as string[] };
+    const reasonCounts: Record<string, number> = {};
     const results = await Promise.all(pool.map(async (att) => {
         const t0 = Date.now();
         try {
@@ -541,18 +570,18 @@ async function runFanout(attempts, query, opts) {
                 meta.infoboxes.push(...r.infoboxes);
                 meta.corrections.push(...r.corrections);
                 searxLog(`fan-out OK ${att.url} (${r.results.length} рез. за ${((Date.now() - t0) / 1000).toFixed(1)}с)`);
-                return { url: att.url, results: r.results, error: null };
+                return { url: att.url, results: r.results, error: null as string | null };
             }
             searxLog(`пусто ${att.url} (${att.mode === 'json' ? 'JSON' : 'HTML'})`);
-            return { url: att.url, results: [], error: null };
+            return { url: att.url, results: [] as SearchResult[], error: null as string | null };
         } catch (e) {
-            const msg = e.message || String(e);
+            const msg = (e as Error).message || String(e);
             const hard = /капча|challenge|403|451|unusual|аномал|WAF|Cloudflare|searxng_token/i.test(msg);
             markFailed(att.url, hard);
             const type = classifyMsg(msg);
             reasonCounts[type] = (reasonCounts[type] || 0) + 1;
             searxLog(`fan-out ОШИБКА ${att.url} — ${msg}`);
-            return { url: att.url, results: [], error: msg };
+            return { url: att.url, results: [] as SearchResult[], error: msg };
         }
     }));
     const all = results.flatMap((r) => r.results);
@@ -564,7 +593,7 @@ async function runFanout(attempts, query, opts) {
 }
 
 // Self-healing: если все инстансы недоступны — обновить кандидатов и повторить.
-async function searchWithRecovery(query, opts, mode) {
+async function searchWithRecovery(query: string, opts: SearchOpts, mode: string): Promise<RunResult> {
     const attempt = () => (mode === 'fanout' ? runFanout(buildAttemptList(), query, opts) : runChain(buildAttemptList(), query, opts));
     await ensurePool();
     let res = await attempt();
@@ -574,7 +603,7 @@ async function searchWithRecovery(query, opts, mode) {
             candidates = await discoverCandidates();
             searxLog(`свежих кандидатов: ${candidates.length}`);
         } catch (e) {
-            searxLog('повторный discovery не удался', e.message);
+            searxLog('повторный discovery не удался', (e as Error).message);
         }
         res = await attempt();
     }
@@ -583,27 +612,27 @@ async function searchWithRecovery(query, opts, mode) {
 
 // ─────────────────────────── Форматирование ───────────────────────────
 
-function formatInfobox(infobox) {
-    const lines = [];
-    const title = stripTags(infobox.infobox || infobox.title || '');
+function formatInfobox(infobox: Record<string, unknown>): string {
+    const lines: string[] = [];
+    const title = stripTags(String(infobox.infobox || infobox.title || ''));
     if (title) lines.push(`📌 ${title}`);
     if (infobox.content) lines.push(stripTags(String(infobox.content)));
     if (Array.isArray(infobox.urls) && infobox.urls.length > 0) {
         const urls = infobox.urls.slice(0, 3)
-            .map((u) => `- ${stripTags(u.title || u.url || '')}: ${normalizeHttpUrl(u.url, '')}`)
+            .map((u) => `- ${stripTags(String((u as Record<string, string>).title || (u as Record<string, string>).url || ''))}: ${normalizeHttpUrl(String((u as Record<string, string>).url), '')}`)
             .filter((l) => l.includes('http'));
         if (urls.length > 0) lines.push(urls.join('\n'));
     }
     return lines.join('\n').slice(0, 600);
 }
 
-function formatResults(res, limit) {
-    const lines = [];
+function formatResults(res: RunResult & { minScore?: number | null }, limit: number): string {
+    const lines: string[] = [];
     if (res.meta.answers.length > 0) {
         lines.push('Прямые ответы SearXNG:\n' + res.meta.answers.map((a) => `- ${a}`).join('\n'));
     }
     if (res.meta.infoboxes.length > 0) {
-        const box = formatInfobox(res.meta.infoboxes[0]);
+        const box = formatInfobox(res.meta.infoboxes[0] as Record<string, unknown>);
         if (box) lines.push(box);
     }
     if (res.meta.corrections.length > 0) {
@@ -647,23 +676,23 @@ createMcpServer({
         }
     }],
     handlers: {
-        SearxngSearch: async (args) => {
-            const query = (args.query || '').trim();
+        SearxngSearch: async (args: Record<string, unknown>) => {
+            const query = String(args.query || '').trim();
             if (!query) throw new Error("SearxngSearch: укажи 'query'.");
-            const limit = Math.max(3, Math.min(20, parseInt(args.limit, 10) || MAX_RESULTS));
-            const opts = {
+            const limit = Math.max(3, Math.min(20, parseInt(String(args.limit), 10) || MAX_RESULTS));
+            const opts: SearchOpts = {
                 limit,
                 language: typeof args.language === 'string' && args.language.trim() ? args.language.trim() : '',
                 time_range: typeof args.time_range === 'string' ? args.time_range.trim() : '',
                 minScore: typeof args.min_score === 'number' ? args.min_score : null,
             };
 
-            let res;
+            let res: RunResult;
             if (typeof args.instance === 'string' && args.instance.trim()) {
                 const base = normalizeHttpUrl(args.instance.trim(), '');
                 if (!base) throw new Error(`SearxngSearch: невалидный URL инстанса: ${args.instance}`);
                 searxLog('используем указанный инстанс', base);
-                const attempts = [{ url: base.replace(/\/+$/, ''), mode: 'html' }];
+                const attempts: Attempt[] = [{ url: base.replace(/\/+$/, ''), mode: 'html' }];
                 res = await runChain(attempts, query, opts);
             } else {
                 const mode = args.parallel === true ? 'fanout' : 'chain';

@@ -1,13 +1,14 @@
-const https = require('https');
-const { createMcpServer } = require('./mcp_base.cjs');
+// MCP-сервер знаний (Deno, без API-ключей): Википедия + погода (wttr.in).
+import https from "node:https";
+import { createMcpServer } from "./mcp_base.ts";
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 const TIMEOUT_MS = 20000;
 
-function httpsGetJson(url, timeoutMs = TIMEOUT_MS) {
+function httpsGetJson(url: string, timeoutMs: number = TIMEOUT_MS): Promise<any> {
     return new Promise((resolve, reject) => {
         const req = https.get(url, { headers: { 'User-Agent': UA, 'Accept': 'application/json' }, timeout: timeoutMs }, (res) => {
-            if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+            if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
                 res.resume();
                 reject(new Error(`Редирект запрещён: HTTP ${res.statusCode} -> ${res.headers.location}`));
                 return;
@@ -22,7 +23,7 @@ function httpsGetJson(url, timeoutMs = TIMEOUT_MS) {
                 try {
                     resolve(JSON.parse(data));
                 } catch (e) {
-                    reject(new Error(`Невалидный JSON от ${url}: ${e.message}`));
+                    reject(new Error(`Невалидный JSON от ${url}: ${(e as Error).message}`));
                 }
             });
         });
@@ -33,7 +34,7 @@ function httpsGetJson(url, timeoutMs = TIMEOUT_MS) {
 
 const WIKI_API = 'https://{lang}.wikipedia.org/w/api.php';
 
-async function wikipediaSearch(query, lang) {
+async function wikipediaSearch(query: string, lang: string): Promise<string> {
     const url = WIKI_API.replace('{lang}', encodeURIComponent(lang)) +
         '?action=query&list=search&srsearch=' + encodeURIComponent(query) +
         '&srlimit=5&format=json&utf8=1&origin=*';
@@ -43,15 +44,15 @@ async function wikipediaSearch(query, lang) {
         return 'Ничего не найдено в Википедии по запросу "' + query + '".';
     }
 
-    const titles = hits.map(h => h.title).join('|');
+    const titles = hits.map((h: any) => h.title).join('|');
     const extractsUrl = WIKI_API.replace('{lang}', encodeURIComponent(lang)) +
         '?action=query&prop=extracts&exintro&explaintext&redirects=1&format=json&utf8=1&origin=*&titles=' + encodeURIComponent(titles);
     const extData = await httpsGetJson(extractsUrl);
     const pages = (extData.query && extData.query.pages) || {};
-    const result = [];
+    const result: string[] = [];
 
     for (const hit of hits) {
-        const page = Object.values(pages).find(p => p.title === hit.title);
+        const page = Object.values(pages).find((p: any) => p.title === hit.title);
         const extract = page && page.extract ? page.extract.trim() : (hit.snippet ? hit.snippet.replace(/<[^>]+>/g, '') : '');
         const url = `https://${lang}.wikipedia.org/wiki/${encodeURIComponent(hit.title.replace(/ /g, '_'))}`;
         const snippet = extract.length > 600 ? extract.slice(0, 600) + '…' : extract;
@@ -61,7 +62,7 @@ async function wikipediaSearch(query, lang) {
     return result.join('\n\n');
 }
 
-async function weather(city) {
+async function weather(city: string): Promise<string> {
     const url = 'https://wttr.in/' + encodeURIComponent(city) + '?format=j1&lang=ru';
     const data = await httpsGetJson(url);
 

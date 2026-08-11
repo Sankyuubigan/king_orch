@@ -25,12 +25,10 @@ pub fn builtin_tools() -> Vec<(String, String, serde_json::Value)> {
 
 pub fn get_mcp_server_path(mcp_servers_dir: &Path, name: &str) -> Result<PathBuf, String> {
     let possible_paths = vec![
-        mcp_servers_dir.join(format!("{}.cjs", name)),
-        mcp_servers_dir.join(format!("{}.js", name)),
         mcp_servers_dir.join(format!("{}.ts", name)),
-        PathBuf::from("src-tauri").join("mcp_servers").join(format!("{}.cjs", name)),
-        PathBuf::from("src-tauri").join("mcp_servers").join(format!("{}.js", name)),
+        mcp_servers_dir.join(format!("{}.js", name)),
         PathBuf::from("src-tauri").join("mcp_servers").join(format!("{}.ts", name)),
+        PathBuf::from("src-tauri").join("mcp_servers").join(format!("{}.js", name)),
     ];
     for path in possible_paths { if path.exists() { return Ok(path); } }
     Err(format!("MCP-сервер {} не найден", name))
@@ -64,20 +62,58 @@ fn find_or_download_runtime<L: Fn(String) + Clone + Send + Sync>(
     PathBuf::from(runtime_name)
 }
 
+/// Гранулярные права Deno для каждого MCP-сервера (принцип минимальных прав).
+/// Держать в синхроне с фактическими операциями серверов в src-tauri/mcp_servers/.
+fn deno_permissions(mcp_name: &str, bins_dir: &Path) -> Vec<String> {
+    let bins = bins_dir.to_string_lossy().to_string();
+    match mcp_name {
+        // time — без прав (только вычисления)
+        "time" => vec![],
+        // Только чтение файлов
+        "fs_read" | "local_rag" | "markdown_section_reader" | "ast_analyzer" => {
+            vec!["--allow-read".to_string()]
+        }
+        // Только запись файлов
+        "fs_write" => vec!["--allow-write".to_string()],
+        // Только сеть
+        "web_search" | "docs_fetcher" | "knowledge_api" => vec!["--allow-net".to_string()],
+        // Сеть + кеш пула инстансов (searxng_cache.json) в bins_dir + чтение KING_ORCH_BINS_DIR
+        "searxng_search" => vec![
+            "--allow-net".to_string(),
+            format!("--allow-read={}", bins),
+            format!("--allow-write={}", bins),
+            "--allow-env".to_string(),
+        ],
+        // Сеть + запуск yt-dlp + temp-файлы + env (bins_dir)
+        "youtube_mcp" => vec![
+            "--allow-net".to_string(),
+            "--allow-run".to_string(),
+            "--allow-read".to_string(),
+            "--allow-write".to_string(),
+            "--allow-env".to_string(),
+        ],
+        // AST-карта: чтение проекта, запись .agents_workspace, сеть (npm-пакеты, токенизатор)
+        "ast_treesitter" => vec![
+            "--allow-read".to_string(),
+            "--allow-write".to_string(),
+            "--allow-net".to_string(),
+        ],
+        // deno_runner и любые неизвестные серверы — только запуск подпроцессов
+        _ => vec!["--allow-run".to_string()],
+    }
+}
+
 pub fn resolve_runtime_and_args<L: Fn(String) + Clone + Send + Sync>(
     log_cb: L, script_path: &Path, bins_dir: &Path,
 ) -> (PathBuf, Vec<String>) {
-    let ext = script_path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let deno_path = find_or_download_runtime("deno", bins_dir, log_cb.clone());
+    log_cb(format!("   🦎 Runtime: Deno | {}", script_path.display()));
 
-    if ext == "ts" || ext == "mts" {
-        let deno_path = find_or_download_runtime("deno", bins_dir, log_cb.clone());
-        log_cb(format!("   🦎 Runtime: Deno | {}", script_path.display()));
-        (deno_path, vec!["run".to_string(), "--allow-run".to_string(), "--no-check".to_string(), "--no-config".to_string(), script_path.to_string_lossy().to_string()])
-    } else {
-        let node_path = find_or_download_runtime("node", bins_dir, log_cb.clone());
-        log_cb(format!("   🟢 Runtime: Node | {}", script_path.display()));
-        (node_path, vec![script_path.to_string_lossy().to_string()])
-    }
+    let mcp_name = script_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let mut args = vec!["run".to_string(), "--no-check".to_string(), "--no-config".to_string()];
+    args.extend(deno_permissions(mcp_name, bins_dir));
+    args.push(script_path.to_string_lossy().to_string());
+    (deno_path, args)
 }
 
 fn ensure_mcp_deps<L: Fn(String) + Clone + Send + Sync>(

@@ -1,15 +1,16 @@
-// Общий HTTP-слой для MCP-серверов (zero-dependency: только node:https/http/zlib).
+// Общий HTTP-слой для MCP-серверов (Deno, без npm-зависимостей).
+// Использует node:https/http/zlib — встроенная Node-совместимость Deno.
 // Возможности: gzip/deflate/brotli, merge Set-Cookie между редиректами, лимит байт,
 // колбэк-проверка каждого хопа (SSRF), таймауты. Плюс лёгкие утилиты парсинга HTML.
-const https = require('https');
-const http = require('http');
-const zlib = require('zlib');
+import https from "node:https";
+import http from "node:http";
+import zlib from "node:zlib";
 
 const DEFAULT_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 const DEFAULT_TIMEOUT_MS = 20000;
 const DEFAULT_MAX_BYTES = 5 * 1024 * 1024;
 
-function decodeBody(buf, headers) {
+function decodeBody(buf: Buffer, headers: Record<string, unknown>): Buffer {
     const enc = String(headers['content-encoding'] || '').toLowerCase().trim();
     try {
         if (enc === 'gzip') return zlib.gunzipSync(buf);
@@ -25,9 +26,9 @@ function decodeBody(buf, headers) {
 //   connect — TCP ещё не установлен (DNS/маршрут)
 //   tls     — TCP установлен, TLS-рукопожатие не завершилось (drop/фильтр на TLS)
 //   http    — TLS установлен, но сервер не отвечает на запрос (фильтрация приложения)
-function classifyNetworkError(err, hostname, phase, timedOut) {
+function classifyNetworkError(err: Error & { code?: string }, hostname: string, phase: string, timedOut: boolean): Error {
     const code = err && err.code;
-    let out;
+    let out: Error;
     if (timedOut) {
         if (phase === 'connect') out = new Error(`Таймаут соединения (TCP) с '${hostname}' — сервер не отвечает`);
         else if (phase === 'tls') out = new Error(`Таймаут на TLS-рукопожатии с '${hostname}' — сервер не отвечает на TLS (вероятна региональная блокировка: домен не обслуживает IP из РФ)`);
@@ -40,22 +41,38 @@ function classifyNetworkError(err, hostname, phase, timedOut) {
     else if (code === 'ECONNRESET') out = new Error(`Соединение с '${hostname}' разорвано до завершения ответа (${code})`);
     else if (code === 'EPROTO' || (typeof code === 'string' && code.startsWith('ERR_SSL'))) out = new Error(`Ошибка TLS с '${hostname}' (${code})`);
     else out = err;
-    out.phase = phase; // фаза соединения для логики авто-retry с другим TLS-профилем
+    (out as Error & { phase?: string }).phase = phase; // фаза соединения для логики авто-retry с другим TLS-профилем
     return out;
+}
+
+export interface RequestOptions {
+    method?: string;
+    headers?: Record<string, string>;
+    body?: string | Buffer | null;
+    timeoutMs?: number;
+    maxBytes?: number;
+    maxRedirects?: number;
+    checkUrl?: (url: string, hop: number) => unknown | Promise<unknown>;
+    userAgent?: string;
+}
+
+export interface HttpResponse {
+    status: number;
+    headers: Record<string, any>;
+    body: Buffer;
+    text: string;
+    url: string;
 }
 
 /**
  * HTTP-запрос с ручными редиректами (каждый хоп проходит через opts.checkUrl).
- * @param {string} url
- * @param {object} opts { method, headers, body, timeoutMs, maxBytes, maxRedirects, checkUrl }
- * @returns {Promise<{status:number, headers:object, body:Buffer, text:string, url:string}>}
  */
-async function request(url, opts = {}) {
+export async function request(url: string, opts: RequestOptions = {}): Promise<HttpResponse> {
     const method = opts.method || 'GET';
     const timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT_MS;
     const maxBytes = opts.maxBytes || DEFAULT_MAX_BYTES;
     const maxRedirects = opts.maxRedirects === undefined ? 5 : opts.maxRedirects;
-    const cookieJar = new Map();
+    const cookieJar = new Map<string, string>();
 
     let current = url;
     for (let hop = 0; ; hop++) {
@@ -68,9 +85,9 @@ async function request(url, opts = {}) {
         // Авто-retry на TLS-фазе: некоторые серверы/фильтры (например, searx.space)
         // периодически режут дефолтный TLS-фингерпринт Node (ECONNRESET на рукопожатии).
         // Пробуем фиксированные профили TLS 1.3 и TLS 1.2, прежде чем сдаться.
-        const tlsProfiles = [null, { minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' }, { minVersion: 'TLSv1.2', maxVersion: 'TLSv1.2' }];
-        let lastErr = null;
-        let result = null;
+        const tlsProfiles: (Record<string, string> | null)[] = [null, { minVersion: 'TLSv1.3', maxVersion: 'TLSv1.3' }, { minVersion: 'TLSv1.2', maxVersion: 'TLSv1.2' }];
+        let lastErr: Error | null = null;
+        let result: { status: number; headers: Record<string, any>; body: Buffer } | null = null;
         for (const tlsOpts of tlsProfiles) {
             try {
                 result = await new Promise((resolve, reject) => {
@@ -92,21 +109,21 @@ async function request(url, opts = {}) {
                         },
                         timeout: timeoutMs,
                     }, (res) => {
-                        const chunks = [];
+                        const chunks: Buffer[] = [];
                         let size = 0;
                         let tooLarge = false;
-                        res.on('data', (c) => {
+                        res.on('data', (c: Buffer) => {
                             size += c.length;
                             if (size > maxBytes) { tooLarge = true; res.destroy(); return; }
                             chunks.push(c);
                         });
                         res.on('end', () => {
                             if (tooLarge) { reject(new Error(`Ответ больше лимита ${maxBytes} байт`)); return; }
-                            resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) });
+                            resolve({ status: res.statusCode || 0, headers: res.headers, body: Buffer.concat(chunks) });
                         });
                     });
                     // Отслеживаем фазу соединения, чтобы точно назвать причину таймаута/сброса.
-                    req.on('socket', (socket) => {
+                    req.on('socket', (socket: any) => {
                         if (isHttps) {
                             socket.on('connect', () => { if (phase === 'connect') phase = 'tls'; });
                             socket.on('secureConnect', () => { phase = 'http'; });
@@ -118,14 +135,14 @@ async function request(url, opts = {}) {
                     const killer = setTimeout(() => { timedOut = true; req.destroy(new Error('Таймаут запроса')); }, timeoutMs + 1000);
                     req.on('timeout', () => { timedOut = true; req.destroy(new Error('Таймаут запроса')); });
                     req.on('close', () => clearTimeout(killer));
-                    req.on('error', (err) => reject(classifyNetworkError(err, parsed.hostname, phase, timedOut)));
+                    req.on('error', (err: Error & { code?: string }) => reject(classifyNetworkError(err, parsed.hostname, phase, timedOut)));
                     if (opts.body !== undefined && opts.body !== null) req.write(opts.body);
                     req.end();
                 });
                 break;
             } catch (err) {
-                lastErr = err;
-                if (!isHttps || err.phase !== 'tls' || !err.message) break; // только TLS-фаза https лечится профилями
+                lastErr = err as Error;
+                if (!isHttps || (err as Error & { phase?: string }).phase !== 'tls' || !(err as Error).message) break; // только TLS-фаза https лечится профилями
                 await new Promise((r) => setTimeout(r, 300));
             }
         }
@@ -158,18 +175,18 @@ async function request(url, opts = {}) {
 
 // ─────────────────────────── Утилиты парсинга HTML ───────────────────────────
 
-function unescapeHtml(str) {
+export function unescapeHtml(str: unknown): string {
     return String(str)
         .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
         .replace(/&quot;/g, '"').replace(/&#x27;/g, "'").replace(/&#39;/g, "'")
         .replace(/&nbsp;/g, ' ').replace(/&hellip;/g, '…');
 }
 
-function stripTags(s) {
+export function stripTags(s: unknown): string {
     return unescapeHtml(String(s || '').replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 }
 
-function normalizeText(text) {
+export function normalizeText(text: string): string {
     return String(text)
         .replace(/\r\n/g, '\n')
         .replace(/\u00a0/g, ' ')
@@ -181,17 +198,17 @@ function normalizeText(text) {
 
 // Найти сбалансированный блок от открывающего тега на позиции startIdx.
 // Возвращает { start, end } — диапазон, включающий весь блок (от '<tag' до '</tag>').
-function findBalancedBlock(html, tag, startIdx) {
+export function findBalancedBlock(html: string, tag: string, startIdx: number): { start: number; end: number } | null {
     const openRe = new RegExp(`<${tag}\\b[^>]*>`, 'i');
     const openMatch = html.slice(startIdx).match(openRe);
     if (!openMatch) return null;
-    const blockStart = startIdx + openMatch.index;
+    const blockStart = startIdx + openMatch.index!;
     const contentStart = blockStart + openMatch[0].length;
 
     const tokenRe = new RegExp(`<(\/?)\\s*${tag}\\b([^>]*?)(\\/?)>`, 'gi');
     tokenRe.lastIndex = contentStart;
     let depth = 1;
-    let m;
+    let m: RegExpExecArray | null;
     while ((m = tokenRe.exec(html)) !== null) {
         const isClose = m[1] === '/';
         const isSelfClose = m[3] === '/';
@@ -204,22 +221,22 @@ function findBalancedBlock(html, tag, startIdx) {
     return null;
 }
 
-function extractTagContent(html, tag) {
+export function extractTagContent(html: string, tag: string): string | null {
     const re = new RegExp(`<${tag}\\b[^>]*>`, 'i');
     const m = html.match(re);
     if (!m) return null;
-    const block = findBalancedBlock(html, tag, m.index);
+    const block = findBalancedBlock(html, tag, m.index!);
     if (!block) return null;
     const openClose = html.slice(m.index).match(/<\/?[^>]+>/);
     const openTag = openClose ? openClose[0] : '';
-    return html.slice(m.index + openTag.length, block.end - `</${tag}>`.length);
+    return html.slice(m.index! + openTag.length, block.end - `</${tag}>`.length);
 }
 
 // Все теги с атрибутом attr="value" (value может быть в class-списке).
-function findTagsByAttr(html, attr, value) {
+export function findTagsByAttr(html: string, attr: string, value: string): { tag: string; index: number }[] {
     const re = new RegExp(`<([a-zA-Z][a-zA-Z0-9]*)\\b[^>]*${attr}\\s*=\\s*["']([^"']*)["'][^>]*>`, 'gi');
-    const out = [];
-    let m;
+    const out: { tag: string; index: number }[] = [];
+    let m: RegExpExecArray | null;
     while ((m = re.exec(html)) !== null) {
         const list = m[2].split(/\s+/).map(s => s.toLowerCase());
         if (value && !list.includes(value.toLowerCase())) continue;
@@ -229,10 +246,10 @@ function findTagsByAttr(html, attr, value) {
 }
 
 // Разрезать HTML на сбалансированные блоки, у которых в class есть className.
-function parseBlocksByClass(html, className) {
-    const out = [];
+export function parseBlocksByClass(html: string, className: string): string[] {
+    const out: string[] = [];
     const re = new RegExp(`<([a-z][a-z0-9]*)\\b[^>]*class="[^"]*\\b${className}\\b[^"]*"[^>]*>`, 'gi');
-    let m;
+    let m: RegExpExecArray | null;
     while ((m = re.exec(html)) !== null) {
         const block = findBalancedBlock(html, m[1], m.index);
         if (!block) continue;
@@ -243,13 +260,13 @@ function parseBlocksByClass(html, className) {
 }
 
 // Первый URL из блока (http/https).
-function firstHref(block) {
+export function firstHref(block: string): string {
     const m = block.match(/href="(https?:\/\/[^"]+)"/i);
     return m ? m[1] : '';
 }
 
 // Нормализация http(s) URL, отсев мусорных схем.
-function normalizeHttpUrl(raw, base) {
+export function normalizeHttpUrl(raw: string, base?: string): string {
     if (!raw) return '';
     if (raw.startsWith('//')) raw = 'https:' + raw;
     try {
@@ -259,16 +276,3 @@ function normalizeHttpUrl(raw, base) {
         return u.toString();
     } catch { return ''; }
 }
-
-module.exports = {
-    request,
-    unescapeHtml,
-    stripTags,
-    normalizeText,
-    findBalancedBlock,
-    extractTagContent,
-    findTagsByAttr,
-    parseBlocksByClass,
-    firstHref,
-    normalizeHttpUrl,
-};

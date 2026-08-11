@@ -1,25 +1,11 @@
-const fs = require('fs');
-const path = require('path');
-const readline = require('readline');
+// AST Analyzer MCP v1.0 (Deno). Инструменты: search_code, analyze_file, trace_function.
+// Регекс-парсинг без внешних зависимостей.
+import fs from "node:fs";
+import path from "node:path";
+import { createMcpServer } from "./mcp_base.ts";
 
-function log(msg) { process.stderr.write(`[AST-ANALYZER] ${msg}\n`); }
+function log(msg: string) { console.error(`[AST-ANALYZER] ${msg}`); }
 log('=== AST Analyzer MCP v1.0 ===');
-
-// === Node Modules Resolution ===
-function findNm() {
-    let d = __dirname;
-    for (let i = 0; i < 20; i++) {
-        const nm = path.join(d, 'node_modules');
-        try { if (fs.existsSync(nm) && fs.statSync(nm).isDirectory()) return nm; } catch(e) {}
-        const p = path.dirname(d); if (p === d) break; d = p;
-    }
-    return null;
-}
-const nmFound = findNm();
-if (nmFound && !module.paths.includes(nmFound)) module.paths.unshift(nmFound);
-if (!module.paths.includes(path.resolve(process.cwd(), 'node_modules'))) module.paths.push(path.resolve(process.cwd(), 'node_modules'));
-
-const { createMcpServer } = require('./mcp_base.cjs');
 
 createMcpServer({
     name: "ast-analyzer-mcp",
@@ -42,28 +28,31 @@ createMcpServer({
         }
     ],
     handlers: {
-        search_code: (args) => searchCode(args.target_path, args.query),
-        analyze_file: (args) => analyzeFile(args.file_path),
-        trace_function: (args) => traceFunction(args.target_path, args.function_name)
+        search_code: (args: Record<string, unknown>) => searchCode(String(args.target_path || ''), String(args.query || '')),
+        analyze_file: (args: Record<string, unknown>) => analyzeFile(String(args.file_path || '')),
+        trace_function: (args: Record<string, unknown>) => traceFunction(String(args.target_path || ''), String(args.function_name || ''))
     }
 });
 
 // === Gitignore ===
-function loadGitignore(rootDir) {
-    const rules = [];
+interface GitRule { pattern: string; neg: boolean; dirOnly: boolean; }
+function loadGitignore(rootDir: string): GitRule[] {
+    const rules: GitRule[] = [];
     try {
         for (let raw of fs.readFileSync(path.join(rootDir, '.gitignore'), 'utf8').split('\n')) {
             let line = raw.trim();
             if (!line || line.startsWith('#')) continue;
-            const neg = line.startsWith('!'); if (neg) line = line.substring(1);
-            const dirOnly = line.endsWith('/'); if (dirOnly) line = line.slice(0, -1);
+            const neg = line.startsWith('!');
+            if (neg) line = line.substring(1);
+            const dirOnly = line.endsWith('/');
+            if (dirOnly) line = line.slice(0, -1);
             if (line) rules.push({ pattern: line, neg, dirOnly });
         }
-    } catch(e) {}
+    } catch (e) {}
     return rules;
 }
 
-function isIgnored(relPath, name, isDir, rules) {
+function isIgnored(relPath: string, name: string, isDir: boolean, rules: GitRule[]): boolean {
     let result = false;
     for (const r of rules) {
         if (r.dirOnly && !isDir) continue;
@@ -82,18 +71,20 @@ function isIgnored(relPath, name, isDir, rules) {
 }
 
 // === File Scanning ===
-const SKIP_DIRS = new Set(['node_modules','dist','.git','.svn','.hg','.idea','.vscode','target','build','.agents_workspace']);
-const CODE_EXTS = new Set(['.rs','.js','.ts','.tsx','.jsx','.cjs','.mjs','.py']);
+const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.svn', '.hg', '.idea', '.vscode', 'target', 'build', '.agents_workspace']);
+const CODE_EXTS = new Set(['.rs', '.js', '.ts', '.tsx', '.jsx', '.cjs', '.mjs', '.py']);
 
-function collectCodeFiles(dirPath, rootDir, gitRules) {
-    let files = [], entries;
-    try { entries = fs.readdirSync(dirPath); } catch(e) { return files; }
+function collectCodeFiles(dirPath: string, rootDir: string, gitRules: GitRule[]): { relPath: string; fullPath: string }[] {
+    let files: { relPath: string; fullPath: string }[] = [];
+    let entries: string[];
+    try { entries = fs.readdirSync(dirPath); } catch (e) { return files; }
     const relDir = path.relative(rootDir, dirPath).replace(/\\/g, '/');
     for (const entry of entries) {
         if (entry.startsWith('.') && !entry.match(/\.\w+$/)) continue;
         const fullPath = path.join(dirPath, entry);
         const relPath = relDir ? relDir + '/' + entry : entry;
-        let stat; try { stat = fs.statSync(fullPath); } catch(e) { continue; }
+        let stat: fs.Stats;
+        try { stat = fs.statSync(fullPath); } catch (e) { continue; }
         if (stat.isDirectory()) {
             if (isIgnored(relPath, entry, true, gitRules)) continue;
             if (SKIP_DIRS.has(entry) || SKIP_DIRS.has(entry.toLowerCase())) continue;
@@ -106,26 +97,35 @@ function collectCodeFiles(dirPath, rootDir, gitRules) {
 }
 
 // === Regex-based Function Extraction ===
-const JS_EXTS = ['.js','.ts','.tsx','.jsx','.cjs','.mjs'];
+const JS_EXTS = ['.js', '.ts', '.tsx', '.jsx', '.cjs', '.mjs'];
 
-function extractFunctions(code, ext) {
-    const funcs = [], lines = code.split('\n');
+interface FuncInfo { name: string; line: number; endLine: number; type: string; }
+
+function extractFunctions(code: string, ext: string): FuncInfo[] {
+    const funcs: FuncInfo[] = [];
+    const lines = code.split('\n');
     if (ext === '.rs') {
-        for (let i = 0; i < lines.length; i++) { const s = lines[i].trim(); let m;
-            if ((m=s.match(/^(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/))) funcs.push({name:m[1],line:i+1,type:'fn'});
-            else if ((m=s.match(/^(?:pub\s+)?struct\s+(\w+)/))) funcs.push({name:m[1],line:i+1,type:'struct'});
-            else if ((m=s.match(/^(?:pub\s+)?impl(?:\s+<[^>]+>)?\s+(?:\w+\s+for\s+)?(\w+)/))) funcs.push({name:m[1],line:i+1,type:'impl'});
+        for (let i = 0; i < lines.length; i++) {
+            const s = lines[i].trim();
+            let m: RegExpMatchArray | null;
+            if ((m = s.match(/^(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/))) funcs.push({ name: m[1], line: i+1, type: 'fn' });
+            else if ((m = s.match(/^(?:pub\s+)?struct\s+(\w+)/))) funcs.push({ name: m[1], line: i+1, type: 'struct' });
+            else if ((m = s.match(/^(?:pub\s+)?impl(?:\s+<[^>]+>)?\s+(?:\w+\s+for\s+)?(\w+)/))) funcs.push({ name: m[1], line: i+1, type: 'impl' });
         }
     } else if (JS_EXTS.includes(ext)) {
-        for (let i = 0; i < lines.length; i++) { const s = lines[i].trim(); let m;
-            if ((m=s.match(/^(?:export\s+)?(?:async\s+)?function\s+(\w+)/))) funcs.push({name:m[1],line:i+1,type:'fn'});
-            else if ((m=s.match(/^(?:export\s+)?(?:default\s+)?class\s+(\w+)/))) funcs.push({name:m[1],line:i+1,type:'class'});
-            else if ((m=s.match(/^(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[\w]+)\s*=>/))) funcs.push({name:m[1],line:i+1,type:'arrow_fn'});
+        for (let i = 0; i < lines.length; i++) {
+            const s = lines[i].trim();
+            let m: RegExpMatchArray | null;
+            if ((m = s.match(/^(?:export\s+)?(?:async\s+)?function\s+(\w+)/))) funcs.push({ name: m[1], line: i+1, type: 'fn' });
+            else if ((m = s.match(/^(?:export\s+)?(?:default\s+)?class\s+(\w+)/))) funcs.push({ name: m[1], line: i+1, type: 'class' });
+            else if ((m = s.match(/^(?:export\s+)?const\s+(\w+)\s*=\s*(?:async\s+)?(?:\([^)]*\)|[\w]+)\s*=>/))) funcs.push({ name: m[1], line: i+1, type: 'arrow_fn' });
         }
     } else if (ext === '.py') {
-        for (let i = 0; i < lines.length; i++) { const s = lines[i]; let m;
-            if ((m=s.match(/^(?:async\s+)?def\s+(\w+)/))) funcs.push({name:m[1],line:i+1,type:'def'});
-            else if ((m=s.match(/^class\s+(\w+)/))) funcs.push({name:m[1],line:i+1,type:'class'});
+        for (let i = 0; i < lines.length; i++) {
+            const s = lines[i];
+            let m: RegExpMatchArray | null;
+            if ((m = s.match(/^(?:async\s+)?def\s+(\w+)/))) funcs.push({ name: m[1], line: i+1, type: 'def' });
+            else if ((m = s.match(/^class\s+(\w+)/))) funcs.push({ name: m[1], line: i+1, type: 'class' });
         }
     }
     // Вычисляем endLine для каждой функции
@@ -136,7 +136,7 @@ function extractFunctions(code, ext) {
 }
 
 // === Tool: search_code ===
-function searchCode(targetPath, query) {
+function searchCode(targetPath: string, query: string): string {
     const absPath = path.resolve(targetPath);
     if (!fs.existsSync(absPath)) return `❌ Путь не существует: ${absPath}`;
     const gitRules = loadGitignore(absPath);
@@ -145,19 +145,20 @@ function searchCode(targetPath, query) {
     if (queryTerms.length === 0) return '❌ Пустой поисковый запрос';
 
     // Строим индекс функций для всех файлов
-    const funcIndex = {};
+    const funcIndex: Record<string, FuncInfo[]> = {};
     for (const f of codeFiles) {
         try {
             const code = fs.readFileSync(f.fullPath, 'utf8');
             const ext = path.extname(f.fullPath).toLowerCase();
             const funcs = extractFunctions(code, ext);
             if (funcs.length > 0) funcIndex[f.relPath] = funcs;
-        } catch(e) {}
+        } catch (e) {}
     }
 
-    const results = [];
+    const results: { file: string; line: number; score: number; currentFunc: string; context: string }[] = [];
     for (const f of codeFiles) {
-        let code; try { code = fs.readFileSync(f.fullPath, 'utf8'); } catch(e) { continue; }
+        let code: string;
+        try { code = fs.readFileSync(f.fullPath, 'utf8'); } catch (e) { continue; }
         const lines = code.split('\n');
         for (let i = 0; i < lines.length; i++) {
             const lineLower = lines[i].toLowerCase();
@@ -168,7 +169,7 @@ function searchCode(targetPath, query) {
                     try {
                         const re = new RegExp('\\b' + term.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&') + '\\b', 'i');
                         if (re.test(lines[i])) score += 2;
-                    } catch(e) {}
+                    } catch (e) {}
                 }
             }
             if (score > 0) {
@@ -181,7 +182,8 @@ function searchCode(targetPath, query) {
                         }
                     }
                 }
-                const cs = Math.max(0, i - 2), ce = Math.min(lines.length - 1, i + 2);
+                const cs = Math.max(0, i - 2);
+                const ce = Math.min(lines.length - 1, i + 2);
                 const context = lines.slice(cs, ce + 1).map((l, idx) => `${cs + idx + 1}: ${l}`).join('\n');
                 results.push({ file: f.relPath, line: i + 1, score, currentFunc, context });
             }
@@ -199,9 +201,10 @@ function searchCode(targetPath, query) {
 }
 
 // === Tool: analyze_file ===
-function analyzeFile(filePath) {
+function analyzeFile(filePath: string): string {
     const absPath = path.resolve(filePath);
-    let code; try { code = fs.readFileSync(absPath, 'utf8'); } catch(e) { return `❌ Не удалось прочитать: ${e.message}`; }
+    let code: string;
+    try { code = fs.readFileSync(absPath, 'utf8'); } catch (e) { return `❌ Не удалось прочитать: ${(e as Error).message}`; }
     const ext = path.extname(absPath).toLowerCase();
     const lines = code.split('\n');
     const fileName = path.basename(absPath);
@@ -209,7 +212,7 @@ function analyzeFile(filePath) {
     let out = `📋 Анализ: ${fileName} (${lines.length} строк, ${ext})\n\n`;
 
     // 1. Imports
-    const imports = [];
+    const imports: string[] = [];
     for (let i = 0; i < lines.length; i++) {
         const s = lines[i].trim();
         if (ext === '.rs' && /^(use|mod)\s/.test(s)) imports.push(`  L${i+1}: ${s}`);
@@ -227,7 +230,7 @@ function analyzeFile(filePath) {
     }
 
     // 3. Error handling
-    const errs = [];
+    const errs: string[] = [];
     for (let i = 0; i < lines.length; i++) {
         const s = lines[i];
         if (/\b(try|catch|except|unwrap|expect\(|panic!|throw|raise|\.map_err|anyhow|resolve|reject)\b/.test(s)) {
@@ -244,8 +247,8 @@ function analyzeFile(filePath) {
 
         for (const func of funcs) {
             const funcCode = lines.slice(func.line - 1, func.endLine).join('\n');
-            const calls = new Set();
-            let m;
+            const calls = new Set<string>();
+            let m: RegExpExecArray | null;
             if (ext === '.rs') {
                 const re = /(?:::(\w+)\s*\(|\.(\w+)\s*\(|(?<![:\.\w])(\w+)\s*\()/g;
                 while ((m = re.exec(funcCode)) !== null) {
@@ -271,7 +274,7 @@ function analyzeFile(filePath) {
     }
 
     // 5. Suspicious patterns
-    const suspicious = [];
+    const suspicious: string[] = [];
     for (let i = 0; i < lines.length; i++) {
         const s = lines[i];
         if (ext === '.rs' && /\.unwrap\(\)/.test(s) && !/\.unwrap_or/.test(s))
@@ -295,18 +298,19 @@ function analyzeFile(filePath) {
 }
 
 // === Tool: trace_function ===
-function traceFunction(targetPath, functionName) {
+function traceFunction(targetPath: string, functionName: string): string {
     const absPath = path.resolve(targetPath);
     if (!fs.existsSync(absPath)) return `❌ Путь не существует: ${absPath}`;
     const gitRules = loadGitignore(absPath);
     const codeFiles = collectCodeFiles(absPath, absPath, gitRules);
 
-    const definitions = [];
-    const callers = [];
-    const calleesByDef = {};
+    const definitions: { file: string; line: number; endLine: number; type: string }[] = [];
+    const callers: { file: string; line: number; callerFunc: string; code: string }[] = [];
+    const calleesByDef: Record<string, string[]> = {};
 
     for (const f of codeFiles) {
-        let code; try { code = fs.readFileSync(f.fullPath, 'utf8'); } catch(e) { continue; }
+        let code: string;
+        try { code = fs.readFileSync(f.fullPath, 'utf8'); } catch (e) { continue; }
         const ext = path.extname(f.fullPath).toLowerCase();
         const lines = code.split('\n');
         const funcs = extractFunctions(code, ext);
@@ -317,11 +321,11 @@ function traceFunction(targetPath, functionName) {
                 definitions.push({ file: f.relPath, line: func.line, endLine: func.endLine, type: func.type });
                 // Извлекаем вызовы из тела функции
                 const funcCode = lines.slice(func.line - 1, func.endLine).join('\n');
-                const calls = new Set();
+                const calls = new Set<string>();
                 const re = ext === '.rs'
                     ? /(?:::(\w+)\s*\(|\.(\w+)\s*\(|(?<![:\.\w])(\w+)\s*\()/g
                     : /(?:\.(\w+)\s*\(|(?<![.\w])([a-z_]\w*)\s*\()/gi;
-                let m;
+                let m: RegExpExecArray | null;
                 while ((m = re.exec(funcCode)) !== null) {
                     const n = m[1] || m[2] || m[3];
                     if (n && n !== functionName && n.length > 1) calls.add(n);

@@ -1,21 +1,22 @@
-// Мульти-движковый веб-поиск (zero-dependency, без API-ключей).
+// Мульти-движковый веб-поиск (Deno, zero-dependency, без API-ключей).
 // Движки: duckduckgo (primary), brave, startpage, sogou, baidu, bing, juejin, csdn, exa.
 // Логирование статусов движков — в stderr (попадает в лог приложения как [MCP Stderr]).
-const { createMcpServer } = require('./mcp_base.cjs');
-const {
+import { Buffer } from "node:buffer";
+import { createMcpServer } from "./mcp_base.ts";
+import {
     request, stripTags, parseBlocksByClass, firstHref, normalizeHttpUrl,
-} = require('./web_http.cjs');
+} from "./web_http.ts";
 
 const MAX_RESULTS = 8;
 const CHAIN_PAUSE_MS = 800;
 const ENGINE_DEADLINE_MS = 20000;
 
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 // Защита от зависших движков: жёсткий дедлайн на каждый движок.
-function withDeadline(promise, ms, name) {
-    let timer;
-    const timeout = new Promise((_, reject) => {
+function withDeadline<T>(promise: Promise<T>, ms: number, name: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
         timer = setTimeout(() => reject(new Error('движок завис (дедлайн)')), ms);
     });
     return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
@@ -24,7 +25,7 @@ function withDeadline(promise, ms, name) {
 const UA_CHROME_112 = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/112.0.0.0 Safari/537.36';
 
 // Человекочитаемое описание HTTP-ошибок движков (пишется в лог [ENGINE]).
-function httpStatusError(status) {
+function httpStatusError(status: number): string {
     if (status === 429) return 'лимит запросов (rate-limit) — попробуй позже';
     if (status === 521) return 'антибот-защита сайта (521)';
     if (status === 403) return 'доступ запрещён (403) — вероятна блокировка сервисом';
@@ -36,27 +37,34 @@ function httpStatusError(status) {
 // ─────────────────────────── DuckDuckGo (primary) ───────────────────────────
 
 // DDG при автоматизированных запросах отдаёт антибот-страницу "anomaly" (202, JS-challenge).
-function isAnomaly(status, body) {
+function isAnomaly(status: number, body: string): boolean {
     return status >= 200 && status < 300 && (body.includes('anomaly') || body.includes('execDeep'));
 }
 
-function ddgNormalizeUrl(raw) {
+function ddgNormalizeUrl(raw: string): string {
     let url = normalizeHttpUrl(raw, 'https://duckduckgo.com/');
     if (!url) return '';
     // Развернуть внутренние ссылки-редиректы duckduckgo.com/l/?uddg=...
     try {
         const u = new URL(url);
         if (u.hostname === 'duckduckgo.com' && u.pathname.startsWith('/l/') && u.searchParams.get('uddg')) {
-            const decoded = decodeURIComponent(u.searchParams.get('uddg'));
+            const decoded = decodeURIComponent(u.searchParams.get('uddg')!);
             url = normalizeHttpUrl(decoded, 'https://duckduckgo.com/');
         }
     } catch { /* оставляем как есть */ }
     return url;
 }
 
-async function searchDuckDuckGo(query, limit) {
-    const all = [];
-    const errors = [];
+interface SearchResult {
+    title: string;
+    url: string;
+    snippet: string;
+    source?: string;
+}
+
+async function searchDuckDuckGo(query: string, limit: number): Promise<SearchResult[]> {
+    const all: SearchResult[] = [];
+    const errors: string[] = [];
 
     // 1. Instant Answer API — мгновенный, но для многих запросов пуст.
     try {
@@ -65,10 +73,10 @@ async function searchDuckDuckGo(query, limit) {
             { headers: { 'Accept': 'application/json' }, timeoutMs: 10000 }
         );
         if (res.status === 200) {
-            let json;
+            let json: any;
             try { json = JSON.parse(res.text); } catch { json = null; }
             if (json) {
-                const pushTopic = (t) => {
+                const pushTopic = (t: any) => {
                     const url = ddgNormalizeUrl(t.FirstURL || t.Url || '');
                     const text = stripTags(t.Text || t.Result || '');
                     if (url && text) all.push({ title: (t.Text || url).slice(0, 120), url, snippet: text.slice(0, 400) });
@@ -82,7 +90,7 @@ async function searchDuckDuckGo(query, limit) {
                 }
             }
         }
-    } catch (e) { errors.push('Instant Answer: ' + e.message); }
+    } catch (e) { errors.push('Instant Answer: ' + (e as Error).message); }
 
     if (all.length < 3) {
         await sleep(2500);
@@ -107,7 +115,7 @@ async function searchDuckDuckGo(query, limit) {
                     all.push({ title, url, snippet: snip ? stripTags(snip[1]) : '' });
                 }
                 if (all.length >= 3) break;
-            } catch (e) { errors.push('DDG html: ' + e.message); }
+            } catch (e) { errors.push('DDG html: ' + (e as Error).message); }
             await sleep(4000);
         }
     }
@@ -125,7 +133,7 @@ async function searchDuckDuckGo(query, limit) {
             if (res.status !== 200) throw new Error(httpStatusError(res.status));
             if (isAnomaly(res.status, res.text)) { throw new Error('аномальная страница (anomaly)'); }
             const linkRe = /<a[^>]+class='result-link'[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>|<a[^>]+href="([^"]+)"[^>]+class='result-link'[^>]*>([\s\S]*?)<\/a>/g;
-            let m;
+            let m: RegExpExecArray | null;
             while ((m = linkRe.exec(res.text)) !== null) {
                 const url = ddgNormalizeUrl(m[1] || m[3]);
                 const title = stripTags(m[2] || m[4]);
@@ -134,7 +142,7 @@ async function searchDuckDuckGo(query, limit) {
                 const snip = after.match(/<td class='result-snippet'>([\s\S]*?)<\/td>/);
                 all.push({ title, url, snippet: snip ? stripTags(snip[1]) : '' });
             }
-        } catch (e) { errors.push('DDG lite: ' + e.message); }
+        } catch (e) { errors.push('DDG lite: ' + (e as Error).message); }
     }
 
     if (all.length === 0) {
@@ -145,7 +153,7 @@ async function searchDuckDuckGo(query, limit) {
 
 // ─────────────────────────── Brave ───────────────────────────
 
-async function searchBrave(query, limit) {
+async function searchBrave(query: string, limit: number): Promise<SearchResult[]> {
     const res = await request(
         `https://search.brave.com/search?q=${encodeURIComponent(query)}&source=web&offset=0`,
         {
@@ -166,7 +174,7 @@ async function searchBrave(query, limit) {
     if (/verify you are human|unusual traffic|access denied/i.test(res.text) && !/data-pos="/.test(res.text)) {
         throw new Error('заблокирован (капча)');
     }
-    const out = [];
+    const out: SearchResult[] = [];
     for (const block of parseBlocksByClass(res.text, 'snippet')) {
         const url = firstHref(block);
         if (!url) continue;
@@ -192,7 +200,7 @@ async function searchBrave(query, limit) {
 
 // ─────────────────────────── Startpage ───────────────────────────
 
-async function searchStartpage(query, limit) {
+async function searchStartpage(query: string, limit: number): Promise<SearchResult[]> {
     const home = await request('https://www.startpage.com/', { timeoutMs: 10000 });
     if (home.status !== 200) throw new Error(httpStatusError(home.status));
     // Startpage закрыт Anubis PoW-челленджем (JS proof-of-work) — без браузера не пройти.
@@ -219,7 +227,7 @@ async function searchStartpage(query, limit) {
     // Интерстициальная страница: первый запрос возвращает скрипт с payload, который надо отправить ещё раз.
     const dataMatch = res.text.match(/var data = (\{[\s\S]*?\});/);
     if (dataMatch) {
-        let payload = null;
+        let payload: any = null;
         try { payload = JSON.parse(dataMatch[1]); } catch { /* ignore */ }
         if (payload && payload.sgt) {
             await sleep(1500);
@@ -236,7 +244,7 @@ async function searchStartpage(query, limit) {
         throw new Error('капча');
     }
 
-    const out = [];
+    const out: SearchResult[] = [];
     for (const block of parseBlocksByClass(res.text, 'result')) {
         const a = block.match(/<a[^>]+class="[^"]*result-link[^"]*"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i) ||
             block.match(/<a[^>]+href="([^"]+)"[^>]+class="[^"]*result-link[^"]*"[^>]*>([\s\S]*?)<\/a>/i);
@@ -255,7 +263,7 @@ async function searchStartpage(query, limit) {
 
 // ─────────────────────────── Sogou ───────────────────────────
 
-function sogouExpandUrl(href) {
+function sogouExpandUrl(href: string): string {
     try {
         const u = new URL(href, 'https://www.sogou.com/');
         for (const key of ['url', 'u', 'link']) {
@@ -266,7 +274,7 @@ function sogouExpandUrl(href) {
     } catch { return ''; }
 }
 
-async function searchSogou(query, limit) {
+async function searchSogou(query: string, limit: number): Promise<SearchResult[]> {
     const res = await request(
         `https://www.sogou.com/web?query=${encodeURIComponent(query)}&page=1&ie=utf8`,
         { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0 Safari/537.36', 'Referer': 'https://www.sogou.com/' }, timeoutMs: 10000 }
@@ -275,7 +283,7 @@ async function searchSogou(query, limit) {
     if (/antispider|请输入验证码|访问过于频繁|搜狗搜索验证/i.test(res.text)) {
         throw new Error('заблокирован (челлендж)');
     }
-    const out = [];
+    const out: SearchResult[] = [];
     for (const cls of ['vrwrap', 'rb']) {
         for (const block of parseBlocksByClass(res.text, cls)) {
             const a = block.match(/<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
@@ -299,7 +307,7 @@ async function searchSogou(query, limit) {
 
 // ─────────────────────────── Baidu ───────────────────────────
 
-async function searchBaidu(query, limit) {
+async function searchBaidu(query: string, limit: number): Promise<SearchResult[]> {
     const res = await request(
         `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&pn=0&ie=utf-8&tn=baidu`,
         { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36', 'Accept-Language': 'zh-CN,zh;q=0.9' }, timeoutMs: 10000 }
@@ -308,9 +316,9 @@ async function searchBaidu(query, limit) {
     if (/wappass|百度安全验证|访问过于频繁|请输入验证码/i.test(res.text)) {
         throw new Error('заблокирован (антибот)');
     }
-    const out = [];
+    const out: SearchResult[] = [];
     const h3Re = /<h3[^>]*>([\s\S]*?)<\/h3>/gi;
-    let m;
+    let m: RegExpExecArray | null;
     while ((m = h3Re.exec(res.text)) !== null) {
         const a = m[1].match(/<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
         if (!a) continue;
@@ -326,13 +334,13 @@ async function searchBaidu(query, limit) {
 
 // ─────────────────────────── Bing (request-only) ───────────────────────────
 
-function isBingBlocked(text) {
+function isBingBlocked(text: string): boolean {
     const keywords = ['captcha', 'verify you are human', 'access denied', 'blocked', 'too many requests', '请验证', '验证码'];
     const hits = keywords.filter((k) => text.toLowerCase().includes(k));
     return hits.length >= 2 || (text.toLowerCase().includes('captcha') && !/<li class="b_algo"/.test(text));
 }
 
-function bingRealUrl(href) {
+function bingRealUrl(href: string): string {
     try {
         const u = new URL(href, 'https://www.bing.com/');
         if (u.hostname.includes('bing.com')) {
@@ -347,9 +355,9 @@ function bingRealUrl(href) {
     } catch { return ''; }
 }
 
-async function searchBing(query, limit) {
+async function searchBing(query: string, limit: number): Promise<SearchResult[]> {
     const headers = { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' };
-    let res;
+    let res: import("./web_http.ts").HttpResponse | null;
     try {
         res = await request(
             `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=10&setlang=ru-ru`,
@@ -366,7 +374,7 @@ async function searchBing(query, limit) {
     }
     if (res.status !== 200) throw new Error(httpStatusError(res.status));
     if (isBingBlocked(res.text)) throw new Error('заблокирован (капча) — попробуйте позже');
-    const out = [];
+    const out: SearchResult[] = [];
     for (const block of parseBlocksByClass(res.text, 'b_algo')) {
         const a = block.match(/<h2[^>]*>[\s\S]*?<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
         if (!a) continue;
@@ -387,19 +395,20 @@ async function searchBing(query, limit) {
 
 // ─────────────────────────── Juejin (JSON API) ───────────────────────────
 
-async function searchJuejin(query, limit) {
+async function searchJuejin(query: string, limit: number): Promise<SearchResult[]> {
     const url = `https://api.juejin.cn/search_api/v1/search?aid=2608&uuid=7259393293459605051&spider=0&query=${encodeURIComponent(query)}&id_type=0&cursor=0&limit=${Math.min(limit, 20)}&search_type=0&sort_type=0&version=1`;
     const res = await request(url, { headers: { 'Host': 'api.juejin.cn', 'User-Agent': UA_CHROME_112, 'Accept': 'application/json' }, timeoutMs: 10000 });
     if (res.status !== 200) throw new Error(httpStatusError(res.status));
-    let json;
+    let json: any;
     try { json = JSON.parse(res.text); } catch { throw new Error('невалидный JSON'); }
     if (json.err_no !== 0) throw new Error('err_no=' + json.err_no);
-    const out = [];
+    const out: SearchResult[] = [];
     for (const item of json.data || []) {
         const m = item.result_model || {};
         const info = m.article_info || {};
         const author = (m.author_user_info || {}).user_name || '';
-        const url2 = m.article_id ? `https://juejin.cn/post/${m.article_id}` : '';        const title = stripTags(item.title_highlight || info.title || '');
+        const url2 = m.article_id ? `https://juejin.cn/post/${m.article_id}` : '';
+        const title = stripTags(item.title_highlight || info.title || '');
         if (!title || !url2) continue;
         const desc = stripTags(item.content_highlight || info.brief_content || '').slice(0, 300);
         const meta = [m.category ? `Категория: ${m.category}` : '', author ? `Автор: ${author}` : '', info.digg_count ? `👍 ${info.digg_count}` : ''].filter(Boolean).join(' · ');
@@ -410,16 +419,16 @@ async function searchJuejin(query, limit) {
 
 // ─────────────────────────── CSDN (JSON API) ───────────────────────────
 
-async function searchCsdn(query, limit) {
+async function searchCsdn(query: string, limit: number): Promise<SearchResult[]> {
     const url = `https://so.csdn.net/api/v3/search?q=${encodeURIComponent(query)}&t=all&p=1&s=0&tm=0&lv=-1&ft=0&ct=-1&pnt=-1&ry=-1&ss=-1&dct=-1&vt=-1&dms=-1&vip=-1&hit=1&ec=1&c_p=1&c_r=1&showSrc=1&showBlog=1`;
     const res = await request(url, {
         headers: { 'User-Agent': 'Apifox/1.0.0 (https://apifox.com)', 'Host': 'so.csdn.net', 'Accept': 'application/json' },
         timeoutMs: 10000,
     });
     if (res.status !== 200) throw new Error(httpStatusError(res.status));
-    let json;
+    let json: any;
     try { json = JSON.parse(res.text); } catch { throw new Error('невалидный JSON'); }
-    const out = [];
+    const out: SearchResult[] = [];
     for (const r of json.result_vos || []) {
         const title = stripTags(r.title || '');
         const url2 = cleanTrackingUrl(normalizeHttpUrl(r.url_location, 'https://so.csdn.net/'));
@@ -431,7 +440,7 @@ async function searchCsdn(query, limit) {
 
 // ─────────────────────────── Exa (внутренний keyless endpoint) ───────────────────────────
 
-async function searchExa(query, limit) {
+async function searchExa(query: string, limit: number): Promise<SearchResult[]> {
     const payload = JSON.stringify({
         numResults: limit, query, type: 'auto', useAutoprompt: true, domainFilterType: 'include',
         text: true, density: 'compact', resolvedSearchType: 'neural', moderation: true, fastMode: false, rerankerType: 'default',
@@ -451,9 +460,9 @@ async function searchExa(query, limit) {
         },
     });
     if (res.status !== 200) throw new Error(httpStatusError(res.status));
-    let json;
+    let json: any;
     try { json = JSON.parse(res.text); } catch { throw new Error('невалидный JSON'); }
-    const out = [];
+    const out: SearchResult[] = [];
     for (const r of json.results || []) {
         if (!r.url || !r.title) continue;
         const meta = [r.author ? `Автор: ${r.author}` : '', r.publishedDate ? `Опубликовано: ${r.publishedDate}` : ''].filter(Boolean).join('. ');
@@ -466,7 +475,7 @@ async function searchExa(query, limit) {
 
 // ─────────────────────────── Движок-менеджер ───────────────────────────
 
-const ENGINES = {
+const ENGINES: Record<string, (q: string, l: number) => Promise<SearchResult[]>> = {
     duckduckgo: searchDuckDuckGo,
     brave: searchBrave,
     startpage: searchStartpage,
@@ -479,8 +488,8 @@ const ENGINES = {
 };
 const DEFAULT_ORDER = ['brave', 'duckduckgo', 'startpage', 'sogou', 'juejin', 'csdn', 'baidu', 'bing', 'exa'];
 
-function dedupe(results) {
-    const seen = new Set();
+function dedupe(results: SearchResult[]): SearchResult[] {
+    const seen = new Set<string>();
     return results.filter((r) => {
         const key = r.url;
         if (!key || seen.has(key)) return false;
@@ -490,7 +499,7 @@ function dedupe(results) {
 }
 
 // Оценка релевантности: какая доля результатов содержит хотя бы одно значимое слово запроса.
-function relevantScore(query, results) {
+function relevantScore(query: string, results: SearchResult[]): number {
     const words = query.toLowerCase().split(/\s+/)
         .map((w) => w.replace(/[^\p{L}\p{N}]/gu, ''))
         .filter((w) => w.length >= 4);
@@ -504,7 +513,7 @@ function relevantScore(query, results) {
 }
 
 // Убрать tracking-параметры из URL (CSDN/Juejin добавляют мусор).
-function cleanTrackingUrl(raw) {
+function cleanTrackingUrl(raw: string): string {
     if (!raw) return '';
     try {
         const u = new URL(raw);
@@ -520,16 +529,16 @@ function cleanTrackingUrl(raw) {
     } catch { return raw; }
 }
 
-function engineLog(name, status, extra) {
+function engineLog(name: string, status: string, extra?: string): void {
     console.error(`[ENGINE] ${name}: ${status}${extra ? ' — ' + extra : ''}`);
 }
 
 // Последовательная цепочка фолбэков (по умолчанию): первый рабочий движок выигрывает.
-async function runChain(query, engines, limit) {
+async function runChain(query: string, engines: string[], limit: number): Promise<{ all: SearchResult[]; failures: { name: string; message: string }[] }> {
     const start = Date.now();
-    const all = [];
-    const failures = [];
-    const summary = [];
+    const all: SearchResult[] = [];
+    const failures: { name: string; message: string }[] = [];
+    const summary: string[] = [];
     for (const name of engines) {
         const t0 = Date.now();
         try {
@@ -553,8 +562,8 @@ async function runChain(query, engines, limit) {
             }
         } catch (e) {
             const sec = ((Date.now() - t0) / 1000).toFixed(1);
-            engineLog(name, `ОШИБКА за ${sec}с — ${e.message}`);
-            failures.push({ name, message: e.message });
+            engineLog(name, `ОШИБКА за ${sec}с — ${(e as Error).message}`);
+            failures.push({ name, message: (e as Error).message });
             summary.push(`${name}:ERR`);
         }
         if (all.length < limit) await sleep(CHAIN_PAUSE_MS);
@@ -565,7 +574,7 @@ async function runChain(query, engines, limit) {
 }
 
 // Параллельный режим (engines задан явно): запросы ко всем движкам одновременно.
-async function runParallel(query, engines, limit) {
+async function runParallel(query: string, engines: string[], limit: number): Promise<{ all: SearchResult[]; failures: { name: string; message: string }[] }> {
     const start = Date.now();
     const perEngine = Math.max(2, Math.ceil(limit / engines.length));
     const results = await Promise.all(engines.map(async (name) => {
@@ -581,19 +590,19 @@ async function runParallel(query, engines, limit) {
             return { name, found, error: null };
         } catch (e) {
             const sec = ((Date.now() - t0) / 1000).toFixed(1);
-            engineLog(name, `ОШИБКА за ${sec}с — ${e.message}`);
-            return { name, found: [], error: e.message };
+            engineLog(name, `ОШИБКА за ${sec}с — ${(e as Error).message}`);
+            return { name, found: [], error: (e as Error).message };
         }
     }));
     const all = results.flatMap((r) => r.found);
-    const failures = results.filter((r) => r.error).map((r) => ({ name: r.name, message: r.error }));
+    const failures = results.filter((r) => r.error).map((r) => ({ name: r.name, message: r.error! }));
     const summary = results.map((r) => `${r.name}:${r.error ? 'ERR' : r.found.length}`).join(', ');
     const totalSec = ((Date.now() - start) / 1000).toFixed(1);
     console.error(`[ENGINE] Итог по запросу "${query.slice(0, 60)}": ${summary} | собрано ${all.length} рез. за ${totalSec}с`);
     return { all, failures };
 }
 
-function formatResults(all, failures, limit) {
+function formatResults(all: SearchResult[], failures: { name: string; message: string }[], limit: number): string {
     const deduped = dedupe(all).slice(0, limit);
     const lines = deduped.map((r, i) => {
         const extra = [r.source ? ` (${r.source})` : ''].join('');

@@ -1,30 +1,30 @@
 // MCP-сервер времени (zero-dependency, без API-ключей).
 // Инструмент GetCurrentTime — текущая дата/время в системной таймзоне или произвольной IANA-таймзоне.
-// Аналог официального MCP Time server (modelcontextprotocol/servers), реализация на Node без зависимостей.
-const { createMcpServer } = require('./mcp_base.cjs');
+// Аналог официального MCP Time server (modelcontextprotocol/servers), реализация на Deno без зависимостей.
+import { createMcpServer } from "./mcp_base.ts";
 
 const WEEKDAYS = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'];
 const MONTHS = ['января', 'февраля', 'марта', 'апреля', 'мая', 'июня', 'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря'];
 
-function toUtcIso(date) {
+function toUtcIso(date: Date): string {
     return date.toISOString();
 }
 
-function getLocalParts(date, timeZone) {
+function getLocalParts(date: Date, timeZone: string): Record<string, string> {
     const fmt = new Intl.DateTimeFormat('ru-RU', {
         timeZone,
         year: 'numeric', month: '2-digit', day: '2-digit',
         hour: '2-digit', minute: '2-digit', second: '2-digit',
         weekday: 'long', hour12: false,
     });
-    const parts = {};
+    const parts: Record<string, string> = {};
     for (const p of fmt.formatToParts(date)) {
         if (p.type !== 'literal') parts[p.type] = p.value;
     }
     return parts;
 }
 
-function getCurrentTime(args) {
+function getCurrentTime(args: { timezone?: string }): string {
     const requested = (args.timezone || '').trim();
     const timeZone = requested || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
@@ -37,7 +37,7 @@ function getCurrentTime(args) {
 
     const now = new Date();
     const parts = getLocalParts(now, timeZone);
-    const weekdayIdx = ['понедельник', 'вторник', 'среда', 'четверг', 'пятница', 'суббота', 'воскресенье'].indexOf(parts.weekday);
+    const weekdayIdx = WEEKDAYS.indexOf(parts.weekday);
     const iso = toUtcIso(now);
 
     const year = parts.year;

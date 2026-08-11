@@ -2,8 +2,7 @@ use std::fs;
 use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
-const NODE_URL: &str = "https://nodejs.org/dist/v22.14.0/win-x64/node.exe";
-const DENO_URL: &str = "https://github.com/denoland/deno/releases/download/v2.2.8/deno-x86_64-pc-windows-msvc.zip";
+const DENO_URL: &str = "https://github.com/denoland/deno/releases/download/v2.9.5/deno-x86_64-pc-windows-msvc.zip";
 const YT_DLP_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
 
 pub fn get_bins_dir(data_dir: &Path) -> PathBuf {
@@ -20,7 +19,6 @@ fn bin_filename(name: &str) -> String {
 
 fn bin_url(name: &str) -> Result<&'static str, String> {
     match name {
-        "node" => Ok(NODE_URL),
         "deno" => Ok(DENO_URL),
         "yt-dlp" => Ok(YT_DLP_URL),
         _ => Err(format!("Неизвестный бинарник: {}", name)),

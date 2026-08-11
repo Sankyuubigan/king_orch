@@ -1,6 +1,7 @@
-const fs = require('fs');
-const path = require('path');
-const { createMcpServer } = require('./mcp_base.cjs');
+// MCP-сервер чтения секций markdown (Deno). Инструмент: ReadSection.
+import fs from "node:fs";
+import path from "node:path";
+import { createMcpServer } from "./mcp_base.ts";
 
 createMcpServer({
     name: "markdown-section-reader-mcp",
@@ -29,8 +30,8 @@ createMcpServer({
             const content = fs.readFileSync(targetPath, 'utf8');
             const escapedHeading = heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-            // Найти позицию заголовка в начале строки
-            const headingRe = new RegExp(`^${escapedHeading}\\b.*$`, 'm');
+            // Найти позицию заголовка в начале строки (без \b — не матчит кириллицу)
+            const headingRe = new RegExp(`^${escapedHeading}(?=\\s|$).*$`, 'm');
             const headingMatch = content.match(headingRe);
             if (!headingMatch) {
                 return `Секция с заголовком "${heading}" не найдена в файле ${targetPath}`;

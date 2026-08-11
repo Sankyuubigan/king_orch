@@ -1,12 +1,12 @@
 // WebFetch (generic + сайт-фетчеры статей + GitHub README).
 // SSRF-защита: только публичные http/https, DNS-резолв с блокировкой приватных адресов (по open-websearch/urlSafety).
-const net = require('net');
-const dns = require('dns').promises;
-const { createMcpServer } = require('./mcp_base.cjs');
-const {
+import net from "node:net";
+import dns from "node:dns";
+import { createMcpServer } from "./mcp_base.ts";
+import {
     request, unescapeHtml, stripTags, normalizeText,
     findBalancedBlock, extractTagContent, findTagsByAttr,
-} = require('./web_http.cjs');
+} from "./web_http.ts";
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36';
 const UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.0 Mobile/15E148 Safari/604.1';
@@ -16,11 +16,11 @@ const MAX_BYTES = 2 * 1024 * 1024; // 2 MB
 
 // ─────────────────────────── SSRF-защита (по open-websearch/urlSafety) ───────────────────────────
 
-function stripIpv6Brackets(host) {
+function stripIpv6Brackets(host: string): string {
     return host.startsWith('[') && host.endsWith(']') ? host.slice(1, -1) : host;
 }
 
-function ipv4InCidr(ip, cidr, bits) {
+function ipv4InCidr(ip: string, cidr: string, bits: number): boolean {
     const parts = ip.split('.').map(Number);
     if (parts.length !== 4 || parts.some(p => isNaN(p) || p < 0 || p > 255)) return false;
     const int = ((parts[0] << 24) | (parts[1] << 16) | (parts[2] << 8) | parts[3]) >>> 0;
@@ -30,7 +30,7 @@ function ipv4InCidr(ip, cidr, bits) {
     return (int & mask) === (cint & mask);
 }
 
-function isPrivateIpv4(ip) {
+function isPrivateIpv4(ip: string): boolean {
     if (!net.isIPv4(ip)) return false;
     if (ipv4InCidr(ip, '0.0.0.0', 8)) return true;        // 0.0.0.0/8
     if (ipv4InCidr(ip, '10.0.0.0', 8)) return true;       // 10/8
@@ -45,7 +45,7 @@ function isPrivateIpv4(ip) {
     return false;
 }
 
-function isPrivateIpv6(ip) {
+function isPrivateIpv6(ip: string): boolean {
     if (!net.isIPv6(ip)) return false;
     const lower = ip.toLowerCase().replace(/^::ffff:/, ''); // IPv4-mapped
     if (net.isIPv4(lower)) return isPrivateIpv4(lower);
@@ -56,7 +56,7 @@ function isPrivateIpv6(ip) {
     return false;
 }
 
-function isPrivateOrLocalHostname(hostname) {
+function isPrivateOrLocalHostname(hostname: string): boolean {
     const host = stripIpv6Brackets(hostname.trim().toLowerCase());
     if (!host) return true;
     if (host === 'localhost' || host.endsWith('.localhost')) return true;
@@ -64,8 +64,8 @@ function isPrivateOrLocalHostname(hostname) {
     return isPrivateIpv4(host) || isPrivateIpv6(host);
 }
 
-async function assertPublicUrlResolved(rawUrl, label) {
-    let parsed;
+async function assertPublicUrlResolved(rawUrl: string, label: string): Promise<URL> {
+    let parsed: URL;
     try { parsed = new URL(rawUrl); }
     catch { throw new Error(`${label}: невалидный URL`); }
     if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
@@ -80,9 +80,9 @@ async function assertPublicUrlResolved(rawUrl, label) {
     }
     if (net.isIP(host) !== 0) return parsed;
 
-    let addresses;
+    let addresses: dns.LookupAddress[];
     try {
-        addresses = await dns.lookup(host, { all: true, verbatim: true });
+        addresses = await dns.promises.lookup(host, { all: true, verbatim: true });
     } catch {
         throw new Error(`${label}: не удалось разрешить DNS для '${host}'`);
     }
@@ -96,41 +96,39 @@ async function assertPublicUrlResolved(rawUrl, label) {
 
 // ─────────────────────────── HTTP с безопасными редиректами ───────────────────────────
 
-async function fetchUrlSafe(startUrl, opts = {}) {
+async function fetchUrlSafe(startUrl: string, opts: Record<string, unknown> = {}) {
     return request(startUrl, {
         ...opts,
-        timeoutMs: opts.timeoutMs || TIMEOUT_MS,
+        timeoutMs: (opts.timeoutMs as number) || TIMEOUT_MS,
         maxBytes: MAX_BYTES,
         maxRedirects: MAX_REDIRECTS,
-        checkUrl: (url, hop) => assertPublicUrlResolved(url, `URL (хоп ${hop})`),
+        checkUrl: (url: string, hop: number) => assertPublicUrlResolved(url, `URL (хоп ${hop})`),
     });
 }
 
 // HEAD pre-flight: отсечь большие ответы до скачивания (по open-websearch/fetchWebContent).
 // Многие серверы не умеют HEAD или врут — при проблемах молча продолжаем GET.
-async function headSizeOk(url) {
+async function headSizeOk(url: string): Promise<Error | null> {
     try {
         const res = await fetchUrlSafe(url, { method: 'HEAD', timeoutMs: 10000 });
-        const length = Number(res.headers['content-length']);
+        const length = Number((res as { headers: Record<string, string> }).headers['content-length']);
         if (Number.isFinite(length) && length > MAX_BYTES) {
             return new Error(`Ответ слишком большой (${length} байт, лимит ${MAX_BYTES})`);
         }
-    } catch (e) {
-        if (![400, 403, 404, 405, 406, 501].includes(Number(e.message.split(' ')[1]))) {
-            // Не-HEAD-совместимый сервер или сеть — идём на GET, там свой лимит.
-        }
+    } catch {
+        // Не-HEAD-совместимый сервер или сеть — идём на GET, там свой лимит.
     }
     return null;
 }
 
 // ─────────────────────────── Лёгкий парсер HTML (без jsdom/cheerio) ───────────────────────────
 
-function matchTitle(html) {
+function matchTitle(html: string): string {
     const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
     return m ? unescapeHtml(m[1].replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim() : '';
 }
 
-function matchMetaDescription(html) {
+function matchMetaDescription(html: string): string {
     const m = html.match(/<meta[^>]+(?:name|property)=["']description["'][^>]*>/i) ||
         html.match(/<meta[^>]+(?:name|property)=["']og:description["'][^>]*>/i);
     if (!m) return '';
@@ -138,14 +136,14 @@ function matchMetaDescription(html) {
     return c ? unescapeHtml(c[1]).trim() : '';
 }
 
-function stripNoiseTags(html) {
+function stripNoiseTags(html: string): string {
     let out = html;
     for (const tag of ['script', 'style', 'noscript', 'template', 'iframe', 'svg', 'canvas', 'nav', 'footer', 'header']) {
         for (let i = 0; i < 5; i++) {
             const re = new RegExp(`<${tag}\\b`, 'i');
             const m = out.match(re);
             if (!m) break;
-            const block = findBalancedBlock(out, tag, m.index);
+            const block = findBalancedBlock(out, tag, m.index ?? 0);
             if (!block) break;
             out = out.slice(0, block.start) + out.slice(block.end);
         }
@@ -153,7 +151,7 @@ function stripNoiseTags(html) {
     return out.replace(/<!--[\s\S]*?-->/g, '');
 }
 
-function blockToText(block) {
+function blockToText(block: string): string {
     const hasParagraphs = /<p[\s>]/i.test(block);
     let t = block.replace(/<h[1-6][^>]*>[\s\S]*?<\/h[1-6]>/gi, (m) => '\n' + unescapeHtml(m.replace(/<[^>]+>/g, ' ')) + '\n');
     if (hasParagraphs) {
@@ -166,12 +164,12 @@ function blockToText(block) {
     return unescapeHtml(t);
 }
 
-function extractMainText(html) {
+function extractMainText(html: string): { title: string; text: string; mode: string } {
     const title = matchTitle(html);
     const metaDesc = matchMetaDescription(html);
     const cleaned = stripNoiseTags(html);
 
-    const containers = [
+    const containers: { sel: string; type: string; attr?: string; value: string }[] = [
         { sel: 'article', type: 'tag', value: 'article' },
         { sel: 'main', type: 'tag', value: 'main' },
         { sel: '[role=main]', type: 'attr', attr: 'role', value: 'main' },
@@ -183,11 +181,11 @@ function extractMainText(html) {
     ];
 
     for (const c of containers) {
-        let content = null;
+        let content: string | null = null;
         if (c.type === 'tag') {
             content = extractTagContent(cleaned, c.value);
         } else if (c.type === 'attr' || c.type === 'class') {
-            const found = findTagsByAttr(cleaned, c.attr, c.value);
+            const found = findTagsByAttr(cleaned, c.attr as string, c.value);
             for (const f of found) {
                 const block = findBalancedBlock(cleaned, f.tag, f.index);
                 if (!block) continue;
@@ -210,26 +208,26 @@ function extractMainText(html) {
     return { title, text: normalizeText([title, metaDesc].filter(Boolean).join('\n\n')), mode: 'metadata' };
 }
 
-function looksLikeHtml(raw) {
+function looksLikeHtml(raw: string): boolean {
     return /<!doctype html|<html[\s>]|<body[\s>]/i.test(raw);
 }
 
 // ─────────────────────────── Сайт-фетчеры статей (по open-websearch/targetValidation) ───────────────────────────
 
-function validateCsdnUrl(url) {
+function validateCsdnUrl(url: URL): boolean {
     return url.hostname === 'blog.csdn.net' && url.pathname.includes('/article/details/');
 }
 
-function validateJuejinUrl(url) {
+function validateJuejinUrl(url: URL): boolean {
     return url.hostname === 'juejin.cn' && url.pathname.includes('/post/');
 }
 
-function validateLinuxdoUrl(url) {
+function validateLinuxdoUrl(url: URL): boolean {
     return url.hostname === 'linux.do' && /\/t\/(?:[^/]+\/)?\d+$/.test(url.pathname);
 }
 
-async function fetchCsdnArticle(urlStr) {
-    const { status, body, text, url } = await fetchUrlSafe(urlStr);
+async function fetchCsdnArticle(urlStr: string): Promise<string> {
+    const { status, text, url } = await fetchUrlSafe(urlStr);
     if (status === 521 || status === 403 || status === 503) {
         throw new Error(`CSDN вернул HTTP ${status} (антибот-защита) — попробуй WebFetch на зеркало статьи`);
     }
@@ -238,7 +236,7 @@ async function fetchCsdnArticle(urlStr) {
     }
     const html = text;
     const cleaned = stripNoiseTags(html);
-    let content = null;
+    let content: string | null = null;
     const found = findTagsByAttr(cleaned, 'class', 'content_views');
     for (const f of found) {
         const block = findBalancedBlock(cleaned, f.tag, f.index);
@@ -255,7 +253,7 @@ async function fetchCsdnArticle(urlStr) {
     return `# ${title}\nИсточник: ${url}\n\n${normalizeText(blockToText(content))}`;
 }
 
-async function fetchJuejinArticle(urlStr) {
+async function fetchJuejinArticle(urlStr: string): Promise<string> {
     const { status, text, url } = await fetchUrlSafe(urlStr, { userAgent: UA_MOBILE });
     if (status === 521 || status === 403 || status === 503) {
         throw new Error(`Juejin вернул HTTP ${status} (антибот-защита)`);
@@ -265,7 +263,7 @@ async function fetchJuejinArticle(urlStr) {
     }
     const html = text;
     const cleaned = stripNoiseTags(html);
-    let content = null;
+    let content: string | null = null;
     for (const cls of ['markdown-body', 'article-content', 'content', 'bytemd-preview']) {
         const found = findTagsByAttr(cleaned, 'class', cls);
         for (const f of found) {
@@ -289,13 +287,13 @@ async function fetchJuejinArticle(urlStr) {
     return `# ${title}\nИсточник: ${url}\n\n${normalizeText(blockToText(content))}`;
 }
 
-async function fetchLinuxdoArticle(urlStr) {
+async function fetchLinuxdoArticle(urlStr: string): Promise<string> {
     // Discourse JSON API: https://linux.do/t/{topicId}.json
     const parsed = new URL(urlStr);
     const topicId = (parsed.pathname.match(/\/t\/(?:[^/]+\/)?(\d+)$/) || [])[1];
     const jsonUrl = `https://linux.do/t/${topicId}.json`;
     const res = await fetchUrlSafe(jsonUrl, { timeoutMs: 15000 });
-    let json;
+    let json: { post_stream?: { posts?: { cooked?: string }[] }; title?: string };
     try { json = JSON.parse(res.text); } catch { throw new Error('linux.do вернул не JSON (вероятно Cloudflare-блок)'); }
     const post = json.post_stream && json.post_stream.posts && json.post_stream.posts[0];
     if (!post || !post.cooked) throw new Error('В теме нет постов');
@@ -310,10 +308,10 @@ const README_CANDIDATES = [
     'readme.md', 'readme.mdx', 'readme.markdown', 'readme.txt', 'readme', 'Readme.md',
 ];
 
-function parseGithubRepo(urlStr) {
+function parseGithubRepo(urlStr: string): { owner: string; repo: string } | null {
     let m = urlStr.trim().match(/^git@github\.com:([^/]+)\/([^/]+?)(?:\.git)?$/);
     if (m) return { owner: m[1], repo: m[2] };
-    let parsed;
+    let parsed: URL;
     try { parsed = new URL(urlStr); } catch { return null; }
     if (parsed.hostname !== 'github.com' && parsed.hostname !== 'www.github.com') return null;
     const parts = parsed.pathname.split('/').filter(Boolean);
@@ -321,23 +319,23 @@ function parseGithubRepo(urlStr) {
     return { owner: parts[0], repo: parts[1].replace(/\.git$/, '') };
 }
 
-async function fetchGithubReadme(urlStr) {
+async function fetchGithubReadme(urlStr: string): Promise<string> {
     const repo = parseGithubRepo(urlStr);
     if (!repo) throw new Error('Не похоже на GitHub-репозиторий (ожидался https://github.com/owner/repo или git@github.com:owner/repo.git)');
     const owner = encodeURIComponent(repo.owner);
     const name = encodeURIComponent(repo.repo);
-    let lastError = null;
+    let lastError: Error | null = null;
     for (const candidate of README_CANDIDATES) {
         const rawUrl = `https://raw.githubusercontent.com/${owner}/${name}/HEAD/${candidate}`;
-        let res;
+        let res: { status: number; text: string };
         try {
             res = await request(rawUrl, {
                 userAgent: 'GitHub-README-Fetcher/1.0',
                 timeoutMs: 10000,
-                checkUrl: (u, hop) => assertPublicUrlResolved(u, `URL (хоп ${hop})`),
+                checkUrl: (u: string, hop: number) => assertPublicUrlResolved(u, `URL (хоп ${hop})`),
             });
         } catch (e) {
-            lastError = e;
+            lastError = e as Error;
             break; // сетевая ошибка — дальше бессмысленно
         }
         if (res.status === 200) {
@@ -351,8 +349,8 @@ async function fetchGithubReadme(urlStr) {
 
 // ─────────────────────────── Обработчики ───────────────────────────
 
-function formatResult(extraction, finalUrl) {
-    const lines = [];
+function formatResult(extraction: { title: string; text: string }, finalUrl: string): string {
+    const lines: string[] = [];
     if (extraction.title) lines.push(`# ${extraction.title}`);
     lines.push(`Источник: ${finalUrl}`);
     lines.push('');
@@ -360,7 +358,7 @@ function formatResult(extraction, finalUrl) {
     return lines.join('\n');
 }
 
-function normalizeUrlForArticle(raw) {
+function normalizeUrlForArticle(raw: string): URL | null {
     try {
         const u = new URL(raw);
         if (u.protocol !== 'http:' && u.protocol !== 'https:') return null;
@@ -396,19 +394,19 @@ createMcpServer({
         }
     ],
     handlers: {
-        WebFetch: async (args) => {
+        WebFetch: async (args: Record<string, string>) => {
             const url = (args.url || '').trim();
             if (!url) { throw new Error("WebFetch: укажи 'url'."); }
             const tooLarge = await headSizeOk(url);
             if (tooLarge) throw tooLarge;
-            const { body, text, url: finalUrl, status } = await fetchUrlSafe(url);
+            const { text, url: finalUrl, status } = await fetchUrlSafe(url);
             if (!text || (!looksLikeHtml(text) && !/<[a-z][^>]*>/i.test(text))) {
                 return `Страница ${finalUrl} (HTTP ${status}): нет HTML-контента.\n${text.slice(0, 2000)}`;
             }
             const extraction = extractMainText(text);
             return formatResult(extraction, finalUrl);
         },
-        FetchArticle: async (args) => {
+        FetchArticle: async (args: Record<string, string>) => {
             const url = (args.url || '').trim();
             const type = (args.type || '').trim().toLowerCase();
             if (!url || !type) { throw new Error("FetchArticle: укажи 'url' и 'type' (csdn | juejin | linuxdo)."); }
@@ -428,7 +426,7 @@ createMcpServer({
             }
             throw new Error("Неизвестный тип сайта: " + type + " (доступны: csdn, juejin, linuxdo)");
         },
-        FetchGithubReadme: async (args) => {
+        FetchGithubReadme: async (args: Record<string, string>) => {
             const url = (args.url || '').trim();
             if (!url) { throw new Error("FetchGithubReadme: укажи 'url'."); }
             return fetchGithubReadme(url);
