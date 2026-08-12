@@ -60,6 +60,11 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
                 crate::infra::telemetry::set_enabled(v);
             }
         }
+        "chat_font_scale" => {
+            if let Some(v) = value.as_f64() {
+                cfg.chat_font_scale = v as f32;
+            }
+        }
         _ => {}
     }
     infra::save_config(&app, &cfg);

@@ -30,6 +30,7 @@ async function initApp() {
     agentSelect: $<HTMLSelectElement>("agent-select"),
     contextSlider: $<HTMLInputElement>("context-slider"), contextValue: $<HTMLElement>("context-value"),
     maxGenSlider: $<HTMLInputElement>("max-gen-slider"), maxGenValue: $<HTMLElement>("max-gen-value"),
+    chatFontSlider: $<HTMLInputElement>("chat-font-slider"), chatFontValue: $<HTMLElement>("chat-font-value"),
     chkKvQuantK: $<HTMLInputElement>("chk-kv-quant-k"),
     chkKvQuantV: $<HTMLInputElement>("chk-kv-quant-v"),
     themeSelect: $<HTMLSelectElement>("theme-select"),

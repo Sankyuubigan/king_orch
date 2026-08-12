@@ -88,6 +88,9 @@ pub struct AppConfig {
     pub engine_variant: Option<String>,
     #[serde(default = "default_allow_error_reports")]
     pub allow_error_reports: bool,
+    /// Масштаб шрифта чата (1.0 = 100%, текущий размер по умолчанию).
+    #[serde(default = "default_chat_font_scale")]
+    pub chat_font_scale: f32,
 }
 
 pub fn auto_detect_mmproj(model_path: &str) -> Option<String> {
@@ -114,6 +117,7 @@ fn default_confidence_threshold() -> f32 { 0.8 }
 fn default_show_advanced_features() -> bool { false }
 fn default_show_folder_agents() -> bool { false }
 fn default_allow_error_reports() -> bool { true }
+fn default_chat_font_scale() -> f32 { 1.0 }
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -136,6 +140,7 @@ impl Default for AppConfig {
             llamacpp_dir: None,
             engine_variant: None,
             allow_error_reports: default_allow_error_reports(),
+            chat_font_scale: default_chat_font_scale(),
         }
     }
 }

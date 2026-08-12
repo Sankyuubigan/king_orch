@@ -69,11 +69,11 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .chat-layout { height: 100%; }
 .chat-history { flex: 1; background-color: var(--chat-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; box-shadow: inset 0 2px 5px rgba(0,0,0,0.05); }
 
-.message { max-width: 85%; padding: 10px 15px; border-radius: 8px; line-height: 1.5; font-size: 14px; word-wrap: break-word; position: relative; color: var(--text); }
+.message { max-width: 85%; padding: 10px 15px; border-radius: 8px; line-height: 1.5; font-size: calc(var(--chat-font-scale, 1) * 14px); word-wrap: break-word; position: relative; color: var(--text); }
 .message-user { align-self: flex-end; background-color: var(--msg-user); border-bottom-right-radius: 0; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
 .message-agent { align-self: flex-start; background-color: var(--msg-agent); border-bottom-left-radius: 0; box-shadow: 0 1px 2px rgba(0,0,0,0.1); width: 100%; }
-.message-system { align-self: center; background-color: var(--msg-system); color: #888; font-size: 13px; border-radius: 12px; padding: 10px 15px; text-align: left; }
-.message-thought { background-color: transparent; color: #888; font-size: 13px; border: none; border-radius: 0; padding: 4px 0; margin: 2px 0; box-shadow: none; }
+.message-system { align-self: center; background-color: var(--msg-system); color: #888; font-size: calc(var(--chat-font-scale, 1) * 13px); border-radius: 12px; padding: 10px 15px; text-align: left; }
+.message-thought { background-color: transparent; color: #888; font-size: calc(var(--chat-font-scale, 1) * 13px); border: none; border-radius: 0; padding: 4px 0; margin: 2px 0; box-shadow: none; }
 .tool-thought { display: flex; flex-direction: column; gap: 2px; }
 .tool-thought .tool-thought-args { color: #999; font-family: monospace; font-size: 11px; word-break: break-all; padding-left: 8px; }
 .tool-thought .tool-thought-result { color: #777; font-size: 11px; white-space: pre-wrap; max-height: 90px; overflow-y: auto; border-left: 2px solid var(--border); padding-left: 8px; margin-left: 4px; }
@@ -96,7 +96,7 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .chat-input-controls { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
 .chat-input-controls-left { display: flex; gap: 10px; align-items: center; flex: 1; min-width: 0; }
 .chat-input-controls-right { display: flex; gap: 10px; }
-#chat-input { width: 100%; resize: none; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit; font-size: 14px; min-height: 80px; max-height: 600px; overflow-y: auto; box-sizing: border-box; background: var(--input-bg); color: var(--text); }
+#chat-input { width: 100%; resize: none; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit; font-size: calc(var(--chat-font-scale, 1) * 14px); min-height: 80px; max-height: 600px; overflow-y: auto; box-sizing: border-box; background: var(--input-bg); color: var(--text); }
 
 /* --- Token Counter Styles --- */
 .token-counter {

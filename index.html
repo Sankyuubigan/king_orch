@@ -283,6 +283,10 @@
             <input type="range" id="max-gen-slider" min="512" max="16384" step="512" value="2048" style="flex: 1;" />
           </div>
           <div class="input-row" style="margin-top: 10px;">
+            <label for="chat-font-slider" style="min-width: 250px;">Размер текста в чате: <strong id="chat-font-value">100%</strong></label>
+            <input type="range" id="chat-font-slider" min="100" max="200" step="5" value="100" style="flex: 1;" />
+          </div>
+          <div class="input-row" style="margin-top: 10px;">
             <input type="checkbox" id="chk-kv-quant-k" />
             <label for="chk-kv-quant-k">Квантование КЛЮЧЕЙ KV кэша (Q8_0) - Снижает качество логики</label>
           </div>

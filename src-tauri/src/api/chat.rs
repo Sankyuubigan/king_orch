@@ -124,7 +124,7 @@ fn parse_tool_from_log(msg: &str) -> Option<ToolCallEvent> {
         let q2 = before[q1 + 1..].find('\'')? + q1 + 1;
         let tool = before[q1 + 1..q2].to_string();
         let agent_start = before.find("(агент '")?;
-        let agent_name = before[agent_start + 8..]
+        let agent_name = before[agent_start + "(агент '".len()..]
             .trim_end_matches(')')
             .trim_end_matches('\'')
             .to_string();
@@ -134,6 +134,59 @@ fn parse_tool_from_log(msg: &str) -> Option<ToolCallEvent> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_tool_from_log, parse_thought_from_log};
+
+    #[test]
+    fn parses_tool_call_start() {
+        let evt = parse_tool_from_log("🔧 Агент 'search-specialist' вызвал инструмент WebSearch: {\"query\":\"курс доллара\"}")
+            .expect("должно распарсить старт вызова");
+        assert_eq!(evt.author, "search-specialist");
+        assert_eq!(evt.tool, "WebSearch");
+        assert_eq!(evt.args.as_deref(), Some("{\"query\":\"курс доллара\"}"));
+        assert!(evt.result.is_none());
+    }
+
+    #[test]
+    fn parses_tool_call_result_with_cyrillic_agent() {
+        let evt = parse_tool_from_log("🔧 Инструмент 'WebSearch' (агент 'search-specialist') вернул результат (5 символов): тест")
+            .expect("должно распарсить результат вызова");
+        assert_eq!(evt.author, "search-specialist");
+        assert_eq!(evt.tool, "WebSearch");
+        assert_eq!(evt.result.as_deref(), Some("тест"));
+        assert!(evt.args.is_none());
+    }
+
+    #[test]
+    fn parses_tool_call_result_with_cyrillic_agent_and_rus_tool() {
+        let evt = parse_tool_from_log("🔧 Инструмент 'batch_get_agent_report' (агент 'soma_translator') вернул результат (11 символов): отчёт готов")
+            .expect("должно распарсить результат с кириллическим агентом");
+        assert_eq!(evt.author, "soma_translator");
+        assert_eq!(evt.tool, "batch_get_agent_report");
+        assert_eq!(evt.result.as_deref(), Some("отчёт готов"));
+    }
+
+    #[test]
+    fn parses_tool_call_result_no_agent_part() {
+        assert!(parse_tool_from_log("🔧 Что-то другое").is_none());
+    }
+
+    #[test]
+    fn parses_thought_log() {
+        let (agent, thought, time) = parse_thought_from_log("💭 Мысль search-specialist [d=0] (инструмент WebSearch) [⏱2.6с]: Найду курс доллара")
+            .expect("должно распарсить мысль");
+        assert_eq!(agent, "search-specialist");
+        assert_eq!(thought, "Найду курс доллара");
+        assert!((time - 2.6).abs() < 0.01);
+    }
+
+    #[test]
+    fn parses_thought_log_ignores_subagents() {
+        assert!(parse_thought_from_log("💭 Мысль worker [d=1] (инструмент WebSearch) [⏱1.0с]: что-то").is_none());
+    }
 }
 
 #[tauri::command]

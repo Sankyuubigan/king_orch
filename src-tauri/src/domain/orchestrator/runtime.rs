@@ -75,8 +75,11 @@ fn deno_permissions(mcp_name: &str, bins_dir: &Path) -> Vec<String> {
         }
         // Только запись файлов
         "fs_write" => vec!["--allow-write".to_string()],
-        // Только сеть
-        "web_search" | "docs_fetcher" | "knowledge_api" => vec!["--allow-net".to_string()],
+        // Сеть + чтение env (node:https читает NODE_EXTRA_CA_CERTS и proxy-переменные через node-compat)
+        "web_search" | "docs_fetcher" | "knowledge_api" => vec![
+            "--allow-net".to_string(),
+            "--allow-env".to_string(),
+        ],
         // Сеть + кеш пула инстансов (searxng_cache.json) в bins_dir + чтение KING_ORCH_BINS_DIR
         "searxng_search" => vec![
             "--allow-net".to_string(),

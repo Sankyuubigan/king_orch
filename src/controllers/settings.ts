@@ -61,6 +61,8 @@ export interface SettingsElements {
   engineProgressBar: HTMLDivElement;
   engineStatusLabel: HTMLDivElement;
   engineWarning: HTMLElement;
+  chatFontSlider: HTMLInputElement;
+  chatFontValue: HTMLElement;
 }
 
 export class SettingsController {
@@ -173,6 +175,12 @@ export class SettingsController {
       this.renderModelsList(config);
       if (config.context_size) { this.el.contextSlider.value = config.context_size.toString(); this.el.contextValue.innerText = config.context_size.toString(); }
       if (config.max_gen_tokens) { this.el.maxGenSlider.value = config.max_gen_tokens.toString(); this.el.maxGenValue.innerText = config.max_gen_tokens.toString(); }
+      if (config.chat_font_scale !== undefined) {
+        const pct = Math.round(config.chat_font_scale * 100);
+        this.el.chatFontSlider.value = pct.toString();
+        this.el.chatFontValue.innerText = `${pct}%`;
+        this.applyChatFontScale(config.chat_font_scale);
+      }
       if (config.kv_quant_keys !== undefined) this.el.chkKvQuantK.checked = config.kv_quant_keys;
       if (config.kv_quant_values !== undefined) this.el.chkKvQuantV.checked = config.kv_quant_values;
       if (config.theme) { this.el.themeSelect.value = config.theme; document.documentElement.setAttribute('data-theme', config.theme); }
@@ -196,6 +204,11 @@ export class SettingsController {
       await this.loadModelParams();
       await this.refreshEngineStatus();
     } catch(e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.loadConfig", e); }
+  }
+
+  /** Применяет масштаб шрифта чата (1.0 = 100%) через CSS-переменную. */
+  private applyChatFontScale(scale: number) {
+    document.documentElement.style.setProperty("--chat-font-scale", String(scale));
   }
 
   async refreshEngineStatus() {
@@ -324,6 +337,13 @@ export class SettingsController {
     this.el.maxGenSlider?.addEventListener("input", async () => { 
         this.el.maxGenValue.innerText = this.el.maxGenSlider.value; 
         await invoke("set_config_value", { key: "max_gen_tokens", value: parseInt(this.el.maxGenSlider.value, 10) });
+    });
+    this.el.chatFontSlider?.addEventListener("input", async () => {
+        const pct = parseInt(this.el.chatFontSlider.value, 10);
+        const scale = pct / 100;
+        this.el.chatFontValue.innerText = `${pct}%`;
+        this.applyChatFontScale(scale);
+        await invoke("set_config_value", { key: "chat_font_scale", value: scale });
     });
     this.el.chkKvQuantK?.addEventListener("change", async () => {
         await invoke("set_config_value", { key: "kv_quant_keys", value: this.el.chkKvQuantK.checked });
