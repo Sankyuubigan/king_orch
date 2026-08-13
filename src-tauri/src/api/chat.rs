@@ -108,7 +108,12 @@ fn parse_tool_from_log(msg: &str) -> Option<ToolCallEvent> {
 
     // Старт вызова: "Агент 'X' вызвал инструмент Y: args"
     if let Some(pos) = rest.find(" вызвал инструмент ") {
-        let agent_name = rest[..pos].trim_matches('\'').to_string();
+        let before = &rest[..pos];
+        let agent_name = before
+            .strip_prefix("Агент ")
+            .and_then(|s| s.strip_prefix('\''))
+            .and_then(|s| s.split_once('\'').map(|(n, _)| n.to_string()))
+            .unwrap_or_else(|| before.trim_matches('\'').to_string());
         let after = &rest[pos + " вызвал инструмент ".len()..];
         let (tool, args) = match after.split_once(": ") {
             Some((t, a)) => (t.to_string(), Some(a.to_string())),

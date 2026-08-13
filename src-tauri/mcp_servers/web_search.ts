@@ -1,15 +1,21 @@
 // Мульти-движковый веб-поиск (Deno, zero-dependency, без API-ключей).
-// Движки: duckduckgo (primary), brave, startpage, sogou, baidu, bing, juejin, csdn, exa.
+// Движки: wiby, duckduckgo (primary), marginalia, brave, startpage, sogou, baidu, bing, juejin, csdn, exa.
 // Логирование статусов движков — в stderr (попадает в лог приложения как [MCP Stderr]).
 import { Buffer } from "node:buffer";
 import { createMcpServer } from "./mcp_base.ts";
+import {
+    recordEngineCall,
+} from "./search_stats.ts";
+import {
+    cacheGet, cachePut, cacheKey,
+} from "./search_cache.ts";
 import {
     request, stripTags, parseBlocksByClass, firstHref, normalizeHttpUrl,
 } from "./web_http.ts";
 
 const MAX_RESULTS = 8;
 const CHAIN_PAUSE_MS = 800;
-const ENGINE_DEADLINE_MS = 20000;
+const ENGINE_DEADLINE_MS = 15000;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -70,7 +76,7 @@ async function searchDuckDuckGo(query: string, limit: number): Promise<SearchRes
     try {
         const res = await request(
             `https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`,
-            { headers: { 'Accept': 'application/json' }, timeoutMs: 10000 }
+            { headers: { 'Accept': 'application/json' }, timeoutMs: 4000 }
         );
         if (res.status === 200) {
             let json: any;
@@ -93,7 +99,7 @@ async function searchDuckDuckGo(query: string, limit: number): Promise<SearchRes
     } catch (e) { errors.push('Instant Answer: ' + (e as Error).message); }
 
     if (all.length < 3) {
-        await sleep(2500);
+        await sleep(700);
         // 2. html POST с ретраем при антибот-странице (anomaly).
         for (let i = 0; i < 2; i++) {
             try {
@@ -101,7 +107,7 @@ async function searchDuckDuckGo(query: string, limit: number): Promise<SearchRes
                     method: 'POST',
                     body: 'q=' + encodeURIComponent(query),
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Referer': 'https://html.duckduckgo.com/' },
-                    timeoutMs: 10000,
+                    timeoutMs: 6000,
                 });
                 if (res.status !== 200) throw new Error(httpStatusError(res.status));
                 if (isAnomaly(res.status, res.text)) { throw new Error('аномальная страница (anomaly)'); }
@@ -116,19 +122,19 @@ async function searchDuckDuckGo(query: string, limit: number): Promise<SearchRes
                 }
                 if (all.length >= 3) break;
             } catch (e) { errors.push('DDG html: ' + (e as Error).message); }
-            await sleep(4000);
+            await sleep(1000);
         }
     }
 
     if (all.length < 3) {
-        await sleep(2500);
+        await sleep(700);
         // 3. lite POST как последний fallback.
         try {
             const res = await request('https://lite.duckduckgo.com/lite/', {
                 method: 'POST',
                 body: 'q=' + encodeURIComponent(query),
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded', 'Referer': 'https://lite.duckduckgo.com/' },
-                timeoutMs: 10000,
+                timeoutMs: 6000,
             });
             if (res.status !== 200) throw new Error(httpStatusError(res.status));
             if (isAnomaly(res.status, res.text)) { throw new Error('аномальная страница (anomaly)'); }
@@ -167,7 +173,7 @@ async function searchBrave(query: string, limit: number): Promise<SearchResult[]
                 'sec-fetch-mode': 'navigate',
                 'sec-fetch-dest': 'document',
             },
-            timeoutMs: 10000,
+            timeoutMs: 5000,
         }
     );
     if (res.status !== 200) throw new Error(httpStatusError(res.status));
@@ -201,7 +207,7 @@ async function searchBrave(query: string, limit: number): Promise<SearchResult[]
 // ─────────────────────────── Startpage ───────────────────────────
 
 async function searchStartpage(query: string, limit: number): Promise<SearchResult[]> {
-    const home = await request('https://www.startpage.com/', { timeoutMs: 10000 });
+    const home = await request('https://www.startpage.com/', { timeoutMs: 6000 });
     if (home.status !== 200) throw new Error(httpStatusError(home.status));
     // Startpage закрыт Anubis PoW-челленджем (JS proof-of-work) — без браузера не пройти.
     if (home.text.includes('anubis_challenge') || home.text.includes('anubis')) {
@@ -220,7 +226,7 @@ async function searchStartpage(query: string, limit: number): Promise<SearchResu
         method: 'POST',
         body: new URLSearchParams({ query, cat: 'web', t: 'device', sc, abp: '1', abd: '1', abe: '1' }).toString(),
         headers: postHeaders,
-        timeoutMs: 10000,
+        timeoutMs: 6000,
     });
     if (res.status !== 200) throw new Error(httpStatusError(res.status));
 
@@ -230,12 +236,12 @@ async function searchStartpage(query: string, limit: number): Promise<SearchResu
         let payload: any = null;
         try { payload = JSON.parse(dataMatch[1]); } catch { /* ignore */ }
         if (payload && payload.sgt) {
-            await sleep(1500);
+            await sleep(700);
             res = await request('https://www.startpage.com/sp/search', {
                 method: 'POST',
                 body: new URLSearchParams({ query, sgt: payload.sgt, cat: 'web', t: 'device', sc, abp: '1', abd: '1', abe: '1' }).toString(),
                 headers: postHeaders,
-                timeoutMs: 10000,
+                timeoutMs: 6000,
             });
             if (res.status !== 200) throw new Error(httpStatusError(res.status));
         }
@@ -277,7 +283,7 @@ function sogouExpandUrl(href: string): string {
 async function searchSogou(query: string, limit: number): Promise<SearchResult[]> {
     const res = await request(
         `https://www.sogou.com/web?query=${encodeURIComponent(query)}&page=1&ie=utf8`,
-        { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0 Safari/537.36', 'Referer': 'https://www.sogou.com/' }, timeoutMs: 10000 }
+        { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0 Safari/537.36', 'Referer': 'https://www.sogou.com/' }, timeoutMs: 5000 }
     );
     if (res.status !== 200) throw new Error(httpStatusError(res.status));
     if (/antispider|请输入验证码|访问过于频繁|搜狗搜索验证/i.test(res.text)) {
@@ -310,7 +316,7 @@ async function searchSogou(query: string, limit: number): Promise<SearchResult[]
 async function searchBaidu(query: string, limit: number): Promise<SearchResult[]> {
     const res = await request(
         `https://www.baidu.com/s?wd=${encodeURIComponent(query)}&pn=0&ie=utf-8&tn=baidu`,
-        { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36', 'Accept-Language': 'zh-CN,zh;q=0.9' }, timeoutMs: 10000 }
+        { headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36', 'Accept-Language': 'zh-CN,zh;q=0.9' }, timeoutMs: 5000 }
     );
     if (res.status !== 200) throw new Error(httpStatusError(res.status));
     if (/wappass|百度安全验证|访问过于频繁|请输入验证码/i.test(res.text)) {
@@ -361,7 +367,7 @@ async function searchBing(query: string, limit: number): Promise<SearchResult[]>
     try {
         res = await request(
             `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=10&setlang=ru-ru`,
-            { headers, timeoutMs: 8000 }
+            { headers, timeoutMs: 5000 }
         );
     } catch (e) {
         res = null;
@@ -369,7 +375,7 @@ async function searchBing(query: string, limit: number): Promise<SearchResult[]>
     if (!res || res.status !== 200) {
         res = await request(
             `https://cn.bing.com/search?q=${encodeURIComponent(query)}&count=10&setlang=ru-ru&ensearch=0`,
-            { headers, timeoutMs: 8000 }
+            { headers, timeoutMs: 5000 }
         );
     }
     if (res.status !== 200) throw new Error(httpStatusError(res.status));
@@ -397,7 +403,7 @@ async function searchBing(query: string, limit: number): Promise<SearchResult[]>
 
 async function searchJuejin(query: string, limit: number): Promise<SearchResult[]> {
     const url = `https://api.juejin.cn/search_api/v1/search?aid=2608&uuid=7259393293459605051&spider=0&query=${encodeURIComponent(query)}&id_type=0&cursor=0&limit=${Math.min(limit, 20)}&search_type=0&sort_type=0&version=1`;
-    const res = await request(url, { headers: { 'Host': 'api.juejin.cn', 'User-Agent': UA_CHROME_112, 'Accept': 'application/json' }, timeoutMs: 10000 });
+    const res = await request(url, { headers: { 'Host': 'api.juejin.cn', 'User-Agent': UA_CHROME_112, 'Accept': 'application/json' }, timeoutMs: 4000 });
     if (res.status !== 200) throw new Error(httpStatusError(res.status));
     let json: any;
     try { json = JSON.parse(res.text); } catch { throw new Error('невалидный JSON'); }
@@ -423,7 +429,7 @@ async function searchCsdn(query: string, limit: number): Promise<SearchResult[]>
     const url = `https://so.csdn.net/api/v3/search?q=${encodeURIComponent(query)}&t=all&p=1&s=0&tm=0&lv=-1&ft=0&ct=-1&pnt=-1&ry=-1&ss=-1&dct=-1&vt=-1&dms=-1&vip=-1&hit=1&ec=1&c_p=1&c_r=1&showSrc=1&showBlog=1`;
     const res = await request(url, {
         headers: { 'User-Agent': 'Apifox/1.0.0 (https://apifox.com)', 'Host': 'so.csdn.net', 'Accept': 'application/json' },
-        timeoutMs: 10000,
+        timeoutMs: 4000,
     });
     if (res.status !== 200) throw new Error(httpStatusError(res.status));
     let json: any;
@@ -448,7 +454,7 @@ async function searchExa(query: string, limit: number): Promise<SearchResult[]> 
     const res = await request('https://exa.ai/search/api/search-fast', {
         method: 'POST',
         body: payload,
-        timeoutMs: 10000,
+        timeoutMs: 4000,
         headers: {
             'content-type': 'text/plain;charset=UTF-8',
             'origin': 'https://exa.ai',
@@ -473,10 +479,74 @@ async function searchExa(query: string, limit: number): Promise<SearchResult[]> 
     return out;
 }
 
+// ─────────────────────────── Wiby (индекс старых сайтов) ───────────────────────────
+
+async function searchWiby(query: string, limit: number): Promise<SearchResult[]> {
+    const res = await request(
+        `https://wiby.me/?q=${encodeURIComponent(query)}`,
+        { headers: { 'User-Agent': UA_CHROME_112 }, timeoutMs: 6000 }
+    );
+    if (res.status !== 200) throw new Error(httpStatusError(res.status));
+    const out: SearchResult[] = [];
+    // Результат: <blockquote><a class="tlink" href="URL">Title</a><br><p class="url">URL</p><p>snippet</p></blockquote>
+    for (const block of parseBlocksByClass(res.text, 'tlink')) {
+        const a = block.match(/<a[^>]+href="([^"]+)"[^>]*>\s*([\s\S]*?)\s*<\/a>/i);
+        if (!a) continue;
+        const url = normalizeHttpUrl(a[1], 'https://wiby.me/');
+        const title = stripTags(a[2]);
+        if (!url || !title) continue;
+        const after = res.text.slice(res.text.indexOf(block) + block.length);
+        const next = after.match(/<p class="url">[\s\S]*?<\/p>\s*<p>([\s\S]*?)<\/p>/i);
+        out.push({ title: title.slice(0, 200), url, snippet: next ? stripTags(next[1]).slice(0, 400) : '' });
+    }
+    // Wiby индексирует в основном англоязычные сайты: для прочих запросов выдача будет пустой (это не ошибка движка).
+    return out;
+}
+
+// ─────────────────────────── Marginalia (челлендж "Wait For A Moment") ───────────────────────────
+
+// Marginalia при бот-активности требует подождать и перейти по sst-ссылке (1-2 раза).
+async function searchMarginalia(query: string, limit: number): Promise<SearchResult[]> {
+    const ua = {
+        'User-Agent': UA_CHROME_112,
+        'Referer': 'https://search.marginalia.nu/',
+    };
+    const base = `https://search.marginalia.nu/search?query=${encodeURIComponent(query)}`;
+    let res = await request(base, { headers: ua, timeoutMs: 8000, maxRedirects: 3 });
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const isWait = res.text.includes('Wait A Moment') || (res.status >= 500 && res.text.includes('countdown'));
+        if (!isWait) break;
+        const m = res.text.match(/href="(\/search\?[^"]*sst=[^"]+)"/) ||
+            res.text.match(/location\.replace\('([^']+)'/);
+        if (!m) throw new Error('челлендж без sst-ссылки');
+        const sst = m[1].replace(/&amp;/g, '&').replace(/\\\//g, '/');
+        const tr = parseInt((res.text.match(/data-tr="(-?\d+)"/) || [])[1] || '1', 10);
+        await sleep(Math.max(tr, 0) * 1000 + 1500);
+        res = await request('https://marginalia-search.com' + sst, { headers: ua, timeoutMs: 8000, maxRedirects: 3 });
+    }
+    if (res.status !== 200) throw new Error(httpStatusError(res.status));
+    const out: SearchResult[] = [];
+    // Результат: <h2 ...><a href="URL" rel="noopener" ...>Title</a></h2>, сниппет в <p class="mt-2 ...">.
+    const re = /<h2[^>]*>\s*<a[^>]+href="(https?:\/\/[^"]+)"[^>]*>\s*([\s\S]*?)\s*<\/a>\s*<\/h2>/gi;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(res.text)) !== null) {
+        const url = m[1];
+        const title = stripTags(m[2]).replace(/&shy;/g, '').trim();
+        if (!url || !title) continue;
+        const tail = res.text.slice(m.index + m[0].length);
+        const snip = tail.match(/<p class="mt-2[^"]*"[^>]*>([\s\S]*?)<\/p>/i);
+        out.push({ title: title.slice(0, 200), url, snippet: snip ? stripTags(snip[1]).replace(/&shy;/g, '').slice(0, 400) : '' });
+    }
+    // Marginalia — англоязычный индекс: для русских запросов выдача пустая (не ошибка движка).
+    return out;
+}
+
 // ─────────────────────────── Движок-менеджер ───────────────────────────
 
 const ENGINES: Record<string, (q: string, l: number) => Promise<SearchResult[]>> = {
     duckduckgo: searchDuckDuckGo,
+    wiby: searchWiby,
+    marginalia: searchMarginalia,
     brave: searchBrave,
     startpage: searchStartpage,
     sogou: searchSogou,
@@ -486,7 +556,7 @@ const ENGINES: Record<string, (q: string, l: number) => Promise<SearchResult[]>>
     csdn: searchCsdn,
     exa: searchExa,
 };
-const DEFAULT_ORDER = ['brave', 'duckduckgo', 'startpage', 'sogou', 'juejin', 'csdn', 'baidu', 'bing', 'exa'];
+const DEFAULT_ORDER = ['duckduckgo', 'wiby', 'marginalia', 'brave', 'startpage', 'sogou', 'juejin', 'csdn', 'baidu', 'bing', 'exa'];
 
 function dedupe(results: SearchResult[]): SearchResult[] {
     const seen = new Set<string>();
@@ -546,6 +616,7 @@ async function runChain(query: string, engines: string[], limit: number): Promis
             const sec = ((Date.now() - t0) / 1000).toFixed(1);
             if (found.length > 0) {
                 const score = relevantScore(query, found);
+                recordEngineCall(name, true, Date.now() - t0);
                 if (score >= 0.3) {
                     engineLog(name, `OK (${found.length} рез. за ${sec}с, релевантность ${Math.round(score * 100)}%)`);
                     all.push(...found);
@@ -562,8 +633,10 @@ async function runChain(query: string, engines: string[], limit: number): Promis
             }
         } catch (e) {
             const sec = ((Date.now() - t0) / 1000).toFixed(1);
-            engineLog(name, `ОШИБКА за ${sec}с — ${(e as Error).message}`);
-            failures.push({ name, message: (e as Error).message });
+            const msg = (e as Error).message;
+            recordEngineCall(name, false, Date.now() - t0, msg);
+            engineLog(name, `ОШИБКА за ${sec}с — ${msg}`);
+            failures.push({ name, message: msg });
             summary.push(`${name}:ERR`);
         }
         if (all.length < limit) await sleep(CHAIN_PAUSE_MS);
@@ -583,6 +656,7 @@ async function runParallel(query: string, engines: string[], limit: number): Pro
             const found = await withDeadline(ENGINES[name](query, perEngine), ENGINE_DEADLINE_MS, name);
             const sec = ((Date.now() - t0) / 1000).toFixed(1);
             if (found.length > 0) {
+                recordEngineCall(name, true, Date.now() - t0);
                 engineLog(name, `OK (${found.length} рез. за ${sec}с)`);
             } else {
                 engineLog(name, `пусто (0 рез. за ${sec}с)`);
@@ -590,8 +664,10 @@ async function runParallel(query: string, engines: string[], limit: number): Pro
             return { name, found, error: null };
         } catch (e) {
             const sec = ((Date.now() - t0) / 1000).toFixed(1);
-            engineLog(name, `ОШИБКА за ${sec}с — ${(e as Error).message}`);
-            return { name, found: [], error: (e as Error).message };
+            const msg = (e as Error).message;
+            recordEngineCall(name, false, Date.now() - t0, msg);
+            engineLog(name, `ОШИБКА за ${sec}с — ${msg}`);
+            return { name, found: [], error: msg };
         }
     }));
     const all = results.flatMap((r) => r.found);
@@ -619,12 +695,12 @@ createMcpServer({
     version: "1.0.0",
     tools: [{
         name: "WebSearch",
-        description: "Поиск в интернете (без API-ключей). Мульти-движок: duckduckgo, brave, startpage, sogou, juejin, csdn, baidu, bing, exa. По умолчанию — последовательная цепочка фолбэков по надёжности; можно указать engines (массив) для параллельного поиска по конкретным движкам.",
+        description: "Поиск в интернете (без API-ключей). Мульти-движок: wiby, duckduckgo, marginalia, brave, startpage, sogou, juejin, csdn, baidu, bing, exa. По умолчанию — последовательная цепочка фолбэков по надёжности; можно указать engines (массив) для параллельного поиска по конкретным движкам.",
         inputSchema: {
             type: "object",
             properties: {
                 query: { type: "string", description: "Поисковый запрос" },
-                engines: { type: "array", items: { type: "string" }, description: "Опционально: движки (duckduckgo, brave, startpage, sogou, juejin, csdn, baidu, bing, exa). Без него — цепочка фолбэков." },
+                engines: { type: "array", items: { type: "string" }, description: "Опционально: движки (wiby, duckduckgo, marginalia, brave, startpage, sogou, juejin, csdn, baidu, bing, exa). Без него — цепочка фолбэков." },
                 limit: { type: "number", description: "Опционально: максимум результатов (по умолчанию 8)" }
             },
             required: ["query"]
@@ -647,6 +723,12 @@ createMcpServer({
                 engines = engines.filter((e) => ENGINES[e]);
                 if (engines.length === 0) { throw new Error(`WebSearch: неизвестные движки: ${unknown.join(', ')}. Доступны: ${Object.keys(ENGINES).join(', ')}`); }
             }
+            const cacheKeyStr = cacheKey('web', engines, parallel, query);
+            const cached = cacheGet(cacheKeyStr);
+            if (cached !== null) {
+                engineLog('web_search', `из кеша (query: "${query.slice(0, 60)}")`);
+                return cached;
+            }
             const { all, failures } = parallel
                 ? await runParallel(query, engines, limit)
                 : await runChain(query, engines, limit);
@@ -654,7 +736,9 @@ createMcpServer({
                 const reasons = failures.map((f) => `${f.name}: ${f.message}`).join('; ');
                 throw new Error('Поиск не дал результатов. ' + (reasons ? 'Причины: ' + reasons : 'Все движки вернули пусто.'));
             }
-            return formatResults(all, failures, limit);
+            const out = formatResults(all, failures, limit);
+            cachePut(cacheKeyStr, out);
+            return out;
         }
     }
 });

@@ -76,9 +76,12 @@ fn deno_permissions(mcp_name: &str, bins_dir: &Path) -> Vec<String> {
         // Только запись файлов
         "fs_write" => vec!["--allow-write".to_string()],
         // Сеть + чтение env (node:https читает NODE_EXTRA_CA_CERTS и proxy-переменные через node-compat)
+        // web_search: кеш результатов (search_cache.json) и статистика отказов (search_stats.json) в bins_dir
         "web_search" | "docs_fetcher" | "knowledge_api" => vec![
             "--allow-net".to_string(),
             "--allow-env".to_string(),
+            format!("--allow-read={}", bins),
+            format!("--allow-write={}", bins),
         ],
         // Сеть + кеш пула инстансов (searxng_cache.json) в bins_dir + чтение KING_ORCH_BINS_DIR
         "searxng_search" => vec![
@@ -129,8 +132,8 @@ fn ensure_mcp_deps<L: Fn(String) + Clone + Send + Sync>(
             }
         }
     }
-    // searxng_search хранит кеш пула инстансов (searxng_cache.json) в bins_dir.
-    if mcp_name == "searxng_search" {
+    // web_search (search_cache/search_stats) и searxng_search (searxng_cache) хранят свои файлы в bins_dir.
+    if mcp_name == "searxng_search" || mcp_name == "web_search" {
         if let Some(bins_str) = bins_dir.to_str() {
             return vec![("KING_ORCH_BINS_DIR", bins_str.to_string())];
         }

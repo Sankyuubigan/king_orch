@@ -89,6 +89,12 @@ where
                 .ok_or_else(|| format!("llm_worker: агент '{}' не найден", agent_id))?;
 
             let task = context.resolve_template(node.task.as_deref().unwrap_or(""));
+            let task = if task.trim().is_empty() {
+                (runner.log_cb)("[worker] task пуст — использую дефолтный промпт".to_string());
+                "Выполни задачу.".to_string()
+            } else {
+                task
+            };
 
             // ── inject_reports: Отчёты коллег в system prompt ──
             let mut injected_reports = String::new();

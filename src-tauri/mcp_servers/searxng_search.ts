@@ -16,14 +16,21 @@ import { createMcpServer } from "./mcp_base.ts";
 import {
     request, stripTags, normalizeHttpUrl,
 } from "./web_http.ts";
+import {
+    recordEngineCall,
+} from "./search_stats.ts";
+import {
+    cacheGet, cachePut, cacheKey,
+} from "./search_cache.ts";
 
 const SEARX_SPACE_URL = 'https://searx.space/data/instances.json';
 // Резервные источники списка инстансов (на случай недоступности searx.space):
 const INSTANCES_YML_URL = 'https://raw.githubusercontent.com/searxng/searx-instances/master/searxinstances/instances.yml';
 const NOPLAGIARISM_JSON_URL = 'https://raw.githubusercontent.com/NoPlagiarism/instances-list/master/instances/search/searx/all.json';
-const DISCOVERY_TIMEOUT_MS = 20000;
+const DISCOVERY_TIMEOUT_MS = 15000;
 const DISCOVERY_MAX_BYTES = 8 * 1024 * 1024;
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;      // возраст кеша рабочих инстансов
+const CANDIDATES_TTL_MS = 12 * 60 * 60 * 1000; // как часто обновлять список кандидатов (разморозка пула)
 const CACHE_FILE = 'searxng_cache.json';
 const CACHE_VERSION = 2;
 const SEARCH_TIMEOUT_MS = 15000;
@@ -32,8 +39,9 @@ const MAX_CANDIDATES = 30;                      // лучших из searx.space
 const MAX_POOL_CANDIDATES = 100;                // итоговый потолок пула (с фолбэк-добавками; ленивая проба, лимит 7 попыток/поиск)
 // Последний резерв discovery: проверенные рабочие + уникальные из сторонних списков.
 const FALLBACK_SEED = [
+    'https://searx.tiekoetter.com',   // подтверждён рабочим (кеш 12.08.2026)
+    'https://sx.catgirl.cloud',       // подтверждён рабочим (кеш 12.08.2026)
     'https://search.mdosch.de',
-    'https://searx.tiekoetter.com',
     'https://search.liuzj.net',
     'https://searx.party',
     'https://etsi.me',
@@ -239,6 +247,24 @@ interface WorkingInstance { url: string; mode: 'json' | 'html'; lastOkTs: number
 
 const cooldowns = new Map<string, number>(); // url → timestamp до которого не трогаем
 let working: WorkingInstance[] = [];          // [{url, mode: 'json'|'html', lastOkTs}]
+let candidates: string[] = [];                // свежие кандидаты (для lazy-пробы)
+let lastDiscoveryTs = 0;                      // когда последний раз обновляли кандидатов
+
+// «Разморозка пула»: пул не должен жить вечно на старом кеше. Даже при наличии
+// рабочих инстансов кандидаты обновляются не реже CANDIDATES_TTL_MS — чтобы
+// цепочка могла находить новые живые инстансы и не зависеть от 2-3 старых.
+// Первый discovery в сессии — короткий (не блокирует поиск надолго);
+// последующие (старше CANDIDATES_TTL_MS) — в фоне, без ожидания поиском.
+function refreshCandidatesBackground(): void {
+    if (Date.now() - lastDiscoveryTs <= CANDIDATES_TTL_MS) return;
+    lastDiscoveryTs = Date.now();
+    discoverCandidates()
+        .then((urls) => {
+            candidates = urls;
+            searxLog(`кандидаты обновлены (фон): ${urls.length}`);
+        })
+        .catch((e) => searxLog('фоновый discovery не удался', (e as Error).message));
+}
 
 function isInCooldown(url: string): boolean {
     const until = cooldowns.get(url);
@@ -265,14 +291,12 @@ function saveWorkingCache() {
 
 interface Attempt { url: string; mode: 'json' | 'html' | null; }
 
-// Сборка пула для поиска: известные рабочие (JSON → HTML) + свежие кандидаты.
+// Сборка пула для поиска: рабочие HTML (JSON у большинства инстансов выключен
+// и чаще капчит → html-first), затем свежие кандидаты, в конце — JSON-перки.
 function buildAttemptList(): Attempt[] {
     const attempts: Attempt[] = [];
     const seen = new Set<string>();
     const fresh = (x: WorkingInstance) => Date.now() - x.lastOkTs < CACHE_TTL_MS;
-    for (const w of working.filter((x) => fresh(x) && x.mode === 'json').slice(0, MAX_JSON_ATTEMPTS)) {
-        if (!seen.has(w.url)) { seen.add(w.url); attempts.push({ url: w.url, mode: 'json' }); }
-    }
     for (const w of working.filter((x) => fresh(x) && x.mode === 'html')) {
         if (!seen.has(w.url)) { seen.add(w.url); attempts.push({ url: w.url, mode: 'html' }); }
     }
@@ -281,28 +305,33 @@ function buildAttemptList(): Attempt[] {
         seen.add(url);
         attempts.push({ url, mode: null }); // неизвестный инстанс — пробуем HTML
     }
+    for (const w of working.filter((x) => fresh(x) && x.mode === 'json').slice(0, MAX_JSON_ATTEMPTS)) {
+        if (!seen.has(w.url)) { seen.add(w.url); attempts.push({ url: w.url, mode: 'json' }); }
+    }
     return attempts.filter((a) => !isInCooldown(a.url));
 }
 
-let candidates: string[] = []; // свежие кандидаты (для lazy-пробы)
-
-// Загрузить кеш и кандидатов. Требует одного discovery-запроса, если нет кеша.
+// Загрузить кеш рабочих инстансов; кандидатов — с фоновым обновлением.
 async function ensurePool() {
     const cached = loadCache();
     if (cached) {
         working = cached.working.filter((w) => Date.now() - w.lastOkTs < CACHE_TTL_MS);
-        if (working.length > 0) {
-            searxLog(`рабочие инстансы из кеша: ${working.length}`);
-            return;
-        }
+        if (working.length > 0) searxLog(`рабочие инстансы из кеша: ${working.length}`);
     }
-    try {
-        candidates = await discoverCandidates();
-        searxLog(`кандидатов для lazy-пробы: ${candidates.length}`);
-    } catch (e) {
-        searxLog('discovery не удался', (e as Error).message);
+    if (candidates.length === 0) {
+        try {
+            candidates = await discoverCandidates();
+            lastDiscoveryTs = Date.now();
+            searxLog(`кандидатов для lazy-пробы: ${candidates.length}`);
+        } catch (e) {
+            searxLog('discovery не удался', (e as Error).message);
+        }
+    } else {
+        refreshCandidatesBackground();
+    }
+    if (working.length === 0 && candidates.length === 0) {
         if (cached && cached.working.length > 0) working = cached.working;
-        else throw new Error(`Не удалось получить список инстансов SearXNG: ${(e as Error).message}`);
+        else throw new Error('Не удалось получить список инстансов SearXNG');
     }
 }
 
@@ -478,13 +507,40 @@ async function searchHtml(base: string, query: string, opts: SearchOpts): Promis
 
 // ─────────────────────────── Failover по пулу ───────────────────────────
 
+// Убрать tracking-мусор из URL, чтобы одинаковые страницы с разными параметрами
+// не дублировались в выдаче.
+function dedupeKey(url: string): string {
+    try {
+        const u = new URL(url);
+        u.hash = '';
+        for (const k of [...u.searchParams.keys()]) {
+            if (/^(utm_|fbclid|gclid|yclid|from|ref|referrer|source|mc_|spm)/i.test(k)) u.searchParams.delete(k);
+        }
+        return u.toString().replace(/\/+$/, '');
+    } catch { return url; }
+}
+
 function dedupe(results: SearchResult[]): SearchResult[] {
     const seen = new Set<string>();
-    return results.filter((r) => {
-        if (!r.url || seen.has(r.url)) return false;
-        seen.add(r.url);
-        return true;
-    });
+    const out: SearchResult[] = [];
+    for (const r of results) {
+        if (!r.url || seen.has(dedupeKey(r.url))) continue;
+        seen.add(dedupeKey(r.url));
+        out.push(r);
+    }
+    return out;
+}
+
+// Отсев мусорных результатов: редирект-обёртки (redirect?url=..., /goto, /out.php),
+// пустые/невалидные URL.
+function isJunkResult(r: SearchResult): boolean {
+    if (!r.url) return true;
+    if (/\/(redirect|goto|out|away|click|url)\b[\/?]|url=.*%3A%2F%2F/i.test(r.url)) return true;
+    return false;
+}
+
+function normalizeResults(results: SearchResult[]): SearchResult[] {
+    return dedupe(results.filter((r) => !isJunkResult(r)));
 }
 
 function applyMinScore(results: SearchResult[], minScore: number | null | undefined): SearchResult[] {
@@ -522,6 +578,7 @@ async function runChain(attempts: Attempt[], query: string, opts: SearchOpts): P
             markWorking(att.url, att.mode === 'json' ? 'json' : 'html');
             if (isFresh) freshProbed++;
             if (r.results.length > 0) {
+                recordEngineCall(att.url, true, Date.now() - t0);
                 used.push(att.url);
                 all.push(...r.results);
                 meta.answers.push(...r.answers);
@@ -534,6 +591,7 @@ async function runChain(attempts: Attempt[], query: string, opts: SearchOpts): P
         } catch (e) {
             const msg = (e as Error).message || String(e);
             const hard = /капча|challenge|403|451|unusual|аномал|WAF|Cloudflare|searxng_token/i.test(msg);
+            recordEngineCall(att.url, false, Date.now() - t0, msg);
             markFailed(att.url, hard);
             const sec = ((Date.now() - t0) / 1000).toFixed(1);
             const type = classifyMsg(msg);
@@ -566,6 +624,7 @@ async function runFanout(attempts: Attempt[], query: string, opts: SearchOpts): 
             );
             markWorking(att.url, att.mode === 'json' ? 'json' : 'html');
             if (r.results.length > 0) {
+                recordEngineCall(att.url, true, Date.now() - t0);
                 meta.answers.push(...r.answers);
                 meta.infoboxes.push(...r.infoboxes);
                 meta.corrections.push(...r.corrections);
@@ -577,6 +636,7 @@ async function runFanout(attempts: Attempt[], query: string, opts: SearchOpts): 
         } catch (e) {
             const msg = (e as Error).message || String(e);
             const hard = /капча|challenge|403|451|unusual|аномал|WAF|Cloudflare|searxng_token/i.test(msg);
+            recordEngineCall(att.url, false, Date.now() - t0, msg);
             markFailed(att.url, hard);
             const type = classifyMsg(msg);
             reasonCounts[type] = (reasonCounts[type] || 0) + 1;
@@ -638,7 +698,7 @@ function formatResults(res: RunResult & { minScore?: number | null }, limit: num
     if (res.meta.corrections.length > 0) {
         lines.push(`Уточнение запроса: ${res.meta.corrections[0]}`);
     }
-    const deduped = applyMinScore(dedupe(res.all), res.minScore).slice(0, limit);
+    const deduped = applyMinScore(normalizeResults(res.all), res.minScore).slice(0, limit);
     for (let i = 0; i < deduped.length; i++) {
         const r = deduped[i];
         const extra = [r.source ? ` (${r.source})` : '', r.engines && r.engines !== 'html' ? ` [${r.engines}]` : ''].join('');
@@ -687,15 +747,24 @@ createMcpServer({
                 minScore: typeof args.min_score === 'number' ? args.min_score : null,
             };
 
+            const mode = typeof args.instance === 'string' && args.instance.trim()
+                ? 'instance'
+                : (args.parallel === true ? 'fanout' : 'chain');
+            const cacheKeyStr = cacheKey('searxng', [mode, opts.language ? `lang:${opts.language}` : '', opts.time_range ? `tr:${opts.time_range}` : '', opts.minScore ? `ms:${opts.minScore}` : ''].filter(Boolean), false, query);
+            const cached = cacheGet(cacheKeyStr);
+            if (cached !== null) {
+                searxLog(`из кеша (query: "${query.slice(0, 60)}")`);
+                return cached;
+            }
+
             let res: RunResult;
-            if (typeof args.instance === 'string' && args.instance.trim()) {
-                const base = normalizeHttpUrl(args.instance.trim(), '');
+            if (mode === 'instance') {
+                const base = normalizeHttpUrl(String(args.instance).trim(), '');
                 if (!base) throw new Error(`SearxngSearch: невалидный URL инстанса: ${args.instance}`);
                 searxLog('используем указанный инстанс', base);
                 const attempts: Attempt[] = [{ url: base.replace(/\/+$/, ''), mode: 'html' }];
                 res = await runChain(attempts, query, opts);
             } else {
-                const mode = args.parallel === true ? 'fanout' : 'chain';
                 res = await searchWithRecovery(query, opts, mode);
             }
 
@@ -704,7 +773,9 @@ createMcpServer({
                 throw new Error(`Поиск не дал результатов. Причины: ${reasons}`);
             }
             res.minScore = opts.minScore;
-            return formatResults(res, limit);
+            const out = formatResults(res, limit);
+            cachePut(cacheKeyStr, out);
+            return out;
         }
     }
 });

@@ -8,7 +8,6 @@ use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const LOG_FILE_NAME: &str = "king_orch.log";
 
@@ -99,35 +98,28 @@ pub fn install_panic_hook() {
     }));
 }
 
-/// Читаемый таймстамп YYYY-MM-DD HH:MM:SS (без внешних крейтов)
+/// Читаемый таймстамп YYYY-MM-DD HH:MM:SS в ЛОКАЛЬНОМ времени.
+/// GUI (src/controllers/chat.ts) пишет время через toLocaleTimeString() —
+/// единый источник правды: лог должен совпадать с экраном.
 pub(crate) fn timestamp() -> String {
-    let secs = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    let days = secs.div_euclid(86400);
-    let rem = secs.rem_euclid(86400);
-    let (y, m, d) = civil_from_days(days);
-    format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
-        y,
-        m,
-        d,
-        rem / 3600,
-        (rem % 3600) / 60,
-        rem % 60
-    )
+    chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
-fn civil_from_days(z: i64) -> (i64, u32, u32) {
-    let z = z + 719468;
-    let era = if z >= 0 { z } else { z - 146096 } / 146097;
-    let doe = (z - era * 146097) as u64;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
-    let y = yoe as i64 + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    (if m <= 2 { y + 1 } else { y }, m, d)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn timestamp_format_and_local_time() {
+        let ts = timestamp();
+        assert!(ts.len() >= 19, "формат YYYY-MM-DD HH:MM:SS, получено: {}", ts);
+        assert!(ts.chars().nth(4) == Some('-') && ts.chars().nth(7) == Some('-'), "дата YYYY-MM-DD");
+        assert!(ts.chars().nth(10) == Some(' '), "пробел между датой и временем");
+        assert!(ts.chars().nth(13) == Some(':') && ts.chars().nth(16) == Some(':'), "время HH:MM:SS");
+        let secs = chrono::Local::now();
+        let utc = chrono::Utc::now();
+        let offset = utc.signed_duration_since(secs.with_timezone(&chrono::Utc)).num_seconds();
+        assert_eq!(offset, 0, "timestamp() берёт локальное время (Utc::now() == Local::now() переведённое)");
+        assert_eq!(format!("{}", secs.format("%Y-%m-%d %H:%M:%S")), ts, "совпадает с chrono-форматом");
+    }
 }

@@ -2,15 +2,15 @@ use serde_json;
 
 fn extract_json_block(text: &str) -> Option<String> {
     let text = clean_thought_tags(text);
-    let mut first_block: Option<String> = None;
+    let mut first_fenced: Option<String> = None;
     let mut search_pos = 0;
 
     while let Some(start) = text[search_pos..].find("```json") {
         let abs_start = search_pos + start + 7;
         if let Some(end) = text[abs_start..].find("```") {
             let block = text[abs_start..abs_start + end].trim().to_string();
-            if first_block.is_none() {
-                first_block = Some(block.clone());
+            if first_fenced.is_none() {
+                first_fenced = Some(block.clone());
             }
             // Prefer blocks that contain a target or tool action
             if block.contains("\"target\"") || block.contains("\"tool\"") {
@@ -22,13 +22,68 @@ fn extract_json_block(text: &str) -> Option<String> {
         }
     }
 
-    if let Some(block) = first_block {
+    if let Some(block) = first_fenced {
         return Some(block);
     }
 
-    if let Some(start) = text.find('{') {
-        if let Some(end) = text.rfind('}') {
-            return Some(text[start..=end].trim().to_string());
+    // Не-fenced: собираем все кандидаты {…} с учётом вложенности (скобки внутри
+    // JSON-строк не считаются) и берём ПОСЛЕДНИЙ валидный JSON. Итоговый JSON
+    // модели идёт в конце ответа, а первая {…} из прозы/размышлений может быть
+    // мусором (например, при парсинге склеенного continuation_raw + нового ответа).
+    let mut candidates: Vec<(usize, usize)> = Vec::new();
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        if bytes[i] == b'{' {
+            let start = i;
+            let mut depth = 0u32;
+            let mut in_str = false;
+            let mut esc = false;
+            let mut closed_at: Option<usize> = None;
+            let mut j = i;
+            while j < bytes.len() {
+                let b = bytes[j];
+                if in_str {
+                    if esc {
+                        esc = false;
+                    } else if b == b'\\' {
+                        esc = true;
+                    } else if b == b'"' {
+                        in_str = false;
+                    }
+                } else {
+                    match b {
+                        b'"' => in_str = true,
+                        b'{' => depth += 1,
+                        b'}' => {
+                            depth -= 1;
+                            if depth == 0 {
+                                closed_at = Some(j);
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                j += 1;
+            }
+            match closed_at {
+                Some(end) => {
+                    candidates.push((start, end));
+                    i = end + 1;
+                    continue;
+                }
+                // Незакрытая скобка: дальше корректных кандидатов не будет
+                None => break,
+            }
+        }
+        i += 1;
+    }
+
+    for (start, end) in candidates.iter().rev() {
+        let candidate = &text[*start..=*end];
+        if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+            return Some(candidate.trim().to_string());
         }
     }
     None
@@ -360,9 +415,50 @@ pub fn is_thinking_truncated(raw: &str) -> bool {
     false
 }
 
+/// Нужна ли «докачка» оборванной генерации: размышления не завершены, а причина
+/// остановки — обрыв, а не патология (зацикливание) или отмена пользователем.
+/// Решение принимается по СОДЕРЖИМОМУ ответа (незакрытый думатель), а не по
+/// stop_reason: обрыв случается и по лимиту токенов, и по стоп-слову, и по EOS
+/// в середине думателя. LOOP_DETECTED/CANCELLED докачку не запускают.
+pub fn needs_cutoff_continuation(raw: &str, stop_reason: &str) -> bool {
+    if matches!(stop_reason, "CANCELLED" | "LOOP_DETECTED") {
+        return false;
+    }
+    is_thinking_truncated(raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cutoff_continuation_unclosed_think_any_stop() {
+        let raw = "<think\nразмышления оборваны";
+        assert!(needs_cutoff_continuation(raw, "STOP_WORD"));
+        assert!(needs_cutoff_continuation(raw, "MAX_TOKENS"));
+        assert!(needs_cutoff_continuation(raw, "EOS"));
+    }
+
+    #[test]
+    fn cutoff_continuation_closed_think_no_answer() {
+        let raw = " 思考\nмысли без ответа\n 响应";
+        assert!(needs_cutoff_continuation(raw, "STOP_WORD"));
+    }
+
+    #[test]
+    fn cutoff_continuation_plain_and_empty() {
+        assert!(!needs_cutoff_continuation("", "STOP_WORD"));
+        assert!(!needs_cutoff_continuation("обычный ответ.", "STOP_WORD"));
+        assert!(!needs_cutoff_continuation("<|channel>response\nответ", "STOP_WORD"));
+        assert!(!needs_cutoff_continuation(" 思考\nмысли\n 响应\nИтоговый ответ.", "MAX_TOKENS"));
+    }
+
+    #[test]
+    fn cutoff_continuation_not_for_pathology() {
+        let raw = "<think\nразмышления";
+        assert!(!needs_cutoff_continuation(raw, "LOOP_DETECTED"));
+        assert!(!needs_cutoff_continuation(raw, "CANCELLED"));
+    }
 
     #[test]
     fn split_qwen_thinking_closed() {
@@ -428,5 +524,47 @@ mod tests {
         assert!(crate::domain::orchestrator::is_agent_error("⚠️ ОШИБКА_АГЕНТА: Агент 'x' не смог"));
         assert!(!crate::domain::orchestrator::is_agent_error("нормальный ответ агента"));
         assert!(!crate::domain::orchestrator::is_agent_error(""));
+    }
+
+    #[test]
+    fn extract_json_prefers_last_valid_over_garbage_prefix() {
+        // Мусорная {…} из прозы/размышлений в начале + реальный JSON в конце:
+        // раньше first-{ … last-} склеивал оба и парсинг падал (баг emit_signal).
+        let text = "thinking\nРазмышления {в фигурных скобках без смысла} и текст\n\
+            {\"arguments\": {\"key\": \"soma_translator\", \"value\": \"РУКОСТЬ ИЗВЕСТНА\"}, \"tool\": \"emit_signal\"}";
+        let blk = extract_json_block(text).expect("должен найти валидный JSON в конце");
+        let val: serde_json::Value = serde_json::from_str(&blk).expect("найденный блок — валидный JSON");
+        assert_eq!(val["tool"], "emit_signal");
+        assert_eq!(val["arguments"]["key"], "soma_translator");
+    }
+
+    #[test]
+    fn extract_json_handles_nested_braces_and_quotes() {
+        // Скобки внутри JSON-строк и вложенные объекты должны учитываться.
+        let text = "перед {\"a\": \"текст {скобка} внутри\", \"nested\": {\"b\": [1, 2]}} после";
+        let blk = extract_json_block(text).expect("должен извлечь полный объект");
+        let val: serde_json::Value = serde_json::from_str(&blk).expect("валидный JSON");
+        assert_eq!(val["nested"]["b"][1], 2);
+    }
+
+    #[test]
+    fn parse_tool_call_from_emit_signal_envelope() {
+        let parsed = parse_tool_call("{\"arguments\": {\"key\": \"soma_translator\", \"value\": \"РУКОСТЬ ИЗВЕСТНА\"}, \"tool\": \"emit_signal\"}")
+            .expect("конверт emit_signal распознаётся");
+        assert_eq!(parsed.0, "emit_signal");
+        assert_eq!(parsed.1["key"], "soma_translator");
+    }
+
+    #[test]
+    fn extract_json_returns_none_without_valid_json() {
+        assert!(extract_json_block("просто текст {без json}").is_none());
+        assert!(extract_json_block("{broken \"key\": }").is_none());
+    }
+
+    #[test]
+    fn extract_json_fenced_preferred() {
+        let text = "слова\n```json\n{\"tool\": \"write\", \"arguments\": {}}\n```\nконец {мусор}";
+        let blk = extract_json_block(text).expect("fenced-блок приоритетнее");
+        assert!(blk.contains("\"tool\""));
     }
 }

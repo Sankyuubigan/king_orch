@@ -1,0 +1,53 @@
+{
+ "https://search.liuzj.net": {
+  "calls": 1,
+  "ok": 1,
+  "fails": 0,
+  "lastOkTs": 1786576285503,
+  "lastFailTs": null,
+  "lastFailReason": "",
+  "reasons": {}
+ },
+ "https://baresearch.org": {
+  "calls": 1,
+  "ok": 0,
+  "fails": 1,
+  "lastOkTs": null,
+  "lastFailTs": 1786576317134,
+  "lastFailReason": "капча/челлендж",
+  "reasons": {
+   "captcha": 1
+  }
+ },
+ "https://copp.gg": {
+  "calls": 1,
+  "ok": 0,
+  "fails": 1,
+  "lastOkTs": null,
+  "lastFailTs": 1786576332854,
+  "lastFailReason": "Таймаут соединения (TCP) с 'copp.gg' — сервер не отвечает",
+  "reasons": {
+   "network": 1
+  }
+ },
+ "https://etsi.me": {
+  "calls": 1,
+  "ok": 1,
+  "fails": 0,
+  "lastOkTs": 1786576335189,
+  "lastFailTs": null,
+  "lastFailReason": "",
+  "reasons": {}
+ },
+ "duckduckgo": {
+  "calls": 1,
+  "ok": 0,
+  "fails": 1,
+  "lastOkTs": null,
+  "lastFailTs": 1786576856583,
+  "lastFailReason": "DDG html: доступ запрещён (403) — вероятна блокировка сервисом; DDG html: доступ запрещён (403) — вероятна блокировка сервисом; DDG lite: доступ запрещён (403) — вероятна блокировка сервисом",
+  "reasons": {
+   "forbidden": 1
+  }
+ }
+}

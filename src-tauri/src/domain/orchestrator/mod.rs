@@ -11,8 +11,8 @@ use crate::domain::workflow_engine::{
 use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename, llm_history, GrammarSpec};
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
-    has_incomplete_json_action, is_thinking_truncated, parse_orchestrator_response, parse_tool_call,
-    split_thinking_and_answer, strip_tool_call,
+    has_incomplete_json_action, is_thinking_truncated, needs_cutoff_continuation,
+    parse_orchestrator_response, parse_tool_call, split_thinking_and_answer, strip_tool_call,
 };
 use prompt::build_system_prompt;
 use std::collections::HashMap;
@@ -68,6 +68,32 @@ const MAX_CONTINUATIONS: usize = 12;          // предел «докачек»
 const COMPACT_THRESHOLD_CHARS: usize = 9000;  // накопленных размышлений → сжать в тезисы
 const COMPACT_MAX_TOKENS: usize = 300;
 const THOUGHT_STORE_MAX_CHARS: usize = 2100;  // в сессию сохраняем мысль срезом (приоритет ответу)
+// ── Умное завершение докачек: серия итераций без прогресса (видимого текста нет,
+// размышления перестали расти) = модель зациклилась в думателе — докачку прекращаем
+// и переходим к перегенерации с хинтом-запретом думателей. ──
+const MAX_STALLED_CONTINUATIONS: usize = 3;   // докачек подряд без прогресса
+const MIN_THINKING_GROWTH_CHARS: isize = 128; // порог «размышления растут» за одну докачку
+// Предел повторов второго (сигнального) вызова emit_signal. Если модель не вернула
+// распознаваемый JSON-конверт — ретраим с корректирующим хинтом, затем (не теряя
+// отчёт агента!) пропускаем сигнал с логом, а не подставляем JSON вместо ответа.
+const MAX_SIGNAL_RETRIES: usize = 3;
+
+/// Промпт для сигнального LLM-вызова: сохранить результат анализа как сигнал.
+fn signal_request_prompt(contract_key: &str) -> String {
+    format!(
+        "Отлично. Теперь сохрани результат анализа как сигнал: вызови инструмент emit_signal с key=\"{}\" и value по контракту (точно той структуры, как описано в системном промпте). Ответь ТОЛЬКО JSON с вызовом эмиссии — без пояснений.",
+        contract_key
+    )
+}
+
+/// Корректирующий хинт для ретрая сигнального вызова: модель должна вернуть
+/// РОВНО один JSON-конверт emit_signal (без markdown и пояснений).
+fn signal_retry_hint(contract_key: &str) -> String {
+    format!(
+        "⚠️ Твой ответ не был распознан как вызов emit_signal. Верни РОВНО ОДИН JSON без пояснений и без markdown: {{\"tool\": \"emit_signal\", \"arguments\": {{\"key\": \"{}\", \"value\": <значение по контракту из системного промпта>}}}}.",
+        contract_key
+    )
+}
 
 /// Хвост строки длиной ≤ `n` символов (без разрыва UTF-8).
 fn tail_chars(s: &str, n: usize) -> String {
@@ -703,10 +729,15 @@ let mut final_response = String::new();
     let mut consecutive_failed_tools = 0;
     let mut consecutive_incomplete = 0;
     let mut consecutive_invalid_targets = 0;
+    // Докачка: длина накопленных размышлений на прошлой докачке и серия
+    // «застойных» докачек без прогресса (для умного завершения).
+    let mut last_thinking_len: isize = 0;
+    let mut stalled_continuations = 0usize;
     // ── Второй сигнальный вызов: агент сначала отвечает текстом (свободно),
     // затем оркестратор ВТОРОЙ итерацией просит emit_signal под json_schema.
     let mut signal_attempted = false;   // второй вызов уже сделан (не зацикливаться)
     let mut signal_saved = false;       // сигнал успешно сохранён
+    let mut signal_retries = 0usize;    // неудачных попыток распознать JSON-конверт
     let mut signal_analysis = String::new(); // текст первого (пользовательского) ответа
     // Метка режима для лога пиков памяти: llm_worker графа зовёт run_agent_node
     // с caller_name == "workflow_engine", всё остальное — legacy (.md) режим.
@@ -810,16 +841,52 @@ let mut final_response = String::new();
         if response.trim().is_empty() {
             // Обрыв ВНУТРИ размышлений (thinking-модель): продолжаем с места обрыва,
             // а не считаем «пустой попыткой» и не просим генерировать ЗАНОВО.
-            if stop_reason == "MAX_TOKENS" && is_thinking_truncated(&combined) {
-                if push_continuation_for_cutoff(
-                    &log_cb, &agent.id, engine, model_params, format_type, cancel_flag.clone(),
-                    &ctx_label, stream_meta.clone(), &combined, &parse_target, &raw_response,
-                    &mut llm_messages, &mut continuation_raw, &mut continuation_mark, &mut continuation_count,
-                )? {
-                    final_response = format!("{} Агент '{}' не смог завершить размышления после {} докачек (модель упирается в лимит токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id, MAX_CONTINUATIONS);
-                    break;
+            // Критерий входа — СОДЕРЖИМОЕ ответа (незакрытый думатель), а не причина
+            // остановки: обрыв случается и по лимиту токенов, и по стоп-слову, и по EOS.
+            if needs_cutoff_continuation(&combined, &stop_reason) {
+                // Умное завершение: серия докачек без прогресса (видимого текста нет,
+                // думание перестало расти) = модель зациклилась в думателе — докачку
+                // прекращаем и уходим в перегенерацию с хинтом-запретом думателей.
+                if stalled_continuations >= MAX_STALLED_CONTINUATIONS {
+                    log_cb(format!(
+                        "🛑 Докачка забуксовала: {} итераций подряд без роста размышлений и без видимого ответа — переключаемся на перегенерацию.",
+                        stalled_continuations
+                    ));
+                    stalled_continuations = 0;
+                    last_thinking_len = 0;
+                } else {
+                    // Новая серия докачек (стейт «докачки» сброшен) — стартуем с чистых метрик
+                    if continuation_mark.is_none() {
+                        last_thinking_len = 0;
+                        stalled_continuations = 0;
+                    }
+                    let thinking_len = combined.chars().count() as isize;
+                    let grew = thinking_len - last_thinking_len;
+                    let raw_before = continuation_raw.len();
+                    let exhausted = push_continuation_for_cutoff(
+                        &log_cb, &agent.id, engine, model_params, format_type, cancel_flag.clone(),
+                        &ctx_label, stream_meta.clone(), &combined, &parse_target, &raw_response,
+                        &mut llm_messages, &mut continuation_raw, &mut continuation_mark, &mut continuation_count,
+                    )?;
+                    if exhausted {
+                        final_response = format!("{} Агент '{}' не смог завершить размышления после {} докачек (модель упирается в лимит токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id, MAX_CONTINUATIONS);
+                        break;
+                    }
+                    last_thinking_len = thinking_len;
+                    // Компакт размышлений — это прогресс (факты резюмируются в тезисы),
+                    // серию «застоя» в этом случае сбрасываем, а не считаем застой.
+                    let compacted = continuation_raw.len() < raw_before;
+                    if !compacted && grew < MIN_THINKING_GROWTH_CHARS {
+                        stalled_continuations += 1;
+                        log_cb(format!(
+                            "⚠️ Докачка #{}: размышления не растут (+{} симв.), видимого ответа нет — застой {}/{}",
+                            continuation_count, grew, stalled_continuations, MAX_STALLED_CONTINUATIONS
+                        ));
+                    } else {
+                        stalled_continuations = 0;
+                    }
+                    continue;
                 }
-                continue;
             }
             if stop_reason == "STOP_WORD" || stop_reason == "MAX_TOKENS" {
                 consecutive_incomplete += 1;
@@ -830,9 +897,13 @@ let mut final_response = String::new();
                 let hint = if stop_reason == "MAX_TOKENS" {
                     "Твои размышления прерваны из-за лимита токенов. Сгенерируй ответ ЗАНОВО с самого начала. СИЛЬНО СОКРАТИ свои внутренние размышления (максимум 2-3 вывода) и сразу переходи к финальному результату."
                 } else {
-                    "Ты прервал генерацию. Продолжи ответ ОБЫЧНЫМ ТЕКСТОМ без JSON."
+                    "Ты прервал генерацию. ЗАПРЕЩЕНО начинать с размышлений в тегах (<think, 思考, thinking, <|channel>thought) — они запрещены. Сразу пиши финальный ответ ОБЫЧНЫМ ТЕКСТОМ без JSON."
                 };
                 llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+                // Хинт требует ответ ЗАНОВО — стейт незавершённой докачки сбрасываем,
+                // иначе следующий вызов парсил бы склеенный combined устаревших кусков.
+                continuation_raw.clear();
+                continuation_mark = None;
                 llm_messages.push(LlmMessage { role: "user".to_string(), content: hint.to_string() });
                 continue;
             }
@@ -1011,6 +1082,12 @@ let mut final_response = String::new();
                     final_response = parsed.content;
                 }
 
+                // Ответ завершён обычным текстом — состояние «докачки» больше не нужно.
+                // Без сброса следующий вызов (например, сигнальный emit_signal) парсил бы
+                // склеенный combined и терял свежий JSON-конверт.
+                continuation_raw.clear();
+                continuation_mark = None;
+
                 // ── Второй сигнальный вызов (та же логика, что в конце цикла):
                 // агент ответил через reply, но сигнал по контракту не эмичен.
                 if !signal_attempted && !signal_saved {
@@ -1023,12 +1100,42 @@ let mut final_response = String::new();
                         llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
                         llm_messages.push(LlmMessage {
                             role: "user".to_string(),
-                            content: format!(
-                                "Отлично. Теперь сохрани результат анализа как сигнал: вызови инструмент emit_signal с key=\"{}\" и value по контракту (точно той структуры, как описано в системном промпте). Ответь ТОЛЬКО JSON с вызовом эмиссии — без пояснений.",
-                                contract.key
-                            ),
+                            content: signal_request_prompt(&contract.key),
                         });
                         continue;
+                    }
+                }
+
+                // ── Сигнальная итерация: модель снова вернула reply, а не
+                // JSON-конверт — ретраим с корректирующим хинтом. При исчерпании
+                // попыток сигнал пропускаем (красная кнопка, core §2.2), отчёт сохраняем.
+                if signal_attempted && !signal_saved {
+                    signal_retries += 1;
+                    if signal_retries <= MAX_SIGNAL_RETRIES {
+                        if let Some(contract) = &signal_contract {
+                            log_cb(format!(
+                                "⚠️ [{}] ответ не распознан как emit_signal (попытка {}/{}): {}",
+                                agent.id,
+                                signal_retries,
+                                MAX_SIGNAL_RETRIES,
+                                safe_truncate(&final_response, 80)
+                            ));
+                            llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+                            llm_messages.push(LlmMessage {
+                                role: "user".to_string(),
+                                content: signal_retry_hint(&contract.key),
+                            });
+                            continue;
+                        }
+                    }
+                    log_cb(format!(
+                        "⚠️ [{}] сигнал '{}' НЕ сохранён после {} попыток (JSON конверта не распознан). Отчёт агента сохранён, сигнал пропущен.",
+                        agent.id,
+                        signal_contract.as_ref().map(|c| c.key.as_str()).unwrap_or("?"),
+                        MAX_SIGNAL_RETRIES
+                    ));
+                    if !signal_analysis.is_empty() {
+                        final_response = signal_analysis.clone();
                     }
                 }
                 break;
@@ -1183,12 +1290,49 @@ let mut final_response = String::new();
         }
 
         let preview = safe_truncate(&response, 300).replace('\n', " ");
-        log_cb(format!("✅ Агент {} завершил ответом ({} символов): {}", agent.name, response.len(), preview));
+log_cb(format!("✅ Агент {} завершил ответом ({} символов): {}", agent.name, response.len(), preview));
         final_response = if is_continuation {
             extract_answer_from_combined(&combined, &response)
         } else {
             response
         };
+        // Финальный ответ извлечён — состояние «докачки» завершено (иначе следующий
+        // вызов парсил бы склеенный combined и терял свежий JSON-конверт).
+        continuation_raw.clear();
+        continuation_mark = None;
+
+        // ── Сигнальная итерация: агент ответил, но конверт emit_signal так и не
+        // распознан (модель вернула текст/невалидный JSON). JSON-конверт НЕ должен
+        // стать финальным ответом — с single_report он затёр бы реальный отчёт.
+        // Ретраим с корректирующим хинтом; при исчерпании — логируем (красная кнопка,
+        // core §2.2) и возвращаем анализ агента, жертвуя сигналом, но не отчётом.
+        if signal_attempted && !signal_saved {
+            signal_retries += 1;
+            if signal_retries <= MAX_SIGNAL_RETRIES {
+                if let Some(contract) = &signal_contract {
+                    log_cb(format!(
+                        "⚠️ [{}] ответ не распознан как emit_signal (попытка {}/{}): {}",
+                        agent.id, signal_retries, MAX_SIGNAL_RETRIES, preview
+                    ));
+                    llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+                    llm_messages.push(LlmMessage {
+                        role: "user".to_string(),
+                        content: signal_retry_hint(&contract.key),
+                    });
+                    continue;
+                }
+            }
+            // Ретраи исчерпаны: сигнал пропускаем, отчёт агента сохраняем.
+            log_cb(format!(
+                "⚠️ [{}] сигнал '{}' НЕ сохранён после {} попыток (JSON конверта не распознан). Отчёт агента сохранён, сигнал пропущен.",
+                agent.id,
+                signal_contract.as_ref().map(|c| c.key.as_str()).unwrap_or("?"),
+                MAX_SIGNAL_RETRIES
+            ));
+            if !signal_analysis.is_empty() {
+                final_response = signal_analysis.clone();
+            }
+        }
 
         // ── Второй сигнальный вызов: агент ответил свободно, но не вызвал
         // emit_signal. Если для него есть контракт сигнала — делаем ещё ОДИН
@@ -1203,12 +1347,9 @@ let mut final_response = String::new();
                 llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
                 llm_messages.push(LlmMessage {
                     role: "user".to_string(),
-                    content: format!(
-                        "Отлично. Теперь сохрани результат анализа как сигнал: вызови инструмент emit_signal с key=\"{}\" и value по контракту (точно той структуры, как описано в системном промпте). Ответь ТОЛЬКО JSON с вызовом эмиссии — без пояснений.",
-                        contract.key
-                    ),
+                    content: signal_request_prompt(&contract.key),
                 });
-                continue;
+continue;
             }
         }
         break;
