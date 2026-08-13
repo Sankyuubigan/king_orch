@@ -98,6 +98,14 @@ fn deno_permissions(mcp_name: &str, bins_dir: &Path) -> Vec<String> {
             "--allow-write".to_string(),
             "--allow-env".to_string(),
         ],
+        // Браузер: запуск Chrome + CDP (localhost) + npm-пакеты + профили/PDF в bins_dir
+        "browser" => vec![
+            "--allow-net".to_string(),
+            "--allow-run".to_string(),
+            "--allow-read".to_string(),
+            "--allow-write".to_string(),
+            "--allow-env".to_string(),
+        ],
         // AST-карта: чтение проекта, запись .agents_workspace, сеть (npm-пакеты, токенизатор)
         "ast_treesitter" => vec![
             "--allow-read".to_string(),
@@ -125,6 +133,31 @@ pub fn resolve_runtime_and_args<L: Fn(String) + Clone + Send + Sync>(
 fn ensure_mcp_deps<L: Fn(String) + Clone + Send + Sync>(
     mcp_name: &str, bins_dir: &Path, log_cb: &L,
 ) -> Vec<(&'static str, String)> {
+    if mcp_name == "browser" {
+        let mut envs: Vec<(&'static str, String)> = Vec::new();
+        if let Some(bins_str) = bins_dir.to_str() {
+            envs.push(("KING_ORCH_BINS_DIR", bins_str.to_string()));
+        }
+        // Сначала CloakBrowser (stealth-Chromium) для обхода антибот-защиты;
+        // при любой ошибке — фолбэк на Chrome-for-Testing.
+        match bin_downloader::ensure_cloak_browser(bins_dir, log_cb) {
+            Ok(exe) => {
+                envs.push(("KING_ORCH_CHROME_PATH", exe.to_string_lossy().to_string()));
+                log_cb(format!("🕵️ Браузер: CloakBrowser (stealth) | {}", exe.display()));
+            }
+            Err(e) => {
+                log_cb(format!("⚠️ CloakBrowser недоступен ({}), пробуем Chrome-for-Testing", e));
+                match bin_downloader::ensure_chrome_bin(bins_dir, log_cb) {
+                    Ok(exe) => {
+                        envs.push(("KING_ORCH_CHROME_PATH", exe.to_string_lossy().to_string()));
+                        log_cb(format!("🌐 Браузер: Chrome-for-Testing | {}", exe.display()));
+                    }
+                    Err(e2) => log_cb(format!("❌ Не удалось установить браузер: {}", e2)),
+                }
+            }
+        }
+        return envs;
+    }
     if mcp_name == "youtube_mcp" {
         if let Ok(_yt_path) = bin_downloader::ensure_runtime_bin("yt-dlp", bins_dir, log_cb.clone()) {
             if let Some(bins_str) = bins_dir.to_str() {

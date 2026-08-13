@@ -65,7 +65,12 @@ pub(crate) fn is_agent_error(text: &str) -> bool {
 // позволяет движку переиспользовать KV префикса). Накопившиеся размышления при
 // перерастании лимита сжимаем отдельным малым LLM-вызовом в тезисы (~300 токенов).
 const MAX_CONTINUATIONS: usize = 12;          // предел «докачек» после обрыва
-const COMPACT_THRESHOLD_CHARS: usize = 9000;  // накопленных размышлений → сжать в тезисы
+// Повторные попытки «ответа с начала»: модель завершила докачку, но начала
+// финальный ответ с многоточия (продолжила оборванный думатель, начало ответа
+// потеряно). Не перегенерируем всё заново — хвост остаётся в истории, просим
+// написать начало; при исчерпании попыток принимаем ответ как есть.
+const MAX_CONTINUATION_RESTARTS: usize = 3;
+const COMPACT_THRESHOLD_CHARS: usize = 6000;  // накопленных размышлений → сжать в тезисы
 const COMPACT_MAX_TOKENS: usize = 300;
 const THOUGHT_STORE_MAX_CHARS: usize = 2100;  // в сессию сохраняем мысль срезом (приоритет ответу)
 // ── Умное завершение докачек: серия итераций без прогресса (видимого текста нет,
@@ -158,11 +163,16 @@ fn push_continuation_for_cutoff(
 
     // ── Сжатие накопленных размышлений в тезисы (малый отдельный LLM-вызов) ──
     if let Some(mark) = *continuation_mark {
+        // Текущий оборванный кусок ещё НЕ запушен в llm_messages (пуш в конце
+        // функции), поэтому учитываем и его — иначе компакт всегда запаздывает
+        // на одну докачку и думатель успевает раздуться (потеря начала ответа,
+        // раздутый KV-кэш).
         let acc_chars: usize = llm_messages[mark..]
             .iter()
             .filter(|m| m.role == "assistant")
             .map(|m| m.content.chars().count())
-            .sum();
+            .sum::<usize>()
+            + continuation_raw.chars().count();
         if acc_chars > COMPACT_THRESHOLD_CHARS {
             let thinking = llm_messages[mark..]
                 .iter()
@@ -255,6 +265,13 @@ fn safe_truncate(s: &str, max_len: usize) -> String {
         .map(|(i, c)| i + c.len_utf8())
         .unwrap_or(max_len.min(s.len()));
     format!("{}...", &s[..end])
+}
+
+/// Артефакт докачки: финальный ответ начинается с многоточия — модель
+/// продолжила оборванный думатель вместо того, чтобы начать ответ с начала.
+fn starts_with_ellipsis(s: &str) -> bool {
+    let t = s.trim_start();
+    t.starts_with("...") || t.starts_with('…')
 }
 
 /// Компактное описание вызова агента для subcall (вместо полной копии системного
@@ -767,6 +784,7 @@ let mut final_response = String::new();
 
     // ── Состояние «докачки» после обрыва генерации по лимиту токенов ──
     let mut continuation_count = 0usize;      // сколько раз докачивали оборванную генерацию
+    let mut continuation_restarts = 0usize;   // ретраев «ответа с начала» (артефакт «...»)
     let mut continuation_raw = String::new(); // накопленный сырой текст (для вырезания ответа)
     let mut continuation_mark: Option<usize> = None; // граница сообщений, добавленных при докачке
 
@@ -1010,13 +1028,12 @@ let mut final_response = String::new();
                     tool_found = true;
                     match client.call_tool(&tool_name, arguments) {
                         Ok(res) => { tool_output = Some(res); consecutive_failed_tools = 0; }
-                        Err(e) => { tool_output = Some(format!("Ошибка '{}': {}", tool_name, e)); consecutive_failed_tools += 1; }
+                        Err(e) => { tool_output = Some(format!("Ошибка '{}': {}", tool_name, e)); }
                     }
                 }
             }
             if !tool_found {
                 if agents.iter().any(|a| a.id == tool_name && a.id != agent.id) {
-                    consecutive_failed_tools += 1;
                     log_cb(format!("🔄 Синтаксическая ошибка: '{}' использовал 'tool' для вызова сабагента '{}' вместо 'target'.", agent.name, tool_name));
                     if consecutive_failed_tools >= 3 {
                         final_response = format!("{} Синтаксическая ошибка (3 попытки): агент '{}' продолжает использовать 'tool' вместо 'target'. Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
@@ -1289,6 +1306,32 @@ let mut final_response = String::new();
             }
         }
 
+        // ── Артефакт докачки: ответ начался с многоточия — модель продолжила
+        // оборванный думатель вместо самостоятельного ответа, начало потеряно.
+        // НЕ финализируем и НЕ перегенерируем всё с нуля: хвост уже в истории
+        // (assistant), просим написать ответ С НАЧАЛА — результат не теряется.
+        // Проверяем именно то, что станет финальным ответом (после вырезки
+        // думателя), т.к. сырой текст может начинаться с маркеров размышлений.
+        let (_, split_answer) = split_thinking_and_answer(&combined);
+        if !action_found && starts_with_ellipsis(&split_answer)
+            && continuation_restarts < MAX_CONTINUATION_RESTARTS && !response.trim().is_empty() {
+            continuation_restarts += 1;
+            log_cb(format!(
+                "⚠️ [{}] ответ начался с обрыва размышлений («...») — перезапуск ответа с начала (#{}/{}), хвост сохранён в истории",
+                agent.name, continuation_restarts, MAX_CONTINUATION_RESTARTS
+            ));
+            llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+            // Ответ будет писаться заново — состояние «докачки» сбрасываем,
+            // чтобы следующий вызов не склеивал старый оборванный combined.
+            continuation_raw.clear();
+            continuation_mark = None;
+            llm_messages.push(LlmMessage { role: "user".to_string(), content:
+                "⚠️ Твой финальный ответ начался с многоточия — это продолжение оборванных размышлений, а не самостоятельный ответ. Напиши финальный ответ ЗАНОВО с самого начала: вступление и ВСЕ пункты по порядку. Твой текст после многоточия уже сохранён в истории — не повторяй и не продолжай его, не начинай с «...». Начни с полного первого пункта."
+                .to_string()
+            });
+            continue;
+        }
+
         let preview = safe_truncate(&response, 300).replace('\n', " ");
 log_cb(format!("✅ Агент {} завершил ответом ({} символов): {}", agent.name, response.len(), preview));
         final_response = if is_continuation {
@@ -1387,6 +1430,16 @@ mod tests {
 
     fn parse_wf(yaml: &str) -> WorkflowDef {
         serde_yaml::from_str(yaml).expect("Не удалось распарсить тестовый workflow")
+    }
+
+    #[test]
+    fn starts_with_ellipsis_detects_continuation_artifact() {
+        assert!(starts_with_ellipsis("...принятие решений, требующих участия других"));
+        assert!(starts_with_ellipsis("…продолжение мыслей после обрыва"));
+        assert!(starts_with_ellipsis("   ... ответ с ведущими пробелами"));
+        assert!(!starts_with_ellipsis("Начни ответ с первого пункта"));
+        assert!(!starts_with_ellipsis("Согласно данным, у вас есть симптомы"));
+        assert!(!starts_with_ellipsis(""));
     }
 
     #[test]

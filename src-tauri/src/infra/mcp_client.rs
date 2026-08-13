@@ -2,6 +2,7 @@ use std::process::{Command, Child, Stdio};
 use std::io::{BufReader, BufRead, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::collections::VecDeque;
 use serde_json::{Value, json};
 
 pub struct McpClient {
@@ -9,6 +10,7 @@ pub struct McpClient {
     stdin: std::process::ChildStdin,
     stdout_reader: BufReader<std::process::ChildStdout>,
     next_id: Arc<Mutex<i64>>,
+    stderr_tail: Arc<Mutex<VecDeque<String>>>,
 }
 
 impl McpClient {
@@ -35,13 +37,20 @@ impl McpClient {
         let stderr = child.stderr.take().ok_or("Не удалось получить stderr")?;
 
         let cb = Arc::new(log_cb);
+        let stderr_tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let stderr_buf = stderr_tail.clone();
         thread::spawn(move || {
             let reader = BufReader::new(stderr);
-            for line in reader.lines().flatten() { cb(format!("[MCP Stderr] {}", line)); }
+            for line in reader.lines().flatten() {
+                cb(format!("[MCP Stderr] {}", line));
+                let mut tail = stderr_buf.lock().unwrap();
+                if tail.len() >= 15 { tail.pop_front(); }
+                tail.push_back(line);
+            }
         });
 
         let stdout_reader = BufReader::new(stdout);
-        let mut client = Self { child, stdin, stdout_reader, next_id: Arc::new(Mutex::new(1)) };
+        let mut client = Self { child, stdin, stdout_reader, next_id: Arc::new(Mutex::new(1)), stderr_tail };
         client.initialize()?;
         Ok(client)
     }
@@ -59,7 +68,13 @@ impl McpClient {
         loop {
             line.clear();
             let bytes_read = self.stdout_reader.read_line(&mut line).map_err(|e| e.to_string())?;
-            if bytes_read == 0 { return Err("MCP-сервер неожиданно закрыл поток stdout".to_string()); }
+            if bytes_read == 0 {
+                let tail: Vec<String> = self.stderr_tail.lock().unwrap().iter().cloned().collect();
+                if tail.is_empty() {
+                    return Err("MCP-сервер неожиданно закрыл поток stdout (stderr пуст)".to_string());
+                }
+                return Err(format!("MCP-сервер неожиданно закрыл поток stdout. Причина (последний stderr): {}", tail.join(" | ")));
+            }
             let trimmed = line.trim();
             if trimmed.is_empty() { continue; }
             if let Ok(val) = serde_json::from_str::<Value>(trimmed) {

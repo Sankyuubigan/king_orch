@@ -5,6 +5,7 @@ src-tauri/target
 /env
 /test
 /src-tauri/bin
+/bins
 /temp
 /cookies
 /.claw
