@@ -8,6 +8,8 @@ config:
 
 nodes:
 
+# ── Классификация и маршрутизация ──
+
 - id: extract_facts
   type: llm_fact_extractor
   input: |
@@ -23,27 +25,200 @@ nodes:
     to: call_quick
   - key: needs_docs
     to: call_docs
+  - key: needs_deep_research
+    to: decompose_topic
   default: call_web
+
+# ── Быстрая ветка: канонический источник ──
 
 - id: call_quick
   type: llm_worker
   agent: quick_finder
   task: |
-    Ответь пользователю. Вопрос: {{ user_message }}
+    Ответь пользователю.
+
+    Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+    Исходный вопрос (если выше заглушка {{ ... }} или пусто): {{ user_message }}
   output_type: message
+
+# ── Ветка: документация ──
 
 - id: call_docs
   type: llm_worker
   agent: docs_researcher
   task: |
-    Ответь пользователю. Вопрос: {{ user_message }}
+    Ответь пользователю.
+
+    Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+    Исходный вопрос (если выше заглушка {{ ... }} или пусто): {{ user_message }}
   output_type: message
+
+# ── Deep research ветка: декомпозиция → 3 подтемы → компиляция ──
+
+- id: decompose_topic
+  type: llm_worker
+  agent: topic_decomposer
+  task: |
+    Разбей вопрос пользователя на 3 подтемы для глубокого исследования.
+
+    Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+    Исходный вопрос (если выше заглушка {{ ... }} или пусто): {{ user_message }}
+  output_type: thought
+
+- id: call_sub1
+  type: llm_worker
+  agent: web_researcher
+  task: |
+    Проведи глубокое исследование ОДНОЙ подтемы из списка.
+
+    Общий вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+
+    Список подтем (исследуй ТОЛЬКО подтему №1 — первую строку списка):
+    {{ nodes.decompose_topic.output.result }}
+
+    Верни отчёт по этой подтеме: собранные факты с цитатами-подтверждениями и сквозной нумерацией источников [1]..[N] с секцией «Источники» в конце. Твой отчёт станет секцией итогового доклада — будь самодостаточен.
+  output_type: thought
+
+- id: call_sub2
+  type: llm_worker
+  agent: web_researcher
+  task: |
+    Проведи глубокое исследование ОДНОЙ подтемы из списка.
+
+    Общий вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+
+    Список подтем (исследуй ТОЛЬКО подтему №2 — вторую строку списка):
+    {{ nodes.decompose_topic.output.result }}
+
+    Верни отчёт по этой подтеме: собранные факты с цитатами-подтверждениями и сквозной нумерацией источников [1]..[N] с секцией «Источники» в конце. Твой отчёт станет секцией итогового доклада — будь самодостаточен.
+  output_type: thought
+
+- id: call_sub3
+  type: llm_worker
+  agent: web_researcher
+  task: |
+    Проведи глубокое исследование ОДНОЙ подтемы из списка.
+
+    Общий вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+
+    Список подтем (исследуй ТОЛЬКО подтему №3 — третью строку списка):
+    {{ nodes.decompose_topic.output.result }}
+
+    Верни отчёт по этой подтеме: собранные факты с цитатами-подтверждениями и сквозной нумерацией источников [1]..[N] с секцией «Источники» в конце. Твой отчёт станет секцией итогового доклада — будь самодостаточен.
+  output_type: thought
+
+- id: compile_research
+  type: llm_worker
+  agent: research_compiler
+  task: |
+    Собери итоговый доклад из отчётов по подтемам.
+
+    Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+
+    ## Отчёт по подтеме 1
+    {{ nodes.call_sub1.output.result }}
+
+    ## Отчёт по подтеме 2
+    {{ nodes.call_sub2.output.result }}
+
+    ## Отчёт по подтеме 3
+    {{ nodes.call_sub3.output.result }}
+  output_type: thought
+
+# ── Deep research: цикл оценки качества ──
+
+- id: eval_deep
+  type: llm_worker
+  agent: answer_evaluator
+  task: |
+    Оцени качество черновика ответа на вопрос по чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность).
+
+    Вопрос: {{ nodes.extract_facts.output.rewritten_query }}
+
+    Черновик: {{ nodes.compile_research.output.result }}
+  output_type: thought
+
+- id: check_eval_deep
+  type: switch
+  input_object: "{{ nodes.eval_deep.output.result }}"
+  cases_priority:
+  - key: pass
+    to: final_deep
+  default: improve_deep
+
+- id: improve_deep
+  type: llm_worker
+  agent: web_researcher
+  task: |
+    Оценщик посчитал итоговый доклад недостаточно качественным. Улучши доклад: учти замечания и выполни план улучшения; если замечание требует дополнительных проверок (перечитать источник, проверить версию, свежие данные) — сделай это через свои инструменты поиска.
+
+    Вопрос: {{ nodes.extract_facts.output.rewritten_query }}
+
+    Твой прошлый доклад (содержит источники, которые ты уже открывал — НЕ открывай их повторно): {{ nodes.compile_research.output.result }}
+
+    Вердикт оценщика (JSON): {{ nodes.eval_deep.output.result }}
+
+    ВАЖНО: из вердикта извлеки "reasons" (замечания) и "improvement_plan" (план улучшения) и следуй им.
+
+    Верни УЛУЧШЕННЫЙ полный доклад обычным текстом (без JSON) — он пойдёт пользователю.
+  output_type: thought
+
+- id: eval_deep2
+  type: llm_worker
+  agent: answer_evaluator
+  task: |
+    Оцени качество УЛУЧШЕННОГО черновика по тому же чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность). Учти, что первый вердикт уже был — оценивай именно исправленный черновик.
+
+    Вопрос: {{ nodes.extract_facts.output.rewritten_query }}
+
+    Улучшенный черновик: {{ nodes.improve_deep.output.result }}
+
+    Первый черновик (для сравнения): {{ nodes.compile_research.output.result }}
+
+    Первый вердикт (JSON): {{ nodes.eval_deep.output.result }}
+  output_type: thought
+
+- id: check_eval_deep2
+  type: switch
+  input_object: "{{ nodes.eval_deep2.output.result }}"
+  cases_priority:
+  - key: pass
+    to: final_deep_improved
+  default: honest_fail_deep
+
+- id: final_deep
+  type: system_condition
+  action: aggregate_and_output
+  required: ["research_compiler"]
+
+- id: final_deep_improved
+  type: system_condition
+  action: aggregate_and_output
+  required: ["web_researcher"]
+
+- id: honest_fail_deep
+  type: llm_worker
+  agent: web_researcher
+  task: |
+    Твой доклад дважды не прошёл оценку качества. Верни пользователю честный ответ: возьми свой ЛУЧШИЙ черновик и добавь в конец секцию «Неотвеченные части / степень уверенности» — перечисли, что именно не удалось подтвердить и почему, на основе замечаний оценщика.
+
+    Вопрос: {{ nodes.extract_facts.output.rewritten_query }}
+
+    Твой улучшенный доклад: {{ nodes.improve_deep.output.result }}
+
+    Вердикты оценщика: первый — {{ nodes.eval_deep.output.result }}, второй — {{ nodes.eval_deep2.output.result }}
+  output_type: message
+
+# ── Обычная веб-ветка: исследование + цикл оценки качества ──
 
 - id: call_web
   type: llm_worker
   agent: web_researcher
   task: |
-    Ответь пользователю. Вопрос: {{ user_message }}
+    Ответь пользователю.
+
+    Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+    Исходный вопрос (если выше заглушка {{ ... }} или пусто): {{ user_message }}
   output_type: thought
 
 - id: eval_answer
@@ -52,7 +227,7 @@ nodes:
   task: |
     Оцени качество черновика ответа на вопрос по чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность).
 
-    Вопрос: {{ user_message }}
+    Вопрос: {{ nodes.extract_facts.output.rewritten_query }}
 
     Черновик: {{ nodes.call_web.output.result }}
   output_type: thought
@@ -71,21 +246,57 @@ nodes:
   task: |
     Оценщик посчитал твой черновик недостаточно качественным. Улучши ответ: учти замечания и выполни план улучшения.
 
-    Вопрос: {{ user_message }}
+    Вопрос: {{ nodes.extract_facts.output.rewritten_query }}
 
-    Твой прошлый черновик: {{ nodes.call_web.output.result }}
+    Твой прошлый черновик (содержит источники, которые ты уже открывал — НЕ открывай их повторно): {{ nodes.call_web.output.result }}
 
     Вердикт оценщика (JSON): {{ nodes.eval_answer.output.result }}
 
     ВАЖНО: из вердикта извлеки "reasons" (замечания) и "improvement_plan" (план улучшения) и следуй им. Если замечание требует дополнительных проверок (перечитать источник, проверить версию, свежие данные) — сделай это через свои инструменты поиска.
 
     Верни УЛУЧШЕННЫЙ полный ответ обычным текстом (без JSON) — он пойдёт пользователю.
-  output_type: message
+  output_type: thought
+
+- id: eval_again
+  type: llm_worker
+  agent: answer_evaluator
+  task: |
+    Оцени качество УЛУЧШЕННОГО черновика по тому же чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность). Учти, что первый вердикт уже был — оценивай именно исправленный черновик.
+
+    Вопрос: {{ nodes.extract_facts.output.rewritten_query }}
+
+    Улучшенный черновик: {{ nodes.improve_web.output.result }}
+
+    Первый черновик (для сравнения): {{ nodes.call_web.output.result }}
+
+    Первый вердикт (JSON): {{ nodes.eval_answer.output.result }}
+  output_type: thought
+
+- id: check_eval2
+  type: switch
+  input_object: "{{ nodes.eval_again.output.result }}"
+  cases_priority:
+  - key: pass
+    to: final_web
+  default: honest_fail
 
 - id: final_web
   type: system_condition
   action: aggregate_and_output
   required: ["web_researcher"]
+
+- id: honest_fail
+  type: llm_worker
+  agent: web_researcher
+  task: |
+    Твой черновик дважды не прошёл оценку качества. Верни пользователю честный ответ: возьми свой ЛУЧШИЙ черновик и добавь в конец секцию «Неотвеченные части / степень уверенности» — перечисли, что именно не удалось подтвердить и почему, на основе замечаний оценщика.
+
+    Вопрос: {{ nodes.extract_facts.output.rewritten_query }}
+
+    Твой улучшенный черновик: {{ nodes.improve_web.output.result }}
+
+    Вердикты оценщика: первый — {{ nodes.eval_answer.output.result }}, второй — {{ nodes.eval_again.output.result }}
+  output_type: message
 
 edges:
 
@@ -98,6 +309,39 @@ edges:
 - from: call_docs
   to: END
 
+- from: decompose_topic
+  to: call_sub1
+
+- from: call_sub1
+  to: call_sub2
+
+- from: call_sub2
+  to: call_sub3
+
+- from: call_sub3
+  to: compile_research
+
+- from: compile_research
+  to: eval_deep
+
+- from: eval_deep
+  to: check_eval_deep
+
+- from: improve_deep
+  to: eval_deep2
+
+- from: eval_deep2
+  to: check_eval_deep2
+
+- from: final_deep
+  to: END
+
+- from: final_deep_improved
+  to: END
+
+- from: honest_fail_deep
+  to: END
+
 - from: call_web
   to: eval_answer
 
@@ -105,4 +349,13 @@ edges:
   to: check_eval
 
 - from: improve_web
+  to: eval_again
+
+- from: eval_again
+  to: check_eval2
+
+- from: final_web
+  to: END
+
+- from: honest_fail
   to: END

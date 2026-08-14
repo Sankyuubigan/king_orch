@@ -358,7 +358,12 @@ edges:
     #[test]
     fn test_parse_search_specialist_workflow() {
         // Research-граф с оценщиком ответа: extract_facts → route →
-        // call_web (thought) → eval_answer → check_eval (switch) → final_web/improve_web
+        // call_web (thought) → eval_answer → check_eval (switch) →
+        // improve_web (thought) → eval_again → check_eval2 →
+        // final_web (aggregate_and_output) | honest_fail (message).
+        // Deep-ветка инлайн (бывший deep_research.yaml): decompose_topic →
+        // call_sub1..3 → compile_research → eval_deep → improve_deep → ...
+        // Маршрут: call_quick / call_docs / decompose_topic / call_web.
         let path_str = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/../agents/research/transitions/search-specialist.yaml"
@@ -387,7 +392,85 @@ edges:
 
         let improve = get("improve_web");
         assert_eq!(improve.agent.as_deref(), Some("web_researcher"));
-        assert_eq!(improve.output_type.as_deref(), Some("message"));
+        assert_eq!(improve.output_type.as_deref(), Some("thought"));
+
+        let eval_again = get("eval_again");
+        assert_eq!(eval_again.agent.as_deref(), Some("answer_evaluator"));
+
+        let check2 = get("check_eval2");
+        assert_eq!(check2.node_type, NodeType::Switch);
+        assert_eq!(check2.input_object.as_deref(), Some("{{ nodes.eval_again.output.result }}"));
+        let cases2 = check2.cases_priority.as_ref().unwrap();
+        assert_eq!(cases2.len(), 1);
+        assert_eq!(cases2[0].key, "pass");
+        assert_eq!(cases2[0].to, "final_web");
+        assert_eq!(check2.default.as_deref(), Some("honest_fail"));
+
+        let honest = get("honest_fail");
+        assert_eq!(honest.agent.as_deref(), Some("web_researcher"));
+        assert_eq!(honest.output_type.as_deref(), Some("message"));
+
+        let route = get("route");
+        assert_eq!(route.node_type, NodeType::Switch);
+        let route_cases = route.cases_priority.as_ref().unwrap();
+        assert!(route_cases.iter().any(|c| c.key == "has_known_source" && c.to == "call_quick"));
+        assert!(route_cases.iter().any(|c| c.key == "needs_docs" && c.to == "call_docs"));
+        assert!(route_cases.iter().any(|c| c.key == "needs_deep_research" && c.to == "decompose_topic"));
+        assert_eq!(route.default.as_deref(), Some("call_web"));
+
+        // Deep-ветка инлайн (бывший deep_research.yaml): decompose → 3 подтемы → compile.
+        let dec = get("decompose_topic");
+        assert_eq!(dec.node_type, NodeType::LlmWorker);
+        assert_eq!(dec.agent.as_deref(), Some("topic_decomposer"));
+        assert_eq!(dec.output_type.as_deref(), Some("thought"));
+
+        for i in 1..=3 {
+            let sub = get(&format!("call_sub{}", i));
+            assert_eq!(sub.agent.as_deref(), Some("web_researcher"));
+            assert_eq!(sub.output_type.as_deref(), Some("thought"));
+            assert!(sub.task.as_deref().unwrap_or("").contains("nodes.decompose_topic.output.result"),
+                "задача call_sub{} должна ссылаться на список подтем", i);
+        }
+
+        let comp = get("compile_research");
+        assert_eq!(comp.agent.as_deref(), Some("research_compiler"));
+        assert_eq!(comp.output_type.as_deref(), Some("thought"), "compile_research не терминальный — дальше оценщик");
+        let comp_task = comp.task.as_deref().unwrap_or("");
+        assert!(comp_task.contains("nodes.call_sub1.output.result"));
+        assert!(comp_task.contains("nodes.call_sub3.output.result"));
+
+        // Deep-цикл оценки качества
+        let eval_deep = get("eval_deep");
+        assert_eq!(eval_deep.agent.as_deref(), Some("answer_evaluator"));
+
+        let check_deep = get("check_eval_deep");
+        assert_eq!(check_deep.node_type, NodeType::Switch);
+        assert_eq!(check_deep.default.as_deref(), Some("improve_deep"));
+
+        let improve_deep = get("improve_deep");
+        assert_eq!(improve_deep.agent.as_deref(), Some("web_researcher"));
+        assert_eq!(improve_deep.output_type.as_deref(), Some("thought"));
+
+        let eval_deep2 = get("eval_deep2");
+        assert_eq!(eval_deep2.agent.as_deref(), Some("answer_evaluator"));
+
+        let check_deep2 = get("check_eval_deep2");
+        assert_eq!(check_deep2.node_type, NodeType::Switch);
+        assert_eq!(check_deep2.default.as_deref(), Some("honest_fail_deep"));
+
+        let final_deep = get("final_deep");
+        assert_eq!(final_deep.node_type, NodeType::SystemCondition);
+        assert_eq!(final_deep.action.as_deref(), Some("aggregate_and_output"));
+        assert_eq!(final_deep.required.as_deref(), Some(&["research_compiler".to_string()][..]));
+
+        let final_deep_improved = get("final_deep_improved");
+        assert_eq!(final_deep_improved.node_type, NodeType::SystemCondition);
+        assert_eq!(final_deep_improved.action.as_deref(), Some("aggregate_and_output"));
+        assert_eq!(final_deep_improved.required.as_deref(), Some(&["web_researcher".to_string()][..]));
+
+        let honest_deep = get("honest_fail_deep");
+        assert_eq!(honest_deep.agent.as_deref(), Some("web_researcher"));
+        assert_eq!(honest_deep.output_type.as_deref(), Some("message"));
 
         let final_web = get("final_web");
         assert_eq!(final_web.node_type, NodeType::SystemCondition);

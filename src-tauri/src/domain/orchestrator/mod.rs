@@ -1410,6 +1410,8 @@ continue;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     fn make_agent(id: &str, system_prompt: &str) -> AgentProfile {
         AgentProfile {
@@ -1541,5 +1543,169 @@ mod tests {
         assert!(has_tools, "агент с mcp_servers даёт has_tools=true → run_chat добавит TOOL_WORKING_BUDGET к оценке контекста");
         assert!(prompt.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"));
         assert!(prompt.contains("emit_signal"));
+    }
+
+    // ─────────────────────────── Верификация research-агентов ───────────────────────────
+    // Регрессия 14.08.26: docs_researcher/web_researcher отвечали «по памяти» и не вызывали
+    // WebFetch. Эти тесты фиксируют контракт: инструменты верификации обязаны доходить до модели.
+
+    fn workspace_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf()
+    }
+
+    fn real_agent(id: &str) -> AgentProfile {
+        let agents_dir = workspace_root().join("agents");
+        let agents = load_agents(&agents_dir).expect("агенты должны загрузиться из agents/");
+        agents
+            .into_iter()
+            .find(|a| a.id == id)
+            .unwrap_or_else(|| panic!("агент '{id}' не найден в agents/"))
+    }
+
+    /// Имена инструментов, зарегистрированных MCP-сервером (парсинг tools-блока .ts-файла).
+    fn tools_in_server(server_name: &str) -> Vec<String> {
+        let path = workspace_root()
+            .join("src-tauri/mcp_servers")
+            .join(format!("{server_name}.ts"));
+        let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        let mut out: Vec<String> = Vec::new();
+        for line in src.lines() {
+            if let Some(name) = line.trim().strip_prefix("name:").and_then(|s| s.trim().strip_prefix('"')) {
+                if let Some(end) = name.find('"') {
+                    let t = name[..end].to_string();
+                    if t.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') {
+                        out.push(t);
+                    }
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    fn tools_of_server_as_all_tools(server_name: &str) -> Vec<(String, String, serde_json::Value)> {
+        tools_in_server(server_name)
+            .into_iter()
+            .map(|t| (format!("{server_name}:{t}"), t, serde_json::Value::Null))
+            .collect()
+    }
+
+    #[test]
+    fn docs_researcher_prompt_guarantees_webfetch_reaches_the_model() {
+        let agent = real_agent("docs_researcher");
+        assert!(
+            agent.mcp_servers.iter().any(|s| s == "docs_fetcher"),
+            "docs_researcher обязан иметь mcp-сервер docs_fetcher, есть: {:?}",
+            agent.mcp_servers
+        );
+        assert!(agent.current_date, "docs_researcher должен иметь current_date: true (протокол актуальности)");
+
+        let df_tools = tools_in_server("docs_fetcher");
+        for t in ["WebFetch", "FetchArticle", "FetchGithubReadme"] {
+            assert!(
+                df_tools.iter().any(|x| x == t),
+                "docs_fetcher.ts не регистрирует инструмент {t}, есть: {df_tools:?}"
+            );
+        }
+
+        let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
+        all_tools.extend(tools_of_server_as_all_tools("web_search"));
+        all_tools.extend(runtime::builtin_tools());
+        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048);
+
+        for t in ["WebFetch", "FetchArticle", "FetchGithubReadme", "WebSearch", "emit_signal"] {
+            assert!(sp.contains(t), "промпт docs_researcher не содержит '{t}'");
+        }
+        assert!(sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"));
+        assert!(
+            sp.contains("ЗАПРЕЩЕНО") && sp.contains("WebFetch"),
+            "промпт обязан содержать обязательный протокол верификации"
+        );
+    }
+
+    #[test]
+    fn web_researcher_prompt_guarantees_webfetch_reaches_the_model() {
+        let agent = real_agent("web_researcher");
+        assert!(
+            agent.mcp_servers.iter().any(|s| s == "docs_fetcher"),
+            "web_researcher обязан иметь mcp-сервер docs_fetcher, есть: {:?}",
+            agent.mcp_servers
+        );
+        let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
+        all_tools.extend(tools_of_server_as_all_tools("web_search"));
+        all_tools.extend(runtime::builtin_tools());
+        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048);
+        assert!(sp.contains("WebFetch"), "промпт web_researcher не содержит WebFetch");
+        assert!(sp.contains("WebSearch"));
+    }
+
+    /// Гипотеза 14.08.26: модель сама не вызывает WebFetch даже когда промпт требует
+    /// верификации (Q2: serde 1.0.215 вместо реальной 1.0.229). Реальная модель, реальный
+    /// промпт: pass = вызов инструмента, fail = ответ текстом по памяти.
+    /// Запуск: TEST_MODEL_PATH=... test.bat "docs_researcher_calls_tool_instead_of_guessing_version -- --ignored"
+    #[test]
+    #[ignore]
+    fn docs_researcher_calls_tool_instead_of_guessing_version() {
+        let model_path = std::env::var("TEST_MODEL_PATH").expect("Set TEST_MODEL_PATH to a GGUF file path");
+        let agent = real_agent("docs_researcher");
+        let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
+        all_tools.extend(tools_of_server_as_all_tools("web_search"));
+        all_tools.extend(runtime::builtin_tools());
+        let mut system_prompt = build_system_prompt(&agent, &[], true, &all_tools, 2048);
+        system_prompt.push_str("\n\n[КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ]\n");
+        system_prompt.push_str(prompt::CRITICAL_LIMIT_BLOCK);
+
+        let user_text = "Узнай и сообщи: какая сейчас последняя версия крейта serde? НЕ называй версию по памяти — прочитай официальную страницу через WebFetch и назови версию из неё.";
+
+        let engine_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .map(|d| crate::infra::llamacpp_installer::default_dir(&d))
+            .unwrap_or_else(std::path::PathBuf::new);
+        // В тестовой сборке движок не лежит рядом с exe — берём директорию из конфига приложения.
+        let engine_dir = if engine_dir.join("backends").exists() {
+            engine_dir
+        } else {
+            std::env::var("APPDATA")
+                .ok()
+                .map(|a| Path::new(&a).join("com.kingorch.app").join("app_config.json"))
+                .and_then(|cfg| fs::read_to_string(cfg).ok())
+                .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                .and_then(|v| v.get("llamacpp_dir").and_then(|d| d.as_str()).map(PathBuf::from))
+                .filter(|p| p.join("backends").exists())
+                .unwrap_or(engine_dir)
+        };
+        let engine = LlamaEngine::new(&engine_dir, &model_path, 8192, false, false, &|_| {}, |_| {}).unwrap();
+        let mut params = ModelParams::default();
+        params.temperature = 0.8;
+
+        let msgs = vec![
+            LlmMessage { role: "system".to_string(), content: system_prompt },
+            LlmMessage { role: "user".to_string(), content: user_text.to_string() },
+        ];
+        let cancel = Arc::new(AtomicBool::new(false));
+        let gen = engine
+            .generate_chat(&msgs, 1024, &params, "Auto", cancel, "test:docs_researcher_tool", |_, _| {}, |_| {})
+            .unwrap();
+        let response = gen.text;
+        println!("=== RAW RESPONSE ===\n{}\n=== END ===", response);
+
+        match parse_tool_call(&response) {
+            Some((tool, args, _)) => {
+                println!("TOOL CALL: {tool} {args}");
+                assert!(
+                    tool == "WebFetch" || tool == "WebSearch" || tool == "FetchArticle",
+                    "инструмент '{tool}' не является инструментом верификации"
+                );
+            }
+            None => {
+                let preview: String = response.chars().take(500).collect();
+                panic!("Модель ответила текстом, не вызвав инструмент верификации (гипотеза подтверждена). Ответ: {preview}");
+            }
+        }
     }
 }

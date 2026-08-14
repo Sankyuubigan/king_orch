@@ -15,6 +15,14 @@
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
+// Страховка: в Deno node-compat сбой внутри HTTP-потока (например, EOF при обрыве
+// соединения) может вылететь как unhandled rejection и убить весь MCP-процесс.
+// Ловим глобально: логируем в stderr (не ломает JSON-RPC) и продолжаем работать.
+import process from "node:process";
+process.on("unhandledRejection", (reason) => {
+  try { Deno.stderr.writeSync(encoder.encode(`[mcp_base] unhandledRejection: ${String(reason)}\n`)); } catch { /* ignore */ }
+});
+
 // Буферизованный читатель stdin (построчно).
 const BUF_SIZE = 8192;
 let stdinBuf = new Uint8Array(BUF_SIZE);

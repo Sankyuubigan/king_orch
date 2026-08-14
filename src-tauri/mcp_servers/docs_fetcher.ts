@@ -106,21 +106,6 @@ async function fetchUrlSafe(startUrl: string, opts: Record<string, unknown> = {}
     });
 }
 
-// HEAD pre-flight: отсечь большие ответы до скачивания (по open-websearch/fetchWebContent).
-// Многие серверы не умеют HEAD или врут — при проблемах молча продолжаем GET.
-async function headSizeOk(url: string): Promise<Error | null> {
-    try {
-        const res = await fetchUrlSafe(url, { method: 'HEAD', timeoutMs: 10000 });
-        const length = Number((res as { headers: Record<string, string> }).headers['content-length']);
-        if (Number.isFinite(length) && length > MAX_BYTES) {
-            return new Error(`Ответ слишком большой (${length} байт, лимит ${MAX_BYTES})`);
-        }
-    } catch {
-        // Не-HEAD-совместимый сервер или сеть — идём на GET, там свой лимит.
-    }
-    return null;
-}
-
 // ─────────────────────────── Лёгкий парсер HTML (без jsdom/cheerio) ───────────────────────────
 
 function matchTitle(html: string): string {
@@ -397,8 +382,6 @@ createMcpServer({
         WebFetch: async (args: Record<string, string>) => {
             const url = (args.url || '').trim();
             if (!url) { throw new Error("WebFetch: укажи 'url'."); }
-            const tooLarge = await headSizeOk(url);
-            if (tooLarge) throw tooLarge;
             const { text, url: finalUrl, status } = await fetchUrlSafe(url);
             if (!text || (!looksLikeHtml(text) && !/<[a-z][^>]*>/i.test(text))) {
                 return `Страница ${finalUrl} (HTTP ${status}): нет HTML-контента.\n${text.slice(0, 2000)}`;

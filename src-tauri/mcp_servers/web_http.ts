@@ -113,15 +113,23 @@ export async function request(url: string, opts: RequestOptions = {}): Promise<H
                         const chunks: Buffer[] = [];
                         let size = 0;
                         let tooLarge = false;
+                        let settled = false;
+                        const fail = (err: Error) => { if (settled) return; settled = true; reject(err); };
                         res.on('data', (c: Buffer) => {
                             size += c.length;
                             if (size > maxBytes) { tooLarge = true; res.destroy(); return; }
                             chunks.push(c);
                         });
                         res.on('end', () => {
-                            if (tooLarge) { reject(new Error(`Ответ больше лимита ${maxBytes} байт`)); return; }
+                            if (tooLarge) { fail(new Error(`Ответ больше лимита ${maxBytes} байт`)); return; }
+                            settled = true;
                             resolve({ status: res.statusCode || 0, headers: res.headers, body: Buffer.concat(chunks) });
                         });
+                        // Сбой/обрыв соединения при чтении ответа: reject вместо unhandled rejection,
+                        // который в Deno node-compat может уронить весь MCP-процесс.
+                        res.on('error', (err: Error) => fail(new Error(`Ошибка чтения ответа: ${err.message}`)));
+                        res.on('aborted', () => fail(new Error('Соединение закрыто до конца ответа')));
+                        res.on('close', () => fail(new Error('Соединение закрыто до конца ответа')));
                     });
                     // Отслеживаем фазу соединения, чтобы точно назвать причину таймаута/сброса.
                     req.on('socket', (socket: any) => {
