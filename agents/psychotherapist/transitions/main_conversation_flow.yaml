@@ -14,8 +14,8 @@ nodes:
     User: {{ user_message }}
     Session history (последние сообщения сессии): {{ messages }}
   ui_pos:
-    x: -1990
     y: 493
+    x: -1990
   llm_params: strict
 
 - id: check_has_problem
@@ -42,8 +42,8 @@ nodes:
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    y: 139
     x: -21
+    y: 139
 
 - id: collect_info
   type: llm_worker
@@ -73,8 +73,8 @@ nodes:
   inject_reports:
   - decomposer
   ui_pos:
-    y: 278
     x: 2075
+    y: 278
 
 - id: check_validator_signal
   type: signal_router
@@ -112,8 +112,8 @@ nodes:
   - soma_translator
   - validator
   ui_pos:
-    y: 570
     x: 4260
+    y: 570
 
 - id: call_healer
   type: llm_worker
@@ -127,8 +127,8 @@ nodes:
   - pattern_finder_by_floors
   - synthesizer
   ui_pos:
-    y: 678
     x: 4801
+    y: 678
 
 - id: check_somatic
   type: condition_check
@@ -152,8 +152,8 @@ nodes:
   type: llm_worker
   agent: cluster_checker
   ui_pos:
-    y: 347
     x: 801
+    y: 347
 
 - id: check_cluster_signal
   type: signal_router
@@ -172,15 +172,15 @@ nodes:
   type: llm_worker
   agent: decomposer
   ui_pos:
-    x: 1315
     y: 447
+    x: 1315
 
 - id: synchronize_with_user
   type: llm_worker
   agent: synchronizer
   ui_pos:
-    y: 162
     x: 3367
+    y: 162
   disabled: true
 
 - id: call_request_helper
@@ -188,16 +188,16 @@ nodes:
   agent: request_helper
   output_type: message
   ui_pos:
-    x: -808
     y: 864
+    x: -808
 
 - id: note_1782220193985
   type: note
   input: |
     проверка данных. развилка на доработку данных или отправку на лечение
   ui_pos:
-    y: 287
     x: 1638
+    y: 287
 
 - id: note_1782220533024
   type: note
@@ -211,8 +211,8 @@ nodes:
   type: note
   input: ослабление сопротивления
   ui_pos:
-    y: 566
     x: 3097
+    y: 566
 
 - id: note_1782221436115
   type: note
@@ -225,24 +225,24 @@ nodes:
   type: note
   input: проверяем абстрактный ли запрос
   ui_pos:
-    y: 291
     x: 21
+    y: 291
 
 - id: call_shadow_worker
   type: llm_worker
   agent: shadow_worker
   output_type: message
   ui_pos:
-    x: 3549
     y: 628
+    x: 3549
   disabled: true
 
 - id: note_1784427848563
   type: note
   input: вычисление типа
   ui_pos:
-    y: 582
     x: 3824
+    y: 582
 
 - id: combining_targets
   type: llm_worker
@@ -280,8 +280,8 @@ nodes:
   input: уточнение рукости у юзера
   system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
   ui_pos:
-    y: -156
     x: 536
+    y: -156
 
 - id: note_1785141025138
   type: note
@@ -295,6 +295,7 @@ nodes:
     - финансовые блоки
     - проблемы в отношениях с людьми
     - депрессии, вспышки ярости и т.п.
+    Если у вас есть сопротивление к работе над собой, то вы можете описать это сопротивление.
   ui_pos:
     x: -1323
     y: 748

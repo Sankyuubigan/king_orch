@@ -123,9 +123,26 @@ async function main() {
         console.log('\n========================================');
         console.log('[4/5] Сборка приложения (без установщика)...');
 
-        // Переопределяем конфиг Tauri — отключаем бандлер (NSIS), но компиляция идёт штатно
+        // Переопределяем конфиг Tauri — отключаем бандлер (NSIS), но компиляция идёт штатно.
+        // Массивы в конфиге Tauri заменяются целиком, поэтому окно указываем полностью.
+        // additionalBrowserArgs (только dev!): CDP-порт WebView2 для GUI-тестирования внешним
+        // ИИ-агентом (docs/GUI_TESTING.md, global_ai_docs/desktop_rust_tauri/gui_testing.md).
+        // НЕ использовать env WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: wry всегда задаёт свои
+        // дополнительные аргументы, и WebView2 игнорирует переменную окружения.
         const overridePath = path.join(scriptDir, 'src-tauri', 'tauri-dev-override.json');
-        fs.writeFileSync(overridePath, JSON.stringify({ bundle: { active: false } }));
+        fs.writeFileSync(overridePath, JSON.stringify({
+            bundle: { active: false },
+            app: {
+                windows: [{
+                    title: "King Orch - Multi-Agent Studio",
+                    width: 1100,
+                    height: 850,
+                    resizable: true,
+                    fullscreen: false,
+                    additionalBrowserArgs: "--remote-debugging-port=9222 --remote-allow-origins=*"
+                }]
+            }
+        }));
 
         let buildOk = false;
         try {
