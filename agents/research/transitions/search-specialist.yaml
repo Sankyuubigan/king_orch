@@ -1,0 +1,61 @@
+name: Поисковый специалист
+
+visible: true
+
+config:
+  facts_file: facts.yaml
+  default_llm_params: creative
+
+nodes:
+
+- id: extract_facts
+  type: llm_fact_extractor
+  input: |
+    User: {{ user_message }}
+    Session history (последние сообщения сессии): {{ messages }}
+  llm_params: strict
+
+- id: route
+  type: switch
+  input_object: "{{ nodes.extract_facts.output }}"
+  cases_priority:
+  - key: has_known_source
+    to: call_quick
+  - key: needs_docs
+    to: call_docs
+  default: call_web
+
+- id: call_quick
+  type: llm_worker
+  agent: quick_finder
+  task: |
+    Ответь пользователю. Вопрос: {{ user_message }}
+  output_type: message
+
+- id: call_web
+  type: llm_worker
+  agent: web_researcher
+  task: |
+    Ответь пользователю. Вопрос: {{ user_message }}
+  output_type: message
+
+- id: call_docs
+  type: llm_worker
+  agent: docs_researcher
+  task: |
+    Ответь пользователю. Вопрос: {{ user_message }}
+  output_type: message
+
+edges:
+
+- from: extract_facts
+  to: route
+
+- from: call_quick
+  to: END
+
+- from: call_web
+  to: END
+
+- from: call_docs
+  to: END
