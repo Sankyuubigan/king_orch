@@ -101,6 +101,9 @@ config:
   facts_file: "facts.yaml"         # Или вынести факты + extractor_prompt в отдельный файл
   extractor_prompt: "..."          # Кастомный системный промпт для llm_fact_extractor (опционально)
   default_llm_params: creative     # Дефолтный пресет LLM-параметров (имя из sampling_presets.json)
+  max_steps: 200                   # Предохранитель от бесконечных циклов: макс. число
+                                   # выполненных узлов за прогон (default 200).
+                                   # При превышении — честная ошибка в лог.
 
 nodes:
   - id: node_name
@@ -141,6 +144,7 @@ edges:
 
 **Общие поля узлов:**
 - `disabled: true` — узел не выполняется при активации workflow (для отключенных веток, недоставляющих маршрутов).
+- `max_visits: N` — максимум выполнений узла за один прогон workflow (default 1 = ровно один раз, прежнее поведение). Значение > 1 разрешает циклы через рёбра графа (см. «Циклы в графах»).
 - `ui_pos: {x, y}` — координаты в редакторе графов (генерируется редактором).
 - `system_condition, switch, condition_check` — подробности ниже.
 
@@ -194,6 +198,76 @@ edges:
 ```
 
 > Примечание: поле `cases` (мапа ключ → маршрут) отсутствует. Вместо него — `cases_priority` (массив `{key, to}` или мапа `{key: to}`) + `default`.
+
+### 🔄 Циклы в графах (loop через рёбра)
+
+Цикл строится обычными рёбрами/переходами: стрелка (или `to` в `cases_priority`/`false_to`) ведёт **обратно на начало цикла** — на узел, который повторяется. Выход из цикла — по условию проверочного узла (`switch` / `condition_check`).
+
+Два обязательных механизма (оба уже в движке, ничего дописывать не нужно):
+
+| Механизм | Поле | Default | Назначение |
+|----------|------|---------|------------|
+| **Лимит проходов узла** | `max_visits: N` на узле | 1 (ровно один раз) | Разрешает узлу выполняться N раз за прогон. **Без него цикл невозможен** — узел просто не выполнится второй раз. Ставить на **всех узлах цикла**. |
+| **Глобальный предохранитель** | `config.max_steps: N` | 200 | Суммарный лимит выполненных узлов за прогон. Страховка от бесконечного цикла: при превышении — честная ошибка в лог вместо вечного кручения. |
+
+```yaml
+config:
+  max_steps: 200          # глобальная страховка от бесконечного цикла
+
+nodes:
+  - id: process_problem
+    type: llm_worker
+    agent: problem_worker
+    max_visits: 3         # разрешить до 3 итераций (иначе цикл невозможен)
+
+  - id: check_progress
+    type: switch
+    input_object: "{{ nodes.process_problem.output }}"
+    cases_priority:
+      - key: has_more_problems
+        to: process_problem   # стрелка ОБРАТНО = цикл
+    default: final_answer     # условие выхода из цикла
+```
+
+> **⚠️ Важное предупреждение (тишина = ложь, §2.2):** выход из цикла происходит и при **исчерпании `max_visits`** — переход «назад» перестаёт срабатывать, и если у этой последней попытки нет терминального узла с `output_type: message` (или `aggregate_and_output`), граф закончится **без сообщения пользователю**. Поэтому:
+> - либо гарантируй message-узел на каждом пути выхода (включая «исчерпал попытки»);
+> - либо используй **линейную схему с оценщиком** (максимум 2 попытки, финальное сообщение всегда есть).
+
+### 📋 Линейная схема с оценщиком (альтернатива циклу)
+
+Итеративное улучшение без цикла: черновик → оценщик → `switch` по вердикту → финал или улучшенная попытка. Оба пути гарантированно заканчиваются сообщением. Реализовано в `agents/research/transitions/search-specialist.yaml`.
+
+```yaml
+  - id: call_web
+    type: llm_worker
+    agent: web_researcher       # черновик ответа
+    output_type: thought
+
+  - id: eval_answer
+    type: llm_worker
+    agent: answer_evaluator     # оценщик: {"pass": bool, "reasons": [], "improvement_plan": "..."}
+    task: "Оцени черновик: {{ nodes.call_web.output }}"
+    output_type: thought
+
+  - id: check_eval
+    type: switch                # вердикт оценщика → маршрут
+    input_object: "{{ nodes.eval_answer.output }}"
+    cases_priority:
+      - key: pass
+        to: final_web           # «хорошо» → финал
+    default: improve_web        # «плохо» → улучшенная попытка
+
+  - id: final_web
+    type: system_condition
+    action: aggregate_and_output
+    required: ["web_researcher"]  # отдать лучший черновик в чат
+
+  - id: improve_web
+    type: llm_worker
+    agent: web_researcher       # повторный проход с планом улучшения из оценщика
+    task: "Переработай черновик по плану: {{ nodes.eval_answer.output.improvement_plan }}"
+    output_type: message
+```
 
 ### Действия `system_condition`
 
@@ -377,5 +451,5 @@ facts:
 4. Создай `.yaml` workflow граф в папке `transitions/` — вся маршрутизация здесь
 5. Воркеры создавай как `.md` с узкой задачей (папки `frontend/`/`backend/` по роли)
 6. Используй неймспейсы для изоляции контекстов разных проблем
-7. Факты выноси в `facts.yaml` рядом с workflow; сложные маршруты разбивай на `note`/`switch`/`condition_check`/`signal_router`
+7. Факты выноси в `facts.yaml` рядом с workflow; сложные маршруты разбивай на `note`/`switch`/`condition_check`/`signal_router`; циклы — рёбрами с `max_visits` + `config.max_steps` (см. «Циклы в графах»), или линейной схемой с оценщиком.
 8. Проверь, что file_stem'ы уникальны (движок ищет рекурсивно по `agents/`)

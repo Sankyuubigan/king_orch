@@ -196,7 +196,20 @@ where
     ));
 
     let mut queue: Vec<String> = workflow.nodes.first().map(|n| n.id.clone()).into_iter().collect();
-    let mut visited = std::collections::HashSet::new();
+    // visited → visits: узел может выполниться несколько раз (циклы через рёбра),
+    // но не больше node.max_visits (default 1 = прежнее поведение visited-логики).
+    let max_visits_map: std::collections::HashMap<String, u32> = workflow
+        .nodes
+        .iter()
+        .map(|n| (n.id.clone(), n.max_visits.unwrap_or(1)))
+        .collect();
+    let mut visits: std::collections::HashMap<String, u32> = std::collections::HashMap::new();
+    let max_steps = workflow
+        .config
+        .as_ref()
+        .and_then(|c| c.max_steps)
+        .unwrap_or(200);
+    let mut executed_steps: usize = 0;
     let mut last_node_output: Option<serde_json::Value> = None;
 
     while let Some(node_id) = {
@@ -206,16 +219,28 @@ where
             return Err("Прервано пользователем".to_string());
         }
 
-        if visited.contains(&node_id) {
-            continue;
-        }
-        visited.insert(node_id.clone());
-
         let node = workflow
             .nodes
             .iter()
             .find(|n| n.id == node_id)
             .ok_or_else(|| format!("Узел '{}' не найден в workflow", node_id))?;
+
+        let node_max_visits = max_visits_map.get(&node_id).copied().unwrap_or(1);
+        let visit_count = visits.get(&node_id).copied().unwrap_or(0);
+        if visit_count >= node_max_visits {
+            continue;
+        }
+        visits.insert(node_id.clone(), visit_count + 1);
+
+        // Глобальный предохранитель от бесконечных циклов: честная ошибка,
+        // а не тихий выход (§2.2).
+        executed_steps += 1;
+        if executed_steps > max_steps {
+            return Err(format!(
+                "[workflow] '{}' превысил лимит шагов (max_steps={}) — вероятно бесконечный цикл",
+                workflow.name, max_steps
+            ));
+        }
 
         let node_start = Instant::now();
         (runner.log_cb)(format!(
@@ -256,23 +281,29 @@ where
         }
 
         // Строим новый порядок очереди: [next_node, ...next_nodes, ...остаток очереди]
+        // Узел попадает в очередь, пока не исчерпан его max_visits — это и есть
+        // поддержка циклов: ребро-петля перестаёт срабатывать после N выполнений.
+        let within_visits = |nid: &str| -> bool {
+            let max = max_visits_map.get(nid).copied().unwrap_or(1);
+            visits.get(nid).copied().unwrap_or(0) < max
+        };
         let next = find_next_node(&node_id, &workflow.edges, &result);
         let mut new_queue: Vec<String> = Vec::new();
 
         if let Some(nid) = next {
-            if nid != "__END__" && nid != "END" && !visited.contains(&nid) {
+            if nid != "__END__" && nid != "END" && within_visits(&nid) {
                 new_queue.push(nid);
             }
         }
 
         for nid in &result.next_nodes {
-            if !visited.contains(nid) {
+            if within_visits(nid) {
                 new_queue.push(nid.clone());
             }
         }
 
         for nid in &queue {
-            if !visited.contains(nid) {
+            if within_visits(nid) {
                 new_queue.push(nid.clone());
             }
         }

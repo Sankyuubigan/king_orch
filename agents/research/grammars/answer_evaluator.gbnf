@@ -1,0 +1,6 @@
+root ::= "{" ws "\"pass\"" ws ":" ws json-bool ws "," ws "\"reasons\"" ws ":" ws "[" ws (json-string (ws "," ws json-string)*)? ws "]" ws "," ws "\"improvement_plan\"" ws ":" ws json-string ws "}"
+json-string ::= "\"" string-char* "\""
+string-char ::= [^"\\] | escape
+escape ::= "\\" ("\\" | "\"" | "n" | "t" | "r" | "b" | "f" | "u" [0-9a-f] [0-9a-f] [0-9a-f] [0-9a-f])
+json-bool ::= "true" | "false"
+ws ::= (" " | "\t" | "\n" | "\r")*

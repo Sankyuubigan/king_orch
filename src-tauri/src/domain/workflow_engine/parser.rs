@@ -54,6 +54,10 @@ pub struct WorkflowConfig {
     /// Дефолтный пресет параметров LLM для всех узлов workflow (имя из sampling_presets.json)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_llm_params: Option<String>,
+    /// Глобальный предохранитель от бесконечных циклов: макс. число выполненных узлов
+    /// за один прогон workflow (default 200). При превышении — честная ошибка.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_steps: Option<usize>,
 }
 
 /// Внешний файл фактов (facts.yaml)
@@ -172,6 +176,11 @@ pub struct NodeDef {
     /// Имя пресета параметров LLM из sampling_presets.json (переопределяет default_llm_params)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm_params: Option<String>,
+    /// Максимум выполнений узла за один прогон workflow (default 1 = ровно один раз,
+    /// как было с visited-логикой). Значение >1 разрешает циклы через рёбра графа:
+    /// узел перевыполняется до лимита, выход из цикла — через switch/condition_check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_visits: Option<u32>,
 }
 
 fn is_false(b: &bool) -> bool { !b }
@@ -299,6 +308,100 @@ pub fn separate_top_level_fields(yaml: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_cycle_fields_roundtrip() {
+        // max_visits (на узле) и max_steps (в config) должны переживать
+        // конвейер save_workflow: to_string -> separate_top_level_fields -> parse.
+        let yaml = r#"
+name: Cycle Graph
+config:
+  max_steps: 50
+nodes:
+  - id: draft
+    type: llm_worker
+    agent: web_researcher
+    task: "Исследуй вопрос"
+    max_visits: 3
+  - id: eval
+    type: llm_worker
+    agent: answer_evaluator
+    task: "Оцени черновик"
+edges:
+  - from: draft
+    to: eval
+"#;
+        let wf: WorkflowDef = serde_yaml::from_str(yaml).expect("парсинг YAML");
+
+        let max_steps = wf.config.as_ref().and_then(|c| c.max_steps);
+        assert_eq!(max_steps, Some(50), "config.max_steps должен прочитаться");
+
+        let draft = wf.nodes.iter().find(|n| n.id == "draft").unwrap();
+        assert_eq!(draft.max_visits, Some(3), "max_visits должен прочитаться");
+
+        // Round-trip через надёжный конвейер save_workflow
+        let serialized = serde_yaml::to_string(&wf).expect("ser");
+        let out = separate_top_level_fields(&serialized);
+        let wf2: WorkflowDef = serde_yaml::from_str(&out)
+            .expect("❌ Сгенерированный YAML с cycle-полями невалиден!");
+        assert_eq!(wf2.config.as_ref().and_then(|c| c.max_steps), Some(50));
+        let draft2 = wf2.nodes.iter().find(|n| n.id == "draft").unwrap();
+        assert_eq!(draft2.max_visits, Some(3), "max_visits потерян после round-trip");
+
+        // Никакого null/[] мусора в выводе
+        let null_count = out.matches(": null").count();
+        assert_eq!(null_count, 0, "В сериализованном YAML есть null поля!");
+        assert!(out.contains("max_visits: 3"), "max_visits не попал в YAML");
+        assert!(out.contains("max_steps: 50"), "max_steps не попал в YAML");
+    }
+
+    #[test]
+    fn test_parse_search_specialist_workflow() {
+        // Research-граф с оценщиком ответа: extract_facts → route →
+        // call_web (thought) → eval_answer → check_eval (switch) → final_web/improve_web
+        let path_str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../agents/research/transitions/search-specialist.yaml"
+        );
+        let path = Path::new(path_str);
+        assert!(path.exists(), "Файл не найден: {:?}", path);
+        let wf = parse_workflow_file(path).expect("Парсинг YAML не удался");
+        assert_eq!(wf.name, "Поисковый специалист");
+
+        let get = |id: &str| wf.nodes.iter().find(|n| n.id == id).unwrap_or_else(|| panic!("узел {} не найден", id));
+
+        let call_web = get("call_web");
+        assert_eq!(call_web.output_type.as_deref(), Some("thought"));
+
+        let eval = get("eval_answer");
+        assert_eq!(eval.agent.as_deref(), Some("answer_evaluator"));
+
+        let check = get("check_eval");
+        assert_eq!(check.node_type, NodeType::Switch);
+        assert_eq!(check.input_object.as_deref(), Some("{{ nodes.eval_answer.output.result }}"));
+        let cases = check.cases_priority.as_ref().unwrap();
+        assert_eq!(cases.len(), 1);
+        assert_eq!(cases[0].key, "pass");
+        assert_eq!(cases[0].to, "final_web");
+        assert_eq!(check.default.as_deref(), Some("improve_web"));
+
+        let improve = get("improve_web");
+        assert_eq!(improve.agent.as_deref(), Some("web_researcher"));
+        assert_eq!(improve.output_type.as_deref(), Some("message"));
+
+        let final_web = get("final_web");
+        assert_eq!(final_web.node_type, NodeType::SystemCondition);
+        assert_eq!(final_web.action.as_deref(), Some("aggregate_and_output"));
+        assert_eq!(final_web.required.as_deref(), Some(&["web_researcher".to_string()][..]));
+
+        // Round-trip через конвейер save_workflow
+        let yaml_str = serde_yaml::to_string(&wf).expect("ser");
+        let yaml_final = separate_top_level_fields(&yaml_str);
+        let wf2: WorkflowDef = serde_yaml::from_str(&yaml_final)
+            .expect("❌ search-specialist.yaml не прошёл конвейер save_workflow!");
+        assert_eq!(wf2.nodes.len(), wf.nodes.len());
+        assert_eq!(wf2.edges.len(), wf.edges.len());
+    }
 
     #[test]
     fn test_parse_main_conversation_flow() {

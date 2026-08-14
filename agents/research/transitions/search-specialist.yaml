@@ -32,19 +32,60 @@ nodes:
     Ответь пользователю. Вопрос: {{ user_message }}
   output_type: message
 
-- id: call_web
-  type: llm_worker
-  agent: web_researcher
-  task: |
-    Ответь пользователю. Вопрос: {{ user_message }}
-  output_type: message
-
 - id: call_docs
   type: llm_worker
   agent: docs_researcher
   task: |
     Ответь пользователю. Вопрос: {{ user_message }}
   output_type: message
+
+- id: call_web
+  type: llm_worker
+  agent: web_researcher
+  task: |
+    Ответь пользователю. Вопрос: {{ user_message }}
+  output_type: thought
+
+- id: eval_answer
+  type: llm_worker
+  agent: answer_evaluator
+  task: |
+    Оцени качество черновика ответа на вопрос по чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность).
+
+    Вопрос: {{ user_message }}
+
+    Черновик: {{ nodes.call_web.output.result }}
+  output_type: thought
+
+- id: check_eval
+  type: switch
+  input_object: "{{ nodes.eval_answer.output.result }}"
+  cases_priority:
+  - key: pass
+    to: final_web
+  default: improve_web
+
+- id: improve_web
+  type: llm_worker
+  agent: web_researcher
+  task: |
+    Оценщик посчитал твой черновик недостаточно качественным. Улучши ответ: учти замечания и выполни план улучшения.
+
+    Вопрос: {{ user_message }}
+
+    Твой прошлый черновик: {{ nodes.call_web.output.result }}
+
+    Вердикт оценщика (JSON): {{ nodes.eval_answer.output.result }}
+
+    ВАЖНО: из вердикта извлеки "reasons" (замечания) и "improvement_plan" (план улучшения) и следуй им. Если замечание требует дополнительных проверок (перечитать источник, проверить версию, свежие данные) — сделай это через свои инструменты поиска.
+
+    Верни УЛУЧШЕННЫЙ полный ответ обычным текстом (без JSON) — он пойдёт пользователю.
+  output_type: message
+
+- id: final_web
+  type: system_condition
+  action: aggregate_and_output
+  required: ["web_researcher"]
 
 edges:
 
@@ -54,8 +95,14 @@ edges:
 - from: call_quick
   to: END
 
-- from: call_web
+- from: call_docs
   to: END
 
-- from: call_docs
+- from: call_web
+  to: eval_answer
+
+- from: eval_answer
+  to: check_eval
+
+- from: improve_web
   to: END
