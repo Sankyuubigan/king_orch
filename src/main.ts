@@ -4,7 +4,7 @@
  * Импорты идут через двери (index.ts) — модули не лезут в кишки друг друга.
  */
 import { initConfirmDialog, showToast } from "./ui";
-import { ChatController, SessionController, SettingsController, GraphController, AgentTestController } from "./controllers";
+import { ChatController, SessionController, SettingsController, GraphController, AgentTestController, UpdatePopupController } from "./controllers";
 import { bus } from "./events";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -239,6 +239,14 @@ async function initApp() {
 
   // ─── Старт ───
   settingsCtrl.loadConfig();
+
+  // ─── Проверка обновления при старте (всплывающее окно справа по центру) ───
+  const updatePopupCtrl = new UpdatePopupController({
+    container: $<HTMLElement>("update-popup"),
+    btnUpdate: $<HTMLButtonElement>("btn-update-now"),
+    btnLater: $<HTMLButtonElement>("btn-update-later"),
+  });
+  void updatePopupCtrl.checkOnStartup();
 }
 
 document.addEventListener("DOMContentLoaded", () => {

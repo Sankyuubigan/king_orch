@@ -228,6 +228,25 @@ pub fn remove_model(app: AppHandle, path: String) -> Result<infra::AppConfig, St
 }
 
 #[tauri::command]
+pub fn delete_model_file(app: AppHandle, path: String) -> Result<infra::AppConfig, String> {
+    match std::fs::remove_file(&path) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(format!("Не удалось удалить файл «{}»: {}", path, e)),
+    }
+    let mut cfg = infra::load_config(&app);
+    cfg.models.retain(|m| m != &path);
+    if cfg.last_model.as_deref() == Some(path.as_str()) {
+        cfg.last_model = None;
+    }
+    cfg.model_params.remove(&path);
+    cfg.mmproj_files.remove(&path);
+    cfg.model_meta.remove(&path);
+    infra::save_config(&app, &cfg);
+    Ok(cfg)
+}
+
+#[tauri::command]
 pub fn get_mmproj_path(app: AppHandle, model_path: String) -> Option<String> {
     let cfg = infra::load_config(&app);
     if let Some(path) = cfg.mmproj_files.get(&model_path) {

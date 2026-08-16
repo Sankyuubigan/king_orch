@@ -93,9 +93,9 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 #subchat-title { font-weight: bold; font-size: 15px; color: var(--primary); }
 
 .chat-input-area { display: flex; flex-direction: column; gap: 10px; padding: 10px; background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px; }
-.chat-input-controls { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
-.chat-input-controls-left { display: flex; gap: 10px; align-items: center; flex: 1; min-width: 0; }
-.chat-input-controls-right { display: flex; gap: 10px; }
+.chat-input-controls { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
+.chat-input-controls-left { display: flex; gap: 10px; align-items: center; flex: 1; min-width: 0; flex-wrap: wrap; }
+.chat-input-controls-right { display: flex; gap: 10px; flex-shrink: 0; margin-left: auto; }
 #chat-input { width: 100%; resize: none; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit; font-size: calc(var(--chat-font-scale, 1) * 14px); min-height: 80px; max-height: 600px; overflow-y: auto; box-sizing: border-box; background: var(--input-bg); color: var(--text); }
 
 /* --- Token Counter Styles --- */
@@ -895,4 +895,67 @@ body.edge-reconnecting {
 .test-result-item .result-error {
   color: var(--danger);
   border-left-color: var(--danger);
+}
+
+/* ─── Адаптация под узкое окно ─── */
+/* На узкой ширине прячем второстепенные элементы управления чата,
+   чтобы кнопки Стоп/Отправить не обрезались и не накладывались. */
+@media (max-width: 760px) {
+  #token-counter,
+  #engine-badge { display: none; }
+  .sidebar { width: 200px; padding: 10px; gap: 10px; }
+}
+
+@media (max-width: 560px) {
+  #btn-add-model { display: none; }
+  #agent-select,
+  #model-select { min-width: 80px; flex: 1; }
+  .chat-input-area { gap: 8px; padding: 8px; }
+  .btn-primary,
+  .btn-danger,
+  .btn-secondary { padding: 6px 10px; font-size: 13px; }
+}
+
+@media (max-width: 420px) {
+  .sidebar { display: none; }
+  .main-content { padding: 8px; }
+}
+
+/* ─── Всплывающее окно обновления ─── */
+/* Справа по центру высоты окна, чтобы не загораживать нижние кнопки чата. */
+.update-popup {
+  position: fixed;
+  right: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 280px;
+  max-width: calc(100vw - 32px);
+  background: var(--panel-bg);
+  border: 1px solid var(--primary);
+  border-radius: 8px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
+  padding: 16px;
+  z-index: 1000;
+  box-sizing: border-box;
+}
+.update-popup-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+.update-popup-text {
+  font-size: 13px;
+  color: var(--text-muted, #888);
+  margin-bottom: 14px;
+  line-height: 1.4;
+}
+.update-popup-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.update-popup-buttons .btn-primary,
+.update-popup-buttons .btn-secondary {
+  width: 100%;
 }

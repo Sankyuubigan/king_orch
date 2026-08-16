@@ -75,7 +75,8 @@ async fn main() {
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_updater::Builder::new().build());
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init());
 
     // Плагин телеметрии подключаем ТОЛЬКО при разрешении пользователя.
     let builder = if telemetry_enabled {
@@ -139,6 +140,7 @@ async fn main() {
             api::models::reset_model_params,
             api::models::add_model,
             api::models::remove_model,
+            api::models::delete_model_file,
             api::models::get_mmproj_path,
             api::models::get_auto_download_info,
             api::models::auto_download_default_model,

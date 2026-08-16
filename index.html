@@ -366,6 +366,16 @@
   <!-- Контейнер для всплывающих уведомлений -->
   <div id="toast-container"></div>
 
+  <!-- Всплывающее окно проверки обновлений (показывается справа по центру высоты) -->
+  <div id="update-popup" class="update-popup" style="display: none;">
+    <div class="update-popup-title">Доступно обновление</div>
+    <div class="update-popup-text">Новая версия доступна для установки</div>
+    <div class="update-popup-buttons">
+      <button id="btn-update-now" class="btn-primary">Обновить и перезапустить</button>
+      <button id="btn-update-later" class="btn-secondary">Пока нет</button>
+    </div>
+  </div>
+
   <script type="module" src="/src/main.ts"></script>
 </body>
 </html>

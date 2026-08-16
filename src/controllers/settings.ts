@@ -167,8 +167,8 @@ export class SettingsController {
       info.appendChild(path);
 
       const btnRemove = document.createElement("button");
-      btnRemove.className = "btn-danger";
-      btnRemove.innerText = "Удалить";
+      btnRemove.className = "btn-secondary";
+      btnRemove.innerText = "Удалить из списка";
       btnRemove.style.cssText = "flex-shrink:0; padding:4px 12px;";
       btnRemove.addEventListener("click", async () => {
         if (!confirm(`Удалить модель «${fileName}» из списка? Файл на диске не будет удалён.`)) return;
@@ -180,8 +180,27 @@ export class SettingsController {
         } catch (e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.removeModel", e); }
       });
 
+      const btnDeleteFile = document.createElement("button");
+      btnDeleteFile.className = "btn-danger";
+      btnDeleteFile.innerText = "Удалить файл";
+      btnDeleteFile.style.cssText = "flex-shrink:0; padding:4px 12px;";
+      btnDeleteFile.addEventListener("click", async () => {
+        if (!confirm(`Удалить файл модели «${fileName}» с диска БЕЗВОЗВРАТНО? Запись тоже исчезнет из списка.`)) return;
+        try {
+          const cfg: any = await invoke("delete_model_file", { path: m });
+          this.updateModelSelect(cfg);
+          this.renderModelsList(cfg);
+          showToast("Файл модели удалён.", "success");
+        } catch (e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.deleteModelFile", e); }
+      });
+
+      const btnGroup = document.createElement("div");
+      btnGroup.style.cssText = "display:flex; gap:8px; flex-shrink:0;";
+      btnGroup.appendChild(btnRemove);
+      btnGroup.appendChild(btnDeleteFile);
+
       row.appendChild(info);
-      row.appendChild(btnRemove);
+      row.appendChild(btnGroup);
       this.el.modelsList.appendChild(row);
     }
   }

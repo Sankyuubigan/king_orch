@@ -142,8 +142,14 @@ pub fn push_report(messages: &mut Vec<ChatMessage>, msg: ChatMessage, single_rep
 /// попадают только не-thought сообщения, и только их `content` (без `sub_calls` —
 /// это UI-метаданные, а не переписка). Используется и при инжекции истории
 /// агентам, и в шаблонах workflow (`{{ messages }}`).
+///
+/// Системные сообщения (`author == "system"`) НЕ попадают в промпт — они нужны
+/// только юзеру (хранятся в JSON сессии) и лишь зря жрут контекст модели.
 pub fn llm_history(messages: &[ChatMessage]) -> Vec<&ChatMessage> {
-    messages.iter().filter(|m| m.msg_type != "thought").collect()
+    messages
+        .iter()
+        .filter(|m| m.msg_type != "thought" && m.author.as_deref() != Some("system"))
+        .collect()
 }
 
 impl ChatMessage {
@@ -322,10 +328,12 @@ mod tests {
             msg("msg_1", "thought", "агент", "внутренняя мысль"),
             msg("msg_2", "signal", "агент", "{\"key\": \"value\"}"),
             msg("msg_3", "message", "агент", "ответ"),
+            msg("msg_4", "message", "system", "системное уведомление только для юзера"),
         ];
         let history = llm_history(&msgs);
         assert_eq!(history.len(), 3);
         assert!(history.iter().all(|m| m.msg_type != "thought"));
+        assert!(history.iter().all(|m| m.author.as_deref() != Some("system")));
         assert!(history.iter().any(|m| m.msg_type == "signal"));
     }
 

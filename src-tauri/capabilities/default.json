@@ -12,6 +12,7 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "updater:default",
+    "process:default",
     "shell:default",
     "shell:allow-open",
     "aptabase:allow-track-event"

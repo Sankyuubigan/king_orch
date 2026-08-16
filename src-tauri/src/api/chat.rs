@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State, Emitter, Manager};
 
 use crate::domain;
-use crate::infra::{self, ChatMessage, ChatAttachment, ModelParams, SubCall, LlmMessage};
+use crate::infra::{self, ChatMessage, ChatAttachment, ModelParams, SubCall, LlmMessage, llm_history};
 use crate::api::AppState;
 
 // ─── Лог-файл ───
@@ -446,7 +446,7 @@ pub fn get_prompt_preview(
         content: system_prompt,
     }];
     
-    for msg in history.iter().filter(|m| m.msg_type != "thought") {
+    for msg in llm_history(&history) {
         llm_messages.push(msg.to_llm_message());
     }
     
