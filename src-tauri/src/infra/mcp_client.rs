@@ -3,14 +3,24 @@ use std::io::{BufReader, BufRead, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::collections::VecDeque;
+use std::sync::mpsc;
+use std::time::{Duration, Instant};
 use serde_json::{Value, json};
+
+/// Таймаут ожидания ответа от MCP-сервера (сек). Защищает оркестратор от
+/// вечного висняка при зависшем Deno-сервере. Переопределяется через
+/// `spawn_stub_with_env_timeout` (в перспективе — из `app_config.json`).
+pub const MCP_DEFAULT_TIMEOUT_SECS: u64 = 120;
 
 pub struct McpClient {
     child: Child,
     stdin: std::process::ChildStdin,
-    stdout_reader: BufReader<std::process::ChildStdout>,
     next_id: Arc<Mutex<i64>>,
     stderr_tail: Arc<Mutex<VecDeque<String>>>,
+    /// Канал от фонового читателя stdout. Строки складываются сюда, а
+    /// `read_response` забирает их с таймаутом (вместо блокирующего `read_line`).
+    receiver: mpsc::Receiver<String>,
+    timeout: Duration,
 }
 
 impl McpClient {
@@ -20,6 +30,14 @@ impl McpClient {
 
     pub fn spawn_stub_with_env(
         cmd_path: &str, args: &[&str], envs: &[(&str, &str)],
+        log_cb: impl Fn(String) + Send + Sync + 'static,
+    ) -> Result<Self, String> {
+        Self::spawn_stub_with_env_timeout(cmd_path, args, envs, Duration::from_secs(MCP_DEFAULT_TIMEOUT_SECS), log_cb)
+    }
+
+    pub fn spawn_stub_with_env_timeout(
+        cmd_path: &str, args: &[&str], envs: &[(&str, &str)],
+        timeout: Duration,
         log_cb: impl Fn(String) + Send + Sync + 'static,
     ) -> Result<Self, String> {
         log_cb(format!("🚀 Запуск MCP сервера: {} {:?}", cmd_path, args));
@@ -49,8 +67,17 @@ impl McpClient {
             }
         });
 
-        let stdout_reader = BufReader::new(stdout);
-        let mut client = Self { child, stdin, stdout_reader, next_id: Arc::new(Mutex::new(1)), stderr_tail };
+        // Фоновый читатель stdout -> mpsc канал. Позволяет читать ответы с таймаутом,
+        // а не блокироваться навсегда при зависшем сервере.
+        let (sender, receiver) = mpsc::channel::<String>();
+        thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines().flatten() {
+                if sender.send(line).is_err() { break; } // получатель отвалился — завершаем
+            }
+        });
+
+        let mut client = Self { child, stdin, next_id: Arc::new(Mutex::new(1)), stderr_tail, receiver, timeout };
         client.initialize()?;
         Ok(client)
     }
@@ -64,21 +91,34 @@ impl McpClient {
     }
 
     fn read_response(&mut self, target_id: i64) -> Result<Value, String> {
-        let mut line = String::new();
+        let deadline = Instant::now() + self.timeout;
         loop {
-            line.clear();
-            let bytes_read = self.stdout_reader.read_line(&mut line).map_err(|e| e.to_string())?;
-            if bytes_read == 0 {
-                let tail: Vec<String> = self.stderr_tail.lock().unwrap().iter().cloned().collect();
-                if tail.is_empty() {
-                    return Err("MCP-сервер неожиданно закрыл поток stdout (stderr пуст)".to_string());
+            let remaining = deadline.checked_duration_since(Instant::now()).unwrap_or_default();
+            match self.receiver.recv_timeout(remaining) {
+                Ok(line) => {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() { continue; }
+                    if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
+                        if val.get("id").and_then(|id| id.as_i64()) == Some(target_id) {
+                            return Ok(val);
+                        }
+                        // Не наш id (напр. notification без поля id) — продолжаем ждать.
+                    }
                 }
-                return Err(format!("MCP-сервер неожиданно закрыл поток stdout. Причина (последний stderr): {}", tail.join(" | ")));
-            }
-            let trimmed = line.trim();
-            if trimmed.is_empty() { continue; }
-            if let Ok(val) = serde_json::from_str::<Value>(trimmed) {
-                if val.get("id").and_then(|id| id.as_i64()) == Some(target_id) { return Ok(val); }
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    kill_process_tree(&mut self.child);
+                    return Err(format!(
+                        "⏱ MCP-сервер не ответил за {}с (таймаут вызова). Процесс принудительно остановлен.",
+                        self.timeout.as_secs()
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    let tail: Vec<String> = self.stderr_tail.lock().unwrap().iter().cloned().collect();
+                    if tail.is_empty() {
+                        return Err("MCP-сервер неожиданно закрыл поток stdout (stderr пуст)".to_string());
+                    }
+                    return Err(format!("MCP-сервер неожиданно закрыл поток stdout. Причина (последний stderr): {}", tail.join(" | ")));
+                }
             }
         }
     }
@@ -114,5 +154,53 @@ impl McpClient {
 }
 
 impl Drop for McpClient {
-    fn drop(&mut self) { let _ = self.child.kill(); }
+    fn drop(&mut self) {
+        kill_process_tree(&mut self.child);
+    }
+}
+
+/// Убивает дерево процессов MCP-сервера, а не только прямого потомка.
+///
+/// `child.kill()` на Windows завершает только непосредственного ребёнка
+/// (например, `deno.exe`), оставляя сам MCP-сервер (воркер Deno) осиротевшим
+/// и висящим в памяти. `taskkill /F /T /PID` убивает всё дерево. На Unix
+/// аналогично — через `pkill -P` + fallback на `kill`.
+fn kill_process_tree(child: &mut std::process::Child) {
+    let pid = child.id().to_string();
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill")
+            .args(["/F", "/T", "/PID", &pid])
+            .output();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("pkill").args(["-P", &pid]).output();
+    }
+    // Запасной вариант: прямой потомок.
+    let _ = child.kill();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Заведомо «немой» сервер (Windows): ждёт 600с, ничего не пишет в stdout.
+    /// Если таймаут в read_response работает — конструктор вернёт Err примерно
+    /// за 2с, а не повиснет навсегда.
+    #[test]
+    fn mcp_call_times_out_instead_of_hanging() {
+        let dummy = "cmd";
+        // «Немой» сервер: timeout блокирует 30с, ничего валидного в stdout не шлёт.
+        let args = ["/c", "timeout", "/t", "30", "/nobreak"];
+        let args_refs: Vec<&str> = args.iter().map(|s| *s).collect();
+        let start = Instant::now();
+        let res = McpClient::spawn_stub_with_env_timeout(
+            dummy, &args_refs, &[], Duration::from_secs(2), |_| {},
+        );
+        let elapsed = start.elapsed();
+        assert!(res.is_err(), "ожидалась ошибка таймаута, а не успешный коннект к 'timeout'");
+        // Возвращаемся быстро (с запасом на старт cmd), а не через 600с.
+        assert!(elapsed < Duration::from_secs(30), "таймаут не сработал, прошло {:?}", elapsed);
+    }
 }

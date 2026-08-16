@@ -20,6 +20,7 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
+use std::io::Write;
 
 /// Метаданные текущего стрима: куда выводить токены.
 /// `kind == "message"` → печатать в основной чат юзеру.
@@ -435,8 +436,9 @@ pub fn run_chat<L, S, C, ST>(
     model_path: String, agent_id: String, user_text: String, history: Vec<ChatMessage>,
     attachments: Vec<ChatAttachment>,
     context_size: u32, max_gen_tokens: u32, kv_quant_keys: bool, kv_quant_values: bool,     model_params: ModelParams, format_type: String,
-    mmproj_path: Option<String>, cancel_flag: Arc<AtomicBool>,
+    mmproj_path: Option<String>,     cancel_flag: Arc<AtomicBool>,
     stream_meta: Arc<Mutex<StreamMeta>>,
+    prompt_log: Option<std::path::PathBuf>,
 ) -> Result<ChatRunResult, String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -546,6 +548,7 @@ where
             msg_counter: &mut msg_counter,
             stream_meta: stream_meta.clone(),
             sampling_presets: &sampling_presets,
+            prompt_log: prompt_log.clone(),
         };
         crate::domain::workflow_engine::run_workflow(
             workflow, &mut ctx, &mut runner,
@@ -574,6 +577,7 @@ where
             &mut messages_store, &mut msg_counter,
             String::new(),
             stream_meta.clone(), true,
+            prompt_log.clone(),
         )?;
 
         // Fail-fast: если primary-агент вернул ошибку — не сохраняем её как ответ
@@ -652,6 +656,326 @@ fn has_json_thought_without_action(text: &str) -> bool {
 
 #[allow(clippy::too_many_arguments)]
 #[allow(unused_assignments)]
+/// Снимок ТОЧНОГО входа модели (`llm_messages`) перед каждым вызовом LLM.
+///
+/// Реализует правило «модель видит только то, что записано»: сам факт записи
+/// всего отправленного делает вход воспроизводимым (база replay-тестов без модели)
+/// и устраняет риск «тихо показать модели то, чего нет в логе».
+/// Запись best-effort: ошибки НЕ фатальны (правило 2.2 — логируем, не падаем).
+fn write_prompt_log(path: &Path, agent: &str, call: usize, tokens: usize, messages: &[LlmMessage]) {
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let entry = serde_json::json!({
+        "ts": ts,
+        "agent": agent,
+        "call": call,
+        "tokens": tokens,
+        "messages": messages,
+    });
+    let line = serde_json::to_string(&entry).unwrap_or_default();
+    match std::fs::OpenOptions::new().create(true).append(true).open(path) {
+        Ok(mut f) => { let _ = writeln!(f, "{}", line); }
+        Err(e) => { eprintln!("[prompt_log] не удалось записать {}: {}", path.display(), e); }
+    }
+}
+
+/// Результаты инструментов длиннее этого порога сохраняются в spill-файл,
+/// а модели отдаётся выжимка (head + tail) с локатором. Лечит раздувание
+/// контекста: раньше модель видела полный вывод инструмента (mod.rs:~1122),
+/// что убивало контекст на длинных выдачах (поиск, чтение файлов, логи).
+const SPILL_THRESHOLD: usize = 8000;
+
+/// Директория spills рядом с исполняемым файлом (правило: не писать в cwd).
+pub(crate) fn spill_root_dir() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|pp| pp.join("spill")))
+        .unwrap_or_else(|| std::path::PathBuf::from("spill"))
+}
+
+fn sanitize_name(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .collect()
+}
+
+/// Если вывод инструмента большой — пишет полный текст в spill-файл и
+/// возвращает выжимку (head 2000 + tail 1000) с локатором для встроенного
+/// инструмента `read_spill`. Иначе возвращает текст как есть, без spill.
+fn spill_if_large(output: &str, agent_id: &str, idx: u32) -> (String, Option<std::path::PathBuf>) {
+    if output.len() <= SPILL_THRESHOLD {
+        return (output.to_string(), None);
+    }
+    let root = spill_root_dir();
+    let _ = std::fs::create_dir_all(&root);
+    let fname = format!("spill_{}_{}.txt", sanitize_name(agent_id), idx);
+    let fpath = root.join(&fname);
+    if std::fs::write(&fpath, output).is_err() {
+        return (output.to_string(), None);
+    }
+    let head: String = output.chars().take(2000).collect();
+    let mut tail_chars: Vec<char> = output.chars().rev().take(1000).collect();
+    tail_chars.reverse();
+    let tail: String = tail_chars.into_iter().collect();
+    let display = format!(
+        "[РЕЗУЛЬТАТ ИНСТРУМЕНТА сохранён в файл spills]\n{}\n\n... [полный результат {} символов: {}] ...\n\n{}\n\nЧтобы дочитать полностью, вызови инструмент read_spill с аргументом {{\"path\": \"{}\"}}.",
+        head, output.len(), fpath.display(), tail, fpath.display()
+    );
+    (display, Some(fpath))
+}
+
+/// Встроенный инструмент `read_spill`: читает spill-файл (только внутри
+/// директории spills) и возвращает содержимое, обрезанное до 16К символов.
+pub(crate) fn read_spill_file(path: &str) -> Result<String, String> {
+    let p = std::path::Path::new(path);
+    // Канонизируем оба пути: на Windows canonicalize добавляет префикс \\?\,
+    // поэтому сравнивать нужно канонизированные версии.
+    let root_abs = spill_root_dir()
+        .canonicalize()
+        .unwrap_or_else(|_| spill_root_dir());
+    let abs = p
+        .canonicalize()
+        .map_err(|e| format!("Невалидный путь spill: {}", e))?;
+    if !abs.starts_with(&root_abs) {
+        return Err("Чтение разрешено только внутри директории spills".to_string());
+    }
+    let content =
+        std::fs::read_to_string(&abs).map_err(|e| format!("Ошибка чтения spill: {}", e))?;
+    if content.len() > 16000 {
+        Ok(format!(
+            "{}...\n[обрезано до 16000 символов]",
+            &content[..16000]
+        ))
+    } else {
+        Ok(content)
+    }
+}
+
+/// Единый pipeline компакции контекста перед генерацией. Работает ТОЛЬКО с
+/// не-system сообщениями (system-промпт сохраняется целиком). Стратегии по
+/// возрастанию агрессивности:
+///   1) сворачиваем крупные (ещё не spilled) результаты инструментов в указатель;
+///   2) сжимаем самые старые сообщения в одну выжимку (head-эксцерпты);
+///   3) жёстко удаляем самые старые, пока не влезем в бюджет (fallback).
+/// Бюджет в символах считается вызывающим (global_ctx_limit − max_gen_tokens)·2
+/// (консервативно: для кириллицы 2 символа/токен — компактим раньше, чем нужно).
+/// Отчёт о проделанной компакции — чтобы вызывающий ОБЯЗАТЕЛЬНО записал в лог,
+/// что из контекста было удалено/свёрнуто (правило: тихих операций с данными нет).
+pub(crate) struct CompactionReport {
+    pub tool_results_pruned: usize,
+    pub history_compressed: bool,
+    pub old_messages_dropped: usize,
+}
+
+/// Ключ хранения чек-листа задач агента в сессии (как `thought`-сообщение).
+fn todo_store_key(agent_id: &str) -> String {
+    format!("todo::{}", agent_id)
+}
+
+/// Прочитать чек-лист задач агента из сессии (или пустой список).
+fn read_todos(messages: &[ChatMessage], agent_id: &str) -> Vec<(String, bool)> {
+    let key = todo_store_key(agent_id);
+    for m in messages {
+        if m.msg_type == "thought" && m.author.as_deref() == Some(&key) {
+            if let Ok(v) = serde_json::from_str::<Vec<(String, bool)>>(&m.content) {
+                return v;
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Записать/обновить чек-лист задач агента в сессии (персистится, переживает компакцию).
+fn write_todos(messages: &mut Vec<ChatMessage>, agent_id: &str, todos: &[(String, bool)]) {
+    let key = todo_store_key(agent_id);
+    let content = serde_json::to_string(todos).unwrap_or_default();
+    for m in messages.iter_mut() {
+        if m.msg_type == "thought" && m.author.as_deref() == Some(&key) {
+            m.content = content;
+            return;
+        }
+    }
+    messages.push(ChatMessage {
+        id: None,
+        msg_type: "thought".to_string(),
+        content,
+        sub_calls: None,
+        author: Some(key),
+        model: None,
+    });
+}
+
+/// Исполнение туду-инструментов (`todo_write` / `todo_list`).
+fn run_todo_tool(
+    tool_name: &str,
+    arguments: &serde_json::Value,
+    messages: &mut Vec<ChatMessage>,
+    agent_id: &str,
+) -> String {
+    let mut todos = read_todos(messages, agent_id);
+    match tool_name {
+        "todo_list" => {
+            if todos.is_empty() {
+                return "📋 Список задач пуст.".to_string();
+            }
+            let mut s = String::from("📋 Список задач:\n");
+            for (i, (t, done)) in todos.iter().enumerate() {
+                s.push_str(&format!("{}. [{}] {}\n", i + 1, if *done { "x" } else { " " }, t));
+            }
+            s
+        }
+        "todo_write" => {
+            let action = arguments
+                .get("action")
+                .and_then(|v| v.as_str())
+                .unwrap_or("add");
+            match action {
+                "list" => run_todo_tool("todo_list", arguments, messages, agent_id),
+                "add" => {
+                    let title = arguments
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    if title.trim().is_empty() {
+                        return "❌ Ошибка: для добавления нужен 'title' (текст задачи).".to_string();
+                    }
+                    todos.push((title.clone(), false));
+                    write_todos(messages, agent_id, &todos);
+                    format!("✅ Добавлена задача '{}'. Всего задач: {}.", title, todos.len())
+                }
+                "done" | "remove" => {
+                    let idx = resolve_todo_index(arguments, &todos);
+                    match idx {
+                        Some(i) => {
+                            if action == "done" {
+                                let t = todos[i].0.clone();
+                                todos[i].1 = true;
+                                write_todos(messages, agent_id, &todos);
+                                format!("✅ Задача '{}' отмечена выполненной.", t)
+                            } else {
+                                let t = todos.remove(i).0;
+                                write_todos(messages, agent_id, &todos);
+                                format!("🗑 Удалена задача '{}'.", t)
+                            }
+                        }
+                        None => "❌ Ошибка: укажи 'index' (номер задачи) или 'title'.".to_string(),
+                    }
+                }
+                "clear" => {
+                    write_todos(messages, agent_id, &[]);
+                    "🗑 Список задач очищен.".to_string()
+                }
+                _ => "❌ Ошибка: неизвестное действие. Используй add/done/remove/clear/list.".to_string(),
+            }
+        }
+        _ => "❌ Неизвестный todo-инструмент.".to_string(),
+    }
+}
+
+/// Найти индекс задачи по `index` (1-based) или по `title` (подстрока).
+fn resolve_todo_index(
+    arguments: &serde_json::Value,
+    todos: &[(String, bool)],
+) -> Option<usize> {
+    if let Some(i) = arguments.get("index").and_then(|v| v.as_u64()) {
+        let i = i as usize;
+        if i >= 1 && i <= todos.len() {
+            return Some(i - 1);
+        }
+    }
+    if let Some(t) = arguments.get("title").and_then(|v| v.as_str()) {
+        let t = t.trim().to_lowercase();
+        return todos.iter().position(|(title, _)| title.to_lowercase().contains(&t));
+    }
+    None
+}
+
+fn compact_llm_messages(messages: &mut Vec<LlmMessage>, budget_chars: usize) -> CompactionReport {
+    let mut report = CompactionReport {
+        tool_results_pruned: 0,
+        history_compressed: false,
+        old_messages_dropped: 0,
+    };
+    if messages.len() <= 1 {
+        return report;
+    }
+    let total_chars = |msgs: &[LlmMessage]| -> usize {
+        msgs[1..].iter().map(|m| m.content.chars().count()).sum()
+    };
+
+    if total_chars(messages) <= budget_chars {
+        return report;
+    }
+
+    // Стратегия 1: сворачиваем крупные результаты инструментов (кроме уже
+    // spilled — у них важен локатор пути для read_spill).
+    for m in messages.iter_mut().skip(1) {
+        if m.content.contains("[РЕЗУЛЬТАТ ИНСТРУМЕНТА")
+            && !m.content.contains("сохранён в файл spills")
+            && m.content.chars().count() > 1500
+        {
+            let tool = m
+                .content
+                .lines()
+                .next()
+                .map(|l| {
+                    l.trim_start_matches("[РЕЗУЛЬТАТ ИНСТРУМЕНТА ")
+                        .trim_end_matches("]:")
+                        .trim()
+                        .to_string()
+                })
+                .unwrap_or_else(|| "инструмент".to_string());
+            m.content = format!(
+                "[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}] — крупный результат свёрнут для экономии контекста (полный текст в истории сессии).]",
+                tool
+            );
+            report.tool_results_pruned += 1;
+        }
+    }
+
+    if total_chars(messages) <= budget_chars {
+        return report;
+    }
+
+    // Стратегия 2: сжимаем самые старые сообщения в одну выжимку, сохраняя
+    // system-промпт и `keep_recent` последних сообщений.
+    let keep_recent = 4usize;
+    let n = messages.len();
+    if n > keep_recent + 2 {
+        let compress_end = n - keep_recent;
+        let mut summary = String::from("[СЖАТАЯ ИСТОРИЯ]\n");
+        for m in messages.iter().take(compress_end).skip(1) {
+            let excerpt: String = m.content.chars().take(200).collect();
+            summary.push_str(&format!("({}) {}…\n", m.role, excerpt));
+        }
+        let dropped = compress_end - 1; // сколько старых сообщений ушло в выжимку
+        messages.drain(1..compress_end);
+        messages.insert(
+            1,
+            LlmMessage { role: "system".to_string(), content: summary },
+        );
+        report.old_messages_dropped += dropped;
+        report.history_compressed = true;
+    }
+
+    // Стратегия 3: жёстко удаляем самые старые, пока не влезем.
+    while messages.len() > 2 {
+        if total_chars(messages) <= budget_chars {
+            break;
+        }
+        messages.remove(1);
+        report.old_messages_dropped += 1;
+    }
+
+    report
+}
+
 pub(crate) fn run_agent_node<L, S, C>(
     log_cb: L, status_cb: S, subcall_cb: C,
     engine: &LlamaEngine, agent: &AgentProfile, agents: &[AgentProfile],
@@ -666,6 +990,7 @@ pub(crate) fn run_agent_node<L, S, C>(
     injected_reports: String,
     stream_meta: Arc<Mutex<StreamMeta>>,
     allow_stream: bool,
+    prompt_log: Option<std::path::PathBuf>,
 ) -> Result<String, String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -674,6 +999,12 @@ where
 {
     if depth > 5 { return Err("Превышена максимальная глубина вложенности сабагентов".into()); }
     log_cb(format!("▶ Запуск агента: {} (глубина: {})", agent.name, depth));
+
+    // 4.2: публикуем событие старта в in-process шину (статус агента для UI/логов).
+    crate::infra::event_bus::global_bus().publish(crate::infra::event_bus::AgentEvent::Spawned {
+        agent: agent.id.clone(),
+        namespace: caller_name.as_deref().unwrap_or("main").to_string(),
+    });
 
     // ── Маркер стрима: куда выводить токены этого агента ──
     let prev_meta = stream_meta.lock().map(|m| m.clone()).unwrap_or_default();
@@ -694,8 +1025,21 @@ where
 
     all_tools.extend(runtime::builtin_tools());
 
+    // 4.1: todo-инструмент — ОБЫЧНЫЙ opt-in тул, НЕ built-in для всех. Включается
+    // только для агентов папок `coder`/`research` (и при явном `tools: ["todo"]` в .md),
+    // чтобы не тратить токены и не путать агентов, которым чек-лист не нужен
+    // (психотерапевт и прочие — без туду).
+    let todo_enabled = agent.tools.iter().any(|t| t == "todo")
+        || agent.folder.as_deref() == Some("coder")
+        || agent.folder.as_deref() == Some("research");
+    if todo_enabled {
+        all_tools.extend(runtime::todo_tool_schemas());
+    }
+
     let has_tools_for_prompt = has_real_tools;
     let mut system_prompt = build_system_prompt(agent, messages, has_tools_for_prompt, &all_tools, max_gen_tokens);
+    // 4.5: плагин-слой — точка расширения системного промпта (pass-through, если плагинов нет).
+    crate::infra::plugins::global_plugins().on_system_prompt(&agent.id, &mut system_prompt);
     if !injected_reports.is_empty() {
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&injected_reports);
@@ -735,6 +1079,27 @@ where
         llm_messages.push(LlmMessage { role: "user".to_string(), content: user_text.clone() });
     }
 
+    // Единый pipeline компакции: при давлении по токенам сворачиваем крупные
+    // результаты и старую историю, чтобы не пробивать context_size (fallback —
+    // жёсткая обрезка). Бюджет в символах: (global_ctx_limit − max_gen)·2
+    // (консервативно для кириллицы).
+    let budget_chars = (engine
+        .global_ctx_limit
+        .saturating_sub(max_gen_tokens as u32) as usize)
+        .saturating_mul(2)
+        .max(5000);
+    let compaction = compact_llm_messages(&mut llm_messages, budget_chars);
+    // ОБЯЗАТЕЛЬНО логируем любую потерю контекста (тихих операций с данными нет).
+    if compaction.tool_results_pruned > 0
+        || compaction.history_compressed
+        || compaction.old_messages_dropped > 0
+    {
+        log_cb(format!(
+            "🗜️ Компакция контекста агента '{}': свёрнуто результатов инструментов {}, сжата история {}, жёстко удалено старых сообщений {}.",
+            agent.id, compaction.tool_results_pruned, compaction.history_compressed, compaction.old_messages_dropped
+        ));
+    }
+
     // Invocation-дамп для subcall: только то, что различается между вызовами
     // (task + отчёты коллег). Полный системный промпт агента живёт в .md файле
     // (SSOT) — его копия в сессии раздувала бы JSON на 5-11KB за каждый вызов.
@@ -744,6 +1109,7 @@ let mut final_response = String::new();
     let mut tool_calls = Vec::new();
     let start_time = Instant::now();
     let mut consecutive_failed_tools = 0;
+    let mut spill_idx: u32 = 0;
     let mut consecutive_incomplete = 0;
     let mut consecutive_invalid_targets = 0;
     // Докачка: длина накопленных размышлений на прошлой докачке и серия
@@ -813,6 +1179,12 @@ let mut final_response = String::new();
             } else {
                 break;
             }
+        }
+
+        // ── Снимок точного входа модели (правило «модель видит только записанное») ──
+        if let Some(ref pl) = prompt_log {
+            let logged_tokens = engine.get_tokens_count(&llm_messages, format_type).unwrap_or(0);
+            write_prompt_log(pl, &agent.name, iter, logged_tokens, &llm_messages);
         }
 
         let gen_start = Instant::now();
@@ -1023,11 +1395,33 @@ let mut final_response = String::new();
                         key_str, val_str
                     ));
                 }
+            } else if tool_name == "read_spill" {
+                // Встроенный инструмент дочитки больших результатов инструментов.
+                tool_found = true;
+                let p = arguments.get("path").and_then(|v| v.as_str()).unwrap_or("").to_string();
+                match read_spill_file(&p) {
+                    Ok(content) => { tool_output = Some(content); }
+                    Err(e) => { tool_output = Some(format!("Ошибка read_spill: {}", e)); }
+                }
+            } else if tool_name == "todo_write" || tool_name == "todo_list" {
+                // 4.1: opt-in чек-лист задач (доступен только агентам coder/research).
+                tool_found = true;
+                let result = run_todo_tool(&tool_name, &arguments, messages, &agent.id);
+                tool_output = Some(result);
             } else if let Some((mcp_name, _, _)) = all_tools.iter().find(|(_, name, _)| name == &tool_name) {
                 if let Some(client) = mcp_clients.get_mut(mcp_name) {
                     tool_found = true;
                     match client.call_tool(&tool_name, arguments) {
-                        Ok(res) => { tool_output = Some(res); consecutive_failed_tools = 0; }
+                        Ok(res) => {
+                            tool_output = Some(res);
+                            consecutive_failed_tools = 0;
+                            crate::infra::event_bus::global_bus().publish(
+                                crate::infra::event_bus::AgentEvent::ToolCall {
+                                    agent: agent.id.clone(),
+                                    tool: tool_name.clone(),
+                                },
+                            );
+                        }
                         Err(e) => { tool_output = Some(format!("Ошибка '{}': {}", tool_name, e)); }
                     }
                 }
@@ -1046,7 +1440,9 @@ let mut final_response = String::new();
                     continue;
                 }
             }
-            let output = tool_output.unwrap_or_else(|| format!("Ошибка: Инструмент '{}' не найден.", tool_name));
+            let mut output = tool_output.unwrap_or_else(|| format!("Ошибка: Инструмент '{}' не найден.", tool_name));
+            // 4.5: плагин-слой — точка расширения результата инструмента (pass-through по умолчанию).
+            crate::infra::plugins::global_plugins().on_tool_result(&agent.id, &tool_name, &mut output);
             log_cb(format!("🔧 Инструмент '{}' (агент '{}') вернул результат ({} символов): {}", tool_name, agent.name, output.chars().count(), safe_truncate(&output, 300)));
 
             if depth == 0 && tool_found && tool_name != "emit_signal" {
@@ -1077,10 +1473,14 @@ let mut final_response = String::new();
             }
             consecutive_failed_tools = 0;
             tool_calls.push(ToolCallInfo { tool_name: tool_name.clone(), arguments: args_str, result: output.clone() });
+            // Большие результаты — в spill-файл, модели отдаём выжимку (лечит
+            // раздувание контекста). Счётчик spill_idx уникален в рамках вызова.
+            let (model_output, _spilled) = spill_if_large(&output, &agent.id, spill_idx);
+            spill_idx += 1;
             llm_messages.push(LlmMessage { role: "assistant".to_string(), content: if is_continuation { combined.clone() } else { raw_response.clone() } });
             continuation_raw.clear();
             continuation_mark = None;
-            llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\nЕсли задача выполнена — ответь ОБЫЧНЫМ ТЕКСТОМ.", tool_name, output) });
+            llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\nЕсли задача выполнена — ответь ОБЫЧНЫМ ТЕКСТОМ.", tool_name, model_output) });
             continue;
         }
 
@@ -1176,6 +1576,7 @@ let mut final_response = String::new();
                     messages, msg_counter,
                     String::new(),
                     stream_meta.clone(), false,
+                    prompt_log.clone(),
                 )?;
                 let end_len = all_sub_calls.len();
                 let node_sub_calls = if start_len < end_len {
@@ -1404,6 +1805,17 @@ continue;
         all_sub_calls.push(subcall);
     }
 
+    // 4.2: публикуем событие завершения в шину (успех/ошибка + длительность).
+    let err = if final_response.starts_with("⚠️") { Some(final_response.clone()) } else { None };
+    crate::infra::event_bus::global_bus().publish(crate::infra::event_bus::AgentEvent::Finished {
+        agent: agent.id.clone(),
+        namespace: caller_name.as_deref().unwrap_or("main").to_string(),
+        ms: start_time.elapsed().as_millis(),
+        error: err,
+    });
+    // 4.5: плагин-слой — уведомление о завершении агента.
+    crate::infra::plugins::global_plugins().on_agent_finish(&agent.id, &final_response);
+
     Ok(final_response)
 }
 
@@ -1451,6 +1863,123 @@ mod tests {
         assert_eq!(estimate_chars_per_token("hello world", "привет", ""), 2);
         assert_eq!(estimate_chars_per_token("hello world", "abcdef", "й"), 3);
         assert_eq!(estimate_chars_per_token("", "", ""), 3);
+    }
+
+    #[test]
+    fn spill_if_large_keeps_small_output_unchanged() {
+        let small = "короткий результат инструмента";
+        let (out, spilled) = spill_if_large(small, "agent1", 0);
+        assert!(!spilled.is_some());
+        assert_eq!(out, small);
+    }
+
+    #[test]
+    fn spill_if_large_writes_file_and_condenses() {
+        // ASCII: 9000 байт < лимит read_spill (16000 байт), но > SPILL_THRESHOLD (8000 символов).
+        let big = "A".repeat(9000);
+        let (out, spilled) = spill_if_large(&big, "agent1", 7);
+        let path = spilled.expect("большой вывод должен быть сохранён в spill");
+        assert!(path.exists(), "spill-файл должен существовать");
+        // Модель видит выжимку, а не 9000 символов
+        assert!(out.len() < big.len());
+        assert!(out.contains("сохранён в файл spills"));
+        // read_spill возвращает полное содержимое
+        let restored = read_spill_file(&path.to_string_lossy()).expect("чтение spill");
+        assert_eq!(restored, big);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_spill_file_rejects_paths_outside_spill_dir() {
+        // Попытка прочитать файл вне директории spills должна упасть
+        let outside = std::env::current_exe()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_else(|_| "src-tauri/src/main.rs".to_string());
+        let res = read_spill_file(&outside);
+        assert!(res.is_err(), "чтение вне spill-директории запрещено");
+    }
+
+    #[test]
+    fn compact_llm_messages_prunes_big_results_and_fits_budget() {
+        let mut msgs = vec![
+            LlmMessage { role: "system".to_string(), content: "SYS".to_string() },
+            LlmMessage { role: "user".to_string(), content: "[РЕЗУЛЬТАТ ИНСТРУМЕНТА big_tool]:\n".to_string() + &"x".repeat(5000) },
+            LlmMessage { role: "assistant".to_string(), content: "A".repeat(4000) },
+            LlmMessage { role: "user".to_string(), content: "B".repeat(4000) },
+            LlmMessage { role: "assistant".to_string(), content: "C".repeat(4000) },
+        ];
+        // бюджет чуть больше суммы после сворачивания крупного результата
+        // (≈12100), чтобы сработала стратегия 1, но не жёсткое удаление.
+        compact_llm_messages(&mut msgs, 13000);
+        let total: usize = msgs[1..].iter().map(|m| m.content.chars().count()).sum();
+        assert!(total <= 13000, "должны влезть в бюджет, получено {}", total);
+        // system-промпт сохранён целиком
+        assert_eq!(msgs[0].content, "SYS");
+        // крупный результат инструмента свёрнут (стратегия 1 сработала)
+        assert!(msgs.iter().any(|m| m.content.contains("крупный результат свёрнут")));
+    }
+
+    #[test]
+    fn compact_llm_messages_keeps_small_conversations_untouched() {
+        let mut msgs = vec![
+            LlmMessage { role: "system".to_string(), content: "SYS".to_string() },
+            LlmMessage { role: "user".to_string(), content: "привет".to_string() },
+            LlmMessage { role: "assistant".to_string(), content: "здравствуй".to_string() },
+        ];
+        compact_llm_messages(&mut msgs, 6000);
+        assert_eq!(msgs.len(), 3, "маленький диалог не трогаем");
+    }
+
+    #[test]
+    fn todo_tool_add_list_done_persists_in_session() {
+        let mut msgs: Vec<ChatMessage> = Vec::new();
+        let r = run_todo_tool(
+            "todo_write",
+            &serde_json::json!({"action": "add", "title": "написать тест"}),
+            &mut msgs,
+            "coder_x",
+        );
+        assert!(r.contains("Добавлена задача"), "добавление должно подтвердиться");
+
+        let l = run_todo_tool(
+            "todo_write",
+            &serde_json::json!({"action": "list"}),
+            &mut msgs,
+            "coder_x",
+        );
+        assert!(l.contains("написать тест"));
+        assert!(l.contains("[ ]"), "новая задача невыполнена");
+
+        let d = run_todo_tool(
+            "todo_write",
+            &serde_json::json!({"action": "done", "index": 1}),
+            &mut msgs,
+            "coder_x",
+        );
+        assert!(d.contains("отмечена выполненной"));
+
+        // Состояние должно пережить вызов и лежать в сессии (thought todo::coder_x).
+        let persisted = read_todos(&msgs, "coder_x");
+        assert_eq!(persisted.len(), 1);
+        assert!(persisted[0].1, "задача отмечена выполненной в сессии");
+    }
+
+    #[test]
+    fn todo_tool_clear_empties_list() {
+        let mut msgs: Vec<ChatMessage> = Vec::new();
+        run_todo_tool(
+            "todo_write",
+            &serde_json::json!({"action": "add", "title": "задача"}),
+            &mut msgs,
+            "research_x",
+        );
+        run_todo_tool(
+            "todo_write",
+            &serde_json::json!({"action": "clear"}),
+            &mut msgs,
+            "research_x",
+        );
+        assert!(read_todos(&msgs, "research_x").is_empty(), "после clear список пуст");
     }
 
     #[test]

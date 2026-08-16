@@ -2,6 +2,7 @@
 //! Доменный и API слои импортируют инфраструктуру ТОЛЬКО через этот фасад
 
 pub mod config;
+pub mod event_bus;
 pub mod detokenizer;
 pub mod llm;
 pub mod llm_types;
@@ -9,6 +10,7 @@ pub mod llm_gguf;
 pub mod llm_multimodal;
 pub mod session_manager;
 pub mod mcp_client;
+pub mod plugins;
 pub mod downloader;
 pub mod bin_downloader;
 pub mod gpu_detector;

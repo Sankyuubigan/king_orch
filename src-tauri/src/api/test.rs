@@ -169,6 +169,7 @@ pub async fn run_iterative_test(
             String::new(), // injected_reports
             std::sync::Arc::new(std::sync::Mutex::new(domain::StreamMeta::default())),
             false,
+            None,
         ) {
             Ok(response) => {
                 append_test_log(&format!("✅ Ответ LLM: {}", response));

@@ -43,6 +43,8 @@ pub struct WorkflowRunner<'a, L, S, C> {
     pub stream_meta: Arc<Mutex<orchestrator::StreamMeta>>,
     /// Именованные пресеты параметров LLM (sampling_presets.json)
     pub sampling_presets: &'a SamplingPresets,
+    /// Путь к логу снимков входа модели (prompt-log). None — не писать.
+    pub prompt_log: Option<std::path::PathBuf>,
 }
 
 impl<'a, L, S, C> WorkflowRunner<'a, L, S, C>
@@ -112,6 +114,7 @@ where
             injected_reports.to_string(),
             self.stream_meta.clone(),
             allow_stream,
+            self.prompt_log.clone(),
         )
     }
 

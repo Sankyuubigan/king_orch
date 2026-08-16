@@ -69,7 +69,8 @@ infra/    — Инфраструктура (LLM, сессии, MCP, конфиг
 - **Изоляция контекста**: каждый агент видит только то, что ему нужно
 - **Единый источник правды**: Массив `messages[]` в JSON-файле сессии. Все результаты агентов хранятся как сообщения с `namespace` и `agent_name`.
 - **Единый стейт (фронтенд)**: Запрещено дублировать переменные в контроллерах. Всё в `Store`.
-- **Разделение бизнес-логики и маршрутизации**: `.md` файлы агентов содержат ТОЛЬКО бизнес-логику (стиль общения, правила представления). Вся маршрутизация (вызов сабагентов, проверка статусов, циклы) — в `.yaml` workflow графах. Классификация контекста — built-in в `workflow_engine/intent_classifier.rs`.
+- **Разделение бизнес-логики и маршрутизации**: `.md` файлы агентов содержат ТОЛЬКО бизнес-логику (стиль общения, правила представления). Вся маршрутизация (вызов сабагентов, проверка статусов, циклы) — в `.yaml` workflow графах.
+- **Классификация контекста** — реализована в графах workflow, а НЕ отдельным модулем. Built-in узел `llm_fact_extractor` (`workflow_engine/fact_extractor.rs`) извлекает факты из текста (возвращает JSON `{"fact_id": true/false, ...}`), а дальше маршрутизация идёт по узлам `LlmSequentialSwitch` / `switch` / `condition_check` / `signal_router` (`workflow_engine/nodes.rs`, см. `cases_priority`). Отдельного файла `intent_classifier.rs` **не существует** (это устаревшее упоминание).
 
 ## 2. Сессия и сообщения
 
@@ -116,7 +117,7 @@ pub struct ChatMessage {
 |-----|-----|--------|--------|
 | **Бизнес-логика** | `.md` файлы агентов | Markdown | `therapist_communicator.md` |
 | **Маршрутизация** | `.yaml` файлы в `workflows/` | YAML граф | `main_conversation_flow.yaml` |
-| **Классификация контекста** | Built-in в `workflow_engine/` | Rust | `intent_classifier.rs` |
+| **Классификация контекста** | Узлы workflow графа (факт-экстрактор + маршрутизация) | YAML + Rust | `fact_extractor.rs` (`llm_fact_extractor`) + `nodes.rs` (`LlmSequentialSwitch`, `switch`, `condition_check`, `signal_router`) |
 
 ### Вызов инструментов (MCP)
 ```json

@@ -305,10 +305,20 @@ pub async fn chat_request(
         &app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
     );
     let log_cb_for_result = log_cb.clone();
+    // Prompt-log: снимок точного входа модели (правило «модель видит только записанное»).
+    // Путь best-effort по timestamp; если директория недоступна — лог просто не пишется.
+    let prompt_log_ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let prompt_log = app.path().app_data_dir().ok().map(|d| {
+        d.join("prompt_logs").join(format!("{}_{}.prompt_log.jsonl", agent_id, prompt_log_ts))
+    });
     let run_result = tokio::task::spawn_blocking(move || {
         // ── Контроль утечек: RSS приложения до и после запроса ──
         // Рост между последовательными запросами = утечка в приложении.
         let app_rss_before = crate::infra::current_process_rss();
+
         let run_result = domain::run_chat(
             log_cb.clone(),
             status_cb,
@@ -332,6 +342,7 @@ pub async fn chat_request(
             mmproj_path,
             cancel_flag,
             stream_meta,
+            prompt_log,
         );
         let app_rss_after = crate::infra::current_process_rss();
         match (app_rss_before, app_rss_after) {

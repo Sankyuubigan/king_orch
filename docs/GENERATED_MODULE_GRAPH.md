@@ -1,0 +1,52 @@
+# Карта модулей King Orch (сгенерировано автоматически)
+
+> ⚠️ ФАЙЛ СГЕНЕРИРОВАН скриптом `scripts/gen_docs.cjs`. **НЕ ПРАВИТЬ РУКАМИ** —
+> правки будут перезаписаны при следующей генерации. Правь код, затем перегенерируй.
+
+## Карта модулей (зависимости через `use crate::`)
+
+```mermaid
+flowchart TD
+  crate__api__agents["crate::api::agents"]
+  crate__api__chat["crate::api::chat"]
+  crate__api__config["crate::api::config"]
+  crate__api__file_utils["crate::api::file_utils"]
+  crate__api__graph["crate::api::graph"]
+  crate__api__llamacpp["crate::api::llamacpp"]
+  crate__api["crate::api"]
+  crate__api__models["crate::api::models"]
+  crate__api__sessions["crate::api::sessions"]
+  crate__api__test["crate::api::test"]
+  crate__api__version["crate::api::version"]
+  crate__domain__agent_manager["crate::domain::agent_manager"]
+  crate__domain["crate::domain"]
+  crate__domain__orchestrator["crate::domain::orchestrator"]
+  crate__domain__orchestrator__prompt["crate::domain::orchestrator::prompt"]
+  crate__domain__orchestrator__runtime["crate::domain::orchestrator::runtime"]
+  crate__domain__parsers["crate::domain::parsers"]
+  crate__domain__signals["crate::domain::signals"]
+  crate__domain__workflow_engine__context["crate::domain::workflow_engine::context"]
+  crate__domain__workflow_engine__fact_extractor["crate::domain::workflow_engine::fact_extractor"]
+  crate__domain__workflow_engine["crate::domain::workflow_engine"]
+  crate__domain__workflow_engine__nodes["crate::domain::workflow_engine::nodes"]
+  crate__domain__workflow_engine__parser["crate::domain::workflow_engine::parser"]
+  crate__infra__bin_downloader["crate::infra::bin_downloader"]
+  crate__infra__config["crate::infra::config"]
+  crate__infra__detokenizer["crate::infra::detokenizer"]
+  crate__infra__downloader["crate::infra::downloader"]
+  crate__infra__gpu_detector["crate::infra::gpu_detector"]
+  crate__infra__llamacpp_installer["crate::infra::llamacpp_installer"]
+  crate__infra__llm["crate::infra::llm"]
+  crate__infra__llm_gguf["crate::infra::llm_gguf"]
+  crate__infra__llm_multimodal["crate::infra::llm_multimodal"]
+  crate__infra__llm_types["crate::infra::llm_types"]
+  crate__infra__mcp_client["crate::infra::mcp_client"]
+  crate__infra__mem_profiler["crate::infra::mem_profiler"]
+  crate__infra["crate::infra"]
+  crate__infra__session_manager["crate::infra::session_manager"]
+  crate__infra__startup_log["crate::infra::startup_log"]
+  crate__infra__telemetry__aptabase["crate::infra::telemetry::aptabase"]
+  crate__infra__telemetry["crate::infra::telemetry"]
+  crate__main["crate::main"]
+```
+

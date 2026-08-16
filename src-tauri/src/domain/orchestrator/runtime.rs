@@ -4,6 +4,46 @@ use crate::infra::bin_downloader;
 
 /// Встроенные инструменты (единый источник — SSOT). Подмешиваются в промпт
 /// каждого агента при РЕАЛЬНОМ вызове и в worst-case оценку контекста.
+/// Схемы туду-инструментов (`todo_write` / `todo_list`). Это ОБЫЧНЫЕ инструменты,
+/// НЕ built-in: подключаются только опционально (папка агента `coder`/`research`
+/// либо явный `tools: ["todo"]` в .md), чтобы не жрать токены и не путать агентов,
+/// которым чек-лист не нужен. Состояние хранится в сессии (thought с автором
+/// `todo::<agent_id>`) и переживает компакцию контекста (Слой 2.2).
+pub fn todo_tool_schemas() -> Vec<(String, String, serde_json::Value)> {
+    vec![
+        (
+            "_todo".to_string(),
+            "todo_write".to_string(),
+            serde_json::json!({
+                "name": "todo_write",
+                "description": "Управление чек-листом задач агента. Используй для многошаговых задач, чтобы не терять план (он переживает сжатие контекста). Действия: add (нужен title), done/remove (по index или title), clear (очистить), list (показать).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "action": {"type": "string", "enum": ["add", "done", "remove", "clear", "list"], "description": "add — добавить задачу; done/remove — отметить/удалить по index(1-based) или title; clear — очистить; list — показать список."},
+                        "title": {"type": "string", "description": "Текст задачи (для add) или название для поиска (done/remove)."},
+                        "index": {"type": "integer", "description": "Номер задачи (1-based) для done/remove."}
+                    },
+                    "required": ["action"]
+                }
+            }),
+        ),
+        (
+            "_todo".to_string(),
+            "todo_list".to_string(),
+            serde_json::json!({
+                "name": "todo_list",
+                "description": "Показать текущий чек-лист задач агента (что сделано, что осталось).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }
+            }),
+        ),
+    ]
+}
+
 pub fn builtin_tools() -> Vec<(String, String, serde_json::Value)> {
     vec![(
         "_builtin".to_string(),
@@ -20,7 +60,53 @@ pub fn builtin_tools() -> Vec<(String, String, serde_json::Value)> {
                 "required": ["key", "value"]
             }
         }),
+    ), (
+        "_builtin".to_string(),
+        "read_spill".to_string(),
+        serde_json::json!({
+            "name": "read_spill",
+            "description": "Дочитать полный результат большого инструмента, сохранённый в файл spills (локатор приходит в сообщении '[РЕЗУЛЬТАТ ИНСТРУМЕНТА сохранён в файл spills]'). Принимает path (путь к spill-файлу). Возвращает полное содержимое (обрезанное до 16К символов).",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Путь к spill-файлу (например spills/spill_agent_0.txt)"}
+                },
+                "required": ["path"]
+            }
+        }),
     )]
+}
+
+/// Capability-шов (Слой 4.3): единая точка, где декларируется, что агент
+/// *умеет* — какие встроенные инструменты, MCP-серверы и сабагенты ему доступны.
+/// Ядро оркестратора спрашивает шов вместо хардкода; добавить/заменить
+/// capability можно, не трогая цикл выполнения. Возвращает человекочитаемую
+/// сводку (используется в промптах/логах и для согласования между агентами).
+pub fn agent_capabilities(agent: &crate::domain::agent_manager::AgentProfile) -> Vec<String> {
+    let mut caps = Vec::new();
+    for t in &agent.tools {
+        caps.push(format!("tool:{}", t));
+    }
+    for m in &agent.mcp_servers {
+        caps.push(format!("mcp:{}", m));
+    }
+    for s in &agent.subagents {
+        caps.push(format!("subagent:{}", s));
+    }
+    // Встроенные инструменты доступны всем агентам.
+    for (_, name, _) in builtin_tools() {
+        caps.push(format!("builtin:{}", name));
+    }
+    caps
+}
+
+/// Человекочитаемая сводка capability-шва для логов/промпта.
+pub fn agent_capabilities_summary(agent: &crate::domain::agent_manager::AgentProfile) -> String {
+    let caps = agent_capabilities(agent);
+    if caps.is_empty() {
+        return format!("Агент '{}' не имеет объявленных capability.", agent.id);
+    }
+    format!("Capability-шов агента '{}': {}", agent.id, caps.join(", "))
 }
 
 pub fn get_mcp_server_path(mcp_servers_dir: &Path, name: &str) -> Result<PathBuf, String> {
@@ -217,5 +303,48 @@ pub fn load_mcp_servers<L: Fn(String) + Clone + Send + Sync + 'static>(
             }
             Err(e) => log_cb(format!("❌ Ошибка поиска файла сервера: {}", e)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::agent_manager::AgentProfile;
+
+    fn make_agent(tools: &[&str], mcp: &[&str], subs: &[&str]) -> AgentProfile {
+        AgentProfile {
+            id: "agent_x".to_string(),
+            name: "Agent X".to_string(),
+            description: String::new(),
+            system_prompt: String::new(),
+            is_hidden: false,
+            mode: "worker".to_string(),
+            mcp_servers: mcp.iter().map(|s| s.to_string()).collect(),
+            subagents: subs.iter().map(|s| s.to_string()).collect(),
+            folder: None,
+            single_report: false,
+            tools: tools.iter().map(|s| s.to_string()).collect(),
+            current_date: false,
+        }
+    }
+
+    #[test]
+    fn agent_capabilities_lists_declared_and_builtin() {
+        let a = make_agent(&["custom_tool"], &["fs_read"], &["helper"]);
+        let caps = agent_capabilities(&a);
+        assert!(caps.iter().any(|c| c == "tool:custom_tool"));
+        assert!(caps.iter().any(|c| c == "mcp:fs_read"));
+        assert!(caps.iter().any(|c| c == "subagent:helper"));
+        // Встроенные инструменты доступны всем агентам через шов.
+        assert!(caps.iter().any(|c| c == "builtin:emit_signal"));
+        assert!(caps.iter().any(|c| c == "builtin:read_spill"));
+    }
+
+    #[test]
+    fn agent_capabilities_summary_is_readable() {
+        let a = make_agent(&["custom_tool"], &["fs_read"], &[]);
+        let s = agent_capabilities_summary(&a);
+        assert!(s.contains("agent_x"));
+        assert!(s.contains("tool:custom_tool"));
     }
 }
