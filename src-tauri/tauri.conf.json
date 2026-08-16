@@ -1,6 +1,6 @@
 {
   "productName": "King Orch",
-  "version": "26.8.72",
+  "version": "26.8.75",
   "identifier": "com.kingorch.app",
   "build": {
     "beforeDevCommand": "npm run dev",

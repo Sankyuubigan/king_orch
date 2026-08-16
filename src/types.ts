@@ -86,4 +86,7 @@ export interface CatalogEntry {
     download_url: string;
     mmproj_url?: string;
     tokenizer_id?: string;
+    uncen?: boolean;
+    vision?: boolean;
+    audio?: boolean;
 }

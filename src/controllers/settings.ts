@@ -109,8 +109,23 @@ export class SettingsController {
 
   updateModelSelect(config: any) {
     this.el.modelSelect.innerHTML = "";
-    for (const m of config.models) { const o = document.createElement("option"); o.value = m; o.text = m.split(/[/\\]/).pop() || m; this.el.modelSelect.appendChild(o); }
+    for (const m of config.models) {
+      const o = document.createElement("option");
+      o.value = m;
+      const fileName = m.split(/[/\\]/).pop() || m;
+      const badges = this.capabilityIcons(config.model_meta?.[m]).map(i => i.icon).join(" ");
+      o.text = fileName + (badges ? `  ${badges}` : "");
+      this.el.modelSelect.appendChild(o);
+    }
     if (config.last_model && config.models.includes(config.last_model)) this.el.modelSelect.value = config.last_model;
+  }
+
+  private capabilityIcons(meta?: { uncen?: boolean; vision?: boolean; audio?: boolean }): { icon: string; title: string }[] {
+    const out: { icon: string; title: string }[] = [];
+    if (meta?.uncen) out.push({ icon: "😈", title: "Без цензуры (uncensored)" });
+    if (meta?.vision) out.push({ icon: "👁", title: "Видит изображения (vision)" });
+    if (meta?.audio) out.push({ icon: "🎵", title: "Понимает аудио (audio)" });
+    return out;
   }
 
   renderModelsList(config: any) {
@@ -140,6 +155,14 @@ export class SettingsController {
       const path = document.createElement("div");
       path.innerText = m;
       path.style.cssText = "font-size:11px; color:var(--text-muted, #888); word-break:break-all;";
+      const meta = config.model_meta?.[m];
+      for (const b of this.capabilityIcons(meta)) {
+        const span = document.createElement("span");
+        span.innerText = b.icon;
+        span.title = b.title;
+        span.style.cssText = "font-size:13px; margin-left:5px; cursor:help;";
+        name.appendChild(span);
+      }
       info.appendChild(name);
       info.appendChild(path);
 
@@ -325,7 +348,7 @@ export class SettingsController {
     try {
       store.modelsCatalog = await invoke("get_models_catalog");
       this.el.downloadModelSelect.innerHTML = '<option value="">-- Выберите модель --</option>';
-      store.modelsCatalog.forEach(m => { const o = document.createElement("option"); o.value = m.name; o.text = m.size_gb ? `${m.name} (${m.size_gb} GB)` : m.name; this.el.downloadModelSelect.appendChild(o); });
+      store.modelsCatalog.forEach(m => { const o = document.createElement("option"); o.value = m.name; const badges = this.capabilityIcons(m).map(i => i.icon).join(" "); o.text = (m.size_gb ? `${m.name} (${m.size_gb} GB)` : m.name) + (badges ? `  ${badges}` : ""); this.el.downloadModelSelect.appendChild(o); });
     } catch(e) { this.el.downloadModelSelect.innerHTML = '<option value="">Ошибка</option>'; void trackError("settings.loadCatalog", e); }
   }
 
@@ -376,8 +399,8 @@ export class SettingsController {
       setTelemetryEnabled(val);
       await invoke("set_config_value", { key: "allow_error_reports", value: val });
     });
-    this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
-    this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) { const cfg: any = await invoke("add_model", { path: sel as string }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
+    this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) {         const cfg: any = await invoke("add_model", { path: sel as string, flags: null }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
+    this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) {         const cfg: any = await invoke("add_model", { path: sel as string, flags: null }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
     this.el.btnCheckUpdate?.addEventListener("click", async () => {
       const btn = this.el.btnCheckUpdate;
       const status = this.el.updateStatus;
@@ -436,7 +459,15 @@ export class SettingsController {
       try {
          const savePath = await save({ defaultPath: model.download_url.split('/').pop()?.split('?')[0] || `${model.name}.gguf`, filters: [{ name: "GGUF", extensions: ["gguf"] }] }); if (!savePath) return;
         this.el.btnDownloadModel.disabled = true; this.el.downloadProgressContainer.style.display = "block";
-        await invoke("download_model", { url: model.download_url, savePath }); await invoke("add_model", { path: savePath });
+        await invoke("download_model", { url: model.download_url, savePath });
+        if (model.mmproj_url) {
+          const sep = savePath.includes("\\") ? "\\" : "/";
+          const dir = savePath.substring(0, savePath.lastIndexOf(sep));
+          const mpName = (model.mmproj_url.split('/').pop() || "mmproj.gguf").split('?')[0];
+          const mpPath = `${dir}${sep}${mpName}`;
+          await invoke("download_model", { url: model.mmproj_url, savePath: mpPath });
+        }
+        await invoke("add_model", { path: savePath, flags: { uncen: !!model.uncen, vision: !!model.vision, audio: !!model.audio } });
         await this.loadConfig(); showToast(`Модель ${model.name} скачана!`, "success");
       } catch(e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.downloadModel", e); }
       finally { this.el.btnDownloadModel.disabled = false; this.el.downloadProgressContainer.style.display = "none"; }

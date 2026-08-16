@@ -83,14 +83,49 @@ pub async fn auto_download_default_model(app: AppHandle, save_path: String) -> R
     )
     .await?;
 
+    // Докачиваем multimodal-проектор (mmproj), если модель его поддерживает
+    let mut mmproj_saved: Option<String> = None;
+    if let Some(mmp_url) = &default_entry.mmproj_url {
+        let mmp_name = mmp_url
+            .split('/')
+            .last()
+            .and_then(|s| s.split('?').next())
+            .unwrap_or("mmproj.gguf")
+            .to_string();
+        let mmp_path = format!(
+            "{}{}{}",
+            parent_dir.display(),
+            std::path::MAIN_SEPARATOR,
+            mmp_name
+        );
+        crate::infra::downloader::download_model(
+            app.clone(),
+            mmp_url.clone(),
+            mmp_path.clone(),
+        )
+        .await?;
+        mmproj_saved = Some(mmp_path);
+    }
+
     let models_dir = parent_dir.to_str().map(|d| d.to_string());
 
     let mut cfg = infra::load_config(&app);
     if !cfg.models.contains(&save_path) {
         cfg.models.push(save_path.clone());
     }
-    cfg.last_model = Some(save_path);
+    cfg.last_model = Some(save_path.clone());
     cfg.models_dir = models_dir;
+    if let Some(mp) = mmproj_saved {
+        cfg.mmproj_files.insert(save_path.clone(), mp);
+    }
+    cfg.model_meta.insert(
+        save_path.clone(),
+        infra::ModelMeta {
+            uncen: default_entry.uncen.unwrap_or(false),
+            vision: default_entry.vision.unwrap_or(false),
+            audio: default_entry.audio.unwrap_or(false),
+        },
+    );
     infra::save_config(&app, &cfg);
 
     Ok(())
@@ -150,7 +185,11 @@ pub fn reset_model_params(app: AppHandle, model_path: String) -> infra::ModelPar
 }
 
 #[tauri::command]
-pub fn add_model(app: AppHandle, path: String) -> Result<infra::AppConfig, String> {
+pub fn add_model(
+    app: AppHandle,
+    path: String,
+    flags: Option<infra::ModelMeta>,
+) -> Result<infra::AppConfig, String> {
     let meta = std::fs::metadata(&path)
         .map_err(|e| format!("Файл модели не найден: {}", e))?;
     if meta.len() < 1024 * 1024 {
@@ -165,6 +204,10 @@ pub fn add_model(app: AppHandle, path: String) -> Result<infra::AppConfig, Strin
 
     if let Some(mmp) = infra::auto_detect_mmproj(&path) {
         cfg.mmproj_files.insert(path.clone(), mmp);
+    }
+
+    if let Some(f) = flags {
+        cfg.model_meta.insert(path.clone(), f);
     }
 
     infra::save_config(&app, &cfg);

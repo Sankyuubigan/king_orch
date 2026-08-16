@@ -4,7 +4,69 @@ use crate::infra;
 
 #[tauri::command]
 pub fn get_config(app: AppHandle) -> infra::AppConfig {
-    infra::load_config(&app)
+    let mut cfg = infra::load_config(&app);
+    backfill_model_meta(&app, &mut cfg);
+    cfg
+}
+
+/// Дозаполняет `model_meta` для уже установленных моделей по сопоставлению
+/// имени файла с каталогом (чтобы иконки возможностей отображались без
+/// повторного скачивания). Vision также выводится из наличия mmproj.
+fn backfill_model_meta(app: &AppHandle, cfg: &mut infra::AppConfig) {
+    let catalog = infra::load_catalog(app);
+    let mut changed = false;
+    for model_path in &cfg.models {
+        if cfg.model_meta.contains_key(model_path) {
+            continue;
+        }
+        let stem = std::path::Path::new(model_path)
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase());
+        let mut meta = infra::ModelMeta::default();
+        if let Some(stem) = stem {
+            for entry in &catalog {
+                let dl_stem = entry
+                    .download_url
+                    .split('/')
+                    .last()
+                    .and_then(|s| s.split('?').next())
+                    .and_then(|f| std::path::Path::new(f).file_stem())
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_lowercase());
+                let mmp_stem = entry
+                    .mmproj_url
+                    .as_ref()
+                    .map(|u| {
+                        u.split('/')
+                            .last()
+                            .and_then(|s| s.split('?').next())
+                            .and_then(|f| std::path::Path::new(f).file_stem())
+                            .and_then(|s| s.to_str())
+                            .map(|s| s.to_lowercase())
+                            .unwrap_or_default()
+                    });
+                if dl_stem.as_deref() == Some(stem.as_str())
+                    || mmp_stem.as_deref() == Some(stem.as_str())
+                {
+                    meta.uncen = entry.uncen.unwrap_or(false);
+                    meta.vision = entry.vision.unwrap_or(false);
+                    meta.audio = entry.audio.unwrap_or(false);
+                    break;
+                }
+            }
+        }
+        if cfg.mmproj_files.contains_key(model_path) {
+            meta.vision = true;
+        }
+        if meta.uncen || meta.vision || meta.audio {
+            cfg.model_meta.insert(model_path.clone(), meta);
+            changed = true;
+        }
+    }
+    if changed {
+        infra::save_config(app, cfg);
+    }
 }
 
 #[tauri::command]

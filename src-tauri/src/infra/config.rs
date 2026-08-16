@@ -81,6 +81,8 @@ pub struct AppConfig {
     #[serde(default)]
     pub mmproj_files: HashMap<String, String>,
     #[serde(default)]
+    pub model_meta: HashMap<String, ModelMeta>,
+    #[serde(default)]
     pub llamacpp_dir: Option<String>,
     /// Предпочтение юзера: какой бекенд движка использовать ("auto" / "cpu" /
     /// "cuda-12.4" / "cuda-13.3" / "vulkan" / "hip-radeon"). None = авто.
@@ -137,6 +139,7 @@ impl Default for AppConfig {
             show_advanced_features: default_show_advanced_features(),
             show_folder_agents: default_show_folder_agents(),
             mmproj_files: HashMap::new(),
+            model_meta: HashMap::new(),
             llamacpp_dir: None,
             engine_variant: None,
             allow_error_reports: default_allow_error_reports(),
@@ -194,6 +197,16 @@ pub fn save_config(app: &AppHandle, config: &AppConfig) {
     }
 }
 
+#[derive(Serialize, Deserialize, Clone, Default)]
+pub struct ModelMeta {
+    #[serde(default)]
+    pub uncen: bool,
+    #[serde(default)]
+    pub vision: bool,
+    #[serde(default)]
+    pub audio: bool,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct CatalogEntry {
     pub name: String,
@@ -204,6 +217,14 @@ pub struct CatalogEntry {
     pub tokenizer_id: Option<String>,
     #[serde(default)]
     pub is_default: bool,
+    #[serde(default)]
+    pub mmproj_url: Option<String>,
+    #[serde(default)]
+    pub uncen: Option<bool>,
+    #[serde(default)]
+    pub vision: Option<bool>,
+    #[serde(default)]
+    pub audio: Option<bool>,
 }
 
 pub fn find_agents_dir(app: &AppHandle) -> PathBuf {
