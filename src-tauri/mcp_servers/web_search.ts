@@ -568,6 +568,25 @@ function dedupe(results: SearchResult[]): SearchResult[] {
     });
 }
 
+// Дедупликация по домену + URL (паттерн scira/web-search.ts):
+// один домен не должен повторяться в результатах multi-query поиска.
+function extractDomain(url: string): string {
+    try { return new URL(url).hostname; } catch { return ''; }
+}
+
+function dedupeByDomain(results: SearchResult[]): SearchResult[] {
+    const seenUrls = new Set<string>();
+    const seenDomains = new Set<string>();
+    return results.filter((r) => {
+        const domain = extractDomain(r.url);
+        if (!r.url || seenUrls.has(r.url)) return false;
+        if (domain && seenDomains.has(domain)) return false;
+        seenUrls.add(r.url);
+        if (domain) seenDomains.add(domain);
+        return true;
+    });
+}
+
 // Оценка релевантности: какая доля результатов содержит хотя бы одно значимое слово запроса.
 function relevantScore(query: string, results: SearchResult[]): number {
     const words = query.toLowerCase().split(/\s+/)
@@ -690,26 +709,58 @@ function formatResults(all: SearchResult[], failures: { name: string; message: s
     return lines.join('\n');
 }
 
+// Мульти-запросный вывод: секции по каждому запросу, сквозная нумерация,
+// дедуп по домену+URL между запросами (паттерн scira/web-search.ts).
+function formatMultiResults(
+    perQuery: { query: string; all: SearchResult[]; failures: { name: string; message: string }[] }[],
+    limit: number,
+): string {
+    const out: string[] = [];
+    const seenDomains = new Set<string>();
+    let index = 1;
+    for (const { query, all, failures } of perQuery) {
+        out.push(`=== Запрос: ${query} ===`);
+        for (const r of all) {
+            if (index > limit) break;
+            const domain = extractDomain(r.url);
+            if (domain && seenDomains.has(domain)) continue;
+            seenDomains.add(domain);
+            out.push(`[${index}] ${r.title}${r.source ? ` (${r.source})` : ''}\nСсылка: ${r.url}\nОписание: ${r.snippet || '—'}`);
+            index++;
+        }
+        if (failures.length > 0) {
+            out.push(`⚠️ Движки с ошибками: ${failures.map((f) => `${f.name} (${f.message})`).join(', ')}`);
+        }
+        out.push('');
+    }
+    return out.join('\n').trim();
+}
+
 createMcpServer({
     name: "web-search-mcp",
     version: "1.0.0",
     tools: [{
         name: "WebSearch",
-        description: "Поиск в интернете (без API-ключей). Мульти-движок: wiby, duckduckgo, marginalia, brave, startpage, sogou, juejin, csdn, baidu, bing, exa. По умолчанию — последовательная цепочка фолбэков по надёжности; можно указать engines (массив) для параллельного поиска по конкретным движкам.",
+        description: "Поиск в интернете (без API-ключей). Мульти-движок: wiby, duckduckgo, marginalia, brave, startpage, sogou, juejin, csdn, baidu, bing, exa. По умолчанию — последовательная цепочка фолбэков по надёжности; можно указать engines (массив) для параллельного поиска по конкретным движкам. Поддерживает multi-query: передай queries (массив 1-5 запросов) — каждый выполняется параллельно, результаты дедуплицируются по домену+URL.",
         inputSchema: {
             type: "object",
             properties: {
-                query: { type: "string", description: "Поисковый запрос" },
+                query: { type: "string", description: "Поисковый запрос (один). Альтернатива: queries." },
+                queries: { type: "array", items: { type: "string" }, description: "Опционально: массив 1-5 запросов для multi-query поиска (параллельно, дедуп по домену+URL). Запросы — на языке пользователя, естественные фразы, без операторов (OR/AND/site: и т.п.)." },
                 engines: { type: "array", items: { type: "string" }, description: "Опционально: движки (wiby, duckduckgo, marginalia, brave, startpage, sogou, juejin, csdn, baidu, bing, exa). Без него — цепочка фолбэков." },
                 limit: { type: "number", description: "Опционально: максимум результатов (по умолчанию 8)" }
-            },
-            required: ["query"]
+            }
         }
     }],
     handlers: {
         WebSearch: async (args) => {
             const query = (args.query || '').trim();
-            if (!query) { throw new Error("WebSearch: укажи 'query'."); }
+            let queries: string[] = [];
+            if (Array.isArray(args.queries)) {
+                queries = args.queries.filter((q) => typeof q === 'string' && q.trim()).map((q) => q.trim()).slice(0, 5);
+            }
+            if (queries.length === 0 && query) queries = [query];
+            if (queries.length === 0) { throw new Error("WebSearch: укажи 'query' или 'queries'."); }
             let limit = Math.max(3, Math.min(20, parseInt(args.limit, 10) || MAX_RESULTS));
             let engines = DEFAULT_ORDER;
             let parallel = false;
@@ -723,20 +774,26 @@ createMcpServer({
                 engines = engines.filter((e) => ENGINES[e]);
                 if (engines.length === 0) { throw new Error(`WebSearch: неизвестные движки: ${unknown.join(', ')}. Доступны: ${Object.keys(ENGINES).join(', ')}`); }
             }
-            const cacheKeyStr = cacheKey('web', engines, parallel, query);
+            const cacheKeyStr = cacheKey('web', engines, parallel, queries.join('|'));
             const cached = cacheGet(cacheKeyStr);
             if (cached !== null) {
-                engineLog('web_search', `из кеша (query: "${query.slice(0, 60)}")`);
+                engineLog('web_search', `из кеша (query: "${queries[0].slice(0, 60)}")`);
                 return cached;
             }
-            const { all, failures } = parallel
-                ? await runParallel(query, engines, limit)
-                : await runChain(query, engines, limit);
-            if (all.length === 0) {
-                const reasons = failures.map((f) => `${f.name}: ${f.message}`).join('; ');
+            const perQuery = await Promise.all(queries.map(async (q) => {
+                const { all, failures } = parallel
+                    ? await runParallel(q, engines, Math.max(3, Math.ceil(limit / queries.length)))
+                    : await runChain(q, engines, Math.max(3, Math.ceil(limit / queries.length)));
+                return { query: q, all: dedupe(all), failures };
+            }));
+            const total = perQuery.reduce((s, p) => s + p.all.length, 0);
+            if (total === 0) {
+                const reasons = perQuery.flatMap((p) => p.failures.map((f) => `${f.name}: ${f.message}`)).join('; ');
                 throw new Error('Поиск не дал результатов. ' + (reasons ? 'Причины: ' + reasons : 'Все движки вернули пусто.'));
             }
-            const out = formatResults(all, failures, limit);
+            const out = queries.length === 1
+                ? formatResults(perQuery[0].all, perQuery[0].failures, limit)
+                : formatMultiResults(perQuery, limit);
             cachePut(cacheKeyStr, out);
             return out;
         }

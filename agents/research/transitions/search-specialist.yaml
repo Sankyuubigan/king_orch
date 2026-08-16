@@ -25,6 +25,12 @@ nodes:
     to: call_quick
   - key: needs_docs
     to: call_docs
+  - key: needs_github
+    to: call_github
+  - key: needs_academic
+    to: call_academic
+  - key: needs_video
+    to: call_video
   - key: needs_deep_research
     to: decompose_topic
   default: call_web
@@ -53,6 +59,38 @@ nodes:
     Исходный вопрос (если выше заглушка {{ ... }} или пусто): {{ user_message }}
   output_type: message
 
+# ── Ветки вертикальных поисков ──
+
+- id: call_github
+  type: llm_worker
+  agent: github_researcher
+  task: |
+    Ответь пользователю: найди репозитории/библиотеки по потребности и дай точные факты о них.
+
+    Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+    Исходный вопрос (если выше заглушка {{ ... }} или пусто): {{ user_message }}
+  output_type: message
+
+- id: call_academic
+  type: llm_worker
+  agent: academic_researcher
+  task: |
+    Ответь пользователю: найди научные статьи/исследования по вопросу и дай точные факты о них.
+
+    Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+    Исходный вопрос (если выше заглушка {{ ... }} или пусто): {{ user_message }}
+  output_type: message
+
+- id: call_video
+  type: llm_worker
+  agent: youtube_researcher
+  task: |
+    Ответь пользователю: найди подходящие видео на YouTube и дай точные факты о них.
+
+    Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+    Исходный вопрос (если выше заглушка {{ ... }} или пусто): {{ user_message }}
+  output_type: message
+
 # ── Deep research ветка: декомпозиция → 3 подтемы → компиляция ──
 
 - id: decompose_topic
@@ -73,7 +111,7 @@ nodes:
 
     Общий вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
 
-    Список подтем (исследуй ТОЛЬКО подтему №1 — первую строку списка):
+    Список подтем (исследуй ТОЛЬКО подтему №1 — первую строку списка; формат: «название | запрос a | запрос b» — готовые поисковые запросы используй как основу для multi-query WebSearch):
     {{ nodes.decompose_topic.output.result }}
 
     Верни отчёт по этой подтеме: собранные факты с цитатами-подтверждениями и сквозной нумерацией источников [1]..[N] с секцией «Источники» в конце. Твой отчёт станет секцией итогового доклада — будь самодостаточен.
@@ -87,7 +125,7 @@ nodes:
 
     Общий вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
 
-    Список подтем (исследуй ТОЛЬКО подтему №2 — вторую строку списка):
+    Список подтем (исследуй ТОЛЬКО подтему №2 — вторую строку списка; формат: «название | запрос a | запрос b» — готовые поисковые запросы используй как основу для multi-query WebSearch):
     {{ nodes.decompose_topic.output.result }}
 
     Верни отчёт по этой подтеме: собранные факты с цитатами-подтверждениями и сквозной нумерацией источников [1]..[N] с секцией «Источники» в конце. Твой отчёт станет секцией итогового доклада — будь самодостаточен.
@@ -101,7 +139,7 @@ nodes:
 
     Общий вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
 
-    Список подтем (исследуй ТОЛЬКО подтему №3 — третью строку списка):
+    Список подтем (исследуй ТОЛЬКО подтему №3 — третью строку списка; формат: «название | запрос a | запрос b» — готовые поисковые запросы используй как основу для multi-query WebSearch):
     {{ nodes.decompose_topic.output.result }}
 
     Верни отчёт по этой подтеме: собранные факты с цитатами-подтверждениями и сквозной нумерацией источников [1]..[N] с секцией «Источники» в конце. Твой отчёт станет секцией итогового доклада — будь самодостаточен.
@@ -307,6 +345,15 @@ edges:
   to: END
 
 - from: call_docs
+  to: END
+
+- from: call_github
+  to: END
+
+- from: call_academic
+  to: END
+
+- from: call_video
   to: END
 
 - from: decompose_topic

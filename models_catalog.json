@@ -60,5 +60,12 @@
     "size_gb": "4.51",
     "download_url": "https://huggingface.co/FadedRedStar/LFM2.5-8B-A1B-heretic-imatrix-GGUF/resolve/main/LFM2.5-8B-A1B-heretic-IQ4_NL-imatrix.gguf?download=true",
     "tokenizer_id": "LiquidAI/LFM2.5-8B-A1B"
+  },
+  {
+    "name": "qwen3.8-27b-heretic-ara-i1-3bit",
+    "size_gb": "12.9",
+    "download_url": "https://huggingface.co/mradermacher/Qwen3.8-27B-heretic-ara-i1-GGUF/resolve/main/Qwen3.8-27B-heretic-ara.i1-IQ3_M.gguf?download=true",
+    "mmproj_url": "https://huggingface.co/mradermacher/Qwen3.8-27B-heretic-ara-GGUF/resolve/main/Qwen3.8-27B-heretic-ara.mmproj-Q8_0.gguf?download=true",
+    "tokenizer_id": "Qwen/Qwen3.8-27B"
   }
 ]

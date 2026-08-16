@@ -90,6 +90,11 @@ fn deno_permissions(mcp_name: &str, bins_dir: &Path) -> Vec<String> {
             format!("--allow-write={}", bins),
             "--allow-env".to_string(),
         ],
+        // Вертикальные поиски (keyless REST API): только сеть + env (node-compat proxy-переменные)
+        "github_search" | "academic_search" | "youtube_search" => vec![
+            "--allow-net".to_string(),
+            "--allow-env".to_string(),
+        ],
         // Сеть + запуск yt-dlp + temp-файлы + env (bins_dir)
         "youtube_mcp" => vec![
             "--allow-net".to_string(),

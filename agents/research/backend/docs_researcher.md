@@ -14,9 +14,12 @@ mcp_servers: ["web_search", "docs_fetcher", "searxng_search", "time"]
 - Если нужно точное текущее время или таймзона — вызови `GetCurrentTime` через `{"thought": "...", "tool": "GetCurrentTime", "arguments": {}}`.
 
 Инструменты:
-- `WebSearch` — мульти-движковый поиск: duckduckgo, brave, startpage и др. (`{"thought": "...", "tool": "WebSearch", "arguments": {"query": "..."}}`). Если пусто/ошибка — `SearxngSearch` (мета-поиск, опционально `time_range`).
+- `WebSearch` — мульти-движковый поиск: duckduckgo, brave, startpage и др. **Multi-query**: передавай `queries` (массив 3-5 запросов) одним вызовом. Запросы — естественные фразы 5-15 слов на языке пользователя, БЕЗ операторов (OR/AND/site: и т.п.). Вызов: `{"thought": "...", "tool": "WebSearch", "arguments": {"queries": ["...", "..."]}}`. Если пусто/ошибка — `SearxngSearch` (мета-поиск, опционально `time_range`).
 - `WebFetch` — чтение страницы по URL: `{"thought": "...", "tool": "WebFetch", "arguments": {"url": "https://..."}}`. Для crates.io — ПРЯМОЙ JSON API: `https://crates.io/api/v1/crates/<имя_крейта>`.
+- `WebFetchBatch` — батч-чтение до 5 URL одним вызовом: `{"tool": "WebFetchBatch", "arguments": {"urls": ["https://...", "https://..."]}}`.
 - `FetchGithubReadme` — README репозитория: `{"tool": "FetchGithubReadme", "arguments": {"url": "https://github.com/owner/repo"}}`.
+
+Временные зацепки: для «живых» версий/API встраивай год/дату в сам запрос («serde crate latest version 2026»), `time_range` — дополнительно, не вместо.
 
 # ПРОТОКОЛ «ВЕРСИИ КРЕЙТОВ» (обязательный при вопросах о версиях/library)
 
@@ -39,9 +42,9 @@ mcp_servers: ["web_search", "docs_fetcher", "searxng_search", "time"]
 - Если вопрос был «какая версия установлена в проекте» — указания на Cargo.toml/lock в session history важнее актуальной версии: проверь сначала историю сессии.
 
 АЛГОРИТМ РАБОТЫ (общий):
-1. `WebSearch` → если пусто/ошибка → `SearxngSearch`.
-2. Выбери самую релевантную ссылку.
-3. `WebFetch` содержимое страницы.
+1. `WebSearch` (multi-query: 3-5 запросов) → если пусто/ошибка → `SearxngSearch`.
+2. Выбери самые релевантные ссылки.
+3. `WebFetchBatch` на 3-5 ссылок одним вызовом (или `WebFetch` на одну).
 4. Прочитай текст и выдели только то, что нужно для решения задачи.
 
 ФОРМАТ ОТВЕТА:

@@ -121,6 +121,16 @@ function matchMetaDescription(html: string): string {
     return c ? unescapeHtml(c[1]).trim() : '';
 }
 
+// Canonical/og:url — реальный адрес страницы (полезен при metadata-fallback:
+// часто fetch попадает на мусорную/редиректную копию, а канон указывает на оригинал).
+function matchCanonicalUrl(html: string): string {
+    const m = html.match(/<link[^>]+rel=["']canonical["'][^>]*>/i) ||
+        html.match(/<meta[^>]+property=["']og:url["'][^>]*>/i);
+    if (!m) return '';
+    const h = m[0].match(/href=["']([^"']*)["']/i) || m[0].match(/content=["']([^"']*)["']/i);
+    return h ? unescapeHtml(h[1]).trim() : '';
+}
+
 function stripNoiseTags(html: string): string {
     let out = html;
     for (const tag of ['script', 'style', 'noscript', 'template', 'iframe', 'svg', 'canvas', 'nav', 'footer', 'header']) {
@@ -149,9 +159,10 @@ function blockToText(block: string): string {
     return unescapeHtml(t);
 }
 
-function extractMainText(html: string): { title: string; text: string; mode: string } {
+function extractMainText(html: string): { title: string; text: string; mode: string; canonical?: string } {
     const title = matchTitle(html);
     const metaDesc = matchMetaDescription(html);
+    const canonical = matchCanonicalUrl(html);
     const cleaned = stripNoiseTags(html);
 
     const containers: { sel: string; type: string; attr?: string; value: string }[] = [
@@ -182,15 +193,15 @@ function extractMainText(html: string): { title: string; text: string; mode: str
         }
         if (content) {
             const text = normalizeText(blockToText(content));
-            if (text.length >= 120) return { title, text, mode: c.sel };
+            if (text.length >= 120) return { title, text, mode: c.sel, canonical };
         }
     }
 
     const body = extractTagContent(cleaned, 'body');
     const bodyText = normalizeText(blockToText(body || cleaned));
-    if (bodyText) return { title, text: bodyText, mode: 'body' };
+    if (bodyText) return { title, text: bodyText, mode: 'body', canonical };
 
-    return { title, text: normalizeText([title, metaDesc].filter(Boolean).join('\n\n')), mode: 'metadata' };
+    return { title, text: normalizeText([title, metaDesc].filter(Boolean).join('\n\n')), mode: 'metadata', canonical };
 }
 
 function looksLikeHtml(raw: string): boolean {
@@ -334,13 +345,42 @@ async function fetchGithubReadme(urlStr: string): Promise<string> {
 
 // ─────────────────────────── Обработчики ───────────────────────────
 
-function formatResult(extraction: { title: string; text: string }, finalUrl: string): string {
+function formatResult(extraction: { title: string; text: string; mode: string; canonical?: string }, finalUrl: string): string {
     const lines: string[] = [];
     if (extraction.title) lines.push(`# ${extraction.title}`);
     lines.push(`Источник: ${finalUrl}`);
+    if (extraction.canonical && extraction.canonical !== finalUrl) {
+        lines.push(`Канонический URL: ${extraction.canonical}`);
+    }
     lines.push('');
-    lines.push(extraction.text);
+    if (extraction.mode === 'metadata') {
+        // Metadata-fallback (паттерн scira): полный текст не извлечён — честно
+        // отдаём метаданные как зацепку, не выдавая их за контент.
+        lines.push('⚠️ Полный текст страницы не извлечён (JS-рендер/защита) — доступны только метаданные.');
+        lines.push(extraction.text || '—');
+    } else {
+        lines.push(extraction.text);
+    }
     return lines.join('\n');
+}
+
+// Общий обработчик одного URL: fetch → извлечение → формат (используется и WebFetch, и WebFetchBatch).
+async function fetchSingleUrl(urlStr: string): Promise<{ url: string; ok: true; content: string } | { url: string; ok: false; error: string }> {
+    try {
+        const { text, url: finalUrl, status } = await fetchUrlSafe(urlStr);
+        if (!text || (!looksLikeHtml(text) && !/<[a-z][^>]*>/i.test(text))) {
+            // Не-HTML ответ (JSON API и т.п.) — отдаём сырой текст как есть,
+            // это легитимный контент (crates.io, api.github.com/releases и т.д.).
+            if (text && text.trim()) {
+                return { url: urlStr, ok: true, content: `Источник: ${finalUrl}\n\n${text.slice(0, 12000)}` };
+            }
+            return { url: urlStr, ok: false, error: `HTTP ${status}: пустой ответ` };
+        }
+        const extraction = extractMainText(text);
+        return { url: urlStr, ok: true, content: formatResult(extraction, finalUrl) };
+    } catch (e) {
+        return { url: urlStr, ok: false, error: (e as Error).message };
+    }
 }
 
 function normalizeUrlForArticle(raw: string): URL | null {
@@ -357,8 +397,13 @@ createMcpServer({
     tools: [
         {
             name: "WebFetch",
-            description: "Скачать веб-страницу по URL и извлечь читаемый текст (защита от SSRF: только публичные http/https адреса).",
+            description: "Скачать веб-страницу по URL и извлечь читаемый текст (защита от SSRF: только публичные http/https адреса). Если полный текст не извлекается (JS-рендер/защита) — возвращает метаданные страницы (title, описание, canonical) как зацепку.",
             inputSchema: { type: "object", properties: { url: { type: "string", description: "URL адрес страницы" } }, required: ["url"] }
+        },
+        {
+            name: "WebFetchBatch",
+            description: "Батч-чтение до 5 URL одним вызовом (паттерн scira browsePage): каждый URL обрабатывается как WebFetch, результат — список блоков с пометкой ok/ошибка. Используй после поиска, чтобы открыть несколько релевантных ссылок сразу.",
+            inputSchema: { type: "object", properties: { urls: { type: "array", items: { type: "string" }, description: "Массив URL (1-5)" } }, required: ["urls"] }
         },
         {
             name: "FetchArticle",
@@ -382,12 +427,28 @@ createMcpServer({
         WebFetch: async (args: Record<string, string>) => {
             const url = (args.url || '').trim();
             if (!url) { throw new Error("WebFetch: укажи 'url'."); }
-            const { text, url: finalUrl, status } = await fetchUrlSafe(url);
-            if (!text || (!looksLikeHtml(text) && !/<[a-z][^>]*>/i.test(text))) {
-                return `Страница ${finalUrl} (HTTP ${status}): нет HTML-контента.\n${text.slice(0, 2000)}`;
-            }
-            const extraction = extractMainText(text);
-            return formatResult(extraction, finalUrl);
+            const res = await fetchSingleUrl(url);
+            if (!res.ok) throw new Error(`WebFetch: ${res.error}`);
+            return res.content;
+        },
+        WebFetchBatch: async (args: Record<string, unknown>) => {
+            const urls = Array.isArray(args.urls) ? args.urls.filter((u) => typeof u === 'string' && u.trim()).slice(0, 5) : [];
+            if (urls.length === 0) { throw new Error("WebFetchBatch: укажи 'urls' (массив 1-5 URL)."); }
+            const unique = Array.from(new Set(urls.map((u) => (u as string).trim())));
+            const results = await Promise.allSettled(unique.map((u) => fetchSingleUrl(u)));
+            const out: string[] = [];
+            results.forEach((r, i) => {
+                const label = unique[i];
+                if (r.status === 'fulfilled') {
+                    const res = r.value;
+                    out.push(res.ok
+                        ? `--- [OK] ${label} ---\n${res.content}`
+                        : `--- [ОШИБКА] ${label} ---\n${res.error}`);
+                } else {
+                    out.push(`--- [ОШИБКА] ${label} ---\n${(r.reason as Error).message}`);
+                }
+            });
+            return out.join('\n\n');
         },
         FetchArticle: async (args: Record<string, string>) => {
             const url = (args.url || '').trim();
