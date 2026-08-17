@@ -142,6 +142,8 @@ async fn main() {
             api::models::remove_model,
             api::models::delete_model_file,
             api::models::get_mmproj_path,
+            api::models::get_model_capabilities,
+            api::models::get_all_capabilities,
             api::models::ensure_mmproj,
             api::models::get_auto_download_info,
             api::models::auto_download_default_model,

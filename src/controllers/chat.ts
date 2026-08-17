@@ -64,6 +64,7 @@ export class ChatController {
   private menuCallbacks: MessageMenuCallbacks;
   private thoughtMenuCallbacks: ThoughtMenuCallbacks;
   private attachments: Attachment[] = [];
+  private modelAudioCapable: boolean = false;
   private countTimer: number | null = null;
 
   constructor(el: ChatElements) {
@@ -691,23 +692,34 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
   private async updateAttachButtonState() {
     const btn = this.el.btnAttach;
     const modelPath = this.el.modelSelect?.value;
-    if (!modelPath) { btn.disabled = true; btn.classList.remove('btn-attach-active'); btn.classList.add('btn-attach-inactive'); btn.title = 'Сначала выберите модель'; return; }
+    if (!modelPath) { btn.disabled = true; this.modelAudioCapable = false; btn.classList.remove('btn-attach-active'); btn.classList.add('btn-attach-inactive'); btn.title = 'Сначала выберите модель'; return; }
     let mmprojPath: string | null = null;
     try { mmprojPath = await invoke("get_mmproj_path", { modelPath }); } catch (_) {}
     if (!mmprojPath) {
       // Модель могла быть добавлена вручную без mmproj — докачиваем по каталогу.
       btn.disabled = true;
+      this.modelAudioCapable = false;
       btn.classList.remove('btn-attach-active');
       btn.classList.add('btn-attach-inactive');
       btn.title = 'Скачивание mmproj для мультимодального режима…';
       try { mmprojPath = await invoke("ensure_mmproj", { modelPath }); } catch (_) {}
     }
     if (mmprojPath) {
+      // Аудио разрешаем только моделям с реальной audio-способностью
+      // (читаем из models_catalog.json живьём), иначе отправка аудио
+      // ведёт к зависанию генерации (напр. Gemma-4 не поддерживает звук в llama.cpp).
+      let audioCapable = false;
+      try {
+        const caps = await invoke<{ vision: boolean; audio: boolean }>("get_model_capabilities", { modelPath });
+        audioCapable = !!caps.audio;
+      } catch (_) { audioCapable = false; }
+      this.modelAudioCapable = audioCapable;
       btn.disabled = false;
       btn.classList.remove('btn-attach-inactive');
       btn.classList.add('btn-attach-active');
-      btn.title = 'Прикрепить файл (изображение/аудио)';
+      btn.title = audioCapable ? 'Прикрепить файл (изображение/аудио)' : 'Прикрепить изображение';
     } else {
+      this.modelAudioCapable = false;
       btn.disabled = true;
       btn.classList.remove('btn-attach-active');
       btn.classList.add('btn-attach-inactive');
@@ -720,6 +732,10 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (file.size > 20 * 1024 * 1024) { showToast(`Файл ${file.name} слишком большой (>20MB)`, "error"); continue; }
+      if (file.type.startsWith("audio/") && !this.modelAudioCapable) {
+        showToast(`Модель не поддерживает аудио — прикрепление звука отключено`, "error");
+        continue;
+      }
       const dataBase64 = await this.fileToBase64(file);
       this.attachments.push({ file_name: file.name, mime_type: file.type, data_base64: dataBase64 });
       this.addFilePreview(file.name, file.type, dataBase64);

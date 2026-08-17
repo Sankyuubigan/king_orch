@@ -144,6 +144,10 @@ pub async fn run_iterative_test(
         let mut msg_counter = 0; 
         let mut all_sub_calls = Vec::new(); 
 
+        let mcp_pool: crate::infra::mcp_client::McpPool = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::<String, crate::infra::mcp_client::SharedMcpClient>::new(),
+        ));
+
         match domain::orchestrator::run_agent_node(
             log_cb.clone(),
             status_cb.clone(),
@@ -164,6 +168,7 @@ pub async fn run_iterative_test(
             &mcp_servers_dir,
             &bins_dir,
             &domain::orchestrator::resolve_grammars_dir(&agents_dir, None),
+            mcp_pool,
             &mut current_chat_messages,
             &mut msg_counter,
             String::new(), // injected_reports

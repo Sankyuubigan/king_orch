@@ -24,7 +24,7 @@ pub mod telemetry;
 pub use config::{AppConfig, CatalogEntry, ModelMeta, ModelParams, SamplingPresets};
 pub use llm::{ChatMessage, ChatAttachment, LlamaEngine, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename, llm_history, PromptFormat, estimate_vram_mb, GrammarSpec, build_json_only_grammar};
 pub use session_manager::{ChatSession, SessionMeta};
-pub use mcp_client::McpClient;
+pub use mcp_client::{McpClient, McpPool, SharedMcpClient};
 
 // ─── Публичные функции ───
 pub use config::{load_config, save_config, load_catalog, load_sampling_presets, auto_detect_mmproj, find_catalog_entry_for_model, find_agents_dir, find_mcp_servers_dir};

@@ -8,7 +8,7 @@
     "tokenizer_id": "google/gemma-4-E4B-it",
     "uncen": true,
     "vision": true,
-    "audio": true
+    "audio": false
   },
   {
     "name": "gemma-4-12b",
@@ -18,7 +18,7 @@
     "tokenizer_id": "google/gemma-4-12B-it",
     "uncen": true,
     "vision": true,
-    "audio": true
+    "audio": false
   },
   {
     "name": "granite-4.1-8b",
@@ -57,7 +57,7 @@
     "tokenizer_id": "google/gemma-4-E2B-it",
     "uncen": false,
     "vision": true,
-    "audio": true
+    "audio": false
   },
   {
     "name": "nanbeige-4.2-3b",

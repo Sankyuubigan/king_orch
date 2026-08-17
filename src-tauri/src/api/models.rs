@@ -263,6 +263,62 @@ pub fn get_mmproj_path(app: AppHandle, model_path: String) -> Option<String> {
     None
 }
 
+/// Возвращает актуальные возможности модели (vision/audio), читая их
+/// НАПРЯМУЮ из `models_catalog.json` (живьём), а не из закэшированного
+/// `model_meta`. Нужно для гейтинга вложений: аудио разрешаем только
+/// моделям, которые реально его поддерживают в llama.cpp (Ultravox /
+/// Qwen2.5-Omni), иначе отправка аудио ведёт к зависанию генерации
+/// (см. баг с Gemma-4, у которой в каталоге ошибочно стоял `audio: true`).
+#[derive(Serialize)]
+pub struct ModelCapabilities {
+    pub vision: bool,
+    pub audio: bool,
+    pub uncen: bool,
+}
+
+#[tauri::command]
+pub fn get_model_capabilities(app: AppHandle, model_path: String) -> ModelCapabilities {
+    let catalog = infra::load_catalog(&app);
+    let cfg = infra::load_config(&app);
+    let mut caps = ModelCapabilities { vision: false, audio: false, uncen: false };
+    if let Some(entry) = infra::find_catalog_entry_for_model(&catalog, &model_path) {
+        caps.vision = entry.vision.unwrap_or(false);
+        caps.audio = entry.audio.unwrap_or(false);
+        caps.uncen = entry.uncen.unwrap_or(false);
+    }
+    // Наличие mmproj даёт показ изображений даже без явного флага в каталоге.
+    if cfg.mmproj_files.contains_key(&model_path) {
+        caps.vision = true;
+    }
+    caps
+}
+
+/// Возвращает актуальные возможности (vision/audio/uncen) для ВСЕХ
+/// установленных моделей, читая их напрямую из `models_catalog.json` и
+/// наличия mmproj. Единый источник правды для отображения иконок
+/// возможностей — чтобы исключить показ устаревшего закэшированного
+/// `model_meta` (см. баг с нотой 🎵 у Gemma после правки каталога).
+#[tauri::command]
+pub fn get_all_capabilities(app: AppHandle) -> std::collections::HashMap<String, ModelCapabilities> {
+    use std::collections::HashMap;
+    let catalog = infra::load_catalog(&app);
+    let cfg = infra::load_config(&app);
+    let mut map: HashMap<String, ModelCapabilities> = HashMap::new();
+    for model_path in &cfg.models {
+        let mut caps = ModelCapabilities { vision: false, audio: false, uncen: false };
+        if let Some(entry) = infra::find_catalog_entry_for_model(&catalog, model_path) {
+            caps.vision = entry.vision.unwrap_or(false);
+            caps.audio = entry.audio.unwrap_or(false);
+            caps.uncen = entry.uncen.unwrap_or(false);
+        }
+        if cfg.mmproj_files.contains_key(model_path) {
+            caps.vision = true;
+        }
+        map.insert(model_path.clone(), caps);
+    }
+    map
+}
+
 /// Возвращает путь к mmproj для модели, докачивая его по каталогу
 /// (`models_catalog.json`), если файл не найден. Нужно для кнопки «скрепка»
 /// у моделей, добавленных вручную (без скачивания через кнопку).

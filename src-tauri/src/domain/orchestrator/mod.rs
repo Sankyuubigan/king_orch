@@ -391,13 +391,17 @@ where
         log_cb(format!("▶ Запуск агента: {}", primary_agent.name));
         log_cb(format!("DEBUG run_chat: history.len={}, msg_0_author={:?}", history.len(), history.first().map(|m| m.author.clone())));
 
+        let mcp_pool: crate::infra::mcp_client::McpPool = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::<String, crate::infra::mcp_client::SharedMcpClient>::new(),
+        ));
+
         let final_res = run_agent_node(
             log_cb.clone(), status_cb, subcall_cb,
             &engine, primary_agent, &agents, user_text, recent_history,
             &attachments,
             max_gen_usize, &model_params, &format_type,
             cancel_flag, 0, &mut all_sub_calls, None, &mcp_servers_dir, &bins_dir,
-            &grammars_dir,
+            &grammars_dir, mcp_pool,
             &mut messages_store, &mut msg_counter,
             String::new(),
             stream_meta.clone(), true,
@@ -493,6 +497,7 @@ pub(crate) fn run_agent_node<L, S, C>(
     all_sub_calls: &mut Vec<SubCall>, caller_name: Option<String>,
     mcp_servers_dir: &Path, bins_dir: &Path,
     grammars_dir: &Path,
+    mcp_pool: crate::infra::mcp_client::McpPool,
     messages: &mut Vec<ChatMessage>, msg_counter: &mut u32,
     injected_reports: String,
     stream_meta: Arc<Mutex<StreamMeta>>,
@@ -524,9 +529,8 @@ where
     }
     let _stream_guard = StreamGuard { meta: stream_meta.clone(), prev: prev_meta };
 
-    let mut mcp_clients = HashMap::new();
     let mut all_tools: Vec<(String, String, serde_json::Value)> = Vec::new();
-    runtime::load_mcp_servers(&log_cb, mcp_servers_dir, bins_dir, &agent.mcp_servers, &mut mcp_clients, &mut all_tools);
+    runtime::load_mcp_servers(&log_cb, mcp_servers_dir, bins_dir, &agent.mcp_servers, &mcp_pool, &mut all_tools);
 
     let has_real_tools = !all_tools.is_empty() || !agent.tools.is_empty();
 
@@ -655,7 +659,7 @@ let start_time = Instant::now();
         depth,
         has_tools_for_prompt,
         all_tools,
-        mcp_clients,
+        mcp_clients: mcp_pool,
         log_cb: log_cb.clone(),
         status_cb: status_cb.clone(),
         subcall_cb: subcall_cb.clone(),

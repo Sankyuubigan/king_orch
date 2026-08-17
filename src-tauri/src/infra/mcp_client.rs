@@ -2,10 +2,17 @@ use std::process::{Command, Child, Stdio};
 use std::io::{BufReader, BufRead, Write};
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use serde_json::{Value, json};
+
+/// Общий пул MCP-клиентов на весь запрос: каждый уникальный сервер (по имени)
+/// стартует deno ровно один раз и гасится один раз в конце запроса, а не по
+/// N раз на каждого агента/сабагента (это давало вспышки чёрных окон taskkill
+/// и лишнюю задержку на старт deno).
+pub type SharedMcpClient = Arc<Mutex<McpClient>>;
+pub type McpPool = Arc<Mutex<HashMap<String, SharedMcpClient>>>;
 
 /// Таймаут ожидания ответа от MCP-сервера (сек). Защищает оркестратор от
 /// вечного висняка при зависшем Deno-сервере. Переопределяется через
@@ -169,9 +176,13 @@ fn kill_process_tree(child: &mut std::process::Child) {
     let pid = child.id().to_string();
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &pid])
-            .output();
+        let mut kill = std::process::Command::new("taskkill");
+        kill.args(["/F", "/T", "/PID", &pid]);
+        // Без CREATE_NO_WINDOW taskkill мелькает чёрным консольным окном при
+        // каждом завершении MCP-клиента (а их роняется по набору на каждый
+        // агент/сабагент) — отсюда «мигание» при мультимодальных запросах.
+        { use std::os::windows::process::CommandExt; kill.creation_flags(0x08000000); }
+        let _ = kill.output();
     }
     #[cfg(not(windows))]
     {

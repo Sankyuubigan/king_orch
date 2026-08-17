@@ -89,6 +89,10 @@ where
         allow_stream: bool,
         resolved_params: &ModelParams,
     ) -> Result<String, String> {
+        let mcp_pool: crate::infra::mcp_client::McpPool = std::sync::Arc::new(std::sync::Mutex::new(
+            std::collections::HashMap::<String, crate::infra::mcp_client::SharedMcpClient>::new(),
+        ));
+
         orchestrator::run_agent_node(
             self.log_cb.clone(),
             self.status_cb.clone(),
@@ -108,7 +112,7 @@ where
             Some("workflow_engine".to_string()),
             self.mcp_servers_dir,
             self.bins_dir,
-            self.grammars_dir,
+            self.grammars_dir, mcp_pool,
             messages,
             self.msg_counter,
             injected_reports.to_string(),

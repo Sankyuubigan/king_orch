@@ -107,13 +107,27 @@ export class SettingsController {
     } });
   }
 
+  private capMap: Record<string, { uncen: boolean; vision: boolean; audio: boolean }> = {};
+
+  /// Загружает актуальные возможности всех моделей (живой
+  /// `get_all_capabilities`, единый источник правды) и перерисовывает
+  /// списки моделей. Заменяет использование устаревающего `model_meta`
+  /// для отображения иконок (см. баг с нотой 🎵 у Gemma).
+  private async refreshModelLists(config: any) {
+    try {
+      this.capMap = await invoke<Record<string, { uncen: boolean; vision: boolean; audio: boolean }>>("get_all_capabilities");
+    } catch (_) { this.capMap = {}; }
+    this.updateModelSelect(config);
+    this.renderModelsList(config);
+  }
+
   updateModelSelect(config: any) {
     this.el.modelSelect.innerHTML = "";
     for (const m of config.models) {
       const o = document.createElement("option");
       o.value = m;
       const fileName = m.split(/[/\\]/).pop() || m;
-      const badges = this.capabilityIcons(config.model_meta?.[m]).map(i => i.icon).join(" ");
+      const badges = this.capabilityIcons(this.capMap[m]).map(i => i.icon).join(" ");
       o.text = fileName + (badges ? `  ${badges}` : "");
       this.el.modelSelect.appendChild(o);
     }
@@ -155,7 +169,7 @@ export class SettingsController {
       const path = document.createElement("div");
       path.innerText = m;
       path.style.cssText = "font-size:11px; color:var(--text-muted, #888); word-break:break-all;";
-      const meta = config.model_meta?.[m];
+      const meta = this.capMap[m];
       for (const b of this.capabilityIcons(meta)) {
         const span = document.createElement("span");
         span.innerText = b.icon;
@@ -174,8 +188,7 @@ export class SettingsController {
         if (!confirm(`Удалить модель «${fileName}» из списка? Файл на диске не будет удалён.`)) return;
         try {
           const cfg: any = await invoke("remove_model", { path: m });
-          this.updateModelSelect(cfg);
-          this.renderModelsList(cfg);
+          await this.refreshModelLists(cfg);
           showToast("Модель удалена из списка.", "success");
         } catch (e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.removeModel", e); }
       });
@@ -188,8 +201,7 @@ export class SettingsController {
         if (!confirm(`Удалить файл модели «${fileName}» с диска БЕЗВОЗВРАТНО? Запись тоже исчезнет из списка.`)) return;
         try {
           const cfg: any = await invoke("delete_model_file", { path: m });
-          this.updateModelSelect(cfg);
-          this.renderModelsList(cfg);
+          await this.refreshModelLists(cfg);
           showToast("Файл модели удалён.", "success");
         } catch (e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.deleteModelFile", e); }
       });
@@ -213,8 +225,7 @@ export class SettingsController {
       const verEl = document.getElementById("app-version");
       if (verEl) verEl.textContent = version;
       if (this.el.updateStatus) this.el.updateStatus.textContent = "";
-      this.updateModelSelect(config);
-      this.renderModelsList(config);
+      await this.refreshModelLists(config);
       if (config.context_size) { this.el.contextSlider.value = config.context_size.toString(); this.el.contextValue.innerText = config.context_size.toString(); }
       if (config.max_gen_tokens) { this.el.maxGenSlider.value = config.max_gen_tokens.toString(); this.el.maxGenValue.innerText = config.max_gen_tokens.toString(); }
       if (config.chat_font_scale !== undefined) {
@@ -418,8 +429,8 @@ export class SettingsController {
       setTelemetryEnabled(val);
       await invoke("set_config_value", { key: "allow_error_reports", value: val });
     });
-    this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) {         const cfg: any = await invoke("add_model", { path: sel as string, flags: null }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
-    this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) {         const cfg: any = await invoke("add_model", { path: sel as string, flags: null }); this.updateModelSelect(cfg); this.renderModelsList(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
+    this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) {         const cfg: any = await invoke("add_model", { path: sel as string, flags: null }); await this.refreshModelLists(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
+    this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) {         const cfg: any = await invoke("add_model", { path: sel as string, flags: null }); await this.refreshModelLists(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
     this.el.btnCheckUpdate?.addEventListener("click", async () => {
       const btn = this.el.btnCheckUpdate;
       const status = this.el.updateStatus;

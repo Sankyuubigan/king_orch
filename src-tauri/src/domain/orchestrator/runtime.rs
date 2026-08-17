@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
-use crate::infra::McpClient;
+use std::sync::{Arc, Mutex};
+use crate::infra::mcp_client::{McpClient, McpPool, SharedMcpClient};
 use crate::infra::bin_downloader;
 
 /// Встроенные инструменты (единый источник — SSOT). Подмешиваются в промпт
@@ -270,10 +271,22 @@ pub fn load_mcp_servers<L: Fn(String) + Clone + Send + Sync + 'static>(
     mcp_servers_dir: &Path,
     bins_dir: &Path,
     mcp_names: &[String],
-    mcp_clients: &mut std::collections::HashMap<String, McpClient>,
+    mcp_pool: &McpPool,
     all_tools: &mut Vec<(String, String, serde_json::Value)>,
 ) {
     for mcp_name in mcp_names {
+        // Уже запущен в рамках этого запроса — переиспользуем (deno стартует 1 раз).
+        if let Some(existing) = mcp_pool.lock().unwrap().get(mcp_name).cloned() {
+            if let Ok(tools) = existing.lock().unwrap().list_tools() {
+                for tool in &tools {
+                    if let Some(name) = tool.get("name").and_then(|n| n.as_str()) {
+                        all_tools.push((mcp_name.clone(), name.to_string(), tool.clone()));
+                    }
+                }
+            }
+            continue;
+        }
+
         log_cb(format!("⏳ Инициализация MCP: {}", mcp_name));
         match get_mcp_server_path(mcp_servers_dir, mcp_name) {
             Ok(script_path) => {
@@ -292,7 +305,8 @@ pub fn load_mcp_servers<L: Fn(String) + Clone + Send + Sync + 'static>(
                                         loaded += 1;
                                     }
                                 }
-                                mcp_clients.insert(mcp_name.clone(), client);
+                                let shared: SharedMcpClient = Arc::new(Mutex::new(client));
+                                mcp_pool.lock().unwrap().insert(mcp_name.clone(), shared);
                                 log_cb(format!("✅ MCP '{}' запущен. Инструментов: {}", mcp_name, loaded));
                             }
                             Err(e) => log_cb(format!("❌ Ошибка списка инструментов у '{}': {}", mcp_name, e))

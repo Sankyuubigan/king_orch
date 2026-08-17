@@ -6,7 +6,6 @@ use std::sync::{Arc, atomic::AtomicBool};
 use std::sync::Mutex;
 use std::time::Instant;
 use std::path::{Path, PathBuf};
-use std::collections::HashMap;
 use serde_json::Value;
 use crate::domain::orchestrator::prompt::build_system_prompt;
 
@@ -43,7 +42,7 @@ where
     pub(crate) depth: usize,
     pub(crate) has_tools_for_prompt: bool,
     pub(crate) all_tools: Vec<(String, String, Value)>,
-    pub(crate) mcp_clients: HashMap<String, McpClient>,
+    pub(crate) mcp_clients: McpPool,
     pub(crate) log_cb: L,
     pub(crate) status_cb: S,
     pub(crate) subcall_cb: C,
@@ -187,9 +186,9 @@ where
             let result = run_todo_tool(tool_name, arguments, &mut *self.messages, &self.agent.id);
             tool_output = Some(result);
         } else if let Some((mcp_name, _, _)) = self.all_tools.iter().find(|(_, name, _)| name == &tool_name) {
-            if let Some(client) = self.mcp_clients.get_mut(mcp_name) {
+            if let Some(shared) = self.mcp_clients.lock().unwrap().get(mcp_name).cloned() {
                 tool_found = true;
-                match client.call_tool(tool_name, arguments.clone()) {
+                match shared.lock().unwrap().call_tool(tool_name, arguments.clone()) {
                     Ok(res) => {
                         tool_output = Some(res);
                         self.consecutive_failed_tools = 0;
@@ -284,7 +283,7 @@ where
             engine, agent, agents, messages, msg_counter, all_sub_calls,
             llm_messages, final_response, consecutive_invalid_targets,
             thought_logged, log_cb, status_cb, subcall_cb, stream_meta,
-            prompt_log, mcp_servers_dir, bins_dir, grammars_dir, model_params,
+            prompt_log, mcp_servers_dir, bins_dir, grammars_dir, mcp_clients: mcp_pool, model_params,
             format_type, cancel_flag, depth, has_tools_for_prompt, all_tools,
             continuation_raw, continuation_mark, ..
         } = self;
@@ -303,7 +302,7 @@ where
                 &[],
                 max_gen_tokens, *model_params, *format_type,
                 cancel_flag.clone(), *depth + 1, &mut **all_sub_calls, Some((*agent).name.clone()), *mcp_servers_dir, *bins_dir,
-                *grammars_dir,
+                *grammars_dir, mcp_pool.clone(),
                 &mut **messages, &mut **msg_counter,
                 String::new(),
                 stream_meta.clone(), false,
