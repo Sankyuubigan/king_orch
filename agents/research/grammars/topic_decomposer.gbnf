@@ -1,0 +1,5 @@
+root ::= "{" ws "\"sub1\"" ws ":" ws sub ws "," ws "\"sub2\"" ws ":" ws sub ws "," ws "\"sub3\"" ws ":" ws sub ws "}"
+sub ::= "\"" string-char* "\""
+string-char ::= [^"\\] | escape
+escape ::= "\\" ("\\" | "\"" | "n" | "t" | "r" | "b" | "f" | "u" [0-9a-f] [0-9a-f] [0-9a-f] [0-9a-f])
+ws ::= (" " | "\t" | "\n" | "\r")*
