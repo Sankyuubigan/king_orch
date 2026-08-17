@@ -1,6 +1,6 @@
 [package]
 name = "king_orch"
-version = "26.8.81"
+version = "26.8.84"
 description = "Local LLM Multi-Agent Studio"
 authors = ["You"]
 edition = "2021"

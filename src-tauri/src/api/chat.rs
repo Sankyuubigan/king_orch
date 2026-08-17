@@ -1,5 +1,4 @@
 use serde::Serialize;
-use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, State, Emitter, Manager};
@@ -11,11 +10,11 @@ use crate::api::AppState;
 // ─── Лог-файл ───
 // В release логи пишутся в king_orch.log РЯДОМ С EXE (infra::startup_log) —
 // чтобы юзер мог прислать лог, даже если приложение падает на старте.
-// В dev-комплекте (в рабочем каталоге есть папка test/) дополнительно
-// дублируем в test/last_logs.txt. Проверка runtime (а не cfg(debug_assertions)):
+// В dev-комплекте (в рабочем каталоге есть папка test/) startup_log сам
+// дублирует ВСЕ записи (включая ERROR) в test/last_logs.txt — см.
+// infra::startup_log::init_dev_log(). Проверка runtime (а не cfg(debug_assertions)):
 // релизные сборки запускаются из каталога проекта, где test/ лежит рядом,
 // и логи нужны для диагностики даже без debug-профиля.
-static DEV_LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
 
 pub fn init_log_file() {
     if !infra::startup_log::is_initialized() {
@@ -25,26 +24,13 @@ pub fn init_log_file() {
             }
         }
     }
-    // ПРОВЕРКА ДО НАПИСАНИЯ: каталог test/ существует в CWD → пишем dev-лог.
-    // Создаём только при наличии метки dev-комплекта, чтобы не плодить папку
-    // у конечного пользователя.
-    if std::path::Path::new("test").is_dir() {
-        let path = std::path::PathBuf::from("test").join("last_logs.txt");
-        if let Ok(file) = std::fs::File::create(&path) {
-            if let Ok(mut guard) = DEV_LOG_FILE.lock() {
-                *guard = Some(file);
-            }
-        }
-    }
+    // Dev-зеркало (test/last_logs.txt) инициализируется внутри startup_log;
+    // проверка «каталог test/ существует в CWD» живёт там же.
+    infra::startup_log::init_dev_log();
 }
 
 fn append_log(msg: &str) {
     infra::startup_log::append("LLM", msg);
-    if let Ok(mut guard) = DEV_LOG_FILE.lock() {
-        if let Some(ref mut file) = *guard {
-            let _ = writeln!(file, "[{}] [LLM] {}", infra::startup_log::timestamp(), msg);
-        }
-    }
 }
 
 /// Отмены пользователем (Stop) — не сбои: они не попадают в телеметрию.

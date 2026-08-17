@@ -136,6 +136,7 @@ where
                     sub_calls: None,
                     author: Some(self.agent.id.clone()),
                     model: None,
+                    attachments: None,
                 };
                 self.messages.push(signal_msg);
                 *self.msg_counter += 1;
@@ -231,6 +232,7 @@ where
                 sub_calls: None,
                 author: Some(self.agent.id.clone()),
                 model: Some(extract_model_filename(&self.engine.model_path)),
+                attachments: None,
             });
             *self.msg_counter += 1;
         }
@@ -323,6 +325,7 @@ where
                     sub_calls: node_sub_calls.clone(),
                     author: Some(subagent.id.clone()),
                     model: Some(extract_model_filename(&(*engine).model_path)),
+                    attachments: None,
                 };
                 push_report(&mut **messages, err_msg, subagent.single_report);
                 **msg_counter += 1;
@@ -337,6 +340,7 @@ where
                 sub_calls: node_sub_calls.clone(),
                 author: Some(subagent.id.clone()),
                 model: Some(extract_model_filename(&(*engine).model_path)),
+                attachments: None,
             };
             push_report(&mut **messages, msg, subagent.single_report);
             **msg_counter += 1;

@@ -270,6 +270,18 @@ pub struct CatalogEntry {
 }
 
 pub fn find_agents_dir(app: &AppHandle) -> PathBuf {
+    let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
+
+    // Dev-чекout: исходники в корне репозитория (target/<profile>/../../agents).
+    // Приоритет исходников гарантирует, что в списке агентов всегда актуальный
+    // набор из agents/, а не устаревшая копия ресурсов в target/ (Tauri копирует
+    // ресурсы аддитивно и НЕ удаляет выпиленные из исходников файлы-призраки).
+    // Паттерн тот же, что в find_mcp_servers_dir ниже.
+    let repo_agents = exe_dir.join("..").join("..").join("agents");
+    if repo_agents.exists() {
+        return repo_agents;
+    }
+
     for rel in ["agents", "../agents"] {
         if let Ok(path) = app.path().resolve(rel, BaseDirectory::Resource) {
             if path.exists() {
@@ -277,11 +289,8 @@ pub fn find_agents_dir(app: &AppHandle) -> PathBuf {
             }
         }
     }
-    if let Ok(exe_dir) = app.path().executable_dir() {
-        let path = exe_dir.join("agents");
-        if path.exists() {
-            return path;
-        }
+    if exe_dir.join("agents").exists() {
+        return exe_dir.join("agents");
     }
     let path = PathBuf::from("agents");
     if path.exists() {
@@ -295,10 +304,11 @@ pub fn find_mcp_servers_dir(app: &AppHandle) -> PathBuf {
     let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
     let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
     for dir in [
+        // Dev-чекout: исходники в корне репозитория — приоритет как в find_agents_dir.
+        exe_dir.join("..").join("..").join("src-tauri").join("mcp_servers"),
         exe_dir.join("mcp_servers"),
         resource_dir.join("mcp_servers"),
         PathBuf::from("src-tauri").join("mcp_servers"),
-        exe_dir.join("..").join("..").join("src-tauri").join("mcp_servers"),
     ] {
         if dir.exists() {
             return dir;

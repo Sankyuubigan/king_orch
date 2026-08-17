@@ -6,6 +6,8 @@ const http = require('http');
 
 const scriptDir = __dirname;
 
+const { syncResources } = require('./scripts/sync-resources.cjs');
+
 function downloadFile(url, dest) {
     return new Promise((resolve, reject) => {
         const followRedirect = (currentUrl) => {
@@ -122,6 +124,10 @@ async function main() {
 
         console.log('\n========================================');
         console.log('[4/5] Сборка приложения (без установщика)...');
+
+        // Зеркалим agents/ и mcp_servers/ в target-копии, чтобы в списках не было
+        // файлов-призраков из старых сборок (Tauri копирует ресурсы аддитивно).
+        syncResources(scriptDir);
 
         // Переопределяем конфиг Tauri — отключаем бандлер (NSIS), но компиляция идёт штатно.
         // Массивы в конфиге Tauri заменяются целиком, поэтому окно указываем полностью.

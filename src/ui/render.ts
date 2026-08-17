@@ -1,6 +1,7 @@
 import { renderMarkdown } from "../utils";
 import { createMessageMenu } from "./message-menu";
 import type { MessageMenuCallbacks } from "./message-menu";
+import type { Attachment } from "../types";
 
 
 export type Role = 'user' | 'agent' | 'system';
@@ -11,7 +12,8 @@ export function createMessageElement(
   agentName?: string, 
   timeText?: string,
   msgUid?: string,
-  menuCallbacks?: MessageMenuCallbacks
+  menuCallbacks?: MessageMenuCallbacks,
+  attachments?: Attachment[]
 ): HTMLDivElement {
   const msgDiv = document.createElement("div");
   msgDiv.className = `message message-${role}`;
@@ -28,6 +30,27 @@ export function createMessageElement(
   contentDiv.className = "msg-content";
   contentDiv.innerHTML = renderMarkdown(content);
   msgDiv.appendChild(contentDiv);
+
+  if (attachments && attachments.length > 0) {
+    const attDiv = document.createElement("div");
+    attDiv.className = "msg-attachments";
+    for (const att of attachments) {
+      if (att.mime_type?.startsWith("image/")) {
+        const img = document.createElement("img");
+        img.className = "msg-attachment-img";
+        img.src = `data:${att.mime_type};base64,${att.data_base64}`;
+        img.alt = att.file_name || "вложение";
+        img.title = att.file_name || "вложение";
+        attDiv.appendChild(img);
+      } else {
+        const chip = document.createElement("div");
+        chip.className = "msg-attachment-file";
+        chip.textContent = `📎 ${att.file_name || "файл"}`;
+        attDiv.appendChild(chip);
+      }
+    }
+    msgDiv.appendChild(attDiv);
+  }
 
   if (timeText && role === 'agent') {
     const timeDiv = document.createElement("div");

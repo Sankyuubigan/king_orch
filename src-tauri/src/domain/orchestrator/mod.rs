@@ -418,6 +418,7 @@ where
                 sub_calls: sub_calls_opt,
                 author: Some(primary_agent.id.clone()),
                 model: Some(extract_model_filename(&engine.model_path)),
+                attachments: None,
             });
             Ok(ChatRunResult {
                 text: final_res,
@@ -956,6 +957,7 @@ let start_time = Instant::now();
                     sub_calls: None,
                     author: Some(agent.id.clone()),
                     model: Some(extract_model_filename(&engine.model_path)),
+                    attachments: None,
                 });
                 *ctx.msg_counter += 1;
             }
@@ -970,6 +972,7 @@ let start_time = Instant::now();
                         sub_calls: None,
                         author: Some(agent.id.clone()),
                         model: Some(extract_model_filename(&engine.model_path)),
+                        attachments: None,
                     });
                     *ctx.msg_counter += 1;
                 }

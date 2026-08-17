@@ -6,6 +6,7 @@ export interface ChatMessage {
     author?: string;
     model?: string;
     time_sec?: number;
+    attachments?: Attachment[];
 }
 
 export interface SubCall {

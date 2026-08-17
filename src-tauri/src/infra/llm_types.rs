@@ -115,6 +115,11 @@ pub struct ChatMessage {
     pub author: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Вложения пользовательского сообщения (картинки/файлы). Хранятся в JSON
+    /// сессии для отображения в чате; в промпт модели НЕ попадают (llm_history
+    /// берёт только content). Текущий ход передаёт их отдельным аргументом.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments: Option<Vec<ChatAttachment>>,
 }
 
 /// Добавляет отчёт агента в массив сообщений сессии.
@@ -318,6 +323,7 @@ mod tests {
             sub_calls: None,
             author: Some(author.to_string()),
             model: None,
+            attachments: None,
         }
     }
 

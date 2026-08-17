@@ -12,8 +12,11 @@ use crate::infra::config::ModelParams;
 use super::llm::LlamaEngine;
 use super::llm_types::{ChatAttachment, LlmMessage, GenerationResult, GrammarSpec, build_base_grammar};
 
-/// Маркер вставки медиа в промпт (эквивалент mtmd_default_marker() из llama.cpp)
-const MTMD_MEDIA_MARKER: &str = "<__media__>";
+/// Маркер вставки медиа в промпт. Сервер llama.cpp с версии b10456 использует
+/// СЛУЧАЙНЫЙ маркер при каждом старте (см. get_media_marker() в llama.cpp);
+/// фактическое значение движок читает из GET /props (см. LlamaEngine::media_marker).
+/// Эта константа — фолбэк по умолчанию для старых версий сервера.
+pub(crate) const MTMD_MEDIA_MARKER: &str = "<__media__>";
 
 impl LlamaEngine {
     pub fn generate_chat_multimodal<F, L>(
@@ -29,14 +32,24 @@ impl LlamaEngine {
         log_cb: L,
     ) -> Result<GenerationResult, String>
     where F: FnMut(f32, &str), L: Fn(String) {
-        let (mut full_prompt, actual_format) = self.build_prompt(messages, format_type, &log_cb);
-        log_cb(format!("🔤 Определен формат промпта (мультимодальный): {:?}", actual_format));
-
-        for _ in attachments.iter() {
-            full_prompt.push_str(MTMD_MEDIA_MARKER);
+        // Маркер(ы) медиа вставляем ВНУТРЬ последнего user-сообщения (перед текстом),
+        // а не в конец промпта: изображение должно оказаться в user-повороте
+        // (`<|turn>user\n...<turn|>`), а не после `<|turn>model\n` — иначе Gemma-4
+        // получает картинку в генерационной позиции и не может её обработать.
+        let mut msgs: Vec<LlmMessage> = messages.to_vec();
+        let media_marker = self.media_marker();
+        if !attachments.is_empty() {
+            let markers = media_marker.repeat(attachments.len());
+            match msgs.iter_mut().rev().find(|m| m.role == "user") {
+                Some(last_user) => last_user.content = format!("{}\n{}", markers, last_user.content),
+                None => msgs.push(LlmMessage { role: "user".to_string(), content: markers }),
+            }
         }
 
-        log_cb(format!("📐 Мультимодальный промпт: {} символов, {} вложений", full_prompt.len(), attachments.len()));
+        let (full_prompt, actual_format) = self.build_prompt(&msgs, format_type, &log_cb);
+        log_cb(format!("🔤 Определен формат промпта (мультимодальный): {:?}", actual_format));
+
+        log_cb(format!("📐 Мультимодальный промпт: {} символов, {} вложений (маркер в user-повороте)", full_prompt.len(), attachments.len()));
 
         let multimodal_data: Vec<String> = attachments.iter().map(|a| a.data_base64.clone()).collect();
         let words = actual_format.get_stop_words();

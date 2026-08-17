@@ -81,6 +81,11 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .agent-name { font-weight: bold; font-size: 12px; color: #777; margin-bottom: 5px; display: block; border-bottom: 1px solid var(--border); padding-bottom: 3px; }
 .msg-time { font-size: 11px; color: #888; text-align: right; margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 4px; }
 
+/* Вложения пользовательских сообщений (изображения/файлы) */
+.msg-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.msg-attachment-img { max-width: 240px; max-height: 180px; border-radius: 6px; border: 1px solid var(--border); object-fit: cover; cursor: zoom-in; display: block; }
+.msg-attachment-file { font-size: 12px; color: var(--text); background: var(--bg-color); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .subcall-msg { background-color: transparent; box-shadow: none; padding: 0; margin: 2px 0; }
 .btn-subcall { background-color: var(--subcall-btn); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 12px; cursor: pointer; text-align: left; transition: background-color 0.2s; width: 100%; }
 .btn-subcall:hover { background-color: var(--subcall-btn-hover); }

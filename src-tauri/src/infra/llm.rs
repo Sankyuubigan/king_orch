@@ -25,6 +25,7 @@ use serde_json::json;
 
 use crate::infra::config::ModelParams;
 use crate::infra::detokenizer::compute_stream_diff;
+use crate::infra::llm_multimodal::MTMD_MEDIA_MARKER;
 
 pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report, LlmMessage, extract_model_filename, GenerationResult, llm_history, GrammarSpec, build_base_grammar, build_json_only_grammar};
 pub use super::llm_gguf::{extract_string_from_gguf, extract_f32_from_gguf, extract_u32_from_gguf};
@@ -74,6 +75,11 @@ pub struct LlamaEngine {
     pub mmproj_path: Option<String>,
     /// true = движок запущен с mmproj (может принимать изображения)
     pub is_multimodal_engine: bool,
+    /// Актуальный media-marker сервера llama.cpp (читается из GET /props после
+    /// готовности). С версии b10456 сервер генерирует случайный маркер при
+    /// каждом старте, поэтому жёсткий `<__media__>` больше не подходит.
+    /// Значение стабильно на всё время жизни сервера (magic static в llama.cpp).
+    media_marker: String,
     stream_cb: Arc<dyn Fn(String) + Send + Sync>,
     client: Client,
     server_log: PathBuf,
@@ -370,6 +376,7 @@ impl LlamaEngine {
             model_path: model_path.to_string(),
             mmproj_path: mmproj_path.map(|s| s.to_string()),
             is_multimodal_engine: mmproj_path.is_some(),
+            media_marker: MTMD_MEDIA_MARKER.to_string(),
             stream_cb: Arc::new(stream_cb),
             client,
             server_log,
@@ -422,6 +429,14 @@ impl LlamaEngine {
             std::thread::sleep(Duration::from_millis(500));
         }
         engine.child = Some(child);
+
+        // ── Мультимодальный media-marker: с b10456 сервер генерирует случайный
+        // маркер при каждом старте. Читаем фактический из GET /props (всегда
+        // доступен; флаг --props гейтит только POST). При сбое — остаётся
+        // фолбэк `<__media__>`. Значение стабильно на время жизни сервера.
+        if engine.is_multimodal_engine {
+            engine.fetch_media_marker(&*log_cb);
+        }
 
         log_cb(format!(
             "✅ Движок llama-server запущен: {} (режим {}), порт {}",
@@ -565,6 +580,47 @@ impl LlamaEngine {
             Ok(r) => r.status().is_success(),
             Err(_) => false,
         }
+    }
+
+    /// Читает фактический media-marker из GET /props и записывает его в движок.
+    /// В llama.cpp (b10456+) маркер случаен на каждый старт сервера и возвращается
+    /// в поле `media_marker` эндпоинта /props. Если поле отсутствует или запрос
+    /// упал — оставляем фолбэк `<__media__>` (старые версии сервера ждут именно его).
+    fn fetch_media_marker(&mut self, log_cb: &dyn Fn(String)) {
+        #[derive(serde::Deserialize)]
+        struct PropsResp {
+            #[serde(rename = "media_marker")]
+            media_marker: Option<String>,
+        }
+        let resp = self.client
+            .get(self.url("/props"))
+            .header(AUTHORIZATION, self.auth_header())
+            .timeout(Duration::from_secs(3))
+            .send();
+        let marker = match resp {
+            Ok(r) if r.status().is_success() => {
+                r.json::<PropsResp>()
+                    .ok()
+                    .and_then(|p| p.media_marker)
+            }
+            _ => None,
+        };
+        if let Some(m) = marker {
+            if !m.is_empty() {
+                self.media_marker = m.clone();
+                log_cb(format!("🖼️ Media-marker сервера: {}", m));
+            }
+        } else {
+            log_cb(format!(
+                "⚠️ Не удалось прочитать media_marker из /props — использую фолбэк {}",
+                MTMD_MEDIA_MARKER
+            ));
+        }
+    }
+
+    /// Актуальный media-marker для вставки в промпт при мультимодальных запросах.
+    pub fn media_marker(&self) -> &str {
+        &self.media_marker
     }
 
     fn post_json<T: Serialize, R: DeserializeOwned>(&self, path: &str, body: &T) -> Result<R, String> {

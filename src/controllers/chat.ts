@@ -389,14 +389,14 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     this.scrollToBottomIfNearEnd(container); renderMermaid();
   }
 
-  appendMessage(role: Role, content: string, agentName?: string, timeText?: string, subCalls?: any[], skipSubcallRender = false, uid?: string) {
+  appendMessage(role: Role, content: string, agentName?: string, timeText?: string, subCalls?: any[], skipSubcallRender = false, uid?: string, attachments?: Attachment[]) {
     store.activeThoughtsBlock = null;
     if (subCalls && subCalls.length > 0 && !skipSubcallRender) {
       const items = subCalls.map(call => createSubcallElement(call, (c) => this.showSubchat(c)));
       this.el.chatHistory.appendChild(createThoughtsBlock(items, uid, this.thoughtMenuCallbacks, []));
     }
     const hasMenu = uid !== undefined && (role === 'user' || role === 'agent');
-    const msgEl = createMessageElement(role, content, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined);
+    const msgEl = createMessageElement(role, content, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, attachments);
     this.el.chatHistory.appendChild(msgEl); this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
   }
 
@@ -487,7 +487,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
       const timeText = msg.time_sec ? `${msg.time_sec.toFixed(1)} сек` : undefined;
       // Скрываем служебные теги LLM в сохранённых ответах (defence in depth).
       const cleanContent = role === 'agent' ? stripStreamArtifacts(msg.content) : msg.content;
-      this.el.chatHistory.appendChild(createMessageElement(role, cleanContent, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined));
+      this.el.chatHistory.appendChild(createMessageElement(role, cleanContent, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, msg.attachments));
     }
     if (thoughtsItems.length > 0) this.el.chatHistory.appendChild(createThoughtsBlock(thoughtsItems, lastAssistantUid, this.thoughtMenuCallbacks, thoughtsUids));
     this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
@@ -560,7 +560,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     if (!modelPath) { showToast("Выберите модель!", "error"); return; }
     const userUid = store.nextUid(); store.msgUidList.push(userUid);
     const displayText = text || (this.attachments.length > 0 ? `[${this.attachments.length} файлов]` : '');
-    this.appendMessage('user', displayText, undefined, undefined, undefined, false, userUid);
+    this.appendMessage('user', displayText, undefined, undefined, undefined, false, userUid, this.attachments);
     this.el.chatInput.value = ""; this.el.chatInput.style.height = "auto"; clearTimeout(store.draftTimeout);
     this.el.filePreview.innerHTML = '';
     const attachments = [...this.attachments];
@@ -569,7 +569,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     const historyBefore = store.chatHistory.length;
     const preSendLength = historyBefore + 1;
-    store.chatHistory.push({ type: "message", author: "user", content: displayText });
+    store.chatHistory.push({ type: "message", author: "user", content: displayText, attachments });
     await this.persistSession("");
     bus.emit("session:changed");
     const startTime = performance.now();

@@ -11,7 +11,12 @@ use std::sync::Mutex;
 
 pub const LOG_FILE_NAME: &str = "king_orch.log";
 
+/// Dev-зеркало: в dev-комплекте (в CWD есть папка `test/`) каждая запись
+/// дополнительно дублируется в `test/last_logs.txt`. Это ПОЛНОЕ зеркало
+/// startup_log — ВСЕ уровни, включая ERROR/FATAL, которые раньше шли только
+/// в king_orch.log и терялись из dev-лога (см. report_generation_error).
 static LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
+static DEV_LOG_PATH: Mutex<Option<PathBuf>> = Mutex::new(None);
 
 /// Путь лога по умолчанию — рядом с exe
 pub fn log_path(exe_dir: &Path) -> PathBuf {
@@ -58,6 +63,22 @@ pub fn init(exe_dir: &Path) -> PathBuf {
     path
 }
 
+/// Инициализация dev-зеркала: `test/last_logs.txt` в текущей рабочей директории.
+/// Файл создаётся ТОЛЬКО если каталог `test/` уже существует в CWD — чтобы не
+/// плодить папку у конечного пользователя. Каждый запуск начинается с чистого
+/// файла (truncate), как было в api/chat.rs.
+pub fn init_dev_log() {
+    if !std::path::Path::new("test").is_dir() {
+        return;
+    }
+    let path = std::path::PathBuf::from("test").join("last_logs.txt");
+    // Один раз затираем файл, дальше — только append.
+    let _ = OpenOptions::new().create(true).truncate(true).write(true).open(&path);
+    if let Ok(mut guard) = DEV_LOG_PATH.lock() {
+        *guard = Some(path);
+    }
+}
+
 /// Дописать строку в лог-файл (создаётся при необходимости).
 /// Никогда не паникует и не блокирует работу приложения.
 pub fn append(level: &str, msg: &str) {
@@ -70,6 +91,15 @@ pub fn append(level: &str, msg: &str) {
     let line = format!("[{}] [{}] {}\n", timestamp(), level, msg);
     if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(&path) {
         let _ = f.write_all(line.as_bytes());
+    }
+
+    // ── Dev-зеркало: та же строка в test/last_logs.txt (если dev-комплект) ──
+    if let Ok(guard) = DEV_LOG_PATH.lock() {
+        if let Some(dev_path) = guard.as_deref() {
+            if let Ok(mut f) = OpenOptions::new().create(true).append(true).open(dev_path) {
+                let _ = f.write_all(line.as_bytes());
+            }
+        }
     }
 
     // ── Телеметрия: критические ошибки дополнительно уходят в сервис

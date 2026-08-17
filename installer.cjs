@@ -4,6 +4,8 @@ const { execSync, spawn } = require('child_process');
 
 const scriptDir = __dirname;
 
+const { syncResources } = require('./scripts/sync-resources.cjs');
+
 function runCommand(command, args = [], options = {}) {
     return new Promise((resolve, reject) => {
         const proc = spawn(command, args, { stdio: 'inherit', shell: true, cwd: scriptDir, ...options });
@@ -38,6 +40,9 @@ async function main() {
         console.log('========================================');
         console.log('[3/4] Building Tauri app (release + NSIS)...');
         console.log('========================================\n');
+
+        // Зеркалим agents/ и mcp_servers/ в target-копии (убираем файлы-призраки).
+        syncResources(scriptDir);
 
         await runCommand('npx', ['tauri', 'build']);
 

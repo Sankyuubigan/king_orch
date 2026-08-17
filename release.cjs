@@ -6,6 +6,8 @@ const http = require('http');
 
 const scriptDir = __dirname;
 
+const { syncResources } = require('./scripts/sync-resources.cjs');
+
 function downloadFile(url, dest) {
     return new Promise((resolve, reject) => {
         const followRedirect = (currentUrl) => {
@@ -122,6 +124,10 @@ async function main() {
         // 4. Build with signing
         console.log('\n========================================');
         console.log('[4/5] Tauri build (release with signing)...');
+
+        // Зеркалим agents/ и mcp_servers/ в target-копии (убираем файлы-призраки
+        // из старых сборок, чтобы установщик не таскал устаревшие ресурсы).
+        syncResources(scriptDir);
 
         let privKeyPath = process.env.TAURI_PRIVATE_KEY_ORIGINAL || 'D:\\Projects\\docusaurus-starter\\docs\\Sega Mega Note\\Моя картотека\\software\\настройки\\tauri_signed_keys\\tauri.key';
 

@@ -150,6 +150,7 @@ where
             sub_calls: node_sub_calls,
             author: Some(agent_id.to_string()),
             model: Some(extract_model_filename(&runner.engine.model_path)),
+            attachments: None,
         };
         push_report(&mut context.messages, msg, agent.single_report);
         *runner.msg_counter += 1;
@@ -310,6 +311,7 @@ where
                         sub_calls: None,
                         author: Some("system".to_string()),
                         model: None,
+                        attachments: None,
                     };
                     context.messages.push(msg);
                     *runner.msg_counter += 1;
@@ -655,6 +657,7 @@ where
                         sub_calls: None,
                         author: Some("system".to_string()),
                         model: None,
+                        attachments: None,
                     };
                     context.messages.push(msg);
                     *runner.msg_counter += 1;

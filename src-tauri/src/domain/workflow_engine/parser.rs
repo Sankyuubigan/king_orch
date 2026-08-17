@@ -448,7 +448,7 @@ edges:
         assert_eq!(check_deep.default.as_deref(), Some("improve_deep"));
 
         let improve_deep = get("improve_deep");
-        assert_eq!(improve_deep.agent.as_deref(), Some("web_researcher"));
+        assert_eq!(improve_deep.agent.as_deref(), Some("research_compiler"));
         assert_eq!(improve_deep.output_type.as_deref(), Some("thought"));
 
         let eval_deep2 = get("eval_deep2");
@@ -466,10 +466,10 @@ edges:
         let final_deep_improved = get("final_deep_improved");
         assert_eq!(final_deep_improved.node_type, NodeType::SystemCondition);
         assert_eq!(final_deep_improved.action.as_deref(), Some("aggregate_and_output"));
-        assert_eq!(final_deep_improved.required.as_deref(), Some(&["web_researcher".to_string()][..]));
+        assert_eq!(final_deep_improved.required.as_deref(), Some(&["research_compiler".to_string()][..]));
 
         let honest_deep = get("honest_fail_deep");
-        assert_eq!(honest_deep.agent.as_deref(), Some("web_researcher"));
+        assert_eq!(honest_deep.agent.as_deref(), Some("research_compiler"));
         assert_eq!(honest_deep.output_type.as_deref(), Some("message"));
 
         let final_web = get("final_web");
