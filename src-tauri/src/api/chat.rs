@@ -233,6 +233,30 @@ pub async fn chat_request(
     state.cancel_flag.store(false, Ordering::SeqCst);
     let cancel_flag = state.cancel_flag.clone();
 
+    // ── Автодокачка mmproj ──
+    // Если фронтенд не успел докачать проектор (модель добавлена вручную), а в
+    // запросе есть вложения — докачиваем по каталогу до запуска движка.
+    let mmproj_path = match mmproj_path {
+        Some(p) => Some(p),
+        None if !attachments.is_empty() => {
+            match infra::ensure_mmproj_for_model(&app, &model_path).await {
+                Ok(Some(p)) => Some(p),
+                Ok(None) => {
+                    infra::startup_log::append(
+                        "WARN",
+                        "mmproj для модели не найден в каталоге — мультимодальный режим недоступен",
+                    );
+                    None
+                }
+                Err(e) => {
+                    infra::startup_log::append("WARN", &format!("Не удалось докачать mmproj: {}", e));
+                    None
+                }
+            }
+        }
+        None => None,
+    };
+
     let agents_dir = infra::find_agents_dir(&app);
     let mcp_servers_dir = infra::find_mcp_servers_dir(&app);
 

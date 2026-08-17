@@ -123,7 +123,7 @@ export class SettingsController {
   private capabilityIcons(meta?: { uncen?: boolean; vision?: boolean; audio?: boolean }): { icon: string; title: string }[] {
     const out: { icon: string; title: string }[] = [];
     if (meta?.uncen) out.push({ icon: "😈", title: "Без цензуры (uncensored)" });
-    if (meta?.vision) out.push({ icon: "👁", title: "Видит изображения (vision)" });
+    if (meta?.vision) out.push({ icon: "👁️", title: "Видит изображения (vision)" });
     if (meta?.audio) out.push({ icon: "🎵", title: "Понимает аудио (audio)" });
     return out;
   }

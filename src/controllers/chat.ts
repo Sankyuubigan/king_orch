@@ -692,9 +692,17 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     const btn = this.el.btnAttach;
     const modelPath = this.el.modelSelect?.value;
     if (!modelPath) { btn.disabled = true; btn.classList.remove('btn-attach-active'); btn.classList.add('btn-attach-inactive'); btn.title = 'Сначала выберите модель'; return; }
-    let hasMmproj = false;
-    try { hasMmproj = !!(await invoke("get_mmproj_path", { modelPath })); } catch (_) {}
-    if (hasMmproj) {
+    let mmprojPath: string | null = null;
+    try { mmprojPath = await invoke("get_mmproj_path", { modelPath }); } catch (_) {}
+    if (!mmprojPath) {
+      // Модель могла быть добавлена вручную без mmproj — докачиваем по каталогу.
+      btn.disabled = true;
+      btn.classList.remove('btn-attach-active');
+      btn.classList.add('btn-attach-inactive');
+      btn.title = 'Скачивание mmproj для мультимодального режима…';
+      try { mmprojPath = await invoke("ensure_mmproj", { modelPath }); } catch (_) {}
+    }
+    if (mmprojPath) {
       btn.disabled = false;
       btn.classList.remove('btn-attach-inactive');
       btn.classList.add('btn-attach-active');

@@ -19,42 +19,11 @@ fn backfill_model_meta(app: &AppHandle, cfg: &mut infra::AppConfig) {
         if cfg.model_meta.contains_key(model_path) {
             continue;
         }
-        let stem = std::path::Path::new(model_path)
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_lowercase());
         let mut meta = infra::ModelMeta::default();
-        if let Some(stem) = stem {
-            for entry in &catalog {
-                let dl_stem = entry
-                    .download_url
-                    .split('/')
-                    .last()
-                    .and_then(|s| s.split('?').next())
-                    .and_then(|f| std::path::Path::new(f).file_stem())
-                    .and_then(|s| s.to_str())
-                    .map(|s| s.to_lowercase());
-                let mmp_stem = entry
-                    .mmproj_url
-                    .as_ref()
-                    .map(|u| {
-                        u.split('/')
-                            .last()
-                            .and_then(|s| s.split('?').next())
-                            .and_then(|f| std::path::Path::new(f).file_stem())
-                            .and_then(|s| s.to_str())
-                            .map(|s| s.to_lowercase())
-                            .unwrap_or_default()
-                    });
-                if dl_stem.as_deref() == Some(stem.as_str())
-                    || mmp_stem.as_deref() == Some(stem.as_str())
-                {
-                    meta.uncen = entry.uncen.unwrap_or(false);
-                    meta.vision = entry.vision.unwrap_or(false);
-                    meta.audio = entry.audio.unwrap_or(false);
-                    break;
-                }
-            }
+        if let Some(entry) = infra::find_catalog_entry_for_model(&catalog, model_path) {
+            meta.uncen = entry.uncen.unwrap_or(false);
+            meta.vision = entry.vision.unwrap_or(false);
+            meta.audio = entry.audio.unwrap_or(false);
         }
         if cfg.mmproj_files.contains_key(model_path) {
             meta.vision = true;

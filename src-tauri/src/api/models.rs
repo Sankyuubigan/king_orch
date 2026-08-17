@@ -250,7 +250,9 @@ pub fn delete_model_file(app: AppHandle, path: String) -> Result<infra::AppConfi
 pub fn get_mmproj_path(app: AppHandle, model_path: String) -> Option<String> {
     let cfg = infra::load_config(&app);
     if let Some(path) = cfg.mmproj_files.get(&model_path) {
-        return Some(path.clone());
+        if std::path::Path::new(path).exists() {
+            return Some(path.clone());
+        }
     }
     if let Some(mmp) = infra::auto_detect_mmproj(&model_path) {
         let mut cfg = infra::load_config(&app);
@@ -259,4 +261,12 @@ pub fn get_mmproj_path(app: AppHandle, model_path: String) -> Option<String> {
         return Some(mmp);
     }
     None
+}
+
+/// Возвращает путь к mmproj для модели, докачивая его по каталогу
+/// (`models_catalog.json`), если файл не найден. Нужно для кнопки «скрепка»
+/// у моделей, добавленных вручную (без скачивания через кнопку).
+#[tauri::command]
+pub async fn ensure_mmproj(app: AppHandle, model_path: String) -> Result<Option<String>, String> {
+    infra::ensure_mmproj_for_model(&app, &model_path).await
 }

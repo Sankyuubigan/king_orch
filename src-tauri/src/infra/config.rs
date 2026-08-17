@@ -95,6 +95,48 @@ pub struct AppConfig {
     pub chat_font_scale: f32,
 }
 
+/// Ищет запись каталога по имени установленного файла модели.
+/// Сопоставление идёт по stem имени файла модели с именем файла из
+/// `download_url` или `mmproj_url` записи каталога (как в backfill_model_meta).
+pub fn find_catalog_entry_for_model<'a>(
+    catalog: &'a [CatalogEntry],
+    model_path: &str,
+) -> Option<&'a CatalogEntry> {
+    let stem = std::path::Path::new(model_path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_lowercase())?;
+    for entry in catalog {
+        let dl_stem = entry
+            .download_url
+            .split('/')
+            .last()
+            .and_then(|s| s.split('?').next())
+            .and_then(|f| std::path::Path::new(f).file_stem())
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_lowercase());
+        if dl_stem.as_deref() == Some(stem.as_str()) {
+            return Some(entry);
+        }
+        let mmp_stem = entry
+            .mmproj_url
+            .as_ref()
+            .map(|u| {
+                u.split('/')
+                    .last()
+                    .and_then(|s| s.split('?').next())
+                    .and_then(|f| std::path::Path::new(f).file_stem())
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_lowercase())
+                    .unwrap_or_default()
+            });
+        if mmp_stem.as_deref() == Some(stem.as_str()) {
+            return Some(entry);
+        }
+    }
+    None
+}
+
 pub fn auto_detect_mmproj(model_path: &str) -> Option<String> {
     let dir = Path::new(model_path).parent()?;
 
@@ -310,4 +352,60 @@ pub fn load_catalog(app: &AppHandle) -> Vec<CatalogEntry> {
         }
     }
     vec![]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_catalog() -> Vec<CatalogEntry> {
+        vec![
+            CatalogEntry {
+                name: "gemma-4-8b".to_string(),
+                download_url:
+                    "https://hf.co/x/resolve/main/gemma-4-E4B-it-Q4_K_XL.gguf?download=true".to_string(),
+                size_gb: Some("4".to_string()),
+                tokenizer_id: None,
+                is_default: true,
+                mmproj_url: Some(
+                    "https://hf.co/x/resolve/main/mmproj-gemma-4-E4B-it-BF16.gguf?download=true"
+                        .to_string(),
+                ),
+                uncen: Some(true),
+                vision: Some(true),
+                audio: Some(true),
+            },
+            CatalogEntry {
+                name: "plain".to_string(),
+                download_url: "https://hf.co/y/resolve/main/plain-model-Q4.gguf".to_string(),
+                size_gb: None,
+                tokenizer_id: None,
+                is_default: false,
+                mmproj_url: None,
+                uncen: None,
+                vision: None,
+                audio: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn catalog_matches_by_download_stem() {
+        let cat = sample_catalog();
+        let hit = find_catalog_entry_for_model(&cat, "D:\\models\\gemma-4-E4B-it-Q4_K_XL.gguf");
+        assert_eq!(hit.map(|e| e.name.as_str()), Some("gemma-4-8b"));
+    }
+
+    #[test]
+    fn catalog_matches_by_mmproj_stem() {
+        let cat = sample_catalog();
+        let hit = find_catalog_entry_for_model(&cat, "D:\\models\\mmproj-gemma-4-E4B-it-BF16.gguf");
+        assert_eq!(hit.map(|e| e.name.as_str()), Some("gemma-4-8b"));
+    }
+
+    #[test]
+    fn catalog_unknown_model_returns_none() {
+        let cat = sample_catalog();
+        assert!(find_catalog_entry_for_model(&cat, "D:\\models\\other.gguf").is_none());
+    }
 }
