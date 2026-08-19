@@ -25,7 +25,6 @@ use serde_json::json;
 
 use crate::infra::config::ModelParams;
 use crate::infra::detokenizer::compute_stream_diff;
-use crate::infra::llm_multimodal::MTMD_MEDIA_MARKER;
 
 pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report, LlmMessage, extract_model_filename, GenerationResult, llm_history, GrammarSpec, build_base_grammar, build_json_only_grammar};
 pub use super::llm_gguf::{extract_string_from_gguf, extract_f32_from_gguf, extract_u32_from_gguf};
@@ -75,11 +74,6 @@ pub struct LlamaEngine {
     pub mmproj_path: Option<String>,
     /// true = движок запущен с mmproj (может принимать изображения)
     pub is_multimodal_engine: bool,
-    /// Актуальный media-marker сервера llama.cpp (читается из GET /props после
-    /// готовности). С версии b10456 сервер генерирует случайный маркер при
-    /// каждом старте, поэтому жёсткий `<__media__>` больше не подходит.
-    /// Значение стабильно на всё время жизни сервера (magic static в llama.cpp).
-    media_marker: String,
     stream_cb: Arc<dyn Fn(String) + Send + Sync>,
     client: Client,
     server_log: PathBuf,
@@ -125,14 +119,14 @@ impl Prng {
 }
 
 impl LlamaEngine {
-    pub fn new<L, S>(engine_dir: &Path, model_path: &str, global_ctx_limit: u32, kv_quant_keys: bool, kv_quant_values: bool, log_cb: L, stream_cb: S) -> Result<Self, String>
+    pub fn new<L, S>(engine_dir: &Path, model_path: &str, global_ctx_limit: u32, kv_quant_keys: bool, kv_quant_values: bool, reasoning_budget: u32, log_cb: L, stream_cb: S) -> Result<Self, String>
     where L: Fn(String) + Send + Sync + 'static, S: Fn(String) + Send + Sync + 'static
     {
-        Self::new_with_mmproj(engine_dir, model_path, None, global_ctx_limit, kv_quant_keys, kv_quant_values, log_cb, stream_cb)
+        Self::new_with_mmproj(engine_dir, model_path, None, global_ctx_limit, kv_quant_keys, kv_quant_values, reasoning_budget, log_cb, stream_cb)
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub fn new_with_mmproj<L, S>(engine_dir: &Path, model_path: &str, mmproj_path: Option<&str>, global_ctx_limit: u32, kv_quant_keys: bool, kv_quant_values: bool, log_cb: L, stream_cb: S) -> Result<Self, String>
+    pub fn new_with_mmproj<L, S>(engine_dir: &Path, model_path: &str, mmproj_path: Option<&str>, global_ctx_limit: u32, kv_quant_keys: bool, kv_quant_values: bool, reasoning_budget: u32, log_cb: L, stream_cb: S) -> Result<Self, String>
     where L: Fn(String) + Send + Sync + 'static, S: Fn(String) + Send + Sync + 'static
     {
         let log_cb: std::sync::Arc<dyn Fn(String) + Send + Sync> = std::sync::Arc::new(log_cb);
@@ -303,34 +297,56 @@ impl LlamaEngine {
         let server_log = engine_dir.join("llama_server.log");
         let _ = std::fs::remove_file(&server_log);
 
-        let mut cmd = Command::new(&server_exe);
-        cmd.current_dir(engine_dir)
-            .arg("-m").arg(model_path)
-            .arg("--host").arg("127.0.0.1")
-            .arg("--port").arg(port.to_string())
-            .arg("--api-key").arg(&api_key)
-            .arg("--ctx-size").arg(global_ctx_limit.to_string())
-            .arg("-t").arg(threads.to_string())
-            .arg("-ngl").arg(gpu_layers.to_string())
-            .arg("--flash-attn").arg("on")
-            .arg("--no-webui")
-            .arg("--log-file").arg(&server_log);
-        if let Some(mmp) = mmproj_path {
-            cmd.arg("--mmproj").arg(mmp);
-        }
-        if kv_quant_keys {
-            cmd.arg("--cache-type-k").arg("q8_0");
-        }
-        if kv_quant_values {
-            cmd.arg("--cache-type-v").arg("q8_0");
-        }
+        let use_reasoning_default = reasoning_budget > 0;
+        let build_cmd = {
+            let server_exe = server_exe.clone();
+            let server_log = server_log.clone();
+            let api_key = api_key.clone();
+            move |use_reasoning: bool| {
+                let mut c = Command::new(&server_exe);
+                c.current_dir(engine_dir)
+                    .arg("-m").arg(model_path)
+                    .arg("--host").arg("127.0.0.1")
+                    .arg("--port").arg(port.to_string())
+                    .arg("--api-key").arg(&api_key)
+                    .arg("--ctx-size").arg(global_ctx_limit.to_string())
+                .arg("-t").arg(threads.to_string())
+                .arg("-ngl").arg(gpu_layers.to_string())
+                .arg("--flash-attn").arg("on")
+                .arg("--no-webui")
+                .arg("--log-file").arg(&server_log);
+            if let Some(mmp) = mmproj_path {
+                c.arg("--mmproj").arg(mmp);
+            }
+            if kv_quant_keys {
+                c.arg("--cache-type-k").arg("q8_0");
+            }
+            if kv_quant_values {
+                c.arg("--cache-type-v").arg("q8_0");
+            }
+            if use_reasoning {
+                // Думатель выносится в отдельное поле reasoning_content, ограничен
+                // бюджетом и НЕ сохраняется в истории слота. Если старая версия
+                // движка не знает этих флагов — fallback-перезапуск без них (ниже).
+                c.arg("--reasoning-format").arg("deepseek");
+                c.arg("--reasoning-budget").arg(reasoning_budget.to_string());
+                c.arg("--no-reasoning-preserve");
+            }
+            #[cfg(target_os = "windows")]
+            { use std::os::windows::process::CommandExt; c.creation_flags(0x08000000); }
+            // CUDA/ggml-ошибки идут в stderr (не в --log-file) — захватываем их
+            c.stderr(std::process::Stdio::piped());
+            c
+            }
+        };
 
         log_cb(format!(
-            "🚀 Запуск llama-server: порт {}, контекст {} токенов, потоков {}, mmproj={}",
+            "🚀 Запуск llama-server: порт {}, контекст {} токенов, потоков {}, mmproj={}, думатель={}",
             port,
             global_ctx_limit,
             threads,
-            mmproj_path.unwrap_or("нет")
+            mmproj_path.unwrap_or("нет"),
+            if use_reasoning_default { format!("до {} токенов (deepseek-формат)", reasoning_budget) } else { "выключен".to_string() }
         ));
 
         let client = match Client::builder()
@@ -341,34 +357,35 @@ impl LlamaEngine {
             Err(e) => return fail(format!("Ошибка создания HTTP-клиента: {}", e)),
         };
 
-        #[cfg(target_os = "windows")]
-        { use std::os::windows::process::CommandExt; cmd.creation_flags(0x08000000); }
+        // Поток чтения stderr llama-server: ggml_cuda_init, CUDA-ошибки, варнинги
+        let spawn_stderr_reader = {
+            let log_cb = log_cb.clone();
+            move |stderr: std::process::ChildStderr| {
+                let log_cb = log_cb.clone();
+                std::thread::spawn(move || {
+                    use std::io::BufRead;
+                    let reader = std::io::BufReader::new(stderr);
+                    for line in reader.lines() {
+                        let line = match line {
+                            Ok(l) => l,
+                            Err(_) => break,
+                        };
+                        let line = line.trim();
+                        if !line.is_empty() {
+                            log_cb(format!("[llama-server] {}", line));
+                        }
+                    }
+                });
+            }
+        };
 
-        // CUDA/ggml-ошибки идут в stderr (не в --log-file) — захватываем их
-        cmd.stderr(std::process::Stdio::piped());
-
-        let mut child = match cmd.spawn() {
+        let mut use_reasoning = use_reasoning_default;
+        let mut child = match build_cmd(use_reasoning).spawn() {
             Ok(c) => c,
             Err(e) => return fail(format!("Ошибка запуска llama-server: {}", e)),
         };
-
-        // Поток чтения stderr llama-server: ggml_cuda_init, CUDA-ошибки, варнинги
         if let Some(stderr) = child.stderr.take() {
-            let log_cb = log_cb.clone();
-            std::thread::spawn(move || {
-                use std::io::BufRead;
-                let reader = std::io::BufReader::new(stderr);
-                for line in reader.lines() {
-                    let line = match line {
-                        Ok(l) => l,
-                        Err(_) => break,
-                    };
-                    let line = line.trim();
-                    if !line.is_empty() {
-                        log_cb(format!("[llama-server] {}", line));
-                    }
-                }
-            });
+            spawn_stderr_reader(stderr);
         }
 
         let mut engine = Self {
@@ -376,7 +393,6 @@ impl LlamaEngine {
             model_path: model_path.to_string(),
             mmproj_path: mmproj_path.map(|s| s.to_string()),
             is_multimodal_engine: mmproj_path.is_some(),
-            media_marker: MTMD_MEDIA_MARKER.to_string(),
             stream_cb: Arc::new(stream_cb),
             client,
             server_log,
@@ -392,7 +408,7 @@ impl LlamaEngine {
 
         // ── Ожидание готовности (модель грузится в память) ──
         let mut child = engine.child.take().expect("child");
-        let deadline = Instant::now() + HEALTH_TIMEOUT;
+        let mut deadline = Instant::now() + HEALTH_TIMEOUT;
         let mut last_progress_log = Instant::now();
         loop {
             let exit_state = match child.try_wait() {
@@ -400,6 +416,30 @@ impl LlamaEngine {
                 Err(e) => return fail(format!("Ошибка ожидания llama-server: {}", e)),
             };
             if let Some(code) = exit_state {
+                if use_reasoning && !code.success() {
+                    // Старая версия движка без reasoning-флагов умирает при старте —
+                    // перезапускаем без них, чтобы не блокировать пользователя.
+                    log_cb(format!(
+                        "⚠️ llama-server завершился при запуске (код {}) — перезапуск БЕЗ reasoning-флагов (движок их не поддерживает). Думатель будет отключён.",
+                        code
+                    ));
+                    use_reasoning = false;
+                    match build_cmd(false).spawn() {
+                        Ok(c) => {
+                            child = c;
+                            if let Some(stderr) = child.stderr.take() {
+                                spawn_stderr_reader(stderr);
+                            }
+                            deadline = Instant::now() + HEALTH_TIMEOUT;
+                            last_progress_log = Instant::now();
+                            continue;
+                        }
+                        Err(e) => {
+                            engine.child = Some(child);
+                            return fail(format!("Ошибка запуска llama-server без reasoning-флагов: {}", e));
+                        }
+                    }
+                }
                 engine.child = Some(child);
                 return fail(format!(
                     "Движок llama-server завершился при запуске (код {}). {}",
@@ -429,14 +469,6 @@ impl LlamaEngine {
             std::thread::sleep(Duration::from_millis(500));
         }
         engine.child = Some(child);
-
-        // ── Мультимодальный media-marker: с b10456 сервер генерирует случайный
-        // маркер при каждом старте. Читаем фактический из GET /props (всегда
-        // доступен; флаг --props гейтит только POST). При сбое — остаётся
-        // фолбэк `<__media__>`. Значение стабильно на время жизни сервера.
-        if engine.is_multimodal_engine {
-            engine.fetch_media_marker(&*log_cb);
-        }
 
         log_cb(format!(
             "✅ Движок llama-server запущен: {} (режим {}), порт {}",
@@ -582,47 +614,6 @@ impl LlamaEngine {
         }
     }
 
-    /// Читает фактический media-marker из GET /props и записывает его в движок.
-    /// В llama.cpp (b10456+) маркер случаен на каждый старт сервера и возвращается
-    /// в поле `media_marker` эндпоинта /props. Если поле отсутствует или запрос
-    /// упал — оставляем фолбэк `<__media__>` (старые версии сервера ждут именно его).
-    fn fetch_media_marker(&mut self, log_cb: &dyn Fn(String)) {
-        #[derive(serde::Deserialize)]
-        struct PropsResp {
-            #[serde(rename = "media_marker")]
-            media_marker: Option<String>,
-        }
-        let resp = self.client
-            .get(self.url("/props"))
-            .header(AUTHORIZATION, self.auth_header())
-            .timeout(Duration::from_secs(3))
-            .send();
-        let marker = match resp {
-            Ok(r) if r.status().is_success() => {
-                r.json::<PropsResp>()
-                    .ok()
-                    .and_then(|p| p.media_marker)
-            }
-            _ => None,
-        };
-        if let Some(m) = marker {
-            if !m.is_empty() {
-                self.media_marker = m.clone();
-                log_cb(format!("🖼️ Media-marker сервера: {}", m));
-            }
-        } else {
-            log_cb(format!(
-                "⚠️ Не удалось прочитать media_marker из /props — использую фолбэк {}",
-                MTMD_MEDIA_MARKER
-            ));
-        }
-    }
-
-    /// Актуальный media-marker для вставки в промпт при мультимодальных запросах.
-    pub fn media_marker(&self) -> &str {
-        &self.media_marker
-    }
-
     fn post_json<T: Serialize, R: DeserializeOwned>(&self, path: &str, body: &T) -> Result<R, String> {
         let resp = self.client
             .post(self.url(path))
@@ -692,12 +683,15 @@ impl LlamaEngine {
 
     // ─── Генерация ───
 
-    /// Общий цикл генерации: текст и мультимодалка (через multimodal_data).
+    /// Общий цикл генерации через OpenAI-совместимый `/v1/chat/completions`.
+    /// Промпт рендерит САМ движок (llama.cpp: jinja-интерпретатор + GGUF
+    /// chat_template) — клиент передаёт только `messages[]`. Вложения
+    /// (`attachments`) превращаются в image-части последнего user-сообщения.
     /// `ctx_label` — контекст вызова для лога пиков памяти ("legacy:агент#N" / "graph:узел").
-    pub(crate) fn run_completion<F, L>(
+    pub(crate) fn run_chat_completions<F, L>(
         &self,
-        full_prompt: &str,
-        multimodal_data: Option<Vec<String>>,
+        messages: &[LlmMessage],
+        attachments: Option<&[ChatAttachment]>,
         max_tokens: usize,
         params: &ModelParams,
         stop_words: &[String],
@@ -727,8 +721,8 @@ impl LlamaEngine {
         ));
 
         #[derive(Serialize)]
-        struct CompletionRequest<'a> {
-            prompt: serde_json::Value,
+        struct ChatCompletionsRequest<'a> {
+            messages: Vec<serde_json::Value>,
             n_predict: usize,
             stream: bool,
             temperature: f32,
@@ -753,16 +747,41 @@ impl LlamaEngine {
             json_schema: Option<&'a serde_json::Value>,
         }
 
-        let prompt_value = match &multimodal_data {
-            Some(data) => serde_json::json!({
-                "prompt_string": full_prompt,
-                "multimodal_data": data,
-            }),
-            None => serde_json::Value::String(full_prompt.to_string()),
-        };
+        // messages[] — строки; вложения — image-части последнего user-сообщения
+        // (OAI-совместимый формат content parts; рендер на стороне движка).
+        let mut messages_val: Vec<serde_json::Value> = Vec::with_capacity(messages.len());
+        let last_user_idx = messages.iter().rposition(|m| m.role == "user");
+        for (i, m) in messages.iter().enumerate() {
+            let attach_here = attachments.is_some_and(|a| !a.is_empty()) && last_user_idx == Some(i);
+            if !attach_here {
+                messages_val.push(json!({"role": m.role, "content": m.content}));
+                continue;
+            }
+            let mut parts = vec![json!({"type": "text", "text": m.content})];
+            for a in attachments.unwrap() {
+                parts.push(json!({
+                    "type": "image_url",
+                    "image_url": { "url": format!("data:{};base64,{}", a.mime_type, a.data_base64) }
+                }));
+            }
+            messages_val.push(json!({"role": m.role, "content": parts}));
+        }
+        // Вложения есть, но последний user отсутствует — добавляем отдельное сообщение.
+        if let Some(atts) = attachments {
+            if !atts.is_empty() && last_user_idx.is_none() {
+                let mut parts = Vec::with_capacity(atts.len());
+                for a in atts {
+                    parts.push(json!({
+                        "type": "image_url",
+                        "image_url": { "url": format!("data:{};base64,{}", a.mime_type, a.data_base64) }
+                    }));
+                }
+                messages_val.push(json!({"role": "user", "content": parts}));
+            }
+        }
 
-        let request = CompletionRequest {
-            prompt: prompt_value,
+        let request = ChatCompletionsRequest {
+            messages: messages_val,
             n_predict: max_tokens,
             stream: true,
             temperature: actual_temp,
@@ -804,7 +823,7 @@ impl LlamaEngine {
         let mem_guard = crate::infra::MemGuard::new(sampler, ctx_label, &log_cb);
 
         let resp = self.client
-            .post(self.url("/completion"))
+            .post(self.url("/v1/chat/completions"))
             .header(AUTHORIZATION, self.auth_header())
             .json(&request)
             .send()
@@ -849,8 +868,10 @@ impl LlamaEngine {
             }
         });
         let mut result_text = String::new();
+        let mut reasoning_text = String::new();
         let mut generated_bytes: Vec<u8> = Vec::new();
         let mut generated_tokens: u32 = 0;
+        let mut reasoning_tokens: u32 = 0;
         let mut stop_reason = "MAX_TOKENS".to_string();
         let mut last_loop_check_chars = 0usize;
         let mut prompt_done_logged = false;
@@ -892,7 +913,7 @@ impl LlamaEngine {
             if data.is_empty() {
                 continue;
             }
-            let event: CompletionEvent = match serde_json::from_str(data) {
+            let event: ChatCompletionEvent = match serde_json::from_str(data) {
                 Ok(e) => e,
                 Err(_) => {
                     if data.contains("\"error\"") {
@@ -910,25 +931,36 @@ impl LlamaEngine {
 
             if !prompt_done_logged {
                 prompt_done_logged = true;
+                let prompt_tokens = event.tokens_evaluated
+                    .max(event.timings.as_ref().map(|t| t.prompt_n).unwrap_or(0));
                 log_cb(format!(
                     "📐 Промпт принят движком: {} токенов, max_gen={}",
-                    event.tokens_evaluated, max_tokens
+                    prompt_tokens, max_tokens
                 ));
             }
 
-            if !event.content.is_empty() {
-                generated_bytes.extend_from_slice(event.content.as_bytes());
-                let current_text = String::from_utf8_lossy(&generated_bytes).into_owned();
-                let diff = compute_stream_diff(&current_text, &result_text).to_string();
-                if !diff.is_empty() {
-                    (self.stream_cb)(diff);
+            if let Some(delta) = event.choices.first().and_then(|c| c.delta.content.as_deref()) {
+                if !delta.is_empty() {
+                    generated_bytes.extend_from_slice(delta.as_bytes());
+                    let current_text = String::from_utf8_lossy(&generated_bytes).into_owned();
+                    let diff = compute_stream_diff(&current_text, &result_text).to_string();
+                    if !diff.is_empty() {
+                        (self.stream_cb)(diff);
+                    }
+                    result_text = current_text;
+                    generated_tokens += 1;
                 }
-                result_text = current_text;
-                generated_tokens += 1;
+            }
+            if let Some(r) = event.choices.first().and_then(|c| c.delta.reasoning_content.as_deref()) {
+                if !r.is_empty() {
+                    reasoning_text.push_str(r);
+                    reasoning_tokens += 1;
+                }
             }
 
-            let gen_p = ((generated_tokens as f32 / max_tokens.max(1) as f32) * 50.0).min(50.0);
-            progress_cb(50.0 + gen_p, &format!("Генерация: {} токенов...", generated_tokens));
+            let total_tokens = generated_tokens + reasoning_tokens;
+            let gen_p = ((total_tokens as f32 / max_tokens.max(1) as f32) * 50.0).min(50.0);
+            progress_cb(50.0 + gen_p, &format!("Генерация: {} токенов...", total_tokens));
 
             if let Some(t) = event.timings {
                 if t.predicted_per_second > 0.0 {
@@ -949,31 +981,41 @@ impl LlamaEngine {
                 }
             }
 
-            if event.stop {
-                match event.stop_type.as_deref() {
-                    Some("eos") => stop_reason = "EOS".to_string(),
-                    Some("word") => stop_reason = "STOP_WORD".to_string(),
-                    Some("limit") => stop_reason = "MAX_TOKENS".to_string(),
-                    _ => {
-                        if event.truncated {
-                            stop_reason = "MAX_TOKENS".to_string();
-                        }
-                    }
+            if let Some(fr) = event.choices.first().and_then(|c| c.finish_reason.as_deref()) {
+                match fr {
+                    "stop" => stop_reason = "EOS".to_string(),
+                    "length" => stop_reason = "MAX_TOKENS".to_string(),
+                    "tool_calls" => stop_reason = "TOOL_CALLS".to_string(),
+                    _ => stop_reason = fr.to_string(),
                 }
                 break;
             }
         }
-        progress_cb(100.0, &format!("Готово ({} токенов)", generated_tokens));
+        progress_cb(100.0, &format!("Готово ({} токенов)", generated_tokens + reasoning_tokens));
 
         let gen_elapsed = gen_start.elapsed().as_secs_f64();
+        let total_tokens = generated_tokens + reasoning_tokens;
         let speed = predicted_per_second
             .or_else(|| final_timings.as_ref().map(|t| t.predicted_per_second))
-            .unwrap_or_else(|| if gen_elapsed > 0.0 { generated_tokens as f64 / gen_elapsed } else { 0.0 });
+            .unwrap_or_else(|| if gen_elapsed > 0.0 { total_tokens as f64 / gen_elapsed } else { 0.0 });
         self.last_tok_per_sec.set(speed);
-        log_cb(format!(
-            "⚙️ Сгенерировано {} токенов за {:.1}с ({:.0} tok/s). Причина: {}",
-            generated_tokens, gen_elapsed, speed, stop_reason
-        ));
+        if reasoning_tokens > 0 {
+            log_cb(format!(
+                "⚙️ Сгенерировано {} токенов ответа + {} токенов думателя за {:.1}с ({:.0} tok/s). Причина: {}",
+                generated_tokens, reasoning_tokens, gen_elapsed, speed, stop_reason
+            ));
+        } else {
+            log_cb(format!(
+                "⚙️ Сгенерировано {} токенов за {:.1}с ({:.0} tok/s). Причина: {}",
+                generated_tokens, gen_elapsed, speed, stop_reason
+            ));
+        }
+
+        if reasoning_tokens > 0 {
+            let take = 300.min(reasoning_text.chars().count());
+            let preview: String = reasoning_text.chars().take(take).collect();
+            log_cb(format!("🧠 Думатель ({} токенов). Первые {} символов: {}", reasoning_tokens, take, preview.replace('\n', "\\n")));
+        }
 
         if generated_tokens > 50 {
             let char_count: usize = result_text.chars().count();
@@ -986,8 +1028,8 @@ impl LlamaEngine {
         let report = mem_guard.finish();
         let total_mb = estimate_vram_mb(&self.model_path, self.global_ctx_limit, false, false);
         let extra = format!(
-            "{} токенов за {:.1}с ({:.0} tok/s), причина: {}",
-            generated_tokens, gen_elapsed, speed, stop_reason
+            "{} токенов (+{} думателя) за {:.1}с ({:.0} tok/s), причина: {}",
+            generated_tokens, reasoning_tokens, gen_elapsed, speed, stop_reason
         );
         log_cb(crate::infra::peak_line(ctx_label, &report, self.vram_before, total_mb, &extra));
 
@@ -999,6 +1041,7 @@ impl LlamaEngine {
                 "model": extract_model_filename(&self.model_path),
                 "mode": self.engine_mode,
                 "tokens": generated_tokens,
+                "reasoning_tokens": reasoning_tokens,
                 "elapsed_s": (gen_elapsed * 10.0).round() / 10.0,
                 "tok_per_sec": (speed * 10.0).round() / 10.0,
                 "stop_reason": stop_reason,
@@ -1009,7 +1052,7 @@ impl LlamaEngine {
             }),
         );
 
-        Ok(GenerationResult { text: result_text, stop_reason })
+        Ok(GenerationResult { text: result_text, stop_reason, reasoning: reasoning_text })
     }
 
     pub fn is_multimodal(&self) -> bool {
@@ -1034,20 +1077,26 @@ impl LlamaEngine {
         messages: &[LlmMessage],
         max_tokens: usize,
         model_params: &ModelParams,
-        format_type: &str,
+        _format_type: &str,
         cancel_flag: Arc<AtomicBool>,
         ctx_label: &str,
         progress_cb: F,
         log_cb: L,
     ) -> Result<GenerationResult, String>
     where F: FnMut(f32, &str), L: Fn(String) {
-        let (full_prompt, actual_format) = self.build_prompt(messages, format_type, &log_cb);
-        log_cb(format!("🔤 Определен формат промпта: {:?}", actual_format));
+        // Рендер промпта выполняет движок (llama.cpp jinja по GGUF chat_template) —
+        // единый канонический путь для ВСЕХ моделей. Формат из GGUF нужен только
+        // для стоп-слов и базовой грамматики.
+        let actual_format = PromptFormat::detect_from_gguf(&self.model_path);
+        log_cb(format!(
+            "🎯 Рендер промпта: chat template из GGUF (движок llama.cpp, jinja), формат {:?} — стоп-слова и грамматика",
+            actual_format
+        ));
         let words = actual_format.get_stop_words();
         let stop_words = merged_stop_words(&words);
         let pending = self.take_pending_grammar();
         let grammar = pending.or_else(|| build_base_grammar(&actual_format).map(|gbnf| GrammarSpec { gbnf: Some(gbnf), json_schema: None }));
-        self.run_completion(&full_prompt, None, max_tokens, model_params, &stop_words, grammar, cancel_flag, ctx_label, progress_cb, log_cb)
+        self.run_chat_completions(messages, None, max_tokens, model_params, &stop_words, grammar, cancel_flag, ctx_label, progress_cb, log_cb)
     }
 }
 
@@ -1066,18 +1115,32 @@ struct Timings {
     predicted_per_second: f64,
     #[serde(default, alias = "predicted_n")]
     predicted_n: u32,
+    #[serde(default)]
+    prompt_n: u32,
+}
+
+#[derive(Deserialize, Default)]
+struct ChatDelta {
+    #[serde(default)]
+    content: Option<String>,
+    /// Думатель модели: llama.cpp с --reasoning-format deepseek отдаёт его
+    /// отдельным полем reasoning_content (Ollama использует то же имя).
+    #[serde(default, alias = "thinking")]
+    reasoning_content: Option<String>,
 }
 
 #[derive(Deserialize)]
-struct CompletionEvent {
+struct ChatChoice {
     #[serde(default)]
-    content: String,
+    delta: ChatDelta,
     #[serde(default)]
-    stop: bool,
+    finish_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ChatCompletionEvent {
     #[serde(default)]
-    stop_type: Option<String>,
-    #[serde(default)]
-    truncated: bool,
+    choices: Vec<ChatChoice>,
     #[serde(default)]
     tokens_evaluated: u32,
     #[serde(default)]

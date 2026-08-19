@@ -31,6 +31,9 @@ pub struct ChatAttachment {
 pub struct GenerationResult {
     pub text: String,
     pub stop_reason: String,
+    /// Думатель (reasoning) модели, если движок вернул его отдельным полем
+    /// (--reasoning-format deepseek → reasoning_content). Пусто, если думателя нет.
+    pub reasoning: String,
 }
 
 /// Грамматика llama.cpp для генерации: свободный текст ИЛИ строгий JSON.

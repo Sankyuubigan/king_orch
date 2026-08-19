@@ -59,6 +59,9 @@ where
     pub(crate) consecutive_failed_tools: usize,
     pub(crate) spill_idx: u32,
     pub(crate) consecutive_incomplete: usize,
+    /// Сколько раз подряд модель выдала ТОЛЬКО думатель (reasoning) без видимого
+    /// ответа. Защита от зацикливания: после лимита — ошибка агента.
+    pub(crate) thinking_no_answer: usize,
     pub(crate) consecutive_invalid_targets: usize,
     pub(crate) last_thinking_len: isize,
     pub(crate) stalled_continuations: usize,

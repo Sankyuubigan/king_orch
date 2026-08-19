@@ -190,6 +190,7 @@ pub async fn chat_request(
     history: Vec<ChatMessage>,
     context_size: u32,
     max_gen_tokens: u32,
+    reasoning_budget: Option<u32>,
     kv_quant_keys: bool,
     kv_quant_values: bool,
     model_params: ModelParams,
@@ -199,9 +200,13 @@ pub async fn chat_request(
     let mut cfg = infra::load_config(&app);
     cfg.context_size = context_size;
     cfg.max_gen_tokens = max_gen_tokens;
+    if let Some(rb) = reasoning_budget {
+        cfg.reasoning_budget = rb;
+    }
     cfg.kv_quant_keys = kv_quant_keys;
     cfg.kv_quant_values = kv_quant_values;
     infra::save_config(&app, &cfg);
+    let reasoning_budget = cfg.reasoning_budget;
 
     // ── Проверка установки движка llama.cpp (llama-server) ──
     // Новая архитектура: движок — ОТДЕЛЬНЫЙ процесс, инференс возможен ТОЛЬКО
@@ -347,6 +352,7 @@ pub async fn chat_request(
             max_gen_tokens,
             kv_quant_keys,
             kv_quant_values,
+            reasoning_budget,
             model_params,
             format_type,
             mmproj_path,

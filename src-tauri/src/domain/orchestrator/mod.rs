@@ -259,7 +259,7 @@ pub fn run_chat<L, S, C, ST>(
     engine_dir: std::path::PathBuf,
     model_path: String, agent_id: String, user_text: String, history: Vec<ChatMessage>,
     attachments: Vec<ChatAttachment>,
-    context_size: u32, max_gen_tokens: u32, kv_quant_keys: bool, kv_quant_values: bool,     model_params: ModelParams, format_type: String,
+    context_size: u32, max_gen_tokens: u32, kv_quant_keys: bool, kv_quant_values: bool, reasoning_budget: u32,     model_params: ModelParams, format_type: String,
     mmproj_path: Option<String>,     cancel_flag: Arc<AtomicBool>,
     stream_meta: Arc<Mutex<StreamMeta>>,
     prompt_log: Option<std::path::PathBuf>,
@@ -315,9 +315,9 @@ where
     ));
 
     let engine = if mmproj_path.is_some() {
-        LlamaEngine::new_with_mmproj(&engine_dir, &model_path, mmproj_path.as_deref(), engine_ctx_limit, kv_quant_keys, kv_quant_values, log_cb.clone(), stream_cb)?
+        LlamaEngine::new_with_mmproj(&engine_dir, &model_path, mmproj_path.as_deref(), engine_ctx_limit, kv_quant_keys, kv_quant_values, reasoning_budget, log_cb.clone(), stream_cb)?
     } else {
-        LlamaEngine::new(&engine_dir, &model_path, engine_ctx_limit, kv_quant_keys, kv_quant_values, log_cb.clone(), stream_cb)?
+        LlamaEngine::new(&engine_dir, &model_path, engine_ctx_limit, kv_quant_keys, kv_quant_values, reasoning_budget, log_cb.clone(), stream_cb)?
     };
     let mut messages_store = history.clone();
     for (i, msg) in messages_store.iter_mut().enumerate() {
@@ -675,6 +675,7 @@ let start_time = Instant::now();
         consecutive_failed_tools: 0,
         spill_idx: 0,
         consecutive_incomplete: 0,
+        thinking_no_answer: 0,
         consecutive_invalid_targets: 0,
         last_thinking_len: 0,
         stalled_continuations: 0,
@@ -742,6 +743,7 @@ let start_time = Instant::now();
             )?
         };
         let raw_response = gen.text.clone();
+        let reasoning = gen.reasoning.clone();
         let stop_reason = gen.stop_reason.clone();
 
         log_cb(format!("<<< [{}] LLM за {:.1}с, ответ {} символов", agent.name, gen_start.elapsed().as_secs_f32(), raw_response.len()));
@@ -815,6 +817,27 @@ let start_time = Instant::now();
                 }
             }
             if stop_reason == "STOP_WORD" || stop_reason == "MAX_TOKENS" {
+                // Думатель без ответа: размышления НЕ попадают в историю (они уже
+                // выброшены движком в отдельное поле), докачки бессмысленны — модель
+                // исчерпала лимит на думатель. Повторный вызов с требованием ответа.
+                if !reasoning.trim().is_empty() {
+                    ctx.thinking_no_answer += 1;
+                    if ctx.thinking_no_answer >= 3 {
+                        ctx.final_response = format!("{} Агент '{}' 3 раза подряд сгенерировал только размышления без ответа (думатель исчерпал лимит токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
+                        break;
+                    }
+                    ctx.continuation_raw.clear();
+                    ctx.continuation_mark = None;
+                    log_cb(format!(
+                        "🧠 Агент '{}' выдал только думатель ({} симв.) без ответа ({}) — повторный вызов с требованием отвечать сразу ({}/3).",
+                        agent.id,
+                        reasoning.chars().count(),
+                        stop_reason,
+                        ctx.thinking_no_answer
+                    ));
+                    ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
+                    continue;
+                }
                 ctx.consecutive_incomplete += 1;
                 if ctx.consecutive_incomplete >= 3 {
                     ctx.final_response = format!("{} Агент '{}' не смог сформировать ответ (3 пустых попытки: стоп-слово/лимит токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
@@ -984,6 +1007,26 @@ let start_time = Instant::now();
         }
 
         if !ctx.action_found && response.trim().is_empty() {
+            if !reasoning.trim().is_empty() {
+                // Только думатель без ответа (движок вернул его отдельным полем):
+                // в историю не кладём, докачки не делаем — повторный вызов с ответом.
+                ctx.thinking_no_answer += 1;
+                if ctx.thinking_no_answer >= 3 {
+                    ctx.final_response = format!("{} Агент '{}' 3 раза подряд сгенерировал только размышления без ответа (думатель исчерпал лимит токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
+                    break;
+                }
+                ctx.continuation_raw.clear();
+                ctx.continuation_mark = None;
+                log_cb(format!(
+                    "🧠 Агент '{}' выдал только думатель ({} симв.) без ответа ({}) — повторный вызов с требованием отвечать сразу ({}/3).",
+                    agent.id,
+                    reasoning.chars().count(),
+                    stop_reason,
+                    ctx.thinking_no_answer
+                ));
+                ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
+                continue;
+            }
             ctx.consecutive_incomplete += 1;
             if ctx.consecutive_incomplete >= 5 {
                 ctx.final_response = format!("{} Агент '{}' не смог сформировать ответ (5 пустых попыток). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
@@ -1517,7 +1560,7 @@ mod tests {
                 .filter(|p| p.join("backends").exists())
                 .unwrap_or(engine_dir)
         };
-        let engine = LlamaEngine::new(&engine_dir, &model_path, 8192, false, false, &|_| {}, |_| {}).unwrap();
+        let engine = LlamaEngine::new(&engine_dir, &model_path, 8192, false, false, 0, &|_| {}, |_| {}).unwrap();
         let mut params = ModelParams::default();
         params.temperature = 0.8;
 

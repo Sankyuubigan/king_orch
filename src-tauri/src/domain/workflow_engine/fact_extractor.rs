@@ -185,7 +185,7 @@ Session signals: []";
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .map(|d| crate::infra::llamacpp_installer::default_dir(&d))
             .unwrap_or_else(std::path::PathBuf::new);
-        let engine = LlamaEngine::new(&engine_dir, &model_path, 8192, false, false, &|_| {}, |_| {}).unwrap();
+        let engine = LlamaEngine::new(&engine_dir, &model_path, 8192, false, false, 0, &|_| {}, |_| {}).unwrap();
 
         let msgs = vec![
             LlmMessage {

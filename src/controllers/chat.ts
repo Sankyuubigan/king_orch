@@ -128,7 +128,7 @@ export class ChatController {
     try {
         const kvQuantKeys = this.el.chkKvQuantK?.checked ?? false;
         const kvQuantValues = this.el.chkKvQuantV?.checked ?? false;
-        const maxGen = parseInt(this.el.maxGenSlider?.value || "2048", 10);
+        const maxGen = parseInt(this.el.maxGenSlider?.value || "4096", 10);
 
         const promptText = await invoke<string>("get_prompt_preview", {
             modelPath,

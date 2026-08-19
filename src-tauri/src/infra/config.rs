@@ -64,6 +64,11 @@ pub struct AppConfig {
     pub context_size: u32,
     #[serde(default = "default_max_gen_tokens")]
     pub max_gen_tokens: u32,
+    /// Бюджет думателя (reasoning) модели в токенах: 0 — думатель запрещён,
+    /// N>0 — лимит размышлений до ответа (передаётся в llama-server
+    /// --reasoning-budget). Размышления не попадают в content и в историю.
+    #[serde(default = "default_reasoning_budget")]
+    pub reasoning_budget: u32,
     #[serde(default = "default_kv_quant_keys")]
     pub kv_quant_keys: bool,
     #[serde(default = "default_kv_quant_values")]
@@ -152,7 +157,8 @@ pub fn auto_detect_mmproj(model_path: &str) -> Option<String> {
 }
 
 fn default_context_size() -> u32 { 24576 }
-fn default_max_gen_tokens() -> u32 { 2048 }
+fn default_max_gen_tokens() -> u32 { 4096 }
+fn default_reasoning_budget() -> u32 { 1500 }
 fn default_kv_quant_keys() -> bool { false }
 fn default_kv_quant_values() -> bool { false }
 fn default_theme() -> String { "dark".to_string() }
@@ -173,6 +179,7 @@ impl Default for AppConfig {
             model_params: HashMap::new(),
             context_size: default_context_size(),
             max_gen_tokens: default_max_gen_tokens(),
+            reasoning_budget: default_reasoning_budget(),
             kv_quant_keys: default_kv_quant_keys(),
             kv_quant_values: default_kv_quant_values(),
             theme: default_theme(),

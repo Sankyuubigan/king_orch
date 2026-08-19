@@ -105,6 +105,7 @@ pub async fn run_iterative_test(
         config.context_size,
         config.kv_quant_keys,
         config.kv_quant_values,
+        config.reasoning_budget,
         log_cb.clone(),
         stream_cb.clone(),
     )?;
