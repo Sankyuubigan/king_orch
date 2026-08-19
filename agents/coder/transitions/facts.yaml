@@ -1,0 +1,16 @@
+extractor_prompt: |
+  Ты — системный маршрутизатор. Определи тип запроса.
+  Верни JSON: {"is_question": false, "is_bug": false, "is_feature": false, "needs_search": false, "is_mapping": false}
+  {{ user_message }}
+
+facts:
+  - id: is_question
+    criteria: TRUE если пользователь просто спрашивает как что-то работает, просит объяснить кусок кода, не требуя изменений.
+  - id: is_bug
+    criteria: TRUE если есть жалоба на ошибку, падение, баг, лог. FALSE если фича.
+  - id: is_feature
+    criteria: TRUE если просят добавить функцию, рефакторинг, изменить логику.
+  - id: needs_search
+    criteria: TRUE если просят найти доку, API, погуглить.
+  - id: is_mapping
+    criteria: TRUE если просят карту проекта, AST, обзор.

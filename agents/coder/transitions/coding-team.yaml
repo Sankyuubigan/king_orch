@@ -1,0 +1,211 @@
+name: Команда кодеров
+visible: true
+
+config:
+  facts_file: facts.yaml
+  default_llm_params: strict
+  max_steps: 200
+
+nodes:
+  # ── Извлечение фактов и маршрутизация ──
+  - id: extract_facts
+    type: llm_fact_extractor
+    input: |
+      User: {{ user_message }}
+      Session history: {{ messages }}
+    llm_params: strict
+
+  - id: route
+    type: switch
+    input_object: "{{ nodes.extract_facts.output }}"
+    cases_priority:
+      - key: is_question
+        to: call_code_explainer
+      - key: is_mapping
+        to: call_project_mapper
+      - key: is_bug
+        to: call_bug_analyst
+      - key: needs_search
+        to: call_research_team
+      - key: is_feature
+        to: call_task_planner
+    default: call_task_planner
+
+  # ── Просто ответ на вопрос (READ-ONLY) ──
+  - id: call_code_explainer
+    type: llm_worker
+    agent: code_explainer
+    task: "Ответь на вопрос пользователя, изучив код: {{ user_message }}"
+    output_type: message
+
+  # ── Делегирование в команду поиска ──
+  - id: call_research_team
+    type: sub_workflow
+    workflow: search-specialist
+    task: "{{ user_message }}"
+    output_type: thought
+
+  - id: final_research_output
+    type: system_condition
+    action: aggregate_and_output
+    required: ["web_researcher", "docs_researcher", "quick_finder"]
+
+  # ── Ветка бага: Анализ -> Поиск практики -> Воспроизведение -> План ──
+  - id: call_bug_analyst
+    type: llm_worker
+    agent: bug_analyst
+    task: "Найди первопричину бага: {{ user_message }}"
+    output_type: thought
+
+  - id: check_needs_search
+    type: llm_fact_extractor
+    input: |
+      Анализ бага: {{ nodes.call_bug_analyst.output }}
+      Верни JSON: {"needs_docs": true/false}. true если нужно искать best practice в инете.
+    llm_params: strict
+
+  - id: route_search
+    type: condition_check
+    input_object: "{{ nodes.check_needs_search.output }}"
+    field: needs_docs
+    true_to: call_search_for_bug
+    false_to: call_qa_reproduce
+
+  - id: call_search_for_bug
+    type: sub_workflow
+    workflow: search-specialist
+    task: "Найди документацию и best practice для решения: {{ nodes.call_bug_analyst.output }}"
+    output_type: thought
+
+  - id: call_qa_reproduce
+    type: llm_worker
+    agent: qa_diagnost
+    task: |
+      Напиши падающий тест (Failing Test First) в песочнице, чтобы поймать баг с поличным.
+      Отчёт аналитика: {{ nodes.call_bug_analyst.output }}
+      Best practice из инета (если был): {{ nodes.call_search_for_bug.output }}
+    output_type: thought
+    max_visits: 2
+
+  - id: check_qa_repro
+    type: switch
+    input_object: "{{ nodes.call_qa_reproduce.output }}"
+    cases_priority:
+      - key: bug_captured
+        to: call_task_planner
+    default: honest_fail_bug
+
+  - id: call_task_planner
+    type: llm_worker
+    agent: task_planner
+    task: |
+      Составь PRP (Product Requirement Prompt). Учти архитектурные ошибки. Разбей на микро-шаги.
+      Исходная задача: {{ user_message }}
+      Отчёт аналитика: {{ nodes.call_bug_analyst.output }}
+      Отчёт QA (падающий тест): {{ nodes.call_qa_reproduce.output }}
+    output_type: thought
+    max_visits: 2
+
+  # ── Проверка плана архитектором ──
+  - id: call_arch_reviewer
+    type: llm_worker
+    agent: arch_reviewer
+    task: |
+      Проверь план на архитектурную чистоту, размер файлов (<500 строк) и наличие логирования.
+      План: {{ nodes.call_task_planner.output }}
+    output_type: thought
+
+  - id: check_plan
+    type: switch
+    input_object: "{{ nodes.call_arch_reviewer.output }}"
+    cases_priority:
+      - key: pass
+        to: call_primary_coder
+    default: call_task_planner
+
+  # ── Финальное кодирование и проверка ──
+  - id: call_primary_coder
+    type: llm_worker
+    agent: primary_coder
+    task: |
+      Реализуй задачу строго по утвержденному плану. Обязательно ставь логи.
+      План: {{ nodes.call_task_planner.output }}
+    output_type: thought
+    max_visits: 2
+
+  - id: call_qa_verify
+    type: llm_worker
+    agent: qa_diagnost
+    task: |
+      Проверь написанный кодером код. Запусти тесты. Убедись, что баг исправлен и новые фичи работают.
+      План: {{ nodes.call_task_planner.output }}
+      Внесенные изменения: {{ nodes.call_primary_coder.output }}
+    output_type: thought
+    max_visits: 2
+
+  - id: check_verify
+    type: switch
+    input_object: "{{ nodes.call_qa_verify.output }}"
+    cases_priority:
+      - key: pass
+        to: final_success
+    default: call_primary_coder
+
+  - id: final_success
+    type: system_condition
+    action: aggregate_and_output
+    required: ["primary_coder"]
+
+  - id: honest_fail_bug
+    type: llm_worker
+    agent: bug_analyst
+    task: "QA не смог поймать баг с поличным. Честно сообщи пользователю, что корень не найден и нужен ручной аудит."
+    output_type: message
+
+  # ── Маппинг проекта ──
+  - id: call_project_mapper
+    type: llm_worker
+    agent: project_mapper
+    task: "Сделай карту проекта: {{ user_message }}"
+    output_type: message
+
+edges:
+  - from: extract_facts
+    to: route
+
+  - from: call_research_team
+    to: final_research_output
+
+  - from: call_bug_analyst
+    to: check_needs_search
+  - from: check_needs_search
+    to: route_search
+  - from: route_search
+    to: call_search_for_bug
+  - from: route_search
+    to: call_qa_reproduce
+  - from: call_search_for_bug
+    to: call_qa_reproduce
+  - from: call_qa_reproduce
+    to: check_qa_repro
+  - from: check_qa_repro
+    to: call_task_planner
+  - from: call_task_planner
+    to: call_arch_reviewer
+  - from: call_arch_reviewer
+    to: check_plan
+  - from: check_plan
+    to: call_primary_coder
+  - from: call_primary_coder
+    to: call_qa_verify
+  - from: call_qa_verify
+    to: check_verify
+  - from: check_verify
+    to: final_success
+  - from: check_qa_repro
+    to: honest_fail_bug
+
+  - from: call_project_mapper
+    to: END
+  - from: call_code_explainer
+    to: END
