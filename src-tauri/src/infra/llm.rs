@@ -26,7 +26,7 @@ use serde_json::json;
 use crate::infra::config::ModelParams;
 use crate::infra::detokenizer::compute_stream_diff;
 
-pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report, LlmMessage, extract_model_filename, GenerationResult, llm_history, GrammarSpec, build_base_grammar, build_json_only_grammar};
+pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report, LlmMessage, extract_model_filename, GenerationResult, LlmMetrics, llm_history, GrammarSpec, build_base_grammar, build_json_only_grammar};
 pub use super::llm_gguf::{extract_string_from_gguf, extract_f32_from_gguf, extract_u32_from_gguf};
 
 /// Таймаут ожидания готовности движка (загрузка модели в память)
@@ -884,7 +884,10 @@ impl LlamaEngine {
         let mut last_loop_check_chars = 0usize;
         let mut prompt_done_logged = false;
         let mut predicted_per_second: Option<f64> = None;
+        let mut prompt_per_second: Option<f64> = None;
+        let mut prompt_tokens: u32 = 0;
         let mut final_timings: Option<Timings> = None;
+        let mut first_token_at: Option<Instant> = None;
 
         loop {
             if cancel_flag.load(Ordering::SeqCst) {
@@ -939,16 +942,20 @@ impl LlamaEngine {
 
             if !prompt_done_logged {
                 prompt_done_logged = true;
-                let prompt_tokens = event.tokens_evaluated
+                let pt = event.tokens_evaluated
                     .max(event.timings.as_ref().map(|t| t.prompt_n).unwrap_or(0));
+                prompt_tokens = pt;
                 log_cb(format!(
                     "📐 Промпт принят движком: {} токенов, max_gen={}",
-                    prompt_tokens, max_tokens
+                    pt, max_tokens
                 ));
             }
 
             if let Some(delta) = event.choices.first().and_then(|c| c.delta.content.as_deref()) {
                 if !delta.is_empty() {
+                    if first_token_at.is_none() {
+                        first_token_at = Some(Instant::now());
+                    }
                     generated_bytes.extend_from_slice(delta.as_bytes());
                     let current_text = String::from_utf8_lossy(&generated_bytes).into_owned();
                     let diff = compute_stream_diff(&current_text, &result_text).to_string();
@@ -973,6 +980,12 @@ impl LlamaEngine {
             if let Some(t) = event.timings {
                 if t.predicted_per_second > 0.0 {
                     predicted_per_second = Some(t.predicted_per_second);
+                }
+                if t.prompt_per_second > 0.0 {
+                    prompt_per_second = Some(t.prompt_per_second);
+                }
+                if t.prompt_n > 0 {
+                    prompt_tokens = t.prompt_n;
                 }
                 if t.predicted_n > 0 {
                     final_timings = Some(t);
@@ -1006,6 +1019,12 @@ impl LlamaEngine {
         let speed = predicted_per_second
             .or_else(|| final_timings.as_ref().map(|t| t.predicted_per_second))
             .unwrap_or_else(|| if gen_elapsed > 0.0 { total_tokens as f64 / gen_elapsed } else { 0.0 });
+        let prompt_speed = prompt_per_second
+            .or_else(|| final_timings.as_ref().map(|t| t.prompt_per_second))
+            .unwrap_or(0.0);
+        let ttft_sec = first_token_at
+            .map(|t| t.duration_since(gen_start).as_secs_f64())
+            .unwrap_or(gen_elapsed);
         self.last_tok_per_sec.set(speed);
         if reasoning_tokens > 0 {
             log_cb(format!(
@@ -1060,7 +1079,20 @@ impl LlamaEngine {
             }),
         );
 
-        Ok(GenerationResult { text: result_text, stop_reason, reasoning: reasoning_text })
+        Ok(GenerationResult {
+            text: result_text,
+            stop_reason,
+            reasoning: reasoning_text,
+            metrics: LlmMetrics {
+                prompt_tokens,
+                generated_tokens,
+                reasoning_tokens,
+                prompt_per_second: prompt_speed,
+                predicted_per_second: speed,
+                ttft_sec,
+                elapsed_sec: gen_elapsed,
+            },
+        })
     }
 
     pub fn is_multimodal(&self) -> bool {
@@ -1125,6 +1157,8 @@ struct Timings {
     predicted_n: u32,
     #[serde(default)]
     prompt_n: u32,
+    #[serde(default)]
+    prompt_per_second: f64,
 }
 
 #[derive(Deserialize, Default)]

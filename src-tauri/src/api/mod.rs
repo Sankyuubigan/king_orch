@@ -9,6 +9,7 @@ pub mod chat;
 pub mod graph;
 pub mod test;
 pub mod version;
+pub mod coding_test;
 pub mod file_utils;
 pub mod llamacpp;
 pub mod permissions;

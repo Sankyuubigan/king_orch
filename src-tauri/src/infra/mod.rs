@@ -30,7 +30,7 @@ pub use session_manager::{ChatSession, SessionMeta};
 pub use mcp_client::{McpClient, McpPool, SharedMcpClient};
 
 // ─── Публичные функции ───
-pub use config::{load_config, save_config, load_catalog, load_sampling_presets, auto_detect_mmproj, find_catalog_entry_for_model, find_agents_dir, find_mcp_servers_dir};
+pub use config::{load_config, save_config, load_catalog, load_sampling_presets, auto_detect_mmproj, find_catalog_entry_for_model, find_agents_dir, find_mcp_servers_dir, find_coding_tests_dir};
 pub use mmproj::ensure_mmproj_for_model;
 pub use llm::{extract_f32_from_gguf, extract_u32_from_gguf};
 pub use session_manager::{get_session, get_sessions, save_session, delete_session, rename_session, open_session_folder};

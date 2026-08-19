@@ -27,6 +27,24 @@ pub struct ChatAttachment {
     pub data_base64: String,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct LlmMetrics {
+    /// Токенов во входном промпте (из timings движка).
+    pub prompt_tokens: u32,
+    /// Сгенерировано токенов ответа (+ думатель).
+    pub generated_tokens: u32,
+    /// Токенов думателя (reasoning).
+    pub reasoning_tokens: u32,
+    /// Скорость приёма промпта, токен/с (из timings движка).
+    pub prompt_per_second: f64,
+    /// Скорость генерации, токен/с (из timings движка).
+    pub predicted_per_second: f64,
+    /// Время до первого токена ответа, сек.
+    pub ttft_sec: f64,
+    /// Полное время генерации, сек.
+    pub elapsed_sec: f64,
+}
+
 #[derive(Debug, Clone)]
 pub struct GenerationResult {
     pub text: String,
@@ -34,6 +52,8 @@ pub struct GenerationResult {
     /// Думатель (reasoning) модели, если движок вернул его отдельным полем
     /// (--reasoning-format deepseek → reasoning_content). Пусто, если думателя нет.
     pub reasoning: String,
+    /// Метрики генерации (токены, скорости, TTFT).
+    pub metrics: LlmMetrics,
 }
 
 /// Грамматика llama.cpp для генерации: свободный текст ИЛИ строгий JSON.

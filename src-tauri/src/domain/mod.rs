@@ -7,6 +7,7 @@ pub mod parsers;
 pub mod agent_manager;
 pub mod signals;
 pub mod workflow_engine;
+pub mod coding_bench;
 
 // ─── Публичные типы ───
 pub use agent_manager::AgentEntry;

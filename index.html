@@ -64,6 +64,7 @@
         <div class="sub-tabs">
           <button id="subtab-graph" class="subtab-btn active">🔀 Граф</button>
           <button id="subtab-ai-test" class="subtab-btn">🤖 Тест агентов ИИ</button>
+          <button id="subtab-coding-test" class="subtab-btn">💻 Кодинг тест LLM</button>
         </div>
 
         <div id="view-sub-graph" class="sub-view active">
@@ -132,6 +133,55 @@
               <button id="btn-save-test-results" class="btn-secondary" style="padding:4px 10px; font-size:12px;">💾 Сохранить</button>
             </div>
             <div id="test-results-content"></div>
+          </div>
+        </div>
+
+
+        <div id="view-sub-coding-test" class="sub-view">
+          <div class="group-box">
+            <div class="group-title">1. Выберите модели LLM (~8B, бюджет VRAM 14 ГБ)</div>
+            <div id="coding-model-list" class="test-checklist">
+              <span class="test-hint">Загрузка моделей...</span>
+            </div>
+          </div>
+
+          <div class="group-box">
+            <div class="group-title">2. Выберите наборы задач</div>
+            <div id="coding-suite-list" class="test-checklist">
+              <span class="test-hint">Загрузка наборов...</span>
+            </div>
+          </div>
+
+          <div class="group-box">
+            <div class="group-title">3. Параметры запуска</div>
+            <div class="input-row">
+              <label class="inline-label">Быстрый режим (задач на набор, 0 = все):
+                <input type="number" id="coding-quick-count" min="0" value="0" style="width:90px;" />
+              </label>
+              <label class="inline-label">Бюджет VRAM (МБ):
+                <input type="number" id="coding-vr-budget" min="1024" step="256" value="14336" style="width:110px;" />
+              </label>
+            </div>
+          </div>
+
+          <div class="group-box">
+            <button id="btn-run-coding-test" class="btn-primary">▶ Запустить бенчмарк</button>
+            <button id="btn-stop-coding-test" class="btn-secondary" disabled style="margin-left:8px;">⏹ Стоп</button>
+            <div id="coding-progress" class="test-progress" style="display:none;">
+              <div class="status-label" id="coding-status-label">Подготовка...</div>
+              <div class="progress-bar-container">
+                <div id="coding-progress-bar" class="progress-bar"></div>
+              </div>
+              <div id="coding-log" class="coding-log"></div>
+            </div>
+          </div>
+
+          <div class="group-box" id="coding-results-box" style="display:none;">
+            <div class="group-title" style="display:flex; justify-content:space-between; align-items:center;">
+              <span>Результаты бенчмарка</span>
+              <a id="coding-report-link" class="btn-secondary" style="padding:4px 10px; font-size:12px; display:none;" target="_blank">📄 Отчёт</a>
+            </div>
+            <div id="coding-results-content"></div>
           </div>
         </div>
       </div>

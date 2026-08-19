@@ -964,3 +964,52 @@ body.edge-reconnecting {
 .update-popup-buttons .btn-secondary {
   width: 100%;
 }
+
+/* ─── Кодинг тест LLM ─── */
+.inline-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text);
+}
+.coding-log {
+  margin-top: 10px;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: monospace;
+  font-size: 12px;
+  background: var(--bg-color);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 8px;
+}
+.coding-report-meta {
+  font-size: 12px;
+  color: #888;
+  margin-bottom: 8px;
+}
+.coding-model-result {
+  padding: 10px;
+  margin-bottom: 10px;
+  background: var(--bg-color);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.coding-model-name {
+  font-weight: 600;
+  color: var(--primary);
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.coding-metrics {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.coding-task-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+}
+.coding-task-list .coding-pass { color: #4caf50; }
+.coding-task-list .coding-fail { color: #f44336; }

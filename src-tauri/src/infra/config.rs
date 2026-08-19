@@ -324,6 +324,27 @@ pub fn find_mcp_servers_dir(app: &AppHandle) -> PathBuf {
     resource_dir.join("mcp_servers")
 }
 
+/// Директория с наборами задач для coding-бенчмарка LLM (tasks_for_test_llm/).
+/// Паттерн поиска тот же, что в find_agents_dir / find_mcp_servers_dir:
+/// сначала dev-чекout в корне репозитория, затем ресурсы приложения.
+pub fn find_coding_tests_dir(app: &AppHandle) -> PathBuf {
+    let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
+    for dir in [
+        exe_dir.join("..").join("..").join("tasks_for_test_llm"),
+        exe_dir.join("tasks_for_test_llm"),
+        resource_dir.join("tasks_for_test_llm"),
+        PathBuf::from("tasks_for_test_llm"),
+    ] {
+        if dir.exists() {
+            return dir;
+        }
+    }
+    app.path()
+        .resolve("tasks_for_test_llm", BaseDirectory::Resource)
+        .unwrap_or_else(|_| resource_dir.join("tasks_for_test_llm"))
+}
+
 /// Именованные пресеты параметров сэмплинга (sampling_presets.json)
 pub type SamplingPresets = HashMap<String, ModelParams>;
 

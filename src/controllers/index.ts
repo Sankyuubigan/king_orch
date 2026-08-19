@@ -14,5 +14,8 @@ export type { GraphElements } from './graph'
 export { AgentTestController } from './agent-test'
 export type { AgentTestElements } from './agent-test'
 
+export { CodingTestController } from './coding-test'
+export type { CodingTestElements } from './coding-test'
+
 export { UpdatePopupController } from './update_popup'
 export type { UpdatePopupElements } from './update_popup'

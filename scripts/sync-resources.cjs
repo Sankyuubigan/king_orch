@@ -38,6 +38,7 @@ function syncDir(src, dest) {
 function syncResources(scriptDir) {
     const pairs = [
         [path.join(scriptDir, 'agents'), 'agents'],
+        [path.join(scriptDir, 'tasks_for_test_llm'), 'tasks_for_test_llm'],
         [path.join(scriptDir, 'src-tauri', 'mcp_servers'), 'mcp_servers'],
     ];
 

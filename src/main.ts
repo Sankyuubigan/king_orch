@@ -4,7 +4,7 @@
  * Импорты идут через двери (index.ts) — модули не лезут в кишки друг друга.
  */
 import { initConfirmDialog, initPermissionDialog, showToast } from "./ui";
-import { ChatController, SessionController, SettingsController, GraphController, AgentTestController, UpdatePopupController } from "./controllers";
+import { ChatController, SessionController, SettingsController, GraphController, AgentTestController, CodingTestController, UpdatePopupController } from "./controllers";
 import { bus } from "./events";
 import { invoke } from "@tauri-apps/api/core";
 import { save } from "@tauri-apps/plugin-dialog";
@@ -146,6 +146,23 @@ async function initApp() {
     btnSaveTestResults: $<HTMLButtonElement>("btn-save-test-results"),
   });
 
+  // ─── Контроллер кодинг-теста LLM (суб-вкладка в студии агентов) ───
+  const codingTestCtrl = new CodingTestController({
+    codingModelList: $<HTMLDivElement>("coding-model-list"),
+    codingSuiteList: $<HTMLDivElement>("coding-suite-list"),
+    codingQuickCount: $<HTMLInputElement>("coding-quick-count"),
+    codingVrBudget: $<HTMLInputElement>("coding-vr-budget"),
+    btnRunCodingTest: $<HTMLButtonElement>("btn-run-coding-test"),
+    btnStopCodingTest: $<HTMLButtonElement>("btn-stop-coding-test"),
+    codingProgress: $<HTMLDivElement>("coding-progress"),
+    codingStatusLabel: $<HTMLDivElement>("coding-status-label"),
+    codingProgressBar: $<HTMLDivElement>("coding-progress-bar"),
+    codingLog: $<HTMLDivElement>("coding-log"),
+    codingResultsBox: $<HTMLDivElement>("coding-results-box"),
+    codingResultsContent: $<HTMLDivElement>("coding-results-content"),
+    codingReportLink: $<HTMLAnchorElement>("coding-report-link"),
+  });
+
   // ─── Переключение вкладок ───
   const tabChat = $<HTMLButtonElement>("tab-chat");
   const tabAgentStudio = $<HTMLButtonElement>("tab-agent-studio");
@@ -163,17 +180,21 @@ async function initApp() {
   // Суб-вкладки студии агентов
   const subtabGraph = $<HTMLButtonElement>("subtab-graph");
   const subtabAiTest = $<HTMLButtonElement>("subtab-ai-test");
+  const subtabCodingTest = $<HTMLButtonElement>("subtab-coding-test");
   const viewSubGraph = $<HTMLDivElement>("view-sub-graph");
   const viewSubAiTest = $<HTMLDivElement>("view-sub-ai-test");
+  const viewSubCodingTest = $<HTMLDivElement>("view-sub-coding-test");
 
-  let activeSubTab: 'graph' | 'ai-test' = 'graph';
+  let activeSubTab: 'graph' | 'ai-test' | 'coding-test' = 'graph';
 
-  function switchSubTab(tab: 'graph' | 'ai-test') {
+  function switchSubTab(tab: 'graph' | 'ai-test' | 'coding-test') {
     activeSubTab = tab;
     subtabGraph.classList.toggle('active', tab === 'graph');
     subtabAiTest.classList.toggle('active', tab === 'ai-test');
+    subtabCodingTest.classList.toggle('active', tab === 'coding-test');
     viewSubGraph.classList.toggle('active', tab === 'graph');
     viewSubAiTest.classList.toggle('active', tab === 'ai-test');
+    viewSubCodingTest.classList.toggle('active', tab === 'coding-test');
     if (tab === 'graph') requestAnimationFrame(() => graphCtrl.onTabActivated());
   }
 
@@ -231,6 +252,10 @@ async function initApp() {
   subtabAiTest?.addEventListener("click", () => {
     switchSubTab('ai-test');
     agentTestCtrl.init();
+  });
+  subtabCodingTest?.addEventListener("click", () => {
+    switchSubTab('coding-test');
+    codingTestCtrl.init();
   });
 
   // ─── Мосты шины событий ───
