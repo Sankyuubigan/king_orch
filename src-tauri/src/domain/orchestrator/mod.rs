@@ -221,7 +221,8 @@ pub fn build_worst_agent_prompt(
         .filter_map(|n| n.agent.as_deref())
         .filter_map(|aid| agents.iter().find(|a| a.id == aid))
         .map(|agent| {
-            let tools = runtime::builtin_tools();
+            let mut tools = runtime::builtin_tools();
+            tools.extend(runtime::agent_code_tool_schemas(agent));
             let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
             let mut sp = build_system_prompt(agent, history, has_tools, &tools, 2048);
             sp.push_str("\n\n");
@@ -263,6 +264,7 @@ pub fn run_chat<L, S, C, ST>(
     mmproj_path: Option<String>,     cancel_flag: Arc<AtomicBool>,
     stream_meta: Arc<Mutex<StreamMeta>>,
     prompt_log: Option<std::path::PathBuf>,
+    session_id: String,
 ) -> Result<ChatRunResult, String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -293,8 +295,9 @@ where
         Some(wf) => build_worst_agent_prompt(&agents, wf, &history),
         None => agents.iter().find(|a| a.id == agent_id)
             .map(|agent| {
+                let mut tools = runtime::builtin_tools();
+                tools.extend(runtime::agent_code_tool_schemas(agent));
                 let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
-                let tools = if has_tools { runtime::builtin_tools() } else { Vec::new() };
                 (build_system_prompt(agent, &history, has_tools, &tools, max_gen_usize), has_tools)
             })
             .unwrap_or_else(|| (String::new(), false)),
@@ -347,6 +350,10 @@ where
     let project_dir = agents_dir.parent().unwrap_or(&agents_dir);
     let sampling_presets = crate::infra::load_sampling_presets(project_dir);
 
+    // 🔐 Корень проекта для инструментов кодинга (запись внутри — авто,
+    // проверяется тулами через ctx.workspace_root). Сбрасываем гранты сессии.
+    crate::infra::global_approver().reset_session(&session_id);
+
     if let Some(workflow) = workflow_match {
         log_cb(format!("▶ Запуск workflow '{}' (entry: {})", workflow.name, agent_id));
         let mut ctx = WorkflowContext::new(
@@ -373,6 +380,8 @@ where
             stream_meta: stream_meta.clone(),
             sampling_presets: &sampling_presets,
             prompt_log: prompt_log.clone(),
+            session_id: session_id.clone(),
+            workspace_root: project_dir.to_path_buf(),
         };
         crate::domain::workflow_engine::run_workflow(
             workflow, &mut ctx, &mut runner,
@@ -406,6 +415,8 @@ where
             String::new(),
             stream_meta.clone(), true,
             prompt_log.clone(),
+            session_id.clone(),
+            project_dir.to_path_buf(),
         )?;
 
         // Fail-fast: если primary-агент вернул ошибку — не сохраняем её как ответ
@@ -503,6 +514,8 @@ pub(crate) fn run_agent_node<L, S, C>(
     stream_meta: Arc<Mutex<StreamMeta>>,
     allow_stream: bool,
     prompt_log: Option<std::path::PathBuf>,
+    session_id: String,
+    workspace_root: std::path::PathBuf,
 ) -> Result<String, String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -531,6 +544,10 @@ where
 
     let mut all_tools: Vec<(String, String, serde_json::Value)> = Vec::new();
     runtime::load_mcp_servers(&log_cb, mcp_servers_dir, bins_dir, &agent.mcp_servers, &mcp_pool, &mut all_tools);
+
+    // 🛠 Capability кодинга: `tools: ["code_read"]` — только чтение; `tools: ["code_write"]` —
+    // чтение + мутаторы (внутри корня авто, вне — плашка). SSOT — infra::tools.
+    all_tools.extend(runtime::agent_code_tool_schemas(agent));
 
     let has_real_tools = !all_tools.is_empty() || !agent.tools.is_empty();
 
@@ -666,6 +683,9 @@ let start_time = Instant::now();
         mcp_servers_dir,
         bins_dir,
         grammars_dir,
+        session_id: session_id.clone(),
+        workspace_root: workspace_root.clone(),
+        approver: crate::infra::global_approver(),
         llm_messages,
         messages,
         msg_counter,

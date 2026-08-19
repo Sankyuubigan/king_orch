@@ -10,5 +10,7 @@ export { showToast } from './toast'
 
 export { confirmDialog, initConfirmDialog } from './confirm'
 
+export { initPermissionDialog, showPermissionRequest } from './permission'
+
 export { createMessageMenu } from './message-menu'
 export type { MessageMenuCallbacks } from './message-menu'

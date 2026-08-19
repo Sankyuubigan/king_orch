@@ -30,6 +30,14 @@ pub enum AgentEvent {
         agent: String,
         tool: String,
     },
+    /// Запрос разрешения на запись вне корня проекта (плашка с 3 кнопками).
+    /// Фронтенд показывает диалог и вызывает `respond_permission`.
+    PermissionRequest {
+        request_id: String,
+        agent: String,
+        tool: String,
+        path: String,
+    },
 }
 
 type Listener = Arc<dyn Fn(&AgentEvent) + Send + Sync>;

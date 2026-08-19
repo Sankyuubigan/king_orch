@@ -196,6 +196,7 @@ pub async fn chat_request(
     model_params: ModelParams,
     attachments: Vec<ChatAttachment>,
     mmproj_path: Option<String>,
+    session_id: String,
 ) -> Result<ChatResponse, String> {
     let mut cfg = infra::load_config(&app);
     cfg.context_size = context_size;
@@ -359,6 +360,7 @@ pub async fn chat_request(
             cancel_flag,
             stream_meta,
             prompt_log,
+            session_id,
         );
         let app_rss_after = crate::infra::current_process_rss();
         match (app_rss_before, app_rss_after) {

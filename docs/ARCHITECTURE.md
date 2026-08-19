@@ -131,7 +131,8 @@
 |-------------|---------------------|
 | `orchestrator/mod.rs` | Главный цикл: парсинг ответа LLM, вызов сабагентов/инструментов, рекурсивный `run_agent_node()`, built-in `get_agent_report`. В legacy .md режиме вся история non-thought сообщений inject'ится в `llm_messages` как отдельные ChatMessage. **Точка входа `run_chat()` автоматически определяет: запускать workflow YAML или legacy `run_agent_node()`** |
 | `orchestrator/prompt.rs` | Сборка системного промпта, инструкция по `get_agent_report` вместо рендера состояния |
-| `orchestrator/runtime.rs` | Загрузка и запуск MCP-серверов |
+| `orchestrator/runtime.rs` | Загрузка и запуск MCP-серверов, раскрытие `code_read`/`code_write`/explicit-тулов из `agent.tools` (`agent_code_tool_schemas`) |
+| `orchestrator/dispatch.rs` | Диспетчеризация инструментов. Ветка код-тулов (до MCP): **capability-проверка `is_tool_granted`** (тул должен быть выдан в промпт — defense-in-depth), затем `execute_tool` |
 | `workflow_engine/mod.rs` | **Графовый движок маршрутизации.** Исполняет YAML-графы (workflows). Точка входа — `run_workflow()` |
 | `workflow_engine/parser.rs` | Парсинг YAML workflow файлов, структуры `WorkflowDef`, `NodeDef`, `EdgeDef`, поиск по `file_stem` |
 | `workflow_engine/nodes.rs` | Исполнение узлов графа: `llm_worker`, `llm_fact_extractor`, `system_condition`, `sub_workflow`, `switch`, `note` (pass-through), `return` |
@@ -151,6 +152,10 @@
 | `session_manager.rs` | Чтение/запись JSON-файлов сессий (единый массив `messages[]`) |
 | `mcp_client.rs` | JSON-RPC клиент для MCP-серверов через stdin/stdout |
 | `downloader.rs` | Скачивание .gguf файлов с прогрессом |
+| `bin_downloader.rs` | Скачивание sidecar-бинарников (deno, yt-dlp, rust-analyzer) с распаковкой zip/gzip |
+| `tools/` | **Инструменты кодинга (Rust-ядро, SSOT)**. Трейт `Tool` + реестр `all_tools()`: `fs.rs` (read_file/read_many_files/write_file/edit_file), `search.rs` (grep/glob/list_directory), `shell.rs` (bash/run_tests), `lsp.rs` (lsp_get_definition/lsp_get_references/lsp_get_diagnostics). `code_read`/`code_write` — фильтры по `is_readonly()`, explicit-имена добавляются к базе. Вся реализация — в этом модуле, диспетчер только исполняет |
+| `permissions.rs` | Система разрешений: `PermissionApprover` (auto-allow в корне для мутаторов, read-only авто везде, session-grants, pending-запросы). Тул-события → плашка в UI |
+| `lsp/` | LSP-клиент (JSON-RPC 2.0 по stdio, Content-Length framing) + `manager.rs` (sidecar: ленивый старт rust-analyzer, кэш на workspace root) |
 
 ---
 
@@ -167,9 +172,17 @@ main.rs
          │    │    ├→ fact_extractor.rs  — built-in экстрактор фактов (без .md)
          │    │    └→ mod.rs             — run_workflow() — вход в граф
         │    ├→ orchestrator/           — run_agent_node() (для .md агентов)
+        │    │    ├→ dispatch.rs         — исполнение тулов + capability-проверка
+        │    │    └→ runtime.rs          — MCP-загрузка + agent_code_tool_schemas
         │    ├→ parsers.rs
         │    └→ agent_manager.rs       — загрузка .md + YAML, load_entry_points()
        └→ infra/ (дверь: infra/mod.rs)
+            ├→ tools/                   — код-тулы (SSOT): fs/search/shell/lsp
+            ├→ permissions.rs           — PermissionApprover, плашка
+            ├→ lsp/                     — LSP-клиент + sidecar-менеджер
+            ├→ mcp_client.rs            — JSON-RPC клиент MCP
+            ├→ bin_downloader.rs        — sidecar-бинарники (deno, rust-analyzer)
+            └→ ...
 
 Frontend:
 main.ts
@@ -210,6 +223,30 @@ User → Entry point (выбор в UI: .md с visible: true или YAML с visi
 3. `get_prompt_memory(...)` → `infra::llm::estimate_vram_mb`: `размер файла модели + KV-кэш`, где `effective_ctx = (prompt_tokens + max_gen + 128).min(context_size)`.
 
 Прокси «по символам» для выбора худшего агента допустим для примерной оценки. В UI для графа в подсказке счётчика добавляется пометка «Оценка по самому тяжёлому агенту графа».
+
+### Инструменты кодинга (Rust-ядро) и разрешения
+
+Код-тулы — отдельный слой `infra/tools/` (SSOT-реестр), диспетчеризуются **до** MCP-поиска в `dispatch.rs`.
+
+```
+Агент вызывает {tool} (из all_tools — того, что выдано в промпт)
+   ↓
+dispatch.rs: is_code_tool_reference(tool)?
+   ├─ НЕТ → MCP-поиск (мета-имя сервера) / builtin / ошибка
+   └─ ДА  → is_tool_granted(all_tools, tool)?     (capability-проверка)
+             ├─ НЕТ → "Ошибка: инструмент недоступен агенту" (defense-in-depth)
+             └─ ДА  → execute_tool() → Tool::execute(args, ToolCtx)
+                        ├─ read-only (is_readonly) → авто, любой путь
+                        └─ мутатор (write/edit/bash/run_tests)
+                              ├─ внутри workspace_root → авто + логирование
+                              └─ вне корня → PermissionApprover.pending
+                                    → EventBus PermissionRequest → плашка в UI
+                                    → respond_permission(deny/allow_once/allow_session)
+```
+
+- **Grant (что видит агент)** = `agent_code_tool_schemas(agent)` (runtime.rs): `code_read` → только readonly, `code_write` → всё, явные имена → добавляются к read-only базе. Этот же список попадает в `all_tools` → и в промпт, и в проверку `is_tool_granted`.
+- **LSP** (`infra/lsp/`): rust-analyzer как sidecar (JSON-RPC 2.0 по stdio), ленивый старт, один процесс на workspace root. Тулы `lsp_get_*` — read-only.
+- **Установка sidecar**: `bin_downloader.rs` (rust-analyzer приходит как `.gz` → flate2). Нет бинарника → честная ошибка «LSP-сервер не установлен», не тишина.
 
 **Запрещённые импорты:**
 - ❌ `api/chat.rs → crate::infra::llm::ChatMessage` (кишки)

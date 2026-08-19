@@ -93,6 +93,9 @@ async fn main() {
             infra::startup_log::append("INFO", "setup(): начало");
             let app_handle = app.handle();
 
+            // 🔐 Форвардинг запросов разрешений в UI (плашка с 3 кнопками).
+            api::permissions::init_permission_forwarding(&app_handle);
+
             // Телеметрия: инициализация только если юзер не против.
             if telemetry_enabled {
                 infra::telemetry::init(&app_handle);
@@ -149,6 +152,7 @@ async fn main() {
             api::models::auto_download_default_model,
             api::chat::chat_request,
             api::chat::stop_processing,
+            api::permissions::respond_permission,
             api::chat::get_prompt_preview,
             api::chat::get_prompt_memory,
             api::graph::read_workflow_file,

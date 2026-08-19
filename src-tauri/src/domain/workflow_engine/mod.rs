@@ -45,6 +45,10 @@ pub struct WorkflowRunner<'a, L, S, C> {
     pub sampling_presets: &'a SamplingPresets,
     /// Путь к логу снимков входа модели (prompt-log). None — не писать.
     pub prompt_log: Option<std::path::PathBuf>,
+    /// ID сессии чата (для permission-грантов «в этом чате»).
+    pub session_id: String,
+    /// Корень проекта (запись внутри — авто-разрешена без плашки).
+    pub workspace_root: std::path::PathBuf,
 }
 
 impl<'a, L, S, C> WorkflowRunner<'a, L, S, C>
@@ -119,6 +123,8 @@ where
             self.stream_meta.clone(),
             allow_stream,
             self.prompt_log.clone(),
+            self.session_id.clone(),
+            self.workspace_root.clone(),
         )
     }
 

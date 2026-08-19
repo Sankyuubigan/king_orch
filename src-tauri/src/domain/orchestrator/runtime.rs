@@ -78,6 +78,39 @@ pub fn builtin_tools() -> Vec<(String, String, serde_json::Value)> {
     )]
 }
 
+/// Схемы инструментов кодинга (SSOT — infra::tools::all_tools). Раскрывают
+/// capability `code_read` / `code_write` из `tools:` в .md агента в набор схем.
+///
+/// read-only тулы (read_file, read_many_files, grep, glob, list_directory) —
+/// доступны любому агенту БЕЗ плашки. Мутаторы (write_file, edit_file, bash)
+/// внутри корня проекта — авто, вне корня — плашка пользователя.
+pub fn code_tool_schemas(include_write: bool) -> Vec<(String, String, serde_json::Value)> {
+    crate::infra::tools::tool_schemas(include_write, &[])
+}
+
+/// Явные имена тулов из `agent.tools` (помимо мета-наборов `code_read`/`code_write`/`todo`).
+/// `tool_schemas` ДОБАВЛЯЕТ explicit-имена к базовому read-only набору (SSOT).
+fn explicit_code_tools(agent: &crate::domain::agent_manager::AgentProfile) -> Vec<String> {
+    agent.tools.iter()
+        .filter(|t| *t != "code_read" && *t != "code_write" && *t != "todo")
+        .cloned()
+        .collect()
+}
+
+/// Полный набор схем кодинга для агента: мета-наборы + явные имена из `agent.tools`.
+pub fn agent_code_tool_schemas(agent: &crate::domain::agent_manager::AgentProfile) -> Vec<(String, String, serde_json::Value)> {
+    let explicit = explicit_code_tools(agent);
+    if agent.tools.iter().any(|t| t == "code_write") {
+        crate::infra::tools::tool_schemas(true, &explicit)
+    } else if agent.tools.iter().any(|t| t == "code_read") {
+        crate::infra::tools::tool_schemas(false, &explicit)
+    } else if !explicit.is_empty() {
+        crate::infra::tools::tool_schemas(false, &explicit)
+    } else {
+        Vec::new()
+    }
+}
+
 /// Capability-шов (Слой 4.3): единая точка, где декларируется, что агент
 /// *умеет* — какие встроенные инструменты, MCP-серверы и сабагенты ему доступны.
 /// Ядро оркестратора спрашивает шов вместо хардкода; добавить/заменить
@@ -360,5 +393,43 @@ mod tests {
         let s = agent_capabilities_summary(&a);
         assert!(s.contains("agent_x"));
         assert!(s.contains("tool:custom_tool"));
+    }
+
+    #[test]
+    fn code_read_schemas_are_readonly_only() {
+        let a = make_agent(&["code_read"], &[], &[]);
+        let schemas = agent_code_tool_schemas(&a);
+        let names: Vec<String> = schemas.iter().map(|(_, n, _)| n.clone()).collect();
+        assert!(names.contains(&"read_file".to_string()));
+        assert!(!names.contains(&"write_file".to_string()), "code_read не должен давать write_file");
+        assert!(!names.contains(&"bash".to_string()), "code_read не должен давать bash");
+    }
+
+    #[test]
+    fn code_write_schemas_include_mutators() {
+        let a = make_agent(&["code_write"], &[], &[]);
+        let schemas = agent_code_tool_schemas(&a);
+        let names: Vec<String> = schemas.iter().map(|(_, n, _)| n.clone()).collect();
+        assert!(names.contains(&"read_file".to_string()));
+        assert!(names.contains(&"write_file".to_string()));
+        assert!(names.contains(&"edit_file".to_string()));
+        assert!(names.contains(&"bash".to_string()));
+    }
+
+    #[test]
+    fn explicit_tool_name_adds_mutator_to_readonly_base() {
+        // `tools: ["bash"]` — explicit добавляет bash к read-only базе, но НЕ write_file.
+        let a = make_agent(&["bash"], &[], &[]);
+        let schemas = agent_code_tool_schemas(&a);
+        let names: Vec<String> = schemas.iter().map(|(_, n, _)| n.clone()).collect();
+        assert!(names.contains(&"bash".to_string()));
+        assert!(names.contains(&"read_file".to_string()));
+        assert!(!names.contains(&"write_file".to_string()));
+    }
+
+    #[test]
+    fn no_code_tools_means_empty_schemas() {
+        let a = make_agent(&[], &[], &[]);
+        assert!(agent_code_tool_schemas(&a).is_empty());
     }
 }

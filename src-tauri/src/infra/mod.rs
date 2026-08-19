@@ -19,6 +19,9 @@ pub mod llamacpp_installer;
 pub mod startup_log;
 pub mod mem_profiler;
 pub mod telemetry;
+pub mod tools;
+pub mod permissions;
+pub mod lsp;
 
 // ─── Публичные типы ───
 pub use config::{AppConfig, CatalogEntry, ModelMeta, ModelParams, SamplingPresets};
@@ -32,3 +35,5 @@ pub use mmproj::ensure_mmproj_for_model;
 pub use llm::{extract_f32_from_gguf, extract_u32_from_gguf};
 pub use session_manager::{get_session, get_sessions, save_session, delete_session, rename_session, open_session_folder};
 pub use mem_profiler::{MemSampler, MemGuard, peak_line, current_process_rss};
+pub use permissions::{PermissionApprover, GrantDecision, global_approver, test_approver};
+pub use tools::{Tool, ToolCtx, ToolError, tool_schemas, execute_tool, all_tools};

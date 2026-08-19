@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { store } from "../store";
 import { bus } from "../events";
-import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, showToast } from "../ui";
+import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, showToast, showPermissionRequest } from "../ui";
 import type { Role, MessageMenuCallbacks } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, CatalogEntry } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
@@ -306,7 +306,8 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
         kvQuantValues: this.el.chkKvQuantV.checked,
         modelParams: params,
         attachments: [],
-        mmprojPath
+        mmprojPath,
+        sessionId: store.currentSessionId ?? ""
       });
 
       const dur = ((performance.now() - startTime) / 1000);
@@ -592,7 +593,8 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
           kvQuantValues: this.el.chkKvQuantV.checked, 
           modelParams: params, 
           attachments, 
-          mmprojPath 
+          mmprojPath,
+          sessionId: store.currentSessionId ?? ""
       });
       const dur = ((performance.now() - startTime) / 1000);
       const newMessages = response.messages || [];
@@ -806,6 +808,8 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     listen("progress", (e) => { this.el.progressBar.style.width = `${e.payload}%`; });
     listen("status", (e) => { this.el.statusLabel.innerText = e.payload as string; });
     listen("log", (e) => { this.logToGUI(e.payload as string); });
+
+    listen("tool_permission_request", (e) => { showPermissionRequest(e.payload as any); });
 
     listen("download_progress", (e) => {
       const { downloaded, total } = e.payload as { downloaded: number; total: number };

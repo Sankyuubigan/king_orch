@@ -79,10 +79,30 @@ function buildToolCatalog() {
   const runtime = path.join(SRC, "domain", "orchestrator", "runtime.rs");
   if (fs.existsSync(runtime)) {
     const src = fs.readFileSync(runtime, "utf8");
-    const re = /"name":\s*"(\w+)"[\s\S]*?description:\s*"([^"]*)"/g;
+    const re = /"name":\s*"(\w+)"[\s\S]*?"description":\s*"([^"]*)"/g;
     let m;
     while ((m = re.exec(src))) {
       md += `- \`${m[1]}\` — ${m[2]}\n`;
+    }
+  }
+  md += "\n## Инструменты кодинга (Rust-ядро, infra/tools/ — SSOT)\n\n";
+  const toolsDir = path.join(SRC, "infra", "tools");
+  const toolFiles = ["fs.rs", "search.rs", "shell.rs", "lsp.rs"];
+  for (const f of toolFiles) {
+    const full = path.join(toolsDir, f);
+    if (!fs.existsSync(full)) continue;
+    const src = fs.readFileSync(full, "utf8");
+    // Парсим блоки `impl Tool for X { ... }` целиком: имя, описание, read-only.
+    const implRe = /impl\s+Tool\s+for\s+(\w+)\s*\{([\s\S]*?)\n\}/g;
+    let m;
+    while ((m = implRe.exec(src))) {
+      const body = m[2];
+      const name = (body.match(/fn\s+name\(&self\)\s*->\s*&str\s*\{\s*"([^"]+)"/) || [])[1];
+      const desc = (body.match(/fn\s+description\(&self\)\s*->\s*&str\s*\{\s*"([^"]*)"/) || [])[1];
+      if (!name || !desc) continue;
+      const readonly = /fn\s+is_readonly\(&self\)\s*->\s*bool\s*\{\s*true\s*\}/.test(body);
+      const flag = readonly ? "read-only" : "read+write";
+      md += `- \`${name}\` [${flag}] — ${desc}\n`;
     }
   }
   md += "\n## MCP-серверы (Deno, src-tauri/mcp_servers/)\n\n";

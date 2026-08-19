@@ -363,6 +363,20 @@
     </div>
   </div>
 
+  <!-- Плашка разрешения на запись вне корня проекта (3 кнопки) -->
+  <div id="permission-overlay" class="confirm-overlay">
+    <div class="confirm-dialog">
+      <div class="confirm-icon">🔐</div>
+      <h3 id="permission-title" class="confirm-title">Запись вне проекта</h3>
+      <p id="permission-message" class="confirm-message">Агент запросил доступ к записи.</p>
+      <div class="confirm-buttons">
+        <button id="permission-btn-deny" class="btn-danger confirm-btn">Запретить</button>
+        <button id="permission-btn-once" class="btn-secondary confirm-btn">Разрешить 1 раз</button>
+        <button id="permission-btn-session" class="btn-primary confirm-btn">Разрешить в этом чате</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Контейнер для всплывающих уведомлений -->
   <div id="toast-container"></div>
 

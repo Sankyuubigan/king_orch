@@ -3,7 +3,7 @@
  * Вся логика изолирована в модулях-контроллерах.
  * Импорты идут через двери (index.ts) — модули не лезут в кишки друг друга.
  */
-import { initConfirmDialog, showToast } from "./ui";
+import { initConfirmDialog, initPermissionDialog, showToast } from "./ui";
 import { ChatController, SessionController, SettingsController, GraphController, AgentTestController, UpdatePopupController } from "./controllers";
 import { bus } from "./events";
 import { invoke } from "@tauri-apps/api/core";
@@ -17,6 +17,7 @@ async function initApp() {
   // (уважает настройку «Отправлять анонимные отчёты об ошибках»)
   await initTelemetry();
   initConfirmDialog();
+  initPermissionDialog();
 
   // ─── Контроллер сессий (боковая панель) ───
   const sessionCtrl = new SessionController({

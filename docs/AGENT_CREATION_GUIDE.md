@@ -50,7 +50,7 @@ name: Имя агента (человекочитаемое)
 description: Краткое описание того, что он делает
 visible: true        # опционально: показывать в UI как точку входа
 single_report: true  # опционально: хранить в сессии только 1 (последний) отчёт агента
-tools: ["write", "bash"]   # опционально: включить в промпт описание инструментов
+tools: ["code_write"]   # опционально: код-тулы (code_read — read-only, code_write — чтение+запись, или явные имена)
 mcp_servers: ["server_name"]  # опционально: прикрепить MCP-серверы (из src-tauri/mcp_servers/)
 ---
 Текст системного промпта начинается здесь...
@@ -58,7 +58,19 @@ mcp_servers: ["server_name"]  # опционально: прикрепить MCP
 
 > **Примечание:** Поля `mode` (primary/router/worker) и `subagents` **устарели** и больше не парсятся из frontmatter: все агенты — одного типа. Видимость в UI определяется полем `visible: true/false` — либо в frontmatter `.md` файла, либо в корне YAML workflow. Если поле не указано — entry point скрыт из UI.
 >
-> `tools` в frontmatter — **JSON-массив строк**, а не YAML-мапа: `tools: ["write", "bash"]`.
+> `tools` в frontmatter — **JSON-массив строк**, а не YAML-мапа: `tools: ["write", "bash"]`. Вместо YAML-мапы `tools: {write: true, bash: true}` используй массив имён или мета-наборы `code_read` / `code_write` (legacy YAML-мапа всё ещё распознаётся парсером для обратной совместимости, но это устаревший формат).
+
+### Параметр `tools` (код-тулы из Rust-ядра `infra/tools/`)
+
+Код-инструменты живут в Rust-ядре (SSOT-реестр `src-tauri/src/infra/tools/`), а не в MCP-серверах. Укажи в `tools`:
+
+- `code_read` — мета-набор **read-only** тулов: `read_file`, `read_many_files`, `grep`, `glob`, `list_directory`, `lsp_get_definition`, `lsp_get_references`, `lsp_get_diagnostics`. Выполняются автоматически, без плашки, по любым путям.
+- `code_write` — полный набор (**чтение + запись**): всё из `code_read` плюс мутаторы `write_file`, `edit_file`, `bash`, `run_tests`. Запись **внутри корня проекта** — автоматически разрешена и логируется; запись **вне корня** — плашка в UI с выбором: «Запретить / Разрешить 1 раз / Разрешить в этом чате».
+- **Явные имена** — добавляются к базовому read-only набору (например `tools: ["bash"]` даёт read-only + `bash`, но НЕ `write_file`).
+
+Запуск тестов идёт только через безопасный `run_tests` (белый список команд: `npm_test`, `npm_build`, `npm_lint`, `npm_typecheck`, `cargo_test`, `cargo_check`) — без плашки.
+
+> **Defense-in-depth:** диспетчер `dispatch.rs` проверяет, что тул реально выдан агенту в промпт (`is_tool_granted`). Агент с `code_read` **не сможет** вызвать `write_file`/`edit_file`/`bash`, даже если модель «угадает» имя. MCP-серверы `fs_read`/`fs_write` существуют в репо, но отвязаны от coder-команды.
 
 ### Параметр `single_report` (экономия контекста в сессии)
 

@@ -14,6 +14,7 @@
 - `model_params`: `HashMap<String`
 - `context_size`: `u32`
 - `max_gen_tokens`: `u32`
+- `reasoning_budget`: `u32`
 - `kv_quant_keys`: `bool`
 - `kv_quant_values`: `bool`
 - `theme`: `String`
@@ -22,6 +23,7 @@
 - `show_advanced_features`: `bool`
 - `show_folder_agents`: `bool`
 - `mmproj_files`: `HashMap<String`
+- `model_meta`: `HashMap<String`
 - `llamacpp_dir`: `Option<String>`
 - `engine_variant`: `Option<String>`
 - `allow_error_reports`: `bool`

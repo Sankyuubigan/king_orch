@@ -104,15 +104,47 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             let mut current_date = false;
             let mut mcp_servers = Vec::new();
             let mut tools = Vec::new();
-            for line in frontmatter.lines() {
-                let line = line.trim();
+            let frontmatter_lines: Vec<&str> = frontmatter.lines().collect();
+            let mut i = 0;
+            while i < frontmatter_lines.len() {
+                let line = frontmatter_lines[i].trim();
                 if line.starts_with("name:") { name = line["name:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string(); }
                 else if line.starts_with("description:") { description = line["description:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string(); }
                 else if line.starts_with("visible:") { visible = line["visible:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("single_report:") { single_report = line["single_report:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("current_date:") { current_date = line["current_date:".len()..].trim().parse().unwrap_or(false); }
-                else if line.starts_with("mcp_servers:") { if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["mcp_servers:".len()..].trim()) { mcp_servers = parsed; } }
-                else if line.starts_with("tools:") { if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["tools:".len()..].trim()) { tools = parsed; } }
+                else if line.starts_with("mcp_servers:") {
+                    if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["mcp_servers:".len()..].trim()) { mcp_servers = parsed; }
+                }
+                else if line.starts_with("tools:") {
+                    // Предпочтение: JSON-массив имён (`tools: ["code_write"]`).
+                    let inline = line["tools:".len()..].trim();
+                    if let Ok(parsed) = serde_json::from_str::<Vec<String>>(inline) {
+                        tools = parsed;
+                    } else {
+                        // Robustness: legacy YAML-мапа `tools:\n  write: true\n  bash: true`.
+                        // Сопоставляем булевы ключи с мета-наборами / именами тулов.
+                        let mut j = i + 1;
+                        while j < frontmatter_lines.len() && (frontmatter_lines[j].starts_with(' ') || frontmatter_lines[j].starts_with('\t')) {
+                            let kv = frontmatter_lines[j].trim();
+                            if let Some((k, v)) = kv.split_once(':') {
+                                if let Ok(enabled) = v.trim().parse::<bool>() {
+                                    if enabled {
+                                        match k.trim() {
+                                            "write" | "edit" => tools.push("code_write".to_string()),
+                                            "read" => tools.push("code_read".to_string()),
+                                            "bash" => tools.push("bash".to_string()),
+                                            other => tools.push(other.to_string()),
+                                        }
+                                    }
+                                }
+                            }
+                            j += 1;
+                        }
+                        i = j - 1;
+                    }
+                }
+                i += 1;
             }
             if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, single_report, tools, current_date }); }
         }
@@ -153,4 +185,34 @@ pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
     }
 
     entries
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(content: &str) -> AgentProfile {
+        parse_agent_markdown(content).expect("агент должен распарситься")
+    }
+
+    #[test]
+    fn tools_json_array_parsed() {
+        let a = parse("---\nname: Test\nvisible: true\ntools: [\"code_write\"]\n---\nbody\n");
+        assert_eq!(a.tools, vec!["code_write"]);
+    }
+
+    #[test]
+    fn tools_yaml_map_parsed_as_legacy_robustness() {
+        // Legacy формат: YAML-мапа вместо JSON-массива.
+        let a = parse("---\nname: Test\ntools:\n  write: true\n  bash: true\n  read: false\n---\nbody\n");
+        assert_eq!(a.tools, vec!["code_write", "bash"], "write→code_write, bash→bash, read:false игнорируется");
+    }
+
+    #[test]
+    fn tools_after_yaml_map_not_consumed() {
+        // Ключи после блока мапы (например description ниже tools) парсятся корректно.
+        let a = parse("---\nname: Test\ntools:\n  read: true\ndescription: d\n---\nbody\n");
+        assert_eq!(a.tools, vec!["code_read"]);
+        assert_eq!(a.description, "d");
+    }
 }

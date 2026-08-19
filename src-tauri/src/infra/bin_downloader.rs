@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 const DENO_URL: &str = "https://github.com/denoland/deno/releases/download/v2.9.5/deno-x86_64-pc-windows-msvc.zip";
 const YT_DLP_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
+const RUST_ANALYZER_URL: &str = "https://github.com/rust-lang/rust-analyzer/releases/latest/download/rust-analyzer-x86_64-pc-windows-msvc.gz";
 const CHROME_JSON_URL: &str = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
 // CloakBrowser (stealth-Chromium): бесплатный релиз v146 без лицензионного ключа
 const CLOAK_RELEASE_VERSION: &str = "chromium-v146.0.7680.177.5";
@@ -27,12 +28,37 @@ fn bin_url(name: &str) -> Result<&'static str, String> {
     match name {
         "deno" => Ok(DENO_URL),
         "yt-dlp" => Ok(YT_DLP_URL),
+        "rust-analyzer" => Ok(RUST_ANALYZER_URL),
         _ => Err(format!("Неизвестный бинарник: {}", name)),
     }
 }
 
 fn is_zip(name: &str) -> bool {
     name == "deno"
+}
+
+/// Сжатие: `.gz` (rust-analyzer поставляется как gzip).
+fn is_gzip(name: &str) -> bool {
+    name == "rust-analyzer"
+}
+
+/// Распаковка gzip в один файл (rust-analyzer). Валидирует размер и записывает
+/// исполняемый файл в bins_dir.
+fn extract_gzip(gz_bytes: &[u8], bins_dir: &Path, target_exe: &str, log_cb: &dyn Fn(String)) -> Result<(), String> {
+    use std::io::Read;
+    let mut decoder = flate2::read::GzDecoder::new(gz_bytes);
+    let mut out_bytes = Vec::new();
+    decoder
+        .read_to_end(&mut out_bytes)
+        .map_err(|e| format!("Ошибка распаковки gzip: {}", e))?;
+    if out_bytes.is_empty() {
+        return Err("Пустой файл после распаковки gzip".to_string());
+    }
+    let dest = bins_dir.join(target_exe);
+    fs::write(&dest, &out_bytes)
+        .map_err(|e| format!("Ошибка записи {}: {}", dest.display(), e))?;
+    log_cb(format!("✅ Распакован {} ({} МБ)", target_exe, out_bytes.len() as f64 / 1024.0 / 1024.0));
+    Ok(())
 }
 
 fn download_file_sync(url: &str, dest: &Path, log_cb: &dyn Fn(String)) -> Result<(), String> {
@@ -320,6 +346,19 @@ pub fn ensure_runtime_bin(name: &str, bins_dir: &Path, log_cb: impl Fn(String)) 
         log_cb(format!("📥 Скачано {} МБ, распаковка...", bytes.len() as f64 / 1024.0 / 1024.0));
 
         extract_zip_entry(&bytes, &bins_dir, &bin_name, &log_cb)?;
+    } else if is_gzip(name) {
+        let resp = reqwest::blocking::get(url)
+            .map_err(|e| format!("Ошибка подключения {}: {}", url, e))?;
+
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("HTTP {} при скачивании {}", status, url));
+        }
+
+        let bytes = resp.bytes().map_err(|e| format!("Ошибка чтения ответа: {}", e))?;
+        log_cb(format!("📥 Скачано {} МБ, распаковка...", bytes.len() as f64 / 1024.0 / 1024.0));
+
+        extract_gzip(&bytes, &bins_dir, &bin_name, &log_cb)?;
     } else {
         download_file_sync(url, &bin_path, &log_cb)?;
     }

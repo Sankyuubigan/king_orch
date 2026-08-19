@@ -49,6 +49,9 @@ where
     pub(crate) mcp_servers_dir: &'a Path,
     pub(crate) bins_dir: &'a Path,
     pub(crate) grammars_dir: &'a Path,
+    pub(crate) session_id: String,
+    pub(crate) workspace_root: PathBuf,
+    pub(crate) approver: Arc<crate::infra::PermissionApprover>,
     // ── мутабельные (владение / &mut-ссылки) ──
     pub(crate) llm_messages: Vec<LlmMessage>,
     pub(crate) messages: &'a mut Vec<ChatMessage>,
@@ -188,6 +191,45 @@ where
             tool_found = true;
             let result = run_todo_tool(tool_name, arguments, &mut *self.messages, &self.agent.id);
             tool_output = Some(result);
+        } else if crate::infra::tools::is_code_tool_reference(tool_name) {
+            // 🛠 Инструменты кодинга (SSOT в infra::tools::all_tools): read/grep/glob/
+            // list_directory (read-only, авто) + write/edit/bash (мутаторы: внутри
+            // корня — авто, вне — плашка пользователя). Перед MCP-поиском.
+            tool_found = true;
+            // Capability-проверка (дефенс-ин-депс): агент может вызвать ТОЛЬКО
+            // тулы, которые ему выданы в промпт (all_tools). code_read-агент не
+            // должен получить write_file/edit_file/bash даже если модель
+            // «угадала» имя — пустой промпт не должен вскрывать capability.
+            let granted = crate::infra::tools::is_tool_granted(&self.all_tools, tool_name);
+            if !granted {
+                tool_output = Some(format!(
+                    "Ошибка '{}': инструмент недоступен агенту '{}' (не выдан в capabilities; вероятно, у агента только code_read, а {} — мутатор).",
+                    tool_name, self.agent.id, tool_name
+                ));
+            } else {
+                let code_ctx = crate::infra::ToolCtx {
+                    workspace_root: &self.workspace_root,
+                    session_id: &self.session_id,
+                    approver: &self.approver,
+                    agent_id: &self.agent.id,
+                    bins_dir: self.bins_dir,
+                };
+                match crate::infra::tools::execute_tool(tool_name, arguments, &code_ctx) {
+                    Ok(res) => {
+                        tool_output = Some(res);
+                        self.consecutive_failed_tools = 0;
+                        crate::infra::event_bus::global_bus().publish(
+                            crate::infra::event_bus::AgentEvent::ToolCall {
+                                agent: self.agent.id.clone(),
+                                tool: tool_name.to_string(),
+                            },
+                        );
+                    }
+                    Err(e) => {
+                        tool_output = Some(format!("Ошибка '{}': {}", tool_name, e));
+                    }
+                }
+            }
         } else if let Some((mcp_name, _, _)) = self.all_tools.iter().find(|(_, name, _)| name == &tool_name) {
             if let Some(shared) = self.mcp_clients.lock().unwrap().get(mcp_name).cloned() {
                 tool_found = true;
@@ -288,7 +330,7 @@ where
             thought_logged, log_cb, status_cb, subcall_cb, stream_meta,
             prompt_log, mcp_servers_dir, bins_dir, grammars_dir, mcp_clients: mcp_pool, model_params,
             format_type, cancel_flag, depth, has_tools_for_prompt, all_tools,
-            continuation_raw, continuation_mark, ..
+            continuation_raw, continuation_mark, session_id, workspace_root, ..
         } = self;
 
         if let Some(subagent) = (*agents).iter().find(|a| a.id == parsed.target) {
@@ -310,6 +352,8 @@ where
                 String::new(),
                 stream_meta.clone(), false,
                 prompt_log.clone(),
+                session_id.clone(),
+                workspace_root.clone(),
             )?;
             let end_len = (**all_sub_calls).len();
             let node_sub_calls = if start_len < end_len {

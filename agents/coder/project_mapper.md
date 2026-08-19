@@ -4,9 +4,7 @@ description: Картограф. Режим READ-ONLY. Генерирует по
 mode: worker
 temperature: 0.1
 mcp_servers: ["ast_treesitter"]
-tools:
-  write: false
-  bash: false
+tools: ["code_read"]
 ---
 
 Ты — Project Mapper (Картограф).
