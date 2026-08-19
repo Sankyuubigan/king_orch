@@ -184,16 +184,34 @@ pub fn reset_model_params(app: AppHandle, model_path: String) -> infra::ModelPar
     get_model_params(app, model_path) // Пересчитает параметры из GGUF заново
 }
 
+/// Результат добавления модели: конфиг + опциональное предупреждение о том,
+/// что GGUF-файл повреждён (модель всё равно добавляется, но не заработает).
+#[derive(Serialize)]
+pub struct AddModelOutcome {
+    pub config: infra::AppConfig,
+    pub warning: Option<String>,
+}
+
 #[tauri::command]
 pub fn add_model(
     app: AppHandle,
     path: String,
     flags: Option<infra::ModelMeta>,
-) -> Result<infra::AppConfig, String> {
+) -> Result<AddModelOutcome, String> {
     let meta = std::fs::metadata(&path)
         .map_err(|e| format!("Файл модели не найден: {}", e))?;
     if meta.len() < 1024 * 1024 {
         return Err(format!("Файл слишком маленький ({} байт) — это не GGUF-модель", meta.len()));
+    }
+
+    // Валидация целостности GGUF. Модель добавляем в любом случае, но при
+    // битом файле предупреждаем — жёсткая проверка произойдёт при запуске
+    // движка (LlamaEngine::new_with_mmproj).
+    let mut warning = None;
+    if let Err(msg) = infra::llm_gguf::validate_gguf(&path) {
+        let w = format!("Файл модели повреждён.\n{}", msg);
+        infra::startup_log::append("WARN", &format!("add_model: {}", w));
+        warning = Some(w);
     }
 
     let mut cfg = infra::load_config(&app);
@@ -211,7 +229,7 @@ pub fn add_model(
     }
 
     infra::save_config(&app, &cfg);
-    Ok(cfg)
+    Ok(AddModelOutcome { config: cfg, warning })
 }
 
 #[tauri::command]

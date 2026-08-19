@@ -429,8 +429,8 @@ export class SettingsController {
       setTelemetryEnabled(val);
       await invoke("set_config_value", { key: "allow_error_reports", value: val });
     });
-    this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) {         const cfg: any = await invoke("add_model", { path: sel as string, flags: null }); await this.refreshModelLists(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
-    this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) {         const cfg: any = await invoke("add_model", { path: sel as string, flags: null }); await this.refreshModelLists(cfg); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
+    this.el.btnAddModel?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) {         const res: any = await invoke("add_model", { path: sel as string, flags: null }); if (res?.warning) showToast(res.warning, "error"); await this.refreshModelLists(res.config); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
+    this.el.btnAddModelLlm?.addEventListener("click", async () => { try { const sel = await openDialog({ filters: [{ name: "Model", extensions: ["gguf"] }] }); if (sel) {         const res: any = await invoke("add_model", { path: sel as string, flags: null }); if (res?.warning) showToast(res.warning, "error"); await this.refreshModelLists(res.config); await this.loadModelParams(); } } catch(e) { showToast(`Не удалось добавить модель: ${e}`, "error"); void trackError("settings.addModel", e); } });
     this.el.btnCheckUpdate?.addEventListener("click", async () => {
       const btn = this.el.btnCheckUpdate;
       const status = this.el.updateStatus;
@@ -497,7 +497,8 @@ export class SettingsController {
           const mpPath = `${dir}${sep}${mpName}`;
           await invoke("download_model", { url: model.mmproj_url, savePath: mpPath });
         }
-        await invoke("add_model", { path: savePath, flags: { uncen: !!model.uncen, vision: !!model.vision, audio: !!model.audio } });
+        const res: any = await invoke("add_model", { path: savePath, flags: { uncen: !!model.uncen, vision: !!model.vision, audio: !!model.audio } });
+        if (res?.warning) showToast(res.warning, "error");
         await this.loadConfig(); showToast(`Модель ${model.name} скачана!`, "success");
       } catch(e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.downloadModel", e); }
       finally { this.el.btnDownloadModel.disabled = false; this.el.downloadProgressContainer.style.display = "none"; }

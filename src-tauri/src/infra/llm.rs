@@ -177,6 +177,14 @@ impl LlamaEngine {
             Err(msg)
         };
 
+        // ── Проверка целостности GGUF-файла модели ──
+        // Битые/криво сконвертированные файлы (напр. block_count объявлен
+        // больше, чем реально есть тензоров blk.N) роняют llama-server с
+        // непонятным хвостом лога. Проверяем заранее и даём понятную ошибку.
+        if let Err(msg) = crate::infra::llm_gguf::validate_gguf(model_path) {
+            return fail(format!("Файл модели повреждён.\n{}", msg));
+        }
+
         // ── Проверка установки движка ──
         // Бекенд выбирается юзером в настройках (engine_variant в app_config.json,
         // "auto" → подбор по GPU). Каждый вариант живёт в backends/<variant>/.
