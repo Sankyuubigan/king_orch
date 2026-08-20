@@ -13,6 +13,7 @@ pub mod coding_test;
 pub mod file_utils;
 pub mod llamacpp;
 pub mod permissions;
+pub mod telemetry;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

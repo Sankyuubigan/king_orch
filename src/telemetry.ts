@@ -1,12 +1,13 @@
 /**
  * 🛰️ Слой телеметрии фронтенда — единственное место, откуда уходят
- * события в сервис сбора ошибок (сейчас Aptabase через Tauri-команду
- * `plugin:aptabase|track_event`).
+ * ошибки UI в сервис сбора (сейчас Aptabase). Ошибки отправляются в
+ * Error Reporting API (раздел «Errors» дашборда) через нашу Tauri-команду
+ * `track_error` (бэкенд сам знает про App Key и endpoint).
  *
- * 🔄 Смена сервиса = переписать только этот файл.
+ * 🔄 Смена сервиса = переписать только бэкенд (infra/telemetry) и этот файл.
  *
  * Уважает настройку «Отправлять анонимные отчёты об ошибках»:
- * если юзер выключил — слушатели не вешаются, события не отправляются,
+ * если юзер выключил — слушатели не вешаются, ошибки не отправляются,
  * Tauri-команда не вызывается вовсе.
  */
 import { invoke } from "@tauri-apps/api/core";
@@ -47,26 +48,25 @@ export async function initTelemetry(): Promise<void> {
   if (!enabled || listenersAttached) return;
   listenersAttached = true;
 
-  // Необработанная ошибка / краш UI → "Frontend Error"
+  // Необработанная ошибка / краш UI → "Frontend Error" (kind=unhandled)
   window.addEventListener("error", (e) => {
     const message = e.message || (e.error instanceof Error ? e.error.message : "unknown error");
     const stack = e.error instanceof Error ? e.error.stack || "" : "";
-    void trackEvent("Frontend Error", { message, stack });
+    void sendError("Frontend Error", message, stack, "error", "unhandled");
   });
 
-  // Необработанное отклонение промиса → "Frontend Error"
+  // Необработанное отклонение промиса → "Frontend Error" (kind=unhandled)
   window.addEventListener("unhandledrejection", (e) => {
     const reason: unknown = e.reason;
     const message = reason instanceof Error ? reason.message : String(reason);
     const stack = reason instanceof Error ? reason.stack || "" : "";
-    void trackEvent("Frontend Error", { message, stack });
+    void sendError("Frontend Error", message, stack, "error", "unhandled");
   });
 }
 
 /**
- * Отправить событие. Никогда не бросает и не ломает UI: ошибки отправки
- * только логируются в консоль (дублировать их в лог-вкладку не нужно —
- * это же сами отчёты об ошибках).
+ * Отправить событие-аналитику. Никогда не бросает и не ломает UI.
+ * (Ошибки идут отдельно — через `sendError` в Error Reporting API.)
  */
 export async function trackEvent(
   name: string,
@@ -83,15 +83,36 @@ export async function trackEvent(
 }
 
 /**
+ * Отправить отчёт об ошибке в Error Reporting API.
+ * Никогда не бросает и не ломает UI: сбой отправки только логируется.
+ */
+async function sendError(
+  errorType: string,
+  message: string,
+  stack: string,
+  severity: string,
+  kind: string,
+): Promise<void> {
+  if (!enabled) return;
+  try {
+    await invoke("track_error", {
+      errorType,
+      message,
+      stack: stack || null,
+      severity,
+      kind,
+    });
+  } catch (err) {
+    console.warn(`[telemetry] sendError("${errorType}") не удалось:`, err);
+  }
+}
+
+/**
  * Отследить ОБРАБОТАННУЮ ошибку UI (catch в контроллерах).
  * Никогда не бросает и не ломает интерфейс.
  */
 export async function trackError(whence: string, err: unknown): Promise<void> {
   const message = err instanceof Error ? err.message : String(err ?? "unknown error");
   const stack = err instanceof Error ? (err.stack || "") : "";
-  await trackEvent("UI Error", {
-    when: whence,
-    message,
-    stack: stack.slice(0, 2000),
-  });
+  await sendError("UI Error", `[${whence}] ${message}`, stack.slice(0, 2000), "error", "handled");
 }

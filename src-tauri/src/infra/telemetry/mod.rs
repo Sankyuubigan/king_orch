@@ -1,8 +1,12 @@
 //! 🛰️ Слой телеметрии — тонкий фасад над сервисом сбора ошибок.
 //!
 //! Всё приложение работает ТОЛЬКО через этот модуль:
-//! `track_event` / `track_error` / `is_enabled` / `install_plugin`.
+//! `track_event` / `track_error` / `track_error_report` / `is_enabled` / `install_plugin`.
 //! Никто (кроме `aptabase.rs`) не знает, какой сервис используется внутри.
+//!
+//! События (аналитика) и ошибки идут РАЗНЫМИ каналами:
+//! события — через events API, ошибки — через отдельный Error Reporting API
+//! (раздел «Errors» в дашборде).
 //!
 //! 🔄 Смена провайдера (например, с Aptabase на другой сервис):
 //! 1. Пишем новый файл `telemetry/<service>.rs` с `impl TelemetryBackend`
@@ -10,7 +14,7 @@
 //! 2. Меняем `aptabase::` → `новый_модуль::` в `init()` и `install_plugin()`.
 //! Остальное приложение не трогаем вообще.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
 use tauri::{AppHandle, Runtime, plugin::TauriPlugin};
@@ -23,6 +27,25 @@ mod aptabase;
 pub trait TelemetryBackend: Send + Sync {
     /// Отправить событие. Не должна паниковать и надолго блокировать.
     fn track_event(&self, name: &str, props: Value);
+
+    /// Отправить отчёт об ошибке в Error Reporting API (раздел «Errors»).
+    /// Не должна паниковать и надолго блокировать.
+    fn track_error(&self, report: &ErrorReport);
+}
+
+/// Отчёт об ошибке для Error Reporting API.
+#[derive(Debug, Clone)]
+pub struct ErrorReport {
+    /// Тип ошибки (errorType) — группировка в дашборде, например "Backend Panic".
+    pub error_type: String,
+    /// Человекочитаемое сообщение (errorMessage).
+    pub message: String,
+    /// Стек-трейс / локация (stackTrace). Опционально.
+    pub stack: Option<String>,
+    /// `"fatal"` | `"error"` — сервер принимает только эти значения.
+    pub severity: String,
+    /// `"crash"` | `"unhandled"` | `"taskException"` | `"handled"`.
+    pub kind: String,
 }
 
 /// Реальный бэкенд, установленный в `init()`. До этого — его нет.
@@ -73,10 +96,31 @@ pub fn track_event(name: &str, props: Value) {
     }
 }
 
-/// Отправить критическую ошибку бэкенда как событие `Backend Error`.
+/// Отправить критическую ошибку бэкенда в Error Reporting API.
+/// `source` — уровень из startup_log ("ERROR" | "FATAL" | "CRASH") или контекст.
 pub fn track_error(source: &str, message: &str) {
-    track_event(
-        "Backend Error",
-        json!({ "message": format!("[{}] {}", source, message) }),
-    );
+    let severity = if matches!(source, "FATAL" | "CRASH") {
+        "fatal"
+    } else {
+        "error"
+    };
+    let kind = if source == "CRASH" { "crash" } else { "handled" };
+    track_error_report(&ErrorReport {
+        error_type: "Backend Error".to_string(),
+        message: format!("[{}] {}", source, message),
+        stack: None,
+        severity: severity.to_string(),
+        kind: kind.to_string(),
+    });
+}
+
+/// Отправить отчёт об ошибке в Error Reporting API. Тихий no-op,
+/// если телеметрия отключена/не инициализирована.
+pub fn track_error_report(report: &ErrorReport) {
+    if !is_enabled() {
+        return;
+    }
+    if let Some(backend) = BACKEND.get() {
+        backend.track_error(report);
+    }
 }

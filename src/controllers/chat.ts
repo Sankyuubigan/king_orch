@@ -6,7 +6,7 @@ import { createMessageElement, createSubcallElement, createToolCallElement, crea
 import type { Role, MessageMenuCallbacks } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, CatalogEntry } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
-import { renderMarkdown, stripStreamArtifacts, extractChannelThought } from "../utils";
+import { renderMarkdown, stripStreamArtifacts, extractChannelThought, formatSpeed } from "../utils";
 import { trackError } from "../telemetry";
 import mermaid from "mermaid";
 
@@ -812,12 +812,13 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     listen("tool_permission_request", (e) => { showPermissionRequest(e.payload as any); });
 
     listen("download_progress", (e) => {
-      const { downloaded, total } = e.payload as { downloaded: number; total: number };
+      const { downloaded, total, speed_bps } = e.payload as { downloaded: number; total: number; speed_bps?: number };
       if (total > 0) {
         const pct = ((downloaded / total) * 100).toFixed(1);
         const mbD = (downloaded / 1024 / 1024).toFixed(1);
         const mbT = (total / 1024 / 1024).toFixed(1);
-        this.logToGUI(`📥 Скачивание: ${mbD} MB / ${mbT} MB (${pct}%)`);
+        const speed = formatSpeed(speed_bps);
+        this.logToGUI(`📥 Скачивание: ${mbD} MB / ${mbT} MB (${pct}%)${speed ? ` · ${speed}` : ""}`);
       }
     });
 

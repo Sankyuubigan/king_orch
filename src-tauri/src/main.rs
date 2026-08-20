@@ -173,6 +173,7 @@ async fn main() {
             api::llamacpp::install_engine_update,
             api::llamacpp::remove_engine,
             api::llamacpp::set_engine_dir,
+            api::telemetry::track_error,
         ])
         .run(tauri::generate_context!());
 

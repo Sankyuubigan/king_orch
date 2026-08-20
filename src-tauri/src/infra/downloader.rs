@@ -1,15 +1,22 @@
 use futures_util::StreamExt;
 use std::fs::{self, File};
 use std::io::{Cursor, Read, Write};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 #[derive(Clone, serde::Serialize)]
 struct DownloadProgress {
     downloaded: u64,
     total: u64,
+    /// Скорость скачивания, байт/сек (для плавного GUI). 0 = нет данных.
+    speed_bps: f64,
 }
 
 const MIN_GGUF_SIZE: u64 = 1024 * 1024;
+/// Как часто шлём события в GUI (между эмитами минимум 200 мс — бар ползёт плавно).
+const GUI_EMIT_INTERVAL: Duration = Duration::from_millis(200);
+/// Как часто логируем прогресс в stderr (только каждые 20%, чтобы логи не срались).
+const LOG_STEP_PCT: u64 = 20;
 
 #[tauri::command]
 pub async fn download_model(app: AppHandle, url: String, save_path: String) -> Result<(), String> {
@@ -49,9 +56,12 @@ pub async fn download_model(app: AppHandle, url: String, save_path: String) -> R
     let mut stream = res.bytes_stream();
     let mut downloaded: u64 = 0;
 
-    let mut last_emit_pct: u64 = 0;
+    let mut last_emit_time = Instant::now();
+    let mut last_emit_bytes: u64 = 0;
+    let mut speed_bps: f64 = 0.0;
+    let mut last_log_pct: u64 = 0;
     // Начальный эмит 0%
-    let _ = app.emit("download_progress", DownloadProgress { downloaded: 0, total: total_size });
+    let _ = app.emit("download_progress", DownloadProgress { downloaded: 0, total: total_size, speed_bps: 0.0 });
 
     while let Some(chunk) = stream.next().await {
         let chunk = match chunk {
@@ -69,21 +79,27 @@ pub async fn download_model(app: AppHandle, url: String, save_path: String) -> R
         }
         downloaded += chunk.len() as u64;
 
-        if total_size > 0 {
-            let current_pct = (downloaded * 100) / total_size;
-            if current_pct >= last_emit_pct + 20 || downloaded >= total_size {
-                let _ = app.emit("download_progress", DownloadProgress {
-                    downloaded,
-                    total: total_size,
-                });
-                last_emit_pct = current_pct;
+        let now = Instant::now();
+        let elapsed = now.duration_since(last_emit_time);
+        let is_final = total_size > 0 && downloaded >= total_size;
+        if elapsed >= GUI_EMIT_INTERVAL || is_final {
+            // Логи — только каждые 20% (не спамим stderr)
+            if total_size > 0 {
+                let current_pct = (downloaded * 100) / total_size;
+                if current_pct >= last_log_pct + LOG_STEP_PCT {
+                    eprintln!("[download] {} / {} байт ({}%)", downloaded, total_size, current_pct);
+                    last_log_pct = current_pct;
+                }
             }
+            // Скорость считаем только если окно не нулевое (иначе всплеск на финальном чанке)
+            let dt = elapsed.as_secs_f64();
+            if dt >= 0.05 {
+                speed_bps = (downloaded - last_emit_bytes) as f64 / dt;
+            }
+            let _ = app.emit("download_progress", DownloadProgress { downloaded, total: total_size, speed_bps });
+            last_emit_time = now;
+            last_emit_bytes = downloaded;
         }
-    }
-
-    // Финальный эмит 100% (если ещё не был отправлен)
-    if downloaded >= total_size {
-        let _ = app.emit("download_progress", DownloadProgress { downloaded, total: total_size });
     }
 
     if total_size > 0 && downloaded < total_size {
@@ -141,6 +157,7 @@ pub async fn download_binary(app: AppHandle, url: String, save_path: String, ext
     let _ = app.emit("download_progress", DownloadProgress {
         downloaded: bytes.len() as u64,
         total: total_size,
+        speed_bps: 0.0,
     });
 
     if extract_zip {

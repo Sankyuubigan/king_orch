@@ -7,6 +7,7 @@ import { store } from "../store";
 import { bus } from "../events";
 import { showToast } from "../ui";
 import { setTelemetryEnabled, trackError } from "../telemetry";
+import { formatBytes, formatSpeed } from "../utils";
 
 export interface SettingsElements {
   modelSelect: HTMLSelectElement;
@@ -68,12 +69,26 @@ export interface SettingsElements {
 export class SettingsController {
   private el: SettingsElements;
   private pendingUpdate: any = null;
+  /// Когда в последний раз приходил чанк при скачивании (для детекта «зависло»).
+  private lastDownloadActivity = 0;
 
   constructor(el: SettingsElements) {
     this.el = el;
     this.bindDomEvents();
     this.bindTauriEvents();
     this.bindBusEvents();
+    this.watchDownloadStall();
+  }
+
+  /// Если качает, но прогресс/скорость не приходят дольше 1.5с — подсвечиваем
+  /// пульсацией, чтобы не выглядело, будто всё зависло намертво.
+  private watchDownloadStall() {
+    window.setInterval(() => {
+      const container = this.el.downloadProgressContainer;
+      if (!container || container.style.display === "none") return;
+      const stalled = this.lastDownloadActivity > 0 && Date.now() - this.lastDownloadActivity > 1500;
+      container.classList.toggle("download-stalled", stalled);
+    }, 500);
   }
 
   async loadModelParams() {
@@ -488,7 +503,7 @@ export class SettingsController {
       const model = store.modelsCatalog.find(m => m.name === name); if (!model) return;
       try {
          const savePath = await save({ defaultPath: model.download_url.split('/').pop()?.split('?')[0] || `${model.name}.gguf`, filters: [{ name: "GGUF", extensions: ["gguf"] }] }); if (!savePath) return;
-        this.el.btnDownloadModel.disabled = true; this.el.downloadProgressContainer.style.display = "block";
+        this.el.btnDownloadModel.disabled = true; this.resetDownloadUi();
         await invoke("download_model", { url: model.download_url, savePath });
         if (model.mmproj_url) {
           const sep = savePath.includes("\\") ? "\\" : "/";
@@ -520,7 +535,7 @@ export class SettingsController {
         if (!confirmed) return;
 
         this.el.btnDownloadModel.disabled = true;
-        this.el.downloadProgressContainer.style.display = "block";
+        this.resetDownloadUi();
         await invoke("auto_download_default_model", { savePath: info.save_path });
         await this.loadConfig();
         showToast(`Модель ${info.model_name} скачана!`, "success");
@@ -650,8 +665,25 @@ export class SettingsController {
   }
 
   private bindTauriEvents() {
-    listen("download_progress", (e: any) => { const { downloaded, total } = e.payload; const pct = total > 0 ? (downloaded / total) * 100 : 0; this.el.downloadProgressBar.style.width = `${pct}%`; this.el.downloadStatusLabel.innerText = `${(downloaded/1024/1024).toFixed(1)} MB / ${(total/1024/1024).toFixed(1)} MB`; });
+    listen("download_progress", (e: any) => {
+      const { downloaded, total, speed_bps } = e.payload;
+      this.lastDownloadActivity = Date.now();
+      this.el.downloadProgressContainer.classList.remove("download-stalled");
+      const pct = total > 0 ? (downloaded / total) * 100 : 0;
+      this.el.downloadProgressBar.style.width = `${pct}%`;
+      const speed = formatSpeed(speed_bps);
+      this.el.downloadStatusLabel.innerText = `${formatBytes(downloaded)} / ${total > 0 ? formatBytes(total) : "?"}${speed ? ` · ${speed}` : ""}`;
+    });
     listen("engine_progress", (e: any) => { const { downloaded, total } = e.payload; const pct = total > 0 ? (downloaded / total) * 100 : 0; this.el.engineProgressBar.style.width = `${pct}%`; this.el.engineStatusLabel.innerText = `${(downloaded/1024/1024).toFixed(1)} MB / ${(total/1024/1024).toFixed(1)} MB`; });
+  }
+
+  /// Сброс прогресс-бара перед началом новой загрузки.
+  private resetDownloadUi() {
+    this.lastDownloadActivity = 0;
+    this.el.downloadProgressContainer.style.display = "block";
+    this.el.downloadProgressContainer.classList.remove("download-stalled");
+    this.el.downloadProgressBar.style.width = "0%";
+    this.el.downloadStatusLabel.innerText = "Подключение...";
   }
 
   private bindBusEvents() {
