@@ -1,16 +1,22 @@
 extractor_prompt: |
   Ты — системный маршрутизатор. Определи тип запроса.
-  Верни JSON: {"is_question": false, "is_bug": false, "is_feature": false, "needs_search": false, "is_mapping": false}
+  Верни JSON: {"is_question": false, "is_bug": false, "is_feature": false, "needs_search": false, "is_mapping": false, "is_design": false, "is_testing": false, "is_direct_code": false}
   {{ user_message }}
 
 facts:
   - id: is_question
     criteria: TRUE если пользователь просто спрашивает как что-то работает, просит объяснить кусок кода, не требуя изменений.
-  - id: is_bug
-    criteria: TRUE если есть жалоба на ошибку, падение, баг, лог. FALSE если фича.
-  - id: is_feature
-    criteria: TRUE если просят добавить функцию, рефакторинг, изменить логику.
-  - id: needs_search
-    criteria: TRUE если просят найти доку, API, погуглить.
   - id: is_mapping
     criteria: TRUE если просят карту проекта, AST, обзор.
+  - id: is_design
+    criteria: TRUE если просят сделать красиво, улучшить дизайн/UI, поправить верстку, подобрать цвета, изменить внешний вид интерфейса.
+  - id: is_testing
+    criteria: TRUE если просят написать тесты, сделать песочницу, добавить жесткие логи и найти почему падает, протестировать этот кусок.
+  - id: is_bug
+    criteria: TRUE если есть жалоба на ошибку, падение, баг, лог. FALSE если фича.
+  - id: needs_search
+    criteria: TRUE если просят найти доку, API, погуглить.
+  - id: is_direct_code
+    criteria: TRUE если пользователь ПРЯМО просит написать/исправить конкретный код или файл, и файлы уже известны или план не нужен. FALSE если требуется анализ, поиск первопричины, план или исследование.
+  - id: is_feature
+    criteria: TRUE если просят добавить функцию, рефакторинг, изменить логику.

@@ -23,10 +23,16 @@ nodes:
         to: call_code_explainer
       - key: is_mapping
         to: call_project_mapper
+      - key: is_design
+        to: call_ux_ui_designer
+      - key: is_testing
+        to: call_qa_diagnost_direct
       - key: is_bug
         to: call_bug_analyst
       - key: needs_search
         to: call_research_team
+      - key: is_direct_code
+        to: call_primary_coder_direct
       - key: is_feature
         to: call_task_planner
     default: call_task_planner
@@ -36,6 +42,40 @@ nodes:
     type: llm_worker
     agent: code_explainer
     task: "Ответь на вопрос пользователя, изучив код: {{ user_message }}"
+    output_type: message
+
+  # ── Дизайн: Дизайнер проектирует -> Кодер применяет ──
+  - id: call_ux_ui_designer
+    type: llm_worker
+    agent: ux_ui_designer
+    task: |
+      Спроектируй UI/UX для задачи: {{ user_message }}
+      Верни подробные визуальные инструкции для Primary Coder: файлы, компоненты, CSS/Tailwind-классы, цвета, отступы, анимации. Сам код в файлы не пиши — только инструкции.
+    output_type: thought
+
+  - id: call_design_coder
+    type: llm_worker
+    agent: primary_coder
+    task: |
+      Примени визуальные инструкции дизайнера строго как описано, в указанные файлы.
+      Дизайн-инструкции: {{ nodes.call_ux_ui_designer.output.result }}
+      Исходная задача: {{ user_message }}
+    output_type: message
+
+  # ── Прямой заказ тестов (без полного цикла) ──
+  - id: call_qa_diagnost_direct
+    type: llm_worker
+    agent: qa_diagnost
+    task: "Выполни напрямую: {{ user_message }}"
+    output_type: message
+
+  # ── Прямой заказ кода (план не нужен) ──
+  - id: call_primary_coder_direct
+    type: llm_worker
+    agent: primary_coder
+    task: |
+      Выполни напрямую, без отдельного плана: {{ user_message }}
+      Если не хватает контекста — верни 'Не хватает контекста файла X'. Обязательно ставь логи.
     output_type: message
 
   # ── Делегирование в команду поиска ──
@@ -199,4 +239,13 @@ edges:
   - from: call_project_mapper
     to: END
   - from: call_code_explainer
+    to: END
+
+  - from: call_ux_ui_designer
+    to: call_design_coder
+  - from: call_design_coder
+    to: END
+  - from: call_qa_diagnost_direct
+    to: END
+  - from: call_primary_coder_direct
     to: END
