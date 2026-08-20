@@ -69,6 +69,10 @@ pub struct FactsFile {
     pub facts: Vec<FactDef>,
     #[serde(default)]
     pub phases: Vec<FactDef>,
+    /// Дополнительные (не-fact) поля выхода экстрактора — часть декларативного
+    /// контракта. Например `rewritten_query` (string) в research-графе.
+    #[serde(default)]
+    pub output_fields: Vec<OutputFieldDef>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -76,6 +80,26 @@ pub struct FactDef {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub criteria: Option<String>,
+}
+
+/// Декларативное поле выхода экстрактора фактов (кроме boolean-фактов).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutputFieldDef {
+    pub id: String,
+    /// "boolean" | "string" (по умолчанию "string")
+    #[serde(default = "default_output_type")]
+    pub field_type: String,
+    /// Обязательность поля в JSON-ответе (по умолчанию true)
+    #[serde(default = "default_true")]
+    pub required: bool,
+}
+
+fn default_output_type() -> String {
+    "string".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

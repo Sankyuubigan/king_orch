@@ -31,38 +31,40 @@ where
                 .as_ref()
                 .cloned()
                 .unwrap_or(WorkflowConfig::default());
+
             let input = context.resolve_template(node.input.as_deref().unwrap_or("{{ user_message }}"));
             let signals = context.resolve_template("{{ signals }}");
             let workflow_dir = std::path::Path::new(&workflow.parent_dir);
             let prompt =
                 super::fact_extractor::build_extractor_prompt(&config, &input, &signals, Some(workflow_dir));
 
+            // Строгая грамматика по контракту facts.yaml: точные ключи, без опций.
+            let grammar = super::fact_extractor::build_facts_grammar(&config, Some(workflow_dir));
+            let expected_keys = super::fact_extractor::expected_output_keys(&config, Some(workflow_dir));
+
             let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
-            let llm_response = runner.call_llm_direct(&prompt, &input, &resolved_params, &format!("graph:{}", node.id))?;
+            let llm_response = runner.call_llm_direct(&prompt, &input, &resolved_params, &format!("graph:{}", node.id), Some(grammar.clone()))?;
 
-            let mut parsed: serde_json::Value =
-                serde_json::from_str(&llm_response).unwrap_or_else(|_| {
-                    extract_json(&llm_response)
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .unwrap_or_else(|| serde_json::json!({}))
-                });
+            let mut parsed = parse_fact_json(&llm_response);
 
-            // ── Fallback: если JSON пустой — повторить с уточнением ──
-            if parsed.as_object().map_or(false, |o| o.is_empty()) {
-                (runner.log_cb)("[fact_extractor] JSON пустой, повтор с уточнением...".to_string());
+            // ── Fallback: JSON неполный/с неверными ключами — повторить с уточнением ──
+            if !facts_json_valid(&parsed, &expected_keys) {
+                (runner.log_cb)("[fact_extractor] JSON неполный/неверные ключи, повтор с уточнением...".to_string());
+                let expected_str = expected_keys
+                    .iter()
+                    .map(|k| format!("\"{}\"", k))
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 let retry_prompt = format!(
-                    "{}\n\nВАЖНО: Ответь ТОЛЬКО JSON-объектом без какого-либо другого текста. Пример формата: {{\"has_problem\": true, \"has_somatic\": true}}",
-                    prompt
+                    "{}\n\nВАЖНО: Ответь ТОЛЬКО JSON-объектом строго со всеми ключами: {}. Каждый факт — true/false.",
+                    prompt, expected_str
                 );
-                let retry_response = runner.call_llm_direct(&retry_prompt, &input, &resolved_params, &format!("graph:{}#retry", node.id))?;
-                parsed = serde_json::from_str(&retry_response).unwrap_or_else(|_| {
-                    extract_json(&retry_response)
-                        .and_then(|s| serde_json::from_str(&s).ok())
-                        .unwrap_or_else(|| {
-                            (runner.log_cb)("[fact_extractor] Повтор тоже без JSON, используем fallback".to_string());
-                            serde_json::json!({"has_problem": true, "has_somatic": true})
-                        })
-                });
+                let retry_response = runner.call_llm_direct(&retry_prompt, &input, &resolved_params, &format!("graph:{}#retry", node.id), Some(grammar))?;
+                parsed = parse_fact_json(&retry_response);
+                if !facts_json_valid(&parsed, &expected_keys) {
+                    (runner.log_cb)("[fact_extractor] Повтор тоже неполный/неверные ключи, используем fallback".to_string());
+                    parsed = fallback_facts_json(&expected_keys);
+                }
             }
 
             (runner.log_cb)(format!(
@@ -756,4 +758,38 @@ fn extract_json(text: &str) -> Option<String> {
 
     text.find('{')
         .and_then(|start| text[start..].rfind('}').map(|end| text[start..start + end + 1].to_string()))
+}
+
+/// Парсит JSON-ответ fact_extractor (прямой парс, затем поиск `{...}` в тексте).
+fn parse_fact_json(text: &str) -> serde_json::Value {
+    serde_json::from_str(text).unwrap_or_else(|_| {
+        extract_json(text)
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_else(|| serde_json::json!({}))
+    })
+}
+
+/// Валидирует выход экстрактора против контракта facts.yaml:
+/// присутствуют ВСЕ ожидаемые ключи и НЕТ неизвестных (строгая схема).
+/// Если контракт пуст — достаточно непустого JSON-объекта.
+fn facts_json_valid(parsed: &serde_json::Value, expected: &[String]) -> bool {
+    if expected.is_empty() {
+        return parsed.as_object().map_or(false, |o| !o.is_empty());
+    }
+    let obj = match parsed.as_object() {
+        Some(o) => o,
+        None => return false,
+    };
+    expected.iter().all(|k| obj.contains_key(k))
+        && obj.keys().all(|k| expected.iter().any(|e| e == k))
+}
+
+/// Последний резерв после двух неудач: все факты = false (ничего не выдумываем),
+/// вместо хардкода под конкретную команду агентов.
+fn fallback_facts_json(expected: &[String]) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    for k in expected {
+        obj.insert(k.clone(), serde_json::Value::Bool(false));
+    }
+    serde_json::Value::Object(obj)
 }

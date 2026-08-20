@@ -141,7 +141,7 @@ nodes:
 
 - id: check_grounding
   type: condition_check
-  field: grounding_dont_exist
+  field: needs_grounding
   true_to: note_1785036347995
   false_to: call_cluster_checker
   ui_pos:

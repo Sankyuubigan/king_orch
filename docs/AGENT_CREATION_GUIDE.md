@@ -22,6 +22,8 @@
 
 **Главное правило:** В `.md` файлах **НЕТ** логики маршрутизации (вызовов сабагентов, проверок статусов, циклов). Всё это — в YAML графах.
 
+**Главное правило №2 (один экстрактор на граф):** в каждом workflow **ровно ОДИН** `llm_fact_extractor` — на входе, для классификации запроса. Факты объявляются один раз в `config.facts` / `config.facts_file` (один `facts.yaml` на команду). Mid-flow решения (нужен ли поиск документации, достаточно ли данных, качество черновика) **не делаются вторым экстрактором** — их выносит воркер-вердикт (JSON в отчёте воркера или `emit_signal`), а роутит чистый `switch` / `condition_check` / `signal_router` по `{{ nodes.X.output.result }}`.
+
 ---
 
 ## ✍️ Принципы написания системных промптов
@@ -143,7 +145,7 @@ edges:
 | Тип узла | Что делает | Ключевые поля |
 |----------|-----------|---------------|
 | `llm_worker` | Вызывает `.md` агента с задачей. Результат — `thought` (свёрнутый отчёт) или `message` (в чат), управляется `output_type` | `agent`, `task`, `output_type`, `inject_reports`, `llm_params` |
-| `llm_fact_extractor` | Generic экстрактор фактов. Факты + критерии из `config.facts` / `config.facts_file`. Возвращает JSON `{"fact_id": true/false, ...}` | `input` |
+| `llm_fact_extractor` | Generic экстрактор фактов (один на граф — на входе, см. «Главное правило №2»). Факты + критерии из `config.facts` / `config.facts_file`. Возвращает JSON `{"fact_id": true/false, ...}` | `input` |
 | `llm_freeform` | Зовёт LLM без системного промпта (только история чата) — для off-topic | `input` |
 | `system_condition` | Rust-side проверка состояния сессии / агрегация отчётов | `action`, `required` |
 | `sub_workflow` | Рекурсивный вызов другого YAML графа (по file_stem) | `workflow` |
@@ -463,5 +465,5 @@ facts:
 4. Создай `.yaml` workflow граф в папке `transitions/` — вся маршрутизация здесь
 5. Воркеры создавай как `.md` с узкой задачей (папки `frontend/`/`backend/` по роли)
 6. Используй неймспейсы для изоляции контекстов разных проблем
-7. Факты выноси в `facts.yaml` рядом с workflow; сложные маршруты разбивай на `note`/`switch`/`condition_check`/`signal_router`; циклы — рёбрами с `max_visits` + `config.max_steps` (см. «Циклы в графах»), или линейной схемой с оценщиком.
+7. Факты выноси в `facts.yaml` рядом с workflow; `llm_fact_extractor` — **один на граф, на входе**; mid-flow решения — воркер-вердикт (JSON в отчёте/сигнал) + `switch`/`condition_check`/`signal_router`; сложные маршруты разбивай на `note`/`switch`/`condition_check`/`signal_router`; циклы — рёбрами с `max_visits` + `config.max_steps` (см. «Циклы в графах»), или линейной схемой с оценщиком.
 8. Проверь, что file_stem'ы уникальны (движок ищет рекурсивно по `agents/`)

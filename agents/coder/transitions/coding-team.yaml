@@ -57,16 +57,9 @@ nodes:
     task: "Найди первопричину бага: {{ user_message }}"
     output_type: thought
 
-  - id: check_needs_search
-    type: llm_fact_extractor
-    input: |
-      Анализ бага: {{ nodes.call_bug_analyst.output }}
-      Верни JSON: {"needs_docs": true/false}. true если нужно искать best practice в инете.
-    llm_params: strict
-
   - id: route_search
     type: condition_check
-    input_object: "{{ nodes.check_needs_search.output }}"
+    input_object: "{{ nodes.call_bug_analyst.output.result }}"
     field: needs_docs
     true_to: call_search_for_bug
     false_to: call_qa_reproduce
@@ -74,7 +67,7 @@ nodes:
   - id: call_search_for_bug
     type: sub_workflow
     workflow: search-specialist
-    task: "Найди документацию и best practice для решения: {{ nodes.call_bug_analyst.output }}"
+    task: "Найди документацию и best practice для решения: {{ nodes.call_bug_analyst.output.result }}"
     output_type: thought
 
   - id: call_qa_reproduce
@@ -82,14 +75,14 @@ nodes:
     agent: qa_diagnost
     task: |
       Напиши падающий тест (Failing Test First) в песочнице, чтобы поймать баг с поличным.
-      Отчёт аналитика: {{ nodes.call_bug_analyst.output }}
-      Best practice из инета (если был): {{ nodes.call_search_for_bug.output }}
+      Отчёт аналитика: {{ nodes.call_bug_analyst.output.result }}
+      Best practice из инета (если был): {{ nodes.call_search_for_bug.output.result }}
     output_type: thought
     max_visits: 2
 
   - id: check_qa_repro
     type: switch
-    input_object: "{{ nodes.call_qa_reproduce.output }}"
+    input_object: "{{ nodes.call_qa_reproduce.output.result }}"
     cases_priority:
       - key: bug_captured
         to: call_task_planner
@@ -101,8 +94,8 @@ nodes:
     task: |
       Составь PRP (Product Requirement Prompt). Учти архитектурные ошибки. Разбей на микро-шаги.
       Исходная задача: {{ user_message }}
-      Отчёт аналитика: {{ nodes.call_bug_analyst.output }}
-      Отчёт QA (падающий тест): {{ nodes.call_qa_reproduce.output }}
+      Отчёт аналитика: {{ nodes.call_bug_analyst.output.result }}
+      Отчёт QA (падающий тест): {{ nodes.call_qa_reproduce.output.result }}
     output_type: thought
     max_visits: 2
 
@@ -112,12 +105,12 @@ nodes:
     agent: arch_reviewer
     task: |
       Проверь план на архитектурную чистоту, размер файлов (<500 строк) и наличие логирования.
-      План: {{ nodes.call_task_planner.output }}
+      План: {{ nodes.call_task_planner.output.result }}
     output_type: thought
 
   - id: check_plan
     type: switch
-    input_object: "{{ nodes.call_arch_reviewer.output }}"
+    input_object: "{{ nodes.call_arch_reviewer.output.result }}"
     cases_priority:
       - key: pass
         to: call_primary_coder
@@ -129,7 +122,7 @@ nodes:
     agent: primary_coder
     task: |
       Реализуй задачу строго по утвержденному плану. Обязательно ставь логи.
-      План: {{ nodes.call_task_planner.output }}
+      План: {{ nodes.call_task_planner.output.result }}
     output_type: thought
     max_visits: 2
 
@@ -138,14 +131,14 @@ nodes:
     agent: qa_diagnost
     task: |
       Проверь написанный кодером код. Запусти тесты. Убедись, что баг исправлен и новые фичи работают.
-      План: {{ nodes.call_task_planner.output }}
-      Внесенные изменения: {{ nodes.call_primary_coder.output }}
+      План: {{ nodes.call_task_planner.output.result }}
+      Внесенные изменения: {{ nodes.call_primary_coder.output.result }}
     output_type: thought
     max_visits: 2
 
   - id: check_verify
     type: switch
-    input_object: "{{ nodes.call_qa_verify.output }}"
+    input_object: "{{ nodes.call_qa_verify.output.result }}"
     cases_priority:
       - key: pass
         to: final_success
@@ -177,8 +170,6 @@ edges:
     to: final_research_output
 
   - from: call_bug_analyst
-    to: check_needs_search
-  - from: check_needs_search
     to: route_search
   - from: route_search
     to: call_search_for_bug

@@ -25,7 +25,7 @@ pub mod lsp;
 
 // ─── Публичные типы ───
 pub use config::{AppConfig, CatalogEntry, ModelMeta, ModelParams, SamplingPresets};
-pub use llm::{ChatMessage, ChatAttachment, LlamaEngine, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename, llm_history, PromptFormat, estimate_vram_mb, GrammarSpec, build_json_only_grammar};
+pub use llm::{ChatMessage, ChatAttachment, LlamaEngine, SubCall, ToolCallInfo, push_report, LlmMessage, extract_model_filename, llm_history, PromptFormat, estimate_vram_mb, GrammarSpec, build_json_only_grammar, build_json_object_grammar_with_keys};
 pub use session_manager::{ChatSession, SessionMeta};
 pub use mcp_client::{McpClient, McpPool, SharedMcpClient};
 

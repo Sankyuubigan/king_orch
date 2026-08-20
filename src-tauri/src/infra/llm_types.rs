@@ -109,6 +109,31 @@ pub fn build_json_only_grammar() -> String {
     format!("root ::= json-object\n{}", json_grammar_rules())
 }
 
+/// Строго-JSON грамматика с ФИКСИРОВАННЫМИ ключами — контракт fact_extractor.
+/// Ключи перечислены в фиксированном порядке и без опций: boolean-факты строго
+/// `true`/`false`, строковые поля — JSON-строка. Модель физически НЕ может выдать
+/// неизвестный ключ (вроде `has_grounding_dont_exist` вместо `needs_grounding`)
+/// или пропустить обязательный факт — грамматика этого не позволит на уровне
+/// декодирования, а не «просьбы» в промпте.
+pub fn build_json_object_grammar_with_keys(bool_keys: &[String], string_keys: &[String]) -> String {
+    if bool_keys.is_empty() && string_keys.is_empty() {
+        return build_json_only_grammar();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for k in bool_keys {
+        parts.push(format!("\\\"{}\\\" ws \":\" ws bool", k));
+    }
+    for k in string_keys {
+        parts.push(format!("\\\"{}\\\" ws \":\" ws json-string", k));
+    }
+    let body = parts.join(" \",\" ws ");
+    format!(
+        "root ::= \"{{\" ws {} ws \"}}\"\nbool ::= \"true\" | \"false\"\n{}",
+        body,
+        json_grammar_rules()
+    )
+}
+
 /// Лёгкий тип для промпта LLM — только role + content.
 /// Используется временно при вызове generate_chat(), не сохраняется в сессию.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -402,5 +427,29 @@ mod tests {
         let g = build_json_only_grammar();
         assert!(g.starts_with("root ::= json-object"));
         assert!(g.contains("json-value ::="));
+    }
+
+    #[test]
+    fn key_exact_grammar_lists_keys_without_options() {
+        let bool_keys = vec!["has_problem".to_string(), "needs_grounding".to_string()];
+        let string_keys = vec!["rewritten_query".to_string()];
+        let g = build_json_object_grammar_with_keys(&bool_keys, &string_keys);
+        assert!(g.starts_with("root ::= \"{\" ws"), "{}", g);
+        assert!(g.contains("\\\"has_problem\\\" ws \":\" ws bool"), "{}", g);
+        assert!(g.contains("\\\"needs_grounding\\\" ws \":\" ws bool"), "{}", g);
+        assert!(g.contains("\\\"rewritten_query\\\" ws \":\" ws json-string"), "{}", g);
+        // корень — фиксированные ключи, а НЕ свободный members-цикл: модель не может добавить свои
+        assert!(!g.starts_with("root ::= json-object"), "{}", g);
+        assert!(!g.starts_with("root ::= seq"), "{}", g);
+        // порядок строго фиксирован: has_problem идёт раньше rewritten_query
+        let p1 = g.find("has_problem").unwrap();
+        let p2 = g.find("rewritten_query").unwrap();
+        assert!(p1 < p2);
+    }
+
+    #[test]
+    fn key_exact_grammar_empty_falls_back_to_object() {
+        let g = build_json_object_grammar_with_keys(&[], &[]);
+        assert!(g.starts_with("root ::= json-object"), "{}", g);
     }
 }

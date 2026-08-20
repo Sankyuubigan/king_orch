@@ -151,8 +151,10 @@ where
         Ok(clean_thought_tags(&gen.text))
     }
 
-    /// Зовёт LLM напрямую (без .md агента) — для fact-экстрактора
-    pub fn call_llm_direct(&self, system_prompt: &str, user_text: &str, resolved_params: &ModelParams, ctx_label: &str) -> Result<String, String> {
+    /// Зовёт LLM напрямую (без .md агента) — для fact-экстрактора.
+    /// `grammar` — строгая GBNF по контракту facts.yaml (точные ключи); если не передана —
+    /// любой JSON-объект (запасной вариант).
+    pub fn call_llm_direct(&self, system_prompt: &str, user_text: &str, resolved_params: &ModelParams, ctx_label: &str, grammar: Option<String>) -> Result<String, String> {
         let msgs = vec![
             LlmMessage {
                 role: "system".to_string(),
@@ -164,9 +166,10 @@ where
             },
         ];
         (self.log_cb)("[direct] LLM вызов (fact_extractor)...".to_string());
-        // fact-экстрактор обязан вернуть строгий JSON-объект — жёсткая грамматика
+        // fact-экстрактор обязан вернуть строгий JSON-объект по контракту facts.yaml:
+        // точные ключи, фиксированный порядок, без опций
         self.engine.set_grammar(Some(GrammarSpec {
-            gbnf: Some(build_json_only_grammar()),
+            gbnf: Some(grammar.unwrap_or_else(build_json_only_grammar)),
             json_schema: None,
         }));
         let start = std::time::Instant::now();

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::domain::workflow_engine::parser::{FactDef, FactsFile, WorkflowConfig};
+use crate::domain::workflow_engine::parser::{FactDef, FactsFile, OutputFieldDef, WorkflowConfig};
 
 /// Строит промпт для fact-экстрактора.
 /// Если `facts` пуст и указан `facts_file` — загружает факты из внешнего файла лениво.
@@ -13,6 +13,7 @@ pub fn build_extractor_prompt(
 ) -> String {
     let facts = resolve_facts(config, workflow_dir);
     let phases = resolve_phases(config, workflow_dir);
+    let output_fields = resolve_output_fields(config, workflow_dir);
     let prompt = resolve_extractor_prompt(config, workflow_dir);
 
     if let Some(ref custom_prompt) = prompt {
@@ -26,7 +27,38 @@ pub fn build_extractor_prompt(
         return result;
     }
 
-    build_default_prompt(&facts, &phases, user_message, signals)
+    build_default_prompt(&facts, &phases, &output_fields, user_message, signals)
+}
+
+/// Ожидаемые ключи выхода экстрактора: id boolean-фактов + строковые поля + фаза.
+/// Это контракт, из которого строятся и промпт, и грамматика, и валидация.
+pub fn expected_output_keys(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Vec<String> {
+    let facts = resolve_facts(config, workflow_dir);
+    let output_fields = resolve_output_fields(config, workflow_dir);
+    let phases = resolve_phases(config, workflow_dir);
+    let mut keys: Vec<String> = facts.iter().map(|f| f.id.clone()).collect();
+    keys.extend(output_fields.iter().map(|f| f.id.clone()));
+    if !phases.is_empty() {
+        keys.push("phase".to_string());
+    }
+    keys
+}
+
+/// Строгая GBNF-грамматика по контракту из facts.yaml (точные ключи, без опций).
+pub fn build_facts_grammar(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> String {
+    let facts = resolve_facts(config, workflow_dir);
+    let output_fields = resolve_output_fields(config, workflow_dir);
+    let phases = resolve_phases(config, workflow_dir);
+    let bool_keys: Vec<String> = facts.iter().map(|f| f.id.clone()).collect();
+    let mut string_keys: Vec<String> = output_fields
+        .iter()
+        .filter(|f| f.field_type != "boolean")
+        .map(|f| f.id.clone())
+        .collect();
+    if !phases.is_empty() {
+        string_keys.push("phase".to_string());
+    }
+    crate::infra::build_json_object_grammar_with_keys(&bool_keys, &string_keys)
 }
 
 fn resolve_facts(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Vec<FactDef> {
@@ -39,6 +71,20 @@ fn resolve_facts(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Vec<Fa
             if let Ok(content) = fs::read_to_string(&ext_path) {
                 if let Ok(ext) = serde_yaml::from_str::<FactsFile>(&content) {
                     return ext.facts;
+                }
+            }
+        }
+    }
+    vec![]
+}
+
+fn resolve_output_fields(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Vec<OutputFieldDef> {
+    if let Some(ref facts_file) = config.facts_file {
+        if let Some(dir) = workflow_dir {
+            let ext_path = dir.join(facts_file);
+            if let Ok(content) = fs::read_to_string(&ext_path) {
+                if let Ok(ext) = serde_yaml::from_str::<FactsFile>(&content) {
+                    return ext.output_fields;
                 }
             }
         }
@@ -106,7 +152,7 @@ fn build_list(items: &[FactDef]) -> String {
         .join("\n")
 }
 
-fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], user_message: &str, signals: &str) -> String {
+fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output_fields: &[OutputFieldDef], user_message: &str, signals: &str) -> String {
     let facts_list = build_list(facts);
     let phases_list = build_list(phases);
 
@@ -132,6 +178,10 @@ fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], user_message: &st
     let mut keys = Vec::new();
     for f in facts {
         keys.push(format!("\"{}\": boolean", f.id));
+    }
+    for f in output_fields {
+        let t = if f.field_type == "boolean" { "boolean" } else { "string" };
+        keys.push(format!("\"{}\": {}", f.id, t));
     }
     if !phases.is_empty() {
         keys.push("\"phase\": \"название_фазы\"".to_string());
@@ -173,7 +223,7 @@ mod tests {
         let user_msg = "User: Я мужчина. У меня состояние медлительное заторможенное трансовое , такое негативное состояние, дискомфорт оно приносит мне. Как будто бы меня затягивает куда-то, какая-то меланхолия без всяких причин, настроения нету. Ощущаю себя мёртвым каким-то. Удовольствия от жизни нету. Я как будто бы не вижу смысла в получении удовольствия. Это странно. По этой причине мне и девушки неинтересны. дискомфорт возникает из за того что нету настроения. как то тоскливо без причины как будто бы кошки скребут ноют внутри.
 Session signals: []";
 
-        let prompt = build_default_prompt(&facts, &phases, user_msg, signals);
+        let prompt = build_default_prompt(&facts, &phases, &[], user_msg, signals);
 
         // Print the full prompt for inspection
         println!("=== PROMPT ({}) ===", prompt.len());
