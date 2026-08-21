@@ -1,6 +1,6 @@
 {
   "productName": "King Orch",
-  "version": "26.8.104",
+  "version": "26.8.110",
   "identifier": "com.kingorch.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -29,6 +29,9 @@
     "targets": [
       "nsis"
     ],
+    "windows": {
+      "allowDowngrades": true
+    },
     "icon": [
       "icons/icon.ico",
       "icons/icon.png"

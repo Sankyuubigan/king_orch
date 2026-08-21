@@ -85,7 +85,7 @@ async fn main() {
         builder
     };
 
-    let run_result = builder
+    builder
         .manage(AppState {
             cancel_flag: Arc::new(AtomicBool::new(false)),
         })
@@ -163,6 +163,8 @@ async fn main() {
             api::coding_test::get_coding_bench_info,
             api::coding_test::run_coding_bench,
             api::version::get_app_version,
+            api::updater::get_release_history,
+            api::updater::install_release,
             infra::downloader::download_model,
             api::file_utils::write_text_file,
             api::file_utils::read_text_file,
@@ -175,10 +177,17 @@ async fn main() {
             api::llamacpp::set_engine_dir,
             api::telemetry::track_error,
         ])
-        .run(tauri::generate_context!());
+        .build(tauri::generate_context!())
+        .expect("ошибка создания приложения Tauri")
+        .run(|_app_handle, event| {
+            // Гарантированная зачистка движка llama.cpp (llama-server.exe) при
+            // выходе из приложения: на Windows дочерний процесс не убивается
+            // вместе с родителем и «висит» в памяти. Дополнительно к этому
+            // LlamaEngine назначается в Windows Job Object с KILL_ON_JOB_CLOSE.
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                crate::infra::process_util::kill_active_engines();
+            }
+        });
 
-    match run_result {
-        Ok(()) => infra::startup_log::append("INFO", "Приложение закрыто"),
-        Err(e) => infra::startup_log::append("FATAL", &format!("Приложение завершилось с ошибкой: {}", e)),
-    }
+    infra::startup_log::append("INFO", "Приложение закрыто");
 }

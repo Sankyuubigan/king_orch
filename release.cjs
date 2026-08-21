@@ -248,6 +248,26 @@ async function main() {
         fs.writeFileSync(latestJsonPath, JSON.stringify(latestJson, null, 2), 'utf8');
         console.log(`latest.json generated. URL: ${installerUrl}`);
 
+        // 7.5 Generate per-version manifest.json and attach it to the release.
+        // Used by the in-app "rollback to previous version" feature: the app points
+        // the updater plugin at https://github.com/<repo>/releases/download/v<ver>/manifest.json
+        const manifestJson = {
+          version: version,
+          notes: `King Orch ${version}`,
+          pub_date: new Date().toISOString(),
+          platforms: {
+            "windows-x86_64": {
+              signature: sigContent,
+              url: installerUrl
+            }
+          }
+        };
+        const manifestJsonPath = path.join(scriptDir, 'manifest.json');
+        fs.writeFileSync(manifestJsonPath, JSON.stringify(manifestJson, null, 2), 'utf8');
+        execSync(`gh release upload ${tag} "${manifestJsonPath}"`, { stdio: 'inherit', cwd: scriptDir });
+        fs.unlinkSync(manifestJsonPath);
+        console.log('manifest.json uploaded to release.');
+
         execSync('git add latest.json', { stdio: 'inherit', cwd: scriptDir });
         execSync('git commit -m "chore(release): update latest.json for ' + tag + '"', { stdio: 'inherit', cwd: scriptDir });
         execSync('git push origin main', { stdio: 'inherit', cwd: scriptDir });

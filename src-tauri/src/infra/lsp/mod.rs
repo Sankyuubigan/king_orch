@@ -21,6 +21,8 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
+use crate::infra::process_util::kill_process_tree;
+
 /// Таймаут ожидания ответа LSP-сервера (сек). Первый запрос к rust-analyzer
 /// долгий (индексация проекта), поэтому не слишком мал.
 pub const LSP_DEFAULT_TIMEOUT_SECS: u64 = 120;
@@ -296,23 +298,6 @@ impl Drop for LspClient {
     fn drop(&mut self) {
         kill_process_tree(&mut self.child);
     }
-}
-
-/// Убивает дерево процессов sidecar (как в mcp_client.rs).
-fn kill_process_tree(child: &mut Child) {
-    let pid = child.id().to_string();
-    #[cfg(windows)]
-    {
-        let mut kill = Command::new("taskkill");
-        kill.args(["/F", "/T", "/PID", &pid]);
-        { use std::os::windows::process::CommandExt; kill.creation_flags(0x08000000); }
-        let _ = kill.output();
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = Command::new("pkill").args(["-P", &pid]).output();
-    }
-    let _ = child.kill();
 }
 
 /// Поиск исполняемого файла LSP-сервера: сначала `bins/`, потом PATH.

@@ -22,6 +22,8 @@ pub mod telemetry;
 pub mod tools;
 pub mod permissions;
 pub mod lsp;
+pub mod updater_rollback;
+pub mod process_util;
 
 // ─── Публичные типы ───
 pub use config::{AppConfig, CatalogEntry, ModelMeta, ModelParams, SamplingPresets};

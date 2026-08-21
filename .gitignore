@@ -21,3 +21,6 @@ temp_tauri.key
 /.agents_workspace
 /llamacpp
 /tasks
+/build_rb.log
+/build_rollback.log
+build_rb2.log

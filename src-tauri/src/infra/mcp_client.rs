@@ -7,6 +7,8 @@ use std::sync::mpsc;
 use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 
+use crate::infra::process_util::kill_process_tree;
+
 /// Общий пул MCP-клиентов на весь запрос: каждый уникальный сервер (по имени)
 /// стартует deno ровно один раз и гасится один раз в конце запроса, а не по
 /// N раз на каждого агента/сабагента (это давало вспышки чёрных окон taskkill
@@ -164,32 +166,6 @@ impl Drop for McpClient {
     fn drop(&mut self) {
         kill_process_tree(&mut self.child);
     }
-}
-
-/// Убивает дерево процессов MCP-сервера, а не только прямого потомка.
-///
-/// `child.kill()` на Windows завершает только непосредственного ребёнка
-/// (например, `deno.exe`), оставляя сам MCP-сервер (воркер Deno) осиротевшим
-/// и висящим в памяти. `taskkill /F /T /PID` убивает всё дерево. На Unix
-/// аналогично — через `pkill -P` + fallback на `kill`.
-fn kill_process_tree(child: &mut std::process::Child) {
-    let pid = child.id().to_string();
-    #[cfg(windows)]
-    {
-        let mut kill = std::process::Command::new("taskkill");
-        kill.args(["/F", "/T", "/PID", &pid]);
-        // Без CREATE_NO_WINDOW taskkill мелькает чёрным консольным окном при
-        // каждом завершении MCP-клиента (а их роняется по набору на каждый
-        // агент/сабагент) — отсюда «мигание» при мультимодальных запросах.
-        { use std::os::windows::process::CommandExt; kill.creation_flags(0x08000000); }
-        let _ = kill.output();
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = std::process::Command::new("pkill").args(["-P", &pid]).output();
-    }
-    // Запасной вариант: прямой потомок.
-    let _ = child.kill();
 }
 
 #[cfg(test)]

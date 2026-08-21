@@ -39,6 +39,9 @@ export interface SettingsElements {
   btnCheckUpdate: HTMLButtonElement;
   btnInstallUpdate: HTMLButtonElement;
   updateStatus: HTMLElement;
+  btnRollback: HTMLButtonElement;
+  rollbackStatus: HTMLElement;
+  rollbackHistory: HTMLElement;
   btnSupportProject: HTMLButtonElement;
   btnAutoDownload: HTMLButtonElement;
   autoDownloadModal: HTMLElement;
@@ -498,6 +501,7 @@ export class SettingsController {
         showToast(`Не удалось открыть страницу: ${e}`, "error");
       }
     });
+    this.el.btnRollback?.addEventListener("click", () => this.loadHistory());
     this.el.btnDownloadModel?.addEventListener("click", async () => {
       const name = this.el.downloadModelSelect.value; if (!name) return;
       const model = store.modelsCatalog.find(m => m.name === name); if (!model) return;
@@ -690,5 +694,98 @@ export class SettingsController {
     bus.on("model:changed", (modelPath: string) => {
       if (this.el.modelSelect.value === modelPath) this.loadModelParams();
     });
+  }
+
+  /// ─── Откат к предыдущей версии ───
+
+  private async loadHistory() {
+    const btn = this.el.btnRollback;
+    const status = this.el.rollbackStatus;
+    const container = this.el.rollbackHistory;
+    if (!btn || !container) return;
+    btn.disabled = true;
+    status.textContent = "Загрузка...";
+    container.style.display = "none";
+    try {
+      const list: any[] = await invoke("get_release_history");
+      if (!list || list.length === 0) {
+        status.textContent = "Список версий недоступен.";
+        return;
+      }
+      container.innerHTML = "";
+      for (const r of list) {
+        const row = document.createElement("div");
+        row.style.cssText =
+          "display:flex; justify-content:space-between; align-items:center; gap:10px; padding:8px 0;" +
+          "border-bottom:1px solid rgba(255,255,255,0.08);";
+
+        const left = document.createElement("div");
+        const ver = document.createElement("div");
+        ver.style.cssText = "font-weight:600;";
+        ver.textContent = `v${r.version}` + (r.isCurrent ? " (текущая)" : "");
+        const meta = document.createElement("div");
+        meta.style.cssText = "font-size:12px; color:var(--text-muted);";
+        const date = r.pubDate ? new Date(r.pubDate).toLocaleDateString() : "";
+        meta.textContent = date + (r.notes ? ` · ${String(r.notes).split("\n")[0]}` : "");
+        left.appendChild(ver);
+        left.appendChild(meta);
+
+        const right = document.createElement("div");
+        if (!r.isCurrent) {
+          const btnRoll = document.createElement("button");
+          btnRoll.className = "btn-secondary";
+          btnRoll.textContent = "Откатить";
+          btnRoll.addEventListener("click", () => this.confirmRollback(r, right));
+          right.appendChild(btnRoll);
+        }
+        row.appendChild(left);
+        row.appendChild(right);
+        container.appendChild(row);
+      }
+      container.style.display = "block";
+      status.textContent = "";
+    } catch (e: any) {
+      status.textContent = "";
+      showToast(`Ошибка загрузки истории: ${e}`, "error");
+      void trackError("settings.loadHistory", e);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  private confirmRollback(r: any, right: HTMLElement) {
+    right.innerHTML = "";
+    const warn = document.createElement("span");
+    warn.style.cssText = "font-size:12px; margin-right:8px; color:#ffb84d;";
+    warn.textContent = `Откатить до v${r.version}?`;
+    const yes = document.createElement("button");
+    yes.className = "btn-danger";
+    yes.textContent = "Да, откатить";
+    const no = document.createElement("button");
+    no.className = "btn-secondary";
+    no.textContent = "Отмена";
+    no.style.marginLeft = "6px";
+    yes.addEventListener("click", () => this.doRollback(r.version, yes, no));
+    no.addEventListener("click", () => this.loadHistory());
+    right.appendChild(warn);
+    right.appendChild(yes);
+    right.appendChild(no);
+  }
+
+  private async doRollback(version: string, yes: HTMLButtonElement, no: HTMLButtonElement) {
+    yes.disabled = true;
+    no.disabled = true;
+    yes.textContent = "Откат...";
+    // Приложение само перезапустится установщиком; дожидаться резолва invoke не нужно.
+    try {
+      await invoke("install_release", { version });
+      yes.textContent = "Перезапустите приложение";
+    } catch (e: any) {
+      showToast(`Ошибка отката: ${e}`, "error");
+      void trackError("settings.doRollback", e);
+      yes.disabled = false;
+      no.disabled = false;
+      yes.textContent = "Да, откатить";
+    }
   }
 }

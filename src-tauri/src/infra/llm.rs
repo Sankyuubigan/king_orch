@@ -392,6 +392,13 @@ impl LlamaEngine {
             Ok(c) => c,
             Err(e) => return fail(format!("Ошибка запуска llama-server: {}", e)),
         };
+        // ── Гарантия зачистки при выходе из приложения ──
+        // Регистрируем PID (для докиля в обработчике выхода main.rs) и назначаем
+        // процесс в Windows Job Object с KILL_ON_JOB_CLOSE — тогда ОС убьёт
+        // сервер даже при насильственном закрытии приложения.
+        crate::infra::process_util::register_engine_pid(child.id());
+        #[cfg(windows)]
+        crate::infra::process_util::assign_child_to_kill_job(&child);
         if let Some(stderr) = child.stderr.take() {
             spawn_stderr_reader(stderr);
         }
@@ -432,9 +439,13 @@ impl LlamaEngine {
                         code
                     ));
                     use_reasoning = false;
+                    crate::infra::process_util::unregister_engine_pid(child.id());
                     match build_cmd(false).spawn() {
                         Ok(c) => {
                             child = c;
+                            crate::infra::process_util::register_engine_pid(child.id());
+                            #[cfg(windows)]
+                            crate::infra::process_util::assign_child_to_kill_job(&child);
                             if let Some(stderr) = child.stderr.take() {
                                 spawn_stderr_reader(stderr);
                             }
@@ -1143,7 +1154,15 @@ impl LlamaEngine {
 impl Drop for LlamaEngine {
     fn drop(&mut self) {
         if let Some(mut child) = self.child.take() {
-            let _ = child.kill();
+            let pid = child.id();
+            crate::infra::process_util::unregister_engine_pid(pid);
+            crate::infra::startup_log::append(
+                "INFO",
+                &format!("🔻 Остановка llama-server (pid {})", pid),
+            );
+            // kill_process_tree убивает всё дерево (на Windows `child.kill()`
+            // оставил бы потомков «висящими» в памяти).
+            crate::infra::process_util::kill_process_tree(&mut child);
             let _ = child.wait();
         }
     }

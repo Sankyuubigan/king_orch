@@ -10,6 +10,7 @@ pub mod graph;
 pub mod test;
 pub mod version;
 pub mod coding_test;
+pub mod updater;
 pub mod file_utils;
 pub mod llamacpp;
 pub mod permissions;

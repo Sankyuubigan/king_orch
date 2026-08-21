@@ -220,7 +220,7 @@ mod tests {
         let phases = resolve_phases(&config, Some(&workflow_dir));
         assert!(!facts.is_empty(), "facts.yaml не загрузился из {:?}", workflow_dir);
         let signals = "[]";
-        let user_msg = "User: Я мужчина. У меня состояние медлительное заторможенное трансовое , такое негативное состояние, дискомфорт оно приносит мне. Как будто бы меня затягивает куда-то, какая-то меланхолия без всяких причин, настроения нету. Ощущаю себя мёртвым каким-то. Удовольствия от жизни нету. Я как будто бы не вижу смысла в получении удовольствия. Это странно. По этой причине мне и девушки неинтересны. дискомфорт возникает из за того что нету настроения. как то тоскливо без причины как будто бы кошки скребут ноют внутри.
+        let user_msg = "User: наблюдаю сниженное настроение и упадок сил, интерес к привычным занятиям пропал, ничего не радует. ощущение безысходности и подавленности без видимой внешней причины.
 Session signals: []";
 
         let prompt = build_default_prompt(&facts, &phases, &[], user_msg, signals);
@@ -291,6 +291,104 @@ Session signals: []";
         assert!(
             !has_somatic,
             "has_somatic должен быть false для чисто эмоциональной жалобы, но получен true"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn test_extractor_has_somatic_false_when_no_new_somatic_in_history() {
+        let model_path =
+            std::env::var("TEST_MODEL_PATH").expect("Set TEST_MODEL_PATH to a GGUF file path");
+
+        // Единый источник правды — реальный facts.yaml. Никаких копий критериев в тесте.
+        let workflow_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .join("agents/psychotherapist/transitions");
+        let config = WorkflowConfig {
+            facts_file: Some("facts.yaml".into()),
+            ..Default::default()
+        };
+        let facts = resolve_facts(&config, Some(&workflow_dir));
+        let phases = resolve_phases(&config, Some(&workflow_dir));
+        assert!(!facts.is_empty(), "facts.yaml не загрузился из {:?}", workflow_dir);
+        let signals = "[]";
+
+        // Имитируем реальный вход узла extract_facts: текущее сообщение (User:) +
+        // история сессии (Session history:). В истории УЖЕ есть соматика (msg_0),
+        // а текущее сообщение — лишь ответ на сценарии, без НОВЫХ телесных жалоб.
+        let history = r#"[{"type":"message","author":"user","content":"периодически болит голова с одной стороны и напряжена шея, бывает дискомфорт в области живота по утрам."},{"type":"message","author":"system","content":"Предложены сценарии проработки."}]"#;
+        let user_msg = format!(
+            "User: сценарий 1 не подходит. предпочитаю действовать самостоятельно.\nсценарий 2 не про моё.\nсценарий 3 мимо.\nответы:\n1. близких родственников нет в живых.\n2. затрудняюсь ответить.\n3. возможно, сложно принять состояние своего здоровья.\n\nSession history (последние сообщения сессии): {}",
+            history
+        );
+
+        let prompt = build_default_prompt(&facts, &phases, &[], &user_msg, signals);
+
+        println!("=== PROMPT ({}) ===", prompt.len());
+        println!("{}", prompt);
+        println!("=== END PROMPT ===");
+
+        let engine_dir = std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+            .map(|d| crate::infra::llamacpp_installer::default_dir(&d))
+            .unwrap_or_else(std::path::PathBuf::new);
+        let engine = LlamaEngine::new(&engine_dir, &model_path, 8192, false, false, 0, &|_| {}, |_| {}).unwrap();
+
+        let msgs = vec![
+            LlmMessage {
+                role: "system".to_string(),
+                content: prompt,
+            },
+            LlmMessage {
+                role: "user".to_string(),
+                content: user_msg.clone(),
+            },
+        ];
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let gen = engine
+            .generate_chat(
+                &msgs,
+                256,
+                &ModelParams::default(),
+                "Auto",
+                cancel,
+                "test:fact_extractor",
+                |_, _| {},
+                |_| {},
+            )
+            .unwrap();
+        let response = gen.text;
+
+        println!("=== RAW RESPONSE ===");
+        println!("{}", response);
+        println!("=== END RESPONSE ===");
+
+        let cleaned: String = {
+            let s = response.trim();
+            let start = s.find('{').unwrap_or(0);
+            let end = s.rfind('}').map(|i| i + 1).unwrap_or(s.len());
+            s[start..end].to_string()
+        };
+
+        let parsed: serde_json::Value = serde_json::from_str(&cleaned).unwrap_or_else(|e| {
+            panic!("Failed to parse JSON from response '{}': {}", cleaned, e)
+        });
+
+        println!("=== PARSED JSON ===");
+        println!("{:#}", parsed);
+        println!("=== END JSON ===");
+
+        let has_somatic = parsed
+            .get("has_somatic")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+
+        assert!(
+            !has_somatic,
+            "has_somatic должен быть false, когда в текущем сообщении НЕТ НОВЫХ соматических жалоб (соматика уже была в истории), но получен true"
         );
     }
 }
