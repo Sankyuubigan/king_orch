@@ -2,7 +2,6 @@
 pub(crate) mod dispatch;
 pub(crate) use dispatch::*;
 pub mod stream;
-pub(crate) mod signal_prompts;
 pub(crate) mod text;
 pub(crate) mod invocation;
 pub(crate) mod grammar;
@@ -13,7 +12,6 @@ pub(crate) mod todo;
 pub(crate) mod result;
 pub(crate) use consts::*;
 pub use stream::*;
-pub(crate) use signal_prompts::*;
 pub(crate) use text::*;
 pub(crate) use invocation::*;
 pub(crate) use grammar::*;
@@ -29,7 +27,7 @@ mod runtime;
 pub use runtime::builtin_tools;
 
 use crate::domain::agent_manager::{load_agents, AgentProfile};
-use crate::domain::signals::{SignalContract, build_signal_envelope_schema, load_signal_contract};
+use crate::domain::signals::{SignalContract, extract_signal_value_from_text, load_signal_contract};
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner, NodeType, WorkflowDef,
 };
@@ -699,9 +697,7 @@ let start_time = Instant::now();
         consecutive_invalid_targets: 0,
         last_thinking_len: 0,
         stalled_continuations: 0,
-        signal_attempted: false,
         signal_saved: false,
-        signal_retries: 0,
         signal_analysis: String::new(),
         continuation_count: 0,
         continuation_restarts: 0,
@@ -924,61 +920,10 @@ let start_time = Instant::now();
                 }
 
                 // Ответ завершён обычным текстом — состояние «докачки» больше не нужно.
-                // Без сброса следующий вызов (например, сигнальный emit_signal) парсил бы
-                // склеенный combined и терял свежий JSON-конверт.
+                // Без сброса следующий вызов парсил бы склеенный combined и терял свежий JSON-конверт.
                 ctx.continuation_raw.clear();
                 ctx.continuation_mark = None;
 
-                // ── Второй сигнальный вызов (та же логика, что в конце цикла):
-                // агент ответил через reply, но сигнал по контракту не эмичен.
-                if !ctx.signal_attempted && !ctx.signal_saved {
-                    if let Some(contract) = &signal_contract {
-                        ctx.signal_attempted = true;
-                        ctx.signal_analysis = ctx.final_response.clone();
-                        let schema = build_signal_envelope_schema(contract);
-                        engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
-                        log_cb(format!("📡 Второй сигнальный вызов агента '{}' (из reply): emit_signal('{}') под json_schema", agent.id, contract.key));
-                        ctx.llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
-                        ctx.llm_messages.push(LlmMessage {
-                            role: "user".to_string(),
-                            content: signal_request_prompt(&contract.key),
-                        });
-                        continue;
-                    }
-                }
-
-                // ── Сигнальная итерация: модель снова вернула reply, а не
-                // JSON-конверт — ретраим с корректирующим хинтом. При исчерпании
-                // попыток сигнал пропускаем (красная кнопка, core §2.2), отчёт сохраняем.
-                if ctx.signal_attempted && !ctx.signal_saved {
-                    ctx.signal_retries += 1;
-                    if ctx.signal_retries <= MAX_SIGNAL_RETRIES {
-                        if let Some(contract) = &signal_contract {
-                            log_cb(format!(
-                                "⚠️ [{}] ответ не распознан как emit_signal (попытка {}/{}): {}",
-                                agent.id,
-                                ctx.signal_retries,
-                                MAX_SIGNAL_RETRIES,
-                                safe_truncate(&ctx.final_response, 80)
-                            ));
-                            ctx.llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
-                            ctx.llm_messages.push(LlmMessage {
-                                role: "user".to_string(),
-                                content: signal_retry_hint(&contract.key),
-                            });
-                            continue;
-                        }
-                    }
-                    log_cb(format!(
-                        "⚠️ [{}] сигнал '{}' НЕ сохранён после {} попыток (JSON конверта не распознан). Отчёт агента сохранён, сигнал пропущен.",
-                        agent.id,
-                        signal_contract.as_ref().map(|c| c.key.as_str()).unwrap_or("?"),
-                        MAX_SIGNAL_RETRIES
-                    ));
-                    if !ctx.signal_analysis.is_empty() {
-                        ctx.final_response = ctx.signal_analysis.clone();
-                    }
-                }
                 break;
             }
 
@@ -1117,58 +1062,34 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
         ctx.continuation_raw.clear();
         ctx.continuation_mark = None;
 
-        // ── Сигнальная итерация: агент ответил, но конверт emit_signal так и не
-        // распознан (модель вернула текст/невалидный JSON). JSON-конверт НЕ должен
-        // стать финальным ответом — с single_report он затёр бы реальный отчёт.
-        // Ретраим с корректирующим хинтом; при исчерпании — логируем (красная кнопка,
-        // core §2.2) и возвращаем анализ агента, жертвуя сигналом, но не отчётом.
-        if ctx.signal_attempted && !ctx.signal_saved {
-            ctx.signal_retries += 1;
-            if ctx.signal_retries <= MAX_SIGNAL_RETRIES {
-                if let Some(contract) = &signal_contract {
-                    log_cb(format!(
-                        "⚠️ [{}] ответ не распознан как emit_signal (попытка {}/{}): {}",
-                        agent.id, ctx.signal_retries, MAX_SIGNAL_RETRIES, preview
-                    ));
-                    ctx.llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
-                    ctx.llm_messages.push(LlmMessage {
-                        role: "user".to_string(),
-                        content: signal_retry_hint(&contract.key),
-                    });
-                    continue;
-                }
-            }
-            // Ретраи исчерпаны: сигнал пропускаем, отчёт агента сохраняем.
-            log_cb(format!(
-                "⚠️ [{}] сигнал '{}' НЕ сохранён после {} попыток (JSON конверта не распознан). Отчёт агента сохранён, сигнал пропущен.",
-                agent.id,
-                signal_contract.as_ref().map(|c| c.key.as_str()).unwrap_or("?"),
-                MAX_SIGNAL_RETRIES
-            ));
-            if !ctx.signal_analysis.is_empty() {
-                ctx.final_response = ctx.signal_analysis.clone();
-            }
-        }
-
-        // ── Второй сигнальный вызов: агент ответил свободно, но не вызвал
-        // emit_signal. Если для него есть контракт сигнала — делаем ещё ОДИН
-        // LLM-вызов СТРОГО под json_schema конверта (анализ остаётся первым).
-        if !ctx.signal_attempted && !ctx.signal_saved {
-            if let Some(contract) = &signal_contract {
-                ctx.signal_attempted = true;
-                ctx.signal_analysis = ctx.final_response.clone();
-                let schema = build_signal_envelope_schema(contract);
-                engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
-                log_cb(format!("📡 Второй сигнальный вызов агента '{}': emit_signal('{}') под json_schema", agent.id, contract.key));
-                ctx.llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
-                ctx.llm_messages.push(LlmMessage {
-                    role: "user".to_string(),
-                    content: signal_request_prompt(&contract.key),
-                });
-continue;
-            }
-        }
         break;
+    }
+
+    // ── Детерминированный fallback сигнала (БЕЗ LLM-вызова): агент должен звать
+    // emit_signal нативно в своём ответе. Если он этого не сделал, но у агента есть
+    // контракт сигнала — пытаемся извлечь значение из текста ответа по допустимым
+    // значениям контракта. Это держит маршрутизаторы (в т.ч. без default) в безопасности
+    // и исключает пере-вывод значения отдельным вызовом (который терял контекст).
+    if !ctx.signal_saved {
+        if let Some(contract) = &signal_contract {
+            if let Some(value) = extract_signal_value_from_text(contract, &ctx.final_response) {
+                let mut map = serde_json::Map::new();
+                map.insert(contract.key.clone(), value.clone());
+                let signal_msg = ChatMessage {
+                    id: Some(format!("msg_{}", ctx.msg_counter)),
+                    msg_type: "signal".to_string(),
+                    content: serde_json::Value::Object(map).to_string(),
+                    sub_calls: None,
+                    author: Some(agent.id.clone()),
+                    model: None,
+                    attachments: None,
+                };
+                ctx.messages.push(signal_msg);
+                *ctx.msg_counter += 1;
+                ctx.signal_saved = true;
+                log_cb(format!("📡 Сигнал '{}' извлечён из текста ответа (fallback): {}", contract.key, value));
+            }
+        }
     }
 
     if ctx.depth > 0 {

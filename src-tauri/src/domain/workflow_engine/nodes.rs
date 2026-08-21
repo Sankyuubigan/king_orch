@@ -47,6 +47,13 @@ where
 
             let mut parsed = parse_fact_json(&llm_response);
 
+            (runner.log_cb)(format!(
+                "[fact_extractor][DEBUG] expected_keys={:?} first_valid={} parsed_first={}",
+                expected_keys,
+                facts_json_valid(&parsed, &expected_keys),
+                serde_json::to_string(&parsed).unwrap_or_default()
+            ));
+
             // ── Fallback: JSON неполный/с неверными ключами — повторить с уточнением ──
             if !facts_json_valid(&parsed, &expected_keys) {
                 (runner.log_cb)("[fact_extractor] JSON неполный/неверные ключи, повтор с уточнением...".to_string());
@@ -61,11 +68,22 @@ where
                 );
                 let retry_response = runner.call_llm_direct(&retry_prompt, &input, &resolved_params, &format!("graph:{}#retry", node.id), Some(grammar))?;
                 parsed = parse_fact_json(&retry_response);
+                (runner.log_cb)(format!(
+                    "[fact_extractor][DEBUG] retry_valid={} parsed_retry={}",
+                    facts_json_valid(&parsed, &expected_keys),
+                    serde_json::to_string(&parsed).unwrap_or_default()
+                ));
                 if !facts_json_valid(&parsed, &expected_keys) {
                     (runner.log_cb)("[fact_extractor] Повтор тоже неполный/неверные ключи, используем fallback".to_string());
                     parsed = fallback_facts_json(&expected_keys);
                 }
             }
+
+            (runner.log_cb)(format!(
+                "[fact_extractor][DEBUG] FINAL valid={} parsed={}",
+                facts_json_valid(&parsed, &expected_keys),
+                serde_json::to_string(&parsed).unwrap_or_default()
+            ));
 
             (runner.log_cb)(format!(
                 "[fact_extractor] Сырой ответ: {}",
@@ -599,7 +617,14 @@ where
                 .unwrap_or(serde_json::Value::Null);
 
             let field = node.field.as_deref().unwrap_or("");
-            let is_true = json_val.get(field).and_then(|v| v.as_bool()).unwrap_or(false);
+            // Fail-open: если шаблон не распарсился (пусто/не JSON) — не игнорируем
+            // юзера, трактуем как "да" и логируем. Тихий false здесь = баг "игнорит запрос".
+            let is_true = if json_val.is_null() {
+                (runner.log_cb)("[condition_check] вход не распарсился, fail-open -> true".to_string());
+                true
+            } else {
+                json_val.get(field).and_then(|v| v.as_bool()).unwrap_or(false)
+            };
 
             let branch_target = if is_true {
                 node.true_to.clone()
@@ -761,16 +786,41 @@ fn extract_json(text: &str) -> Option<String> {
 }
 
 /// Парсит JSON-ответ fact_extractor (прямой парс, затем поиск `{...}` в тексте).
+/// Дополнительно приводит значения фактов к JSON-булевому (защита от выдачи
+/// "true"/"false" в кавычках или 0/1 вместо булевого типа), чтобы downstream
+/// condition_check корректно читал .as_bool().
 fn parse_fact_json(text: &str) -> serde_json::Value {
-    serde_json::from_str(text).unwrap_or_else(|_| {
+    let mut val = serde_json::from_str(text).unwrap_or_else(|_| {
         extract_json(text)
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_else(|| serde_json::json!({}))
-    })
+    });
+    if let Some(obj) = val.as_object_mut() {
+        for v in obj.values_mut() {
+            *v = coerce_bool(v.take());
+        }
+    }
+    val
+}
+
+/// Приводит значение к JSON-булевому: "true"/"false" (строка), 1/0, "1"/"0" -> bool.
+fn coerce_bool(v: serde_json::Value) -> serde_json::Value {
+    match v {
+        serde_json::Value::Bool(b) => serde_json::Value::Bool(b),
+        serde_json::Value::String(s) => {
+            let t = s.trim().eq_ignore_ascii_case("true") || s.trim() == "1";
+            serde_json::Value::Bool(t)
+        }
+        serde_json::Value::Number(n) => {
+            serde_json::Value::Bool(n.as_i64().map_or(false, |x| x != 0))
+        }
+        _ => serde_json::Value::Bool(false),
+    }
 }
 
 /// Валидирует выход экстрактора против контракта facts.yaml:
-/// присутствуют ВСЕ ожидаемые ключи и НЕТ неизвестных (строгая схема).
+/// присутствуют ВСЕ ожидаемые ключи. Лишние ключи НЕ считаются ошибкой
+/// (мягче — не выкидываем весь результат из-за одного лишнего/неизвестного поля).
 /// Если контракт пуст — достаточно непустого JSON-объекта.
 fn facts_json_valid(parsed: &serde_json::Value, expected: &[String]) -> bool {
     if expected.is_empty() {
@@ -781,15 +831,62 @@ fn facts_json_valid(parsed: &serde_json::Value, expected: &[String]) -> bool {
         None => return false,
     };
     expected.iter().all(|k| obj.contains_key(k))
-        && obj.keys().all(|k| expected.iter().any(|e| e == k))
 }
 
-/// Последний резерв после двух неудач: все факты = false (ничего не выдумываем),
-/// вместо хардкода под конкретную команду агентов.
+/// Последний резерв после двух неудач.
+/// Fail-open: при неуверенности НЕ считаем, что проблемы нет (has_problem=true),
+/// чтобы не проигнорировать запрос юзера. Остальные факты — false.
+/// (Вместо хардкода под конкретную команду агентов.)
 fn fallback_facts_json(expected: &[String]) -> serde_json::Value {
     let mut obj = serde_json::Map::new();
     for k in expected {
-        obj.insert(k.clone(), serde_json::Value::Bool(false));
+        let default = if k == "has_problem" { true } else { false };
+        obj.insert(k.clone(), serde_json::Value::Bool(default));
     }
     serde_json::Value::Object(obj)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_fact_json_accepts_logged_valid_output() {
+        // После фикса грамматики (экранированные кавычки GBNF) модель выдаёт
+        // ВАЛИДНЫЙ JSON с кавычками у ключей — ровно то, что ловил баг "key must be a string".
+        let s = "{\n  \"has_problem\" : true,\n  \"has_somatic\" : true,\n  \"needs_grounding\" : true,\n  \"user_doesnt_agree\" : false\n}";
+        let v = parse_fact_json(s);
+        let expected = vec![
+            "has_problem".to_string(),
+            "has_somatic".to_string(),
+            "needs_grounding".to_string(),
+            "user_doesnt_agree".to_string(),
+        ];
+        assert!(
+            facts_json_valid(&v, &expected),
+            "валидный JSON с кавычками у ключей должен проходить валидацию"
+        );
+        assert_eq!(v.get("has_problem").and_then(|x| x.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn facts_json_valid_ignores_extra_keys() {
+        let v: serde_json::Value = serde_json::json!({"has_problem": true, "extra": 1});
+        let expected = vec!["has_problem".to_string()];
+        assert!(facts_json_valid(&v, &expected));
+    }
+
+    #[test]
+    fn coerce_string_true_to_bool() {
+        let v = parse_fact_json("{\"has_problem\": \"true\"}");
+        assert_eq!(v.get("has_problem").and_then(|x| x.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn fallback_is_fail_open_for_has_problem() {
+        let expected = vec!["has_problem".to_string(), "has_somatic".to_string()];
+        let v = fallback_facts_json(&expected);
+        assert_eq!(v.get("has_problem").and_then(|x| x.as_bool()), Some(true));
+        assert_eq!(v.get("has_somatic").and_then(|x| x.as_bool()), Some(false));
+    }
 }

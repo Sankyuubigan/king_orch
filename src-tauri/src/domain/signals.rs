@@ -69,6 +69,82 @@ pub fn build_signal_envelope_schema(contract: &SignalContract) -> Value {
     })
 }
 
+/// Детерминированное извлечение значения сигнала из ТЕКСТА ответа агента по
+/// допустимым значениям контракта. НЕ делает LLM-вызов — просто ищет подстроку
+/// или токен. Используется как fallback, когда агент не вызвал `emit_signal` нативно.
+///
+/// Поддерживаемые виды `value_schema`:
+/// - `enum` (массив строк) → первая совпавшая строка (soma_translator/cluster_checker);
+/// - `object` со свойствами-`enum` → объект из совпавших свойств (validator: verdict);
+/// - `pattern` вида `^[1-9]$` → первый символ из набора (synthesizer: destructor_type).
+/// Возвращает `None`, если ничего не нашлось (тогда сигнал не сохраняется).
+pub fn extract_signal_value_from_text(contract: &SignalContract, text: &str) -> Option<Value> {
+    let schema = &contract.value_schema;
+
+    // 1) enum (массив строк)
+    if let Some(enum_vals) = schema.get("enum").and_then(|e| e.as_array()) {
+        for v in enum_vals {
+            if let Some(s) = v.as_str() {
+                if !s.is_empty() && text.contains(s) {
+                    return Some(Value::String(s.to_string()));
+                }
+            }
+        }
+        return None;
+    }
+
+    // 2) object со свойствами-enum
+    if schema.get("type").and_then(|t| t.as_str()) == Some("object") {
+        if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+            let mut obj = serde_json::Map::new();
+            let mut matched = false;
+            for (pname, pschema) in props {
+                if let Some(enum_vals) = pschema.get("enum").and_then(|e| e.as_array()) {
+                    for v in enum_vals {
+                        if let Some(s) = v.as_str() {
+                            if !s.is_empty() && text.contains(s) {
+                                obj.insert(pname.clone(), Value::String(s.to_string()));
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if matched {
+                return Some(Value::Object(obj));
+            }
+        }
+        return None;
+    }
+
+    // 3) pattern одиночного символа (напр. ^[1-9]$)
+    if let Some(pat) = schema.get("pattern").and_then(|p| p.as_str()) {
+        if let Some(inner) = pat.strip_prefix('^').and_then(|p| p.strip_suffix('$')) {
+            if inner.starts_with('[') && inner.ends_with(']') {
+                let set: Vec<char> = inner[1..inner.len() - 1].chars().collect();
+                // Диапазон вида X-Y (напр. "1-9")
+                if set.len() == 3 && set[1] == '-' {
+                    let (lo, hi) = (set[0], set[2]);
+                    for ch in text.chars() {
+                        if ch >= lo && ch <= hi {
+                            return Some(Value::String(ch.to_string()));
+                        }
+                    }
+                } else {
+                    for ch in text.chars() {
+                        if set.contains(&ch) {
+                            return Some(Value::String(ch.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
 /// Полностью инлайн-схемы агентов (карта agent_id → контракт) для отладки/тестов.
 pub fn load_all_signal_contracts(signals_dir: &Path) -> HashMap<String, SignalContract> {
     let mut map = HashMap::new();
@@ -165,5 +241,61 @@ mod tests {
         let map = load_all_signal_contracts(dir);
         assert_eq!(map.len(), 5, "все 5 сигналов");
         assert!(map.contains_key("validator"));
+    }
+
+    #[test]
+    fn extract_signal_value_from_text_enum() {
+        let c = SignalContract {
+            key: "soma_translator".to_string(),
+            value_schema: serde_json::json!({ "type": "string", "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"] }),
+        };
+        // Маркер в тексте → значение извлекается без LLM.
+        assert_eq!(
+            extract_signal_value_from_text(&c, "разбор готов. РУКОСТЬ ИЗВЕСТНА, правая сторона — Мать"),
+            Some(serde_json::json!("РУКОСТЬ ИЗВЕСТНА"))
+        );
+        // Нет маркера → None (сигнал не сохраняется, маршрутизация по default).
+        assert_eq!(
+            extract_signal_value_from_text(&c, "биологический левша, анализ завершён"),
+            None
+        );
+        // Пустой/не совпавший enum → None.
+        assert_eq!(
+            extract_signal_value_from_text(&c, "просто текст без маркеров"),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_signal_value_from_text_object_enum() {
+        let c = SignalContract {
+            key: "validator_report".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "verdict": { "type": "string", "enum": ["ДАННЫХ ДОСТАТОЧНО", "УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО"] }
+                }
+            }),
+        };
+        assert_eq!(
+            extract_signal_value_from_text(&c, "Вердикт: УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО по причине X"),
+            Some(serde_json::json!({ "verdict": "УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО" }))
+        );
+    }
+
+    #[test]
+    fn extract_signal_value_from_text_pattern() {
+        let c = SignalContract {
+            key: "destructor_type".to_string(),
+            value_schema: serde_json::json!({ "type": "string", "pattern": "^[1-9]$" }),
+        };
+        assert_eq!(
+            extract_signal_value_from_text(&c, "тип деструктора равен 7, глубинный"),
+            Some(serde_json::json!("7"))
+        );
+        assert_eq!(
+            extract_signal_value_from_text(&c, "нет цифр"),
+            None
+        );
     }
 }

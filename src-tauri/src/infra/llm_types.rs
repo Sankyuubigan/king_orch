@@ -119,17 +119,30 @@ pub fn build_json_object_grammar_with_keys(bool_keys: &[String], string_keys: &[
     if bool_keys.is_empty() && string_keys.is_empty() {
         return build_json_only_grammar();
     }
+    // Локальное ПРАВИЛО ПРОБЕЛОВ `sp` — ОГРАНИЧЕННОЕ (как в официальном конвертере
+    // JSON-схем llama.cpp: `space ::= | " " | "\n" [ \t]{0,20}`). НЕ используем
+    // глобальный `ws ::= (...)*`: неограниченный `ws*` позволяет модели бесконечно
+    // генерировать пробельные токены после `{` и зацикливаться (LOOP_DETECTED),
+    // после чего экстрактор падает в fallback «все факты false».
+    let sp = "sp ::= \" \" | \"\\n\" [ \\t]{0,4}";
     let mut parts: Vec<String> = Vec::new();
     for k in bool_keys {
-        parts.push(format!("\\\"{}\\\" ws \":\" ws bool", k));
+        // GBNF: \"key\" — экранированные кавычки, чтобы в ВЫВОДЕ КЛЮЧ БЫЛ В КАВЫЧКАХ
+        // (валидный JSON). Без экранирования GBNF трактует "key" как литерал БЕЗ
+        // кавычек -> модель выдаёт { key : ... } -> serde падает ("key must be a string")
+        // -> parse_fact_json возвращает {} -> facts_json_valid=false -> fallback "все false"
+        // -> has_problem=false -> бот игнорирует запрос юзера. Это и есть корень бага.
+        // (Совпадает с официальным конвертером llama.cpp: "\"name\"" -> вывод "name".)
+        parts.push(format!("\"\\\"{}\\\"\" sp \":\" sp bool", k));
     }
     for k in string_keys {
-        parts.push(format!("\\\"{}\\\" ws \":\" ws json-string", k));
+        parts.push(format!("\"\\\"{}\\\"\" sp \":\" sp json-string", k));
     }
-    let body = parts.join(" \",\" ws ");
+    let body = parts.join(" \",\" sp ");
     format!(
-        "root ::= \"{{\" ws {} ws \"}}\"\nbool ::= \"true\" | \"false\"\n{}",
+        "root ::= \"{{\" sp {} sp \"}}\"\nbool ::= \"true\" | \"false\"\n{}\n{}",
         body,
+        sp,
         json_grammar_rules()
     )
 }
@@ -434,10 +447,15 @@ mod tests {
         let bool_keys = vec!["has_problem".to_string(), "needs_grounding".to_string()];
         let string_keys = vec!["rewritten_query".to_string()];
         let g = build_json_object_grammar_with_keys(&bool_keys, &string_keys);
-        assert!(g.starts_with("root ::= \"{\" ws"), "{}", g);
-        assert!(g.contains("\\\"has_problem\\\" ws \":\" ws bool"), "{}", g);
-        assert!(g.contains("\\\"needs_grounding\\\" ws \":\" ws bool"), "{}", g);
-        assert!(g.contains("\\\"rewritten_query\\\" ws \":\" ws json-string"), "{}", g);
+        assert!(g.starts_with("root ::= \"{\" sp"), "{}", g);
+        // Ключи ДОЛЖНЫ быть в экранированных кавычках GBNF (\"key\"), иначе модель
+        // выдаёт { key : ... } без кавычек -> serde падает ("key must be a string").
+        assert!(g.contains("\"\\\"has_problem\\\"\""), "{}", g);
+        assert!(g.contains("\"\\\"needs_grounding\\\"\""), "{}", g);
+        assert!(g.contains("\"\\\"rewritten_query\\\"\""), "{}", g);
+        // пробелы ограничены локальным правилом sp (НЕ глобальным ws*), чтобы модель
+        // не могла зациклиться на пробелах после `{`
+        assert!(g.contains("sp ::= \" \" | \"\\n\" [ \\t]{0,4}"), "{}", g);
         // корень — фиксированные ключи, а НЕ свободный members-цикл: модель не может добавить свои
         assert!(!g.starts_with("root ::= json-object"), "{}", g);
         assert!(!g.starts_with("root ::= seq"), "{}", g);
