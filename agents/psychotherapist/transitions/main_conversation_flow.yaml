@@ -34,16 +34,16 @@ nodes:
   inject_reports:
   - validator
   ui_pos:
-    x: 3077
-    y: 153
+    y: 151
+    x: 3611
 
 - id: call_soma_translator
   type: llm_worker
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    x: -21
     y: 139
+    x: -21
 
 - id: collect_info
   type: llm_worker
@@ -64,8 +64,8 @@ nodes:
   inject_reports:
   - soma_translator
   ui_pos:
-    y: 72
-    x: 1163
+    y: 70
+    x: 1697
 
 - id: call_validator
   type: llm_worker
@@ -73,8 +73,8 @@ nodes:
   inject_reports:
   - decomposer
   ui_pos:
-    x: 2075
-    y: 278
+    y: 276
+    x: 2609
 
 - id: check_validator_signal
   type: signal_router
@@ -86,8 +86,8 @@ nodes:
   - key: ДАННЫХ ДОСТАТОЧНО
     to: note_1782220629095
   ui_pos:
-    y: 179
-    x: 2422
+    y: 177
+    x: 2956
 
 - id: call_destructor_finder
   type: llm_worker
@@ -101,8 +101,8 @@ nodes:
   - soma_translator
   - pattern_finder_by_floors
   ui_pos:
-    x: 4102
-    y: 941
+    x: 4636
+    y: 939
   disabled: true
 
 - id: call_pattern_finder
@@ -112,8 +112,8 @@ nodes:
   - soma_translator
   - validator
   ui_pos:
-    x: 4260
-    y: 570
+    x: 4794
+    y: 568
 
 - id: call_healer
   type: llm_worker
@@ -127,8 +127,8 @@ nodes:
   - pattern_finder_by_floors
   - synthesizer
   ui_pos:
-    x: 4801
-    y: 678
+    x: 5335
+    y: 676
 
 - id: check_somatic
   type: condition_check
@@ -143,44 +143,45 @@ nodes:
   type: condition_check
   field: needs_grounding
   true_to: note_1785036347995
-  false_to: call_cluster_checker
+  false_to: call_decomposer
   ui_pos:
-    y: 325
-    x: 410
+    x: 719
+    y: 260
 
 - id: call_cluster_checker
   type: llm_worker
   agent: cluster_checker
   ui_pos:
-    x: 801
-    y: 347
+    y: 803
+    x: 1326
 
 - id: check_cluster_signal
   type: signal_router
   signal_name: cluster_checker
   cases_priority:
   - key: Конкретная проблема
-    to: note_1782220193985
+    to: ''
   - key: Кластер
-    to: call_decomposer
-  default: call_decomposer
+    to: ''
   ui_pos:
-    y: 295
-    x: 1058
+    x: 1583
+    y: 751
 
 - id: call_decomposer
   type: llm_worker
   agent: decomposer
+  inject_reports:
+  - decomposer
   ui_pos:
-    y: 447
-    x: 1315
+    x: 1618
+    y: 391
 
 - id: synchronize_with_user
   type: llm_worker
   agent: synchronizer
   ui_pos:
-    x: 3367
-    y: 162
+    x: 3901
+    y: 160
   disabled: true
 
 - id: call_request_helper
@@ -196,30 +197,30 @@ nodes:
   input: |
     проверка данных. развилка на доработку данных или отправку на лечение
   ui_pos:
-    x: 1638
-    y: 287
+    y: 285
+    x: 2172
 
 - id: note_1782220533024
   type: note
   input: уточнение данных у юзера
   system_message: "Давайте проведем один мысленный эксперимент, чтобы заглянуть в самый корень вашей проблемы. Если вы окажетесь в этой точке и пути назад не будет, с каким самым невыносимым чувством вы столкнетесь внутри себя? \n\n(Пожалуйста, не пишите о том, что вы будете делать или как будете решать проблему. Опишите именно вашу внутреннюю катастрофу. Например: \"я почувствую себя абсолютно бесполезным ничтожеством\", \"я столкнусь с парализующим страхом смерти/пустоты\", \"я почувствую, что я абсолютно одинок и никому не нужен\", \"моя самооценка будет уничтожена\". Что именно сломается внутри вас?)\n\nПредставьте гипотетическую, но абсолютно безвыходную ситуацию. Что Вы почувствуете в этот момент ? Какие эмоции или состояние вы ощутите?"
   ui_pos:
-    x: 2678
-    y: 98
+    x: 3212
+    y: 96
 
 - id: note_1782220629095
   type: note
   input: ослабление сопротивления
   ui_pos:
-    x: 3097
-    y: 566
+    y: 564
+    x: 3631
 
 - id: note_1782221436115
   type: note
   input: пересчитываем данные с учетом новых данных от юзера
   ui_pos:
-    x: -682
     y: 241
+    x: -682
 
 - id: note_1782224256075
   type: note
@@ -233,16 +234,16 @@ nodes:
   agent: shadow_worker
   output_type: message
   ui_pos:
-    y: 628
-    x: 3549
+    y: 626
+    x: 4083
   disabled: true
 
 - id: note_1784427848563
   type: note
   input: вычисление типа
   ui_pos:
-    x: 3824
-    y: 582
+    y: 580
+    x: 4358
 
 - id: combining_targets
   type: llm_worker
@@ -251,16 +252,16 @@ nodes:
   - pattern_finder_by_floors
   - validator
   ui_pos:
-    y: 694
-    x: 4516
+    x: 5050
+    y: 692
 
 - id: note_1785036347995
   type: note
   input: запрос абстрактный. вызываем поиск сценариев
   system_message: Психотерапевт обнаружил, что Ваша проблема является симптомом (фасадом). Для того чтобы найти ментальную причину Вашей проблемы в психике, Вам будут предложены сценарии примерные возможных ментальных проблем в Вашей жизни. Ваша задача - описать Ваш личный кейс опираясь на эти "примерные" сценарии.
   ui_pos:
-    y: 48
-    x: 721
+    y: 46
+    x: 1255
 
 - id: check_need_handedness
   type: signal_router
@@ -272,8 +273,8 @@ nodes:
     to: check_grounding
   default: check_grounding
   ui_pos:
-    y: 82
-    x: 282
+    x: 278
+    y: 55
 
 - id: note_1785123862689
   type: note
@@ -296,6 +297,8 @@ nodes:
     - проблемы в отношениях с людьми
     - депрессии, вспышки ярости и т.п.
     Если у вас есть сопротивление к работе над собой, то вы можете описать это сопротивление.
+
+    В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
     x: -1323
     y: 748
