@@ -32,6 +32,7 @@ use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner, NodeType, WorkflowDef,
 };
 use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, LlmMessage, extract_model_filename, llm_history, GrammarSpec};
+use crate::infra::llm_types::GenerationResult;
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
     has_incomplete_json_action, is_thinking_truncated, needs_cutoff_continuation,
@@ -605,24 +606,72 @@ where
         llm_messages.push(LlmMessage { role: "user".to_string(), content: user_text.clone() });
     }
 
-    // Единый pipeline компакции: при давлении по токенам сворачиваем крупные
-    // результаты и старую историю, чтобы не пробивать context_size (fallback —
-    // жёсткая обрезка). Бюджет в символах: (global_ctx_limit − max_gen)·2
-    // (консервативно для кириллицы).
-    let budget_chars = (engine
+    // Единый pipeline компакции (по паттернам DeepSeek `compaction.md`): бюджет в
+    // РЕАЛЬНЫХ токенах, head/tail pruning результатов инструментов, LLM-саммари
+    // старой истории, усечение и (край) жёсткий drop.
+    let budget_tokens = engine
         .global_ctx_limit
-        .saturating_sub(max_gen_tokens as u32) as usize)
-        .saturating_mul(2)
-        .max(5000);
-    let compaction = compact_llm_messages(&mut llm_messages, budget_chars);
-    // ОБЯЗАТЕЛЬНО логируем любую потерю контекста (тихих операций с данными нет).
+        .saturating_sub(max_gen_tokens as u32) as usize;
+    // Замыкание подсчёта токенов: точный tokenize движка, fallback — char/2.
+    let token_count = |msgs: &[LlmMessage]| -> usize {
+        engine
+            .get_tokens_count(msgs, format_type)
+            .unwrap_or_else(|_| msgs.iter().map(|m| m.content.chars().count() / 2).sum())
+    };
+    // Замыкание суммаризации: прямой вызов движка БЕЗ грамматики (не трогаем
+    // pending grammar реального вызова) и с запасом по токенам на сам вызов.
+    let summarize = |text: &str| -> Option<String> {
+        // Проверяем, влезает ли диапазон в отдельный вызов суммаризации (без
+        // зависимости от token_count-замыкания, чтобы не борrowать его).
+        let probe_tokens = engine
+            .get_tokens_count(
+                &[LlmMessage { role: "user".to_string(), content: text.to_string() }],
+                format_type,
+            )
+            .unwrap_or_else(|_| text.chars().count() / 2);
+        if probe_tokens > budget_tokens {
+            return None; // диапазон не влезает даже в отдельный вызов суммаризации
+        }
+        let req = vec![
+            LlmMessage {
+                role: "system".to_string(),
+                content: "Сожми историю переписки в краткий саммари. Сохрани ключевые факты, решения, результаты инструментов, открытые задачи и важные инструкции пользователя. Без лишних слов, структурированно.".to_string(),
+            },
+            LlmMessage { role: "user".to_string(), content: text.to_string() },
+        ];
+        engine
+            .run_chat_completions(
+                &req,
+                None,
+                512,
+                model_params,
+                &[] as &[String],
+                None,
+                cancel_flag.clone(),
+                "compact:summarize",
+                |_, _| {},
+                log_cb.clone(),
+            )
+            .ok()
+            .map(|g| g.text.trim().to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let compaction = compact_llm_messages(
+        &mut llm_messages,
+        budget_tokens,
+        4,
+        token_count,
+        summarize,
+        log_cb.clone(),
+    );
+    // ОБЯЗАТЕЛЬНО логируем любую потерю/сжатие контекста (тихих операций с данными нет).
     if compaction.tool_results_pruned > 0
         || compaction.history_compressed
         || compaction.old_messages_dropped > 0
     {
         log_cb(format!(
-            "🗜️ Компакция контекста агента '{}': свёрнуто результатов инструментов {}, сжата история {}, жёстко удалено старых сообщений {}.",
-            agent.id, compaction.tool_results_pruned, compaction.history_compressed, compaction.old_messages_dropped
+            "🗜️ Компакция контекста агента '{}': свёрнуто результатов инструментов {}, сжата история (LLM-саммари: {}) {}, усечено head/tail {}, жёстко удалено старых сообщений {}.",
+            agent.id, compaction.tool_results_pruned, compaction.history_summarized, compaction.history_compressed, compaction.history_truncated, compaction.old_messages_dropped
         ));
     }
 
@@ -720,15 +769,33 @@ let start_time = Instant::now();
                 break;
             }
             if ctx.llm_messages.len() > 2 {
-                let removed = &ctx.llm_messages[1];
-                let chars = removed.content.chars().count();
-                let snippet: String = removed.content.chars().take(120).collect();
-                log_cb(format!(
-                    "⚠️ Превышен лимит контекста: промпт {} + генерация {} > лимита {}. Удалено самое старое сообщение [{}], {} симв.: {}",
-                    current_tokens, max_gen_tokens, ideal_ctx, removed.role, chars,
-                    if chars > 120 { format!("{}…", snippet) } else { snippet }
-                ));
-                ctx.llm_messages.remove(1);
+                // Не дропать узел [СЖАТАЯ ИСТОРИЯ] — сохраняем сжатую историю.
+                let mut idx = 1;
+                if ctx.llm_messages.get(1).map_or(false, |m| m.content.contains("[СЖАТАЯ ИСТОРИЯ]")) {
+                    idx = 2;
+                }
+                // Не рвать пару: если удаляемый — результат инструмента без вызова
+                // рядом, сместить на соседнего ассистента (или наоборот).
+                if idx < ctx.llm_messages.len()
+                    && ctx.llm_messages[idx].content.contains("[РЕЗУЛЬТАТ ИНСТРУМЕНТА")
+                    && idx + 1 < ctx.llm_messages.len()
+                    && ctx.llm_messages[idx + 1].role == "assistant"
+                {
+                    idx += 1;
+                }
+                if idx < ctx.llm_messages.len() {
+                    let removed = &ctx.llm_messages[idx];
+                    let chars = removed.content.chars().count();
+                    let snippet: String = removed.content.chars().take(120).collect();
+                    log_cb(format!(
+                        "⚠️ Превышен лимит контекста: промпт {} + генерация {} > лимита {}. Удалено старое сообщение [{}], {} симв.: {}",
+                        current_tokens, max_gen_tokens, ideal_ctx, removed.role, chars,
+                        if chars > 120 { format!("{}…", snippet) } else { snippet }
+                    ));
+                    ctx.llm_messages.remove(idx);
+                } else {
+                    break;
+                }
             } else {
                 break;
             }
@@ -743,20 +810,46 @@ let start_time = Instant::now();
         let gen_start = Instant::now();
         log_cb(format!(">>> [{}] LLM вызов #{}, msgs={}, max_gen={}, глубина={}", agent.name, iter, ctx.llm_messages.len(), max_gen_tokens, depth));
         let ctx_label = format!("{}:{}#{}", mem_mode, agent.name, iter);
-        let gen = if !attachments.is_empty() && engine.is_multimodal() {
-            engine.generate_chat_multimodal(
-                &ctx.llm_messages, &attachments, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
-                &ctx_label,
-                |p, _| { status_cb(format!("{} обрабатывает медиа (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
-                log_cb.clone(),
-            )?
-        } else {
-            engine.generate_chat(
-                &ctx.llm_messages, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
-                &ctx_label,
-                |p, _| { status_cb(format!("{} думает (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
-                log_cb.clone(),
-            )?
+        // Обёртка генерации с детектом переполнения контекста и повтором (item 4).
+        let attempt_generate = |msgs: &[LlmMessage]| -> Result<GenerationResult, String> {
+            if !attachments.is_empty() && engine.is_multimodal() {
+                engine.generate_chat_multimodal(
+                    msgs, &attachments, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
+                    &ctx_label,
+                    |p, _| { status_cb(format!("{} обрабатывает медиа (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
+                    log_cb.clone(),
+                )
+            } else {
+                engine.generate_chat(
+                    msgs, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
+                    &ctx_label,
+                    |p, _| { status_cb(format!("{} думает (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
+                    log_cb.clone(),
+                )
+            }
+        };
+        let gen: GenerationResult = loop {
+            match attempt_generate(&ctx.llm_messages) {
+                Ok(g) => break g,
+                Err(e) => {
+                    if is_context_overflow(&e) {
+                        log_cb(format!(
+                            "⚠️ Переполнение контекста при генерации ({}). Усечение крупнейшего сообщения и повтор.",
+                            e
+                        ));
+                        let budget = engine.global_ctx_limit.saturating_sub(max_gen_tokens as u32) as usize;
+                        let tc = |msgs: &[LlmMessage]| -> usize {
+                            engine
+                                .get_tokens_count(msgs, format_type)
+                                .unwrap_or_else(|_| msgs.iter().map(|m| m.content.chars().count() / 2).sum())
+                        };
+                        if truncate_largest(&mut ctx.llm_messages, budget, tc, |m| log_cb(m)) {
+                            continue;
+                        }
+                    }
+                    return Err(e);
+                }
+            }
         };
         let raw_response = gen.text.clone();
         let reasoning = gen.reasoning.clone();
@@ -1194,6 +1287,7 @@ mod tests {
 
     #[test]
     fn compact_llm_messages_prunes_big_results_and_fits_budget() {
+        let char_tokens = |msgs: &[LlmMessage]| msgs.iter().map(|m| m.content.chars().count()).sum();
         let mut msgs = vec![
             LlmMessage { role: "system".to_string(), content: "SYS".to_string() },
             LlmMessage { role: "user".to_string(), content: "[РЕЗУЛЬТАТ ИНСТРУМЕНТА big_tool]:\n".to_string() + &"x".repeat(5000) },
@@ -1201,25 +1295,26 @@ mod tests {
             LlmMessage { role: "user".to_string(), content: "B".repeat(4000) },
             LlmMessage { role: "assistant".to_string(), content: "C".repeat(4000) },
         ];
-        // бюджет чуть больше суммы после сворачивания крупного результата
-        // (≈12100), чтобы сработала стратегия 1, но не жёсткое удаление.
-        compact_llm_messages(&mut msgs, 13000);
+        // бюджет в «токенах» (в тесте 1 символ = 1 токен) чуть больше суммы после
+        // сворачивания крупного результата, чтобы сработал слой 1, но не удаление.
+        compact_llm_messages(&mut msgs, 13000, 4, char_tokens, |_| None, |_| {});
         let total: usize = msgs[1..].iter().map(|m| m.content.chars().count()).sum();
         assert!(total <= 13000, "должны влезть в бюджет, получено {}", total);
         // system-промпт сохранён целиком
         assert_eq!(msgs[0].content, "SYS");
-        // крупный результат инструмента свёрнут (стратегия 1 сработала)
-        assert!(msgs.iter().any(|m| m.content.contains("крупный результат свёрнут")));
+        // крупный результат инструмента свёрнут head/tail (слой 1 сработал)
+        assert!(msgs.iter().any(|m| m.content.contains("свёрнуто") && m.content.contains("[РЕЗУЛЬТАТ ИНСТРУМЕНТА")));
     }
 
     #[test]
     fn compact_llm_messages_keeps_small_conversations_untouched() {
+        let char_tokens = |msgs: &[LlmMessage]| msgs.iter().map(|m| m.content.chars().count()).sum();
         let mut msgs = vec![
             LlmMessage { role: "system".to_string(), content: "SYS".to_string() },
             LlmMessage { role: "user".to_string(), content: "привет".to_string() },
             LlmMessage { role: "assistant".to_string(), content: "здравствуй".to_string() },
         ];
-        compact_llm_messages(&mut msgs, 6000);
+        compact_llm_messages(&mut msgs, 6000, 4, char_tokens, |_| None, |_| {});
         assert_eq!(msgs.len(), 3, "маленький диалог не трогаем");
     }
 
