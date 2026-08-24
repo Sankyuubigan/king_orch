@@ -62,7 +62,7 @@ pub(crate) fn is_agent_error(text: &str) -> bool {
 // ── Умное завершение докачек: серия итераций без прогресса (видимого текста нет,
 // размышления перестали расти) = модель зациклилась в думателе — докачку прекращаем
 // и переходим к перегенерации с хинтом-запретом думателей. ──
-// Предел повторов второго (сигнального) вызова emit_signal. Если модель не вернула
+// Предел повторов распознавания конверта emit_signal. Если модель не вернула
 // распознаваемый JSON-конверт — ретраим с корректирующим хинтом, затем (не теряя
 // отчёт агента!) пропускаем сигнал с логом, а не подставляем JSON вместо ответа.
 
@@ -691,7 +691,8 @@ let start_time = Instant::now();
     // Задаётся для ПЕРВОГО вызова LLM агента (consume-and-clear в движке),
     // докачки/компакты/результаты инструментов идут уже с базовой грамматикой.
     // Сигнальные агенты (есть контракт в signals/root.schema.json) НЕ ограничены
-    // GBNF: сигнал эмитится ВТОРЫМ вызовом под json_schema конверта.
+    // GBNF: сигнальные агенты (есть контракт в signals/root.schema.json) НЕ ограничены
+    // GBNF на первом вызове — сигнал эмитится инструментом emit_signal в этом же ответе.
     let signal_contract: Option<SignalContract> = {
         let signals_dir = grammars_dir.parent().unwrap_or(grammars_dir).join("signals");
         load_signal_contract(&signals_dir, &agent.id)
@@ -1626,5 +1627,267 @@ mod tests {
                 panic!("Модель ответила текстом, не вызвав инструмент верификации (гипотеза подтверждена). Ответ: {preview}");
             }
         }
+    }
+
+    /// Регрессия (после переименования needs_grounding → scenario_established):
+    /// модель должна выдавать scenario_established=false для жалобы, состоящей ТОЛЬКО из
+    /// телесных симптомов + фактов о себе (без описанной жизненной ситуации). Раньше слабые
+    /// модели (qwen3.8, granite, nanbeige) ошибочно ставили needs_grounding=false и пайплайн
+    /// не доходил до гроундера.
+    /// Запуск: TEST_MODEL_PATH=... test.bat "psychotherapist_scenario_false_for_pure_somatic -- --ignored"
+    ///   либо TEST_MODELS="path1,path2" для прогона нескольких моделей за раз.
+    #[test]
+    #[ignore]
+    fn psychotherapist_scenario_false_for_pure_somatic() {
+        use std::sync::{Arc, atomic::AtomicBool};
+        use crate::infra::{LlamaEngine, ModelParams, LlmMessage};
+        use crate::domain::workflow_engine::fact_extractor::{build_default_prompt, resolve_facts, resolve_phases};
+        use crate::domain::workflow_engine::parser::WorkflowConfig;
+
+        let models_env = std::env::var("TEST_MODELS")
+            .ok()
+            .or_else(|| std::env::var("TEST_MODEL_PATH").ok())
+            .expect("Set TEST_MODEL_PATH or TEST_MODELS (comma-separated GGUF paths)");
+        let models: Vec<String> = models_env
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert!(!models.is_empty(), "ни одной модели не задано");
+
+        let workflow_dir = workspace_root().join("agents/psychotherapist/transitions");
+        let config = WorkflowConfig { facts_file: Some("facts.yaml".into()), ..Default::default() };
+        let facts = resolve_facts(&config, Some(&workflow_dir));
+        let phases = resolve_phases(&config, Some(&workflow_dir));
+        assert!(!facts.is_empty(), "facts.yaml не загрузился");
+
+        let user_msg = "User: десна воспалилась у меня ровно по середине на верхнем нёбе сразу за передними зубами центральными внутри. болит. из за этой проблемы кушать мне больно. я мужчина, биологический левша.\nSession history (последние сообщения сессии): []";
+
+        let mut failures: Vec<String> = Vec::new();
+        let mut skipped: Vec<String> = Vec::new();
+        for model_path in &models {
+            println!("=== МОДЕЛЬ: {} ===", model_path);
+
+            let engine_dir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                .map(|d| crate::infra::llamacpp_installer::default_dir(&d))
+                .unwrap_or_else(PathBuf::new);
+            let engine_dir = if engine_dir.join("backends").exists() {
+                engine_dir
+            } else {
+                std::env::var("APPDATA")
+                    .ok()
+                    .map(|a| Path::new(&a).join("com.kingorch.app").join("app_config.json"))
+                    .and_then(|cfg| std::fs::read_to_string(cfg).ok())
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                    .and_then(|v| v.get("llamacpp_dir").and_then(|d| d.as_str()).map(PathBuf::from))
+                    .filter(|p| p.join("backends").exists())
+                    .unwrap_or(engine_dir)
+            };
+            let engine = match LlamaEngine::new(&engine_dir, model_path, 8192, false, false, 0, &|_| {}, |_| {}) {
+                Ok(e) => e,
+                Err(e) => {
+                    println!("❌ {} — не удалось запустить движок: {}", model_path, e);
+                    failures.push(model_path.clone());
+                    continue;
+                }
+            };
+
+            let prompt = build_default_prompt(&facts, &phases, &[], user_msg, "[]");
+            let msgs = vec![
+                LlmMessage { role: "system".to_string(), content: prompt },
+                LlmMessage { role: "user".to_string(), content: user_msg.to_string() },
+            ];
+            let cancel = Arc::new(AtomicBool::new(false));
+            let gen = match engine.generate_chat(
+                &msgs,
+                256,
+                &ModelParams::default(),
+                "Auto",
+                false,
+                cancel,
+                "test:fact",
+                |_, _| {},
+                |_| {},
+            ) {
+                Ok(g) => g,
+                Err(e) => {
+                    println!("❌ {} — ошибка генерации: {}", model_path, e);
+                    failures.push(model_path.clone());
+                    continue;
+                }
+            };
+            let response = gen.text;
+
+            if response.trim().is_empty() {
+                println!(
+                    "⚠️ {} — пустой ответ (движок/модель не выдали текст; возможно VRAM/бэкенд) — ПРОПУЩЕНО",
+                    model_path
+                );
+                skipped.push(model_path.clone());
+                continue;
+            }
+
+            let cleaned: String = {
+                let s = response.trim();
+                let start = s.find('{').unwrap_or(0);
+                let end = s.rfind('}').map(|i| i + 1).unwrap_or(s.len());
+                s[start..end].to_string()
+            };
+            let parsed: serde_json::Value = match serde_json::from_str(&cleaned) {
+                Ok(v) => v,
+                Err(e) => {
+                    println!(
+                        "⚠️ {} — JSON не распарсился: {}. RAW: '{}' — ПРОПУЩЕНО",
+                        model_path, e, cleaned
+                    );
+                    skipped.push(model_path.clone());
+                    continue;
+                }
+            };
+            println!("PARSED: {}", parsed);
+
+            let se = parsed.get("scenario_established").and_then(|v| v.as_bool());
+            match se {
+                Some(false) => println!("✅ {} → scenario_established=false", model_path),
+                other => {
+                    println!("❌ {} → scenario_established={:?} (ожидалось false)", model_path, other);
+                    failures.push(model_path.clone());
+                }
+            }
+        }
+        println!(
+            "\n=== ИТОГ fact-теста: провалено по логике(fix)={}, пропущено(движок/модель)={} ===",
+            failures.len(),
+            skipped.len()
+        );
+        assert!(failures.is_empty(), "scenario_established != false для: {:?}", failures);
+    }
+
+    /// Сквозной тест в режиме графа агента «Психотерапевт»: прогоняем жалобу на десну и
+    /// проверяем, что пайплайн ДОХОДИТ до узла call_grounder (в сессии появляется сообщение
+    /// author=="grounder"). Раньше 3 модели (qwen3.8, granite, nanbeige) уходили в decomposer.
+    /// Запуск: TEST_MODEL_PATH=... test.bat "psychotherapist_graph_reaches_grounder -- --ignored"
+    ///   либо TEST_MODELS="p1,p2,..." для прогона всех моделей за один раз.
+    #[test]
+    #[ignore]
+    fn psychotherapist_graph_reaches_grounder() {
+        use std::sync::{Arc, Mutex, atomic::AtomicBool};
+        use crate::infra::{LlamaEngine, ModelParams, SubCall};
+        use crate::domain::workflow_engine::{run_workflow, WorkflowRunner};
+        use crate::domain::workflow_engine::context::WorkflowContext;
+        use crate::domain::workflow_engine::parser::load_workflows;
+        use crate::domain::StreamMeta;
+
+        let models_env = std::env::var("TEST_MODELS")
+            .ok()
+            .or_else(|| std::env::var("TEST_MODEL_PATH").ok())
+            .expect("Set TEST_MODEL_PATH or TEST_MODELS (comma-separated GGUF paths)");
+        let models: Vec<String> = models_env
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        assert!(!models.is_empty(), "ни одной модели не задано");
+
+        let agents_dir = workspace_root().join("agents");
+        let agents = crate::domain::agent_manager::load_agents(&agents_dir).expect("агенты не загрузились");
+        let workflows = load_workflows(&agents_dir).expect("workflows не загрузились");
+        let workflow = workflows
+            .iter()
+            .find(|w| w.name == "Психотерапевт")
+            .unwrap_or_else(|| panic!("workflow 'Психотерапевт' не найден"));
+
+        let user_text = "десна воспалилась у меня ровно по середине на верхнем нёбе сразу за передними зубами центральными внутри. болит. из за этой проблемы кушать мне больно. я мужчина, биологический левша.";
+
+        let mut failures: Vec<String> = Vec::new();
+        for model_path in &models {
+            println!("=== МОДЕЛЬ: {} ===", model_path);
+
+            let engine_dir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                .map(|d| crate::infra::llamacpp_installer::default_dir(&d))
+                .unwrap_or_else(PathBuf::new);
+            let engine_dir = if engine_dir.join("backends").exists() {
+                engine_dir
+            } else {
+                std::env::var("APPDATA")
+                    .ok()
+                    .map(|a| Path::new(&a).join("com.kingorch.app").join("app_config.json"))
+                    .and_then(|cfg| std::fs::read_to_string(cfg).ok())
+                    .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+                    .and_then(|v| v.get("llamacpp_dir").and_then(|d| d.as_str()).map(PathBuf::from))
+                    .filter(|p| p.join("backends").exists())
+                    .unwrap_or(engine_dir)
+            };
+            let engine = match LlamaEngine::new(&engine_dir, model_path, 8192, false, false, 0, &|_| {}, |_| {}) {
+                Ok(e) => e,
+                Err(e) => {
+                    println!("❌ {} — не удалось запустить движок: {}", model_path, e);
+                    failures.push(model_path.clone());
+                    continue;
+                }
+            };
+
+            let project_dir = workspace_root();
+            let sampling_presets = crate::infra::load_sampling_presets(&project_dir);
+            let grammars_dir = crate::domain::orchestrator::grammar::resolve_grammars_dir(&agents_dir, Some(workflow));
+            let mcp_servers_dir = project_dir.join("src-tauri").join("mcp_servers");
+            let bins_dir = project_dir.join("src-tauri").join("bin");
+            let model_params = ModelParams::default();
+
+            let mut all_sub_calls: Vec<SubCall> = Vec::new();
+            let mut msg_counter: u32 = 0;
+
+            let mut runner = WorkflowRunner {
+                engine: &engine,
+                agents: &agents,
+                workflows: &workflows,
+                log_cb: |_: String| {},
+                status_cb: |_: String, _: u8| {},
+                subcall_cb: |_: &SubCall| {},
+                max_gen_tokens: 2048,
+                model_params: &model_params,
+                format_type: "Auto",
+                cancel_flag: Arc::new(AtomicBool::new(false)),
+                mcp_servers_dir: &mcp_servers_dir,
+                bins_dir: &bins_dir,
+                grammars_dir: &grammars_dir,
+                all_sub_calls: &mut all_sub_calls,
+                msg_counter: &mut msg_counter,
+                stream_meta: Arc::new(Mutex::new(StreamMeta::default())),
+                sampling_presets: &sampling_presets,
+                prompt_log: None,
+                session_id: "test-session".to_string(),
+                workspace_root: project_dir.clone(),
+            };
+
+            let mut ctx = WorkflowContext::new(user_text.to_string(), vec![], vec![]);
+
+            match run_workflow(workflow, &mut ctx, &mut runner) {
+                Ok(_) => {
+                    let authors: Vec<String> = ctx
+                        .messages
+                        .iter()
+                        .map(|m| m.author.clone().unwrap_or_default())
+                        .collect();
+                    println!("=== АВТОРЫ СООБЩЕНИЙ: {:?} ===", authors);
+                    let reached = ctx.messages.iter().any(|m| m.author.as_deref() == Some("grounder"));
+                    if reached {
+                        println!("✅ {} — дошёл до grounder", model_path);
+                    } else {
+                        println!("❌ {} — НЕ дошёл до grounder", model_path);
+                        failures.push(model_path.clone());
+                    }
+                }
+                Err(e) => {
+                    println!("❌ {} — ошибка workflow: {}", model_path, e);
+                    failures.push(model_path.clone());
+                }
+            }
+        }
+        assert!(failures.is_empty(), "следующие модели НЕ дошли до grounder: {:?}", failures);
     }
 }

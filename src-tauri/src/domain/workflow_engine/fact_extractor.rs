@@ -61,7 +61,7 @@ pub fn build_facts_grammar(config: &WorkflowConfig, workflow_dir: Option<&Path>)
     crate::infra::build_json_object_grammar_with_keys(&bool_keys, &string_keys)
 }
 
-fn resolve_facts(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Vec<FactDef> {
+pub(crate) fn resolve_facts(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Vec<FactDef> {
     if !config.facts.is_empty() {
         return config.facts.clone();
     }
@@ -92,7 +92,7 @@ fn resolve_output_fields(config: &WorkflowConfig, workflow_dir: Option<&Path>) -
     vec![]
 }
 
-fn resolve_phases(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Vec<FactDef> {
+pub(crate) fn resolve_phases(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Vec<FactDef> {
     if !config.phases.is_empty() {
         return config.phases.clone();
     }
@@ -152,7 +152,7 @@ fn build_list(items: &[FactDef]) -> String {
         .join("\n")
 }
 
-fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output_fields: &[OutputFieldDef], user_message: &str, signals: &str) -> String {
+pub(crate) fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output_fields: &[OutputFieldDef], user_message: &str, signals: &str) -> String {
     let facts_list = build_list(facts);
     let phases_list = build_list(phases);
 
@@ -175,7 +175,7 @@ fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output_fields: &[
          «раз жалоба на тело — соматолог сам разберётся, гроундинг/соматика не нужны». Критерии \
          могут прямо требовать противоположного. В частности:\n\
          - Если критерий `has_somatic` говорит TRUE при НОВОЙ жалобе на тело (которой ещё не было в истории) — ставь has_somatic=true, даже если это первое сообщение.\n\
-         - Если критерий `needs_grounding` говорит TRUE при запросе, состоящем ТОЛЬКО из физических симптомов (без описанной жизненной ситуации) — ставь needs_grounding=true.\n\
+         - Если критерий `scenario_established` говорит FALSE при запросе, состоящем ТОЛЬКО из физических симптомов или фактов о себе (без описанной жизненной ситуации) — ставь scenario_established=false, даже если это первое сообщение.\n\
          Оценивай каждый факт независимо, по его собственному критерию, а не по «общему смыслу».",
     );
 

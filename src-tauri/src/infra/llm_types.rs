@@ -112,7 +112,7 @@ pub fn build_json_only_grammar() -> String {
 /// Строго-JSON грамматика с ФИКСИРОВАННЫМИ ключами — контракт fact_extractor.
 /// Ключи перечислены в фиксированном порядке и без опций: boolean-факты строго
 /// `true`/`false`, строковые поля — JSON-строка. Модель физически НЕ может выдать
-/// неизвестный ключ (вроде `has_grounding_dont_exist` вместо `needs_grounding`)
+/// неизвестный ключ (вроде `has_grounding_dont_exist` вместо `scenario_established`)
 /// или пропустить обязательный факт — грамматика этого не позволит на уровне
 /// декодирования, а не «просьбы» в промпте.
 pub fn build_json_object_grammar_with_keys(bool_keys: &[String], string_keys: &[String]) -> String {
@@ -444,14 +444,14 @@ mod tests {
 
     #[test]
     fn key_exact_grammar_lists_keys_without_options() {
-        let bool_keys = vec!["has_problem".to_string(), "needs_grounding".to_string()];
+        let bool_keys = vec!["has_problem".to_string(), "scenario_established".to_string()];
         let string_keys = vec!["rewritten_query".to_string()];
         let g = build_json_object_grammar_with_keys(&bool_keys, &string_keys);
         assert!(g.starts_with("root ::= \"{\" sp"), "{}", g);
         // Ключи ДОЛЖНЫ быть в экранированных кавычках GBNF (\"key\"), иначе модель
         // выдаёт { key : ... } без кавычек -> serde падает ("key must be a string").
         assert!(g.contains("\"\\\"has_problem\\\"\""), "{}", g);
-        assert!(g.contains("\"\\\"needs_grounding\\\"\""), "{}", g);
+        assert!(g.contains("\"\\\"scenario_established\\\"\""), "{}", g);
         assert!(g.contains("\"\\\"rewritten_query\\\"\""), "{}", g);
         // пробелы ограничены локальным правилом sp (НЕ глобальным ws*), чтобы модель
         // не могла зациклиться на пробелах после `{`

@@ -199,7 +199,24 @@ fn parse_tool_call_from_json(json_str: &str) -> Option<(String, serde_json::Valu
     if let Ok(val) = parsed {
         if let Some(tool) = val.get("tool").and_then(|v| v.as_str()) {
             if !is_valid_tool_name(tool) { return None; }
-            let args = val.get("arguments").cloned().unwrap_or_else(|| val.get("arg").cloned().unwrap_or(serde_json::Value::Null));
+            let args = val
+                .get("arguments")
+                .cloned()
+                .or_else(|| val.get("arg").cloned())
+                .unwrap_or_else(|| {
+                    if let Some(obj) = val.as_object() {
+                        let mut m = obj.clone();
+                        m.remove("tool");
+                        m.remove("thought");
+                        if m.is_empty() {
+                            serde_json::Value::Null
+                        } else {
+                            serde_json::Value::Object(m)
+                        }
+                    } else {
+                        serde_json::Value::Null
+                    }
+                });
             let thought = val.get("thought").and_then(|v| v.as_str()).unwrap_or("").to_string();
             return Some((tool.to_string(), args, thought));
         }
@@ -553,6 +570,17 @@ mod tests {
             .expect("конверт emit_signal распознаётся");
         assert_eq!(parsed.0, "emit_signal");
         assert_eq!(parsed.1["key"], "soma_translator");
+    }
+
+    #[test]
+    fn parse_tool_call_accepts_flattened_emit_signal_envelope() {
+        // qwen3.8 (и слабые модели) эмитят конверт БЕЗ обёртки arguments:
+        // {"tool":"emit_signal","key":..,"value":..}. Парсер должен нормализовать.
+        let parsed = parse_tool_call("{\"tool\": \"emit_signal\", \"key\": \"soma_translator\", \"value\": {\"handness\": \"левша\"}}")
+            .expect("сплющенный конверт emit_signal распознаётся");
+        assert_eq!(parsed.0, "emit_signal");
+        assert_eq!(parsed.1["key"], "soma_translator");
+        assert_eq!(parsed.1["value"]["handness"], "левша");
     }
 
     #[test]

@@ -871,13 +871,12 @@ mod tests {
     fn parse_fact_json_accepts_logged_valid_output() {
         // После фикса грамматики (экранированные кавычки GBNF) модель выдаёт
         // ВАЛИДНЫЙ JSON с кавычками у ключей — ровно то, что ловил баг "key must be a string".
-        let s = "{\n  \"has_problem\" : true,\n  \"has_somatic\" : true,\n  \"needs_grounding\" : true,\n  \"user_doesnt_agree\" : false\n}";
+        let s = "{\n  \"has_problem\" : true,\n  \"has_somatic\" : true,\n  \"scenario_established\" : false\n}";
         let v = parse_fact_json(s);
         let expected = vec![
             "has_problem".to_string(),
             "has_somatic".to_string(),
-            "needs_grounding".to_string(),
-            "user_doesnt_agree".to_string(),
+            "scenario_established".to_string(),
         ];
         assert!(
             facts_json_valid(&v, &expected),

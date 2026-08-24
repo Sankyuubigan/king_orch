@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Единый контракт сигналов emit_signal",
-  "description": "Единый источник правды (SSOT) для сигналов emit-агентов: маппинг agent_id → (сигнальный key + JSON Schema value). Оркестратор при завершении ответа агента делает ВТОРОЙ вызов LLM под json_schema конверта emit_signal (value подставляется инлайн, БЕЗ $ref — вложенные $ref сломаны в llama.cpp, ggml-org/llama.cpp#8073).",
+  "description": "Единый источник правды (SSOT) для сигналов emit-агентов: маппинг agent_id → (сигнальный key + JSON Schema value). Агент вызывает emit_signal как инструмент внутри своего обычного ответа (ОДИН вызов LLM, второго вызова нет). Оркестратор парсит конверт и сохраняет сигнал. Форма конверта: {\"tool\":\"emit_signal\",\"arguments\":{\"key\":..,\"value\":..}}; допускается сплющенная форма без обёртки arguments ({\"tool\":\"emit_signal\",\"key\":..,\"value\":..}) — парсер нормализует её к canonical-виду. value подставляется инлайн, БЕЗ $ref — вложенные $ref сломаны в llama.cpp, ggml-org/llama.cpp#8073).",
   "agents": {
     "validator": {
       "key": "validator_report",

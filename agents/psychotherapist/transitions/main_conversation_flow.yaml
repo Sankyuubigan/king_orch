@@ -141,9 +141,9 @@ nodes:
 
 - id: check_grounding
   type: condition_check
-  field: needs_grounding
-  true_to: note_1785036347995
-  false_to: call_decomposer
+  field: scenario_established
+  true_to: call_decomposer
+  false_to: note_1785036347995
   ui_pos:
     x: 719
     y: 260
