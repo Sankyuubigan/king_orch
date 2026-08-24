@@ -157,6 +157,7 @@ fn run_single_task(
         task.max_tokens as usize,
         &params,
         &opts.config.prompt_format,
+        false,
         cancel_flag.clone(),
         "coding_bench",
         |_progress: f32, _msg: &str| {},

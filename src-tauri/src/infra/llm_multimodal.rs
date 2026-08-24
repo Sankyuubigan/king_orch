@@ -51,6 +51,7 @@ impl LlamaEngine {
             model_params,
             &stop_words,
             grammar,
+            false,
             cancel_flag,
             ctx_label,
             progress_cb,

@@ -29,14 +29,13 @@
 - Содержит список `.gguf` моделей, последнюю использованную модель (`last_model`), параметры (`model_params`), настройки контекста.
 
 >
-> ### 1. Запрет на удаление кеша C++ компиляции
-> **ЗАПРЕЩЕНО удалять `target/debug/build/llama-cpp-sys-2-*` или `target/debug/build/llama-cpp-2-*`.**
-> Эти директории содержат скомпилированные C++ объектные файлы llama.cpp. Полная перекомпиляция с нуля занимает >20 минут (`llama-cpp-sys-2` собирает CUDA через nvcc и компилирует ~200 C++ файлов).
+> ### 1. Движок llama.cpp — отдельный процесс (НЕ нативная линковка)
+> Движок LLM **НЕ линкуется** в main-бинарь. Инференс идёт через отдельный процесс `llama-server.exe` (полный релиз llama.cpp, папка `<exe>/llamacpp`), общение по HTTP (localhost, random-порт + api-key). См. детально: `global_ai_docs/desktop_rust_tauri/llama_cpp_engine.md`.
+> - В `Cargo.toml` проекта **НЕТ** крейта `llama-cpp-sys-2`/`llama-cpp-2` (проверено по `Cargo.lock`). Никакой сборки CUDA через nvcc в дереве зависимостей приложения.
+> - Бинарь `llama-server.exe` **скачивается пользователем** из релизов `ggml-org/llama.cpp` (НЕ sidecar Tauri, НЕ бандлится). Не удаляй папку `<exe>/llamacpp` — это установленный пользователем движок.
+> - Сервер гарантированно убивается при выходе (`Drop` + Windows Job Object `KILL_ON_JOB_CLOSE` + `kill_active_engines` в `ExitRequested`).
 >
-> **Если сборка падает с ошибкой линковки `.obj` файлов:**
-> 1. Найди конкретный битый `.obj`/`.dir` (например, `ggml-cuda/Release/`)
-> 2. Удали ТОЛЬКО его, а не всю папку `build/*`
-> 3. Запусти `test.bat` — cargo дособерёт только удалённые файлы
+> **Правило cwd (см. rules.md:53):** пути к движку вычисляй через `std::env::current_exe().parent()`, а НЕ через `app.path().executable_dir()`.
 >
 > ### 2. Расположение тестов
 > **Тестовые файлы (`.test.ts`) — ТОЛЬКО в `test/`. Запрещено создавать тесты внутри папки `src/`.**
@@ -52,7 +51,7 @@
 ### Стек
 - **Backend**: Rust (Tauri 2.0) — 3-слойная архитектура: API → Домен → Инфра
 - **Frontend**: TypeScript + Vite — контроллеры + двери (index.ts)
-- **Модели**: только локальные `.gguf` файлы (llama.cpp через llama-cpp-2)
+- **Модели**: только локальные `.gguf` файлы (инференс через внешний `llama-server.exe` — полный релиз llama.cpp, запускаемый как отдельный процесс; см. `global_ai_docs/desktop_rust_tauri/llama_cpp_engine.md`)
 - **Агенты**: Markdown файлы (`.md`) с YAML frontmatter
 
 ### Трёхслойная архитектура бэкенда
@@ -203,7 +202,7 @@ npm test            # все тесты vitest
 
 **Специфические технические особенности сборки King Orch:**
 - Если `cargo build` падает с `fatal error C1034: windows.h` — VS-окружение не настроено, запусти `build.bat` или `test.bat` один раз.
-- Если сборка падает с CUDA/nvcc — CUDA 12.9+ несовместима с `llama-cpp-sys-2` 0.1.146. Временно отключи CUDA в Cargo.toml (`features = ["mtmd"]` вместо `["cuda", "mtmd"]`).
+- Если сборка падает с CUDA/nvcc — это относится к сборке Rust-зависимостей приложения, НЕ к движку LLM (движок — внешний `llama-server.exe`, не собирается cargo). Для CUDA-бекенда движка проверь наличие `cublas64_13.dll`/`cublas64_12.dll` рядом с `llama-server.exe` (см. `llama_cpp_engine.md` §3.1, §6).
 
 ### Правила для тестов (важно!)
 - **Таймаут на любые тесты — не более 2 минут (120 000ms) (`timeout: 120000` в tool call).**

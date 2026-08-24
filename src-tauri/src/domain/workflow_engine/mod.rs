@@ -142,6 +142,7 @@ where
                 self.max_gen_tokens,
                 self.model_params,
                 self.format_type,
+                false,
                 self.cancel_flag.clone(),
                 ctx_label,
                 |_, _| {},
@@ -154,7 +155,16 @@ where
     /// Зовёт LLM напрямую (без .md агента) — для fact-экстрактора.
     /// `grammar` — строгая GBNF по контракту facts.yaml (точные ключи); если не передана —
     /// любой JSON-объект (запасной вариант).
-    pub fn call_llm_direct(&self, system_prompt: &str, user_text: &str, resolved_params: &ModelParams, ctx_label: &str, grammar: Option<String>) -> Result<String, String> {
+    pub fn call_llm_direct(&self, system_prompt: &str, user_text: &str, resolved_params: &ModelParams, ctx_label: &str, grammar: Option<String>, disable_reasoning: bool) -> Result<(String, String), String> {
+        // Fact-экстрактор обязан вернуть строгий JSON-объект по контракту facts.yaml:
+        // точные ключи, фиксированный порядок, без опций.
+        //
+        // Reasoning-модели (Qwen3/DeepSeek при --reasoning-format deepseek) могут
+        // спрятать JSON целиком в блоке размышлений (reasoning_content), оставив
+        // content пустым. Поэтому возвращаем ОБА канала; узел LlmFactExtractor
+        // парсит content, а при неудаче — reasoning_content. Это и есть ответ
+        // модели, просто вынесенный в отдельный канал (принцип deepseek-harness:
+        // reasoning и content разделены, финальный ответ берётся из нужного канала).
         let msgs = vec![
             LlmMessage {
                 role: "system".to_string(),
@@ -165,9 +175,9 @@ where
                 content: user_text.to_string(),
             },
         ];
-        (self.log_cb)("[direct] LLM вызов (fact_extractor)...".to_string());
-        // fact-экстрактор обязан вернуть строгий JSON-объект по контракту facts.yaml:
-        // точные ключи, фиксированный порядок, без опций
+        (self.log_cb)(format!(
+            "[direct] LLM вызов (fact_extractor)..."
+        ));
         self.engine.set_grammar(Some(GrammarSpec {
             gbnf: Some(grammar.unwrap_or_else(build_json_only_grammar)),
             json_schema: None,
@@ -180,6 +190,7 @@ where
                 self.max_gen_tokens,
                 resolved_params,
                 self.format_type,
+                disable_reasoning,
                 self.cancel_flag.clone(),
                 ctx_label,
                 |_, _| {},
@@ -187,7 +198,7 @@ where
             )
             .map_err(|e| format!("Ошибка LLM: {}", e));
         (self.log_cb)(format!("[llm] LLM ответ за {:.1}с", start.elapsed().as_secs_f32()));
-        gen.map(|g| g.text)
+        gen.map(|g| (g.text, g.reasoning))
     }
 }
 

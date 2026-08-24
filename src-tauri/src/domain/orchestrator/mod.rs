@@ -148,6 +148,7 @@ fn push_continuation_for_cutoff(
                 COMPACT_MAX_TOKENS,
                 model_params,
                 format_type,
+                false,
                 cancel_flag.clone(),
                 &format!("{}#compact", ctx_label),
                 |_, _| {},
@@ -647,6 +648,7 @@ where
                 model_params,
                 &[] as &[String],
                 None,
+                false,
                 cancel_flag.clone(),
                 "compact:summarize",
                 |_, _| {},
@@ -821,7 +823,7 @@ let start_time = Instant::now();
                 )
             } else {
                 engine.generate_chat(
-                    msgs, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
+                    msgs, max_gen_tokens, model_params, format_type, false, cancel_flag.clone(),
                     &ctx_label,
                     |p, _| { status_cb(format!("{} думает (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
                     log_cb.clone(),
@@ -1606,7 +1608,7 @@ mod tests {
         ];
         let cancel = Arc::new(AtomicBool::new(false));
         let gen = engine
-            .generate_chat(&msgs, 1024, &params, "Auto", cancel, "test:docs_researcher_tool", |_, _| {}, |_| {})
+            .generate_chat(&msgs, 1024, &params, "Auto", false, cancel, "test:docs_researcher_tool", |_, _| {}, |_| {})
             .unwrap();
         let response = gen.text;
         println!("=== RAW RESPONSE ===\n{}\n=== END ===", response);

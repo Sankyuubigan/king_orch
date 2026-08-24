@@ -292,8 +292,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value), dry_multiplier: _p?.dry_multiplier ?? 0.0, dry_base: _p?.dry_base ?? 1.75, dry_allowed_length: _p?.dry_allowed_length ?? 2, dry_penalty_last_n: _p?.dry_penalty_last_n ?? 0, xtc_probability: _p?.xtc_probability ?? 0.0, xtc_threshold: _p?.xtc_threshold ?? 0.1 };
       const allHistory = store.chatHistory.slice();
 
-      let mmprojPath: string | null = null;
-      try { mmprojPath = await invoke("get_mmproj_path", { modelPath }); } catch (_) {}
+      let mmprojPath: string | null = null; // этот путь всегда текстовый (без вложений) — mmproj не нужен
 
       const response: any = await invoke("chat_request", {
         modelPath,
@@ -581,7 +580,9 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value), dry_multiplier: _p2?.dry_multiplier ?? 0.0, dry_base: _p2?.dry_base ?? 1.75, dry_allowed_length: _p2?.dry_allowed_length ?? 2, dry_penalty_last_n: _p2?.dry_penalty_last_n ?? 0, xtc_probability: _p2?.xtc_probability ?? 0.0, xtc_threshold: _p2?.xtc_threshold ?? 0.1 };
       const allHistory = store.chatHistory.slice();
       let mmprojPath: string | null = null;
-      try { mmprojPath = await invoke("get_mmproj_path", { modelPath }); } catch (_) {}
+      if (attachments && attachments.length > 0) {
+        try { mmprojPath = await invoke("get_mmproj_path", { modelPath }); } catch (_) {}
+      }
       const response: any = await invoke("chat_request", { 
           modelPath, 
           agentId: activeAgent, 

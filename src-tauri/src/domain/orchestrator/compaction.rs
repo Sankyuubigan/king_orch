@@ -261,7 +261,7 @@ mod tests {
 
     #[test]
     fn head_tail_keeps_both_ends() {
-        let s: String = std::iter::repeat('a').take(200).collect()
+        let s: String = std::iter::repeat('a').take(200).collect::<String>()
             + &"MIDDLE".repeat(60)
             + &std::iter::repeat('z').take(200).collect::<String>();
         let (h, t) = head_tail(&s, 400);

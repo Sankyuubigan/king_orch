@@ -147,7 +147,7 @@
 
 | Файл | Зона ответственности |
 |------|---------------------|
-| `llm.rs` | Работа с llama-cpp-2, токенизация, генерация, сэмплирование, чтение GGUF, структура `ChatMessage` с полями `type`/`author`. Хелпер `push_report()` — дедупликация отчётов агента при `single_report` |
+| `llm.rs` | Управление движком llama.cpp как ОТДЕЛЬНЫМ ПРОЦЕССОМ (`llama-server.exe`, HTTP-инференс; приложение НЕ линкует llama.cpp нативно). Запуск/зачистка, `/health`/`/tokenize`/`/v1/chat/completions`, токенизация, генерация, сэмплирование, чтение GGUF, структура `ChatMessage` с полями `type`/`author`. Хелпер `push_report()` — дедупликация отчётов агента при `single_report`. Детально: `global_ai_docs/desktop_rust_tauri/llama_cpp_engine.md` |
 | `config.rs` | Структуры AppConfig/ModelParams, чтение/запись конфига, каталог моделей |
 | `session_manager.rs` | Чтение/запись JSON-файлов сессий (единый массив `messages[]`) |
 | `mcp_client.rs` | JSON-RPC клиент для MCP-серверов через stdin/stdout |

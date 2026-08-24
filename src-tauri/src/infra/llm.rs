@@ -306,11 +306,19 @@ impl LlamaEngine {
         let _ = std::fs::remove_file(&server_log);
 
         let use_reasoning_default = reasoning_budget > 0;
+        // mmproj передаётся в llama-server ТОЛЬКО когда он реально нужен
+        // (запрос с изображениями) и файл проектора валиден. Если проектор
+        // битый/несовместимый — движок не должен ронять весь чат: делаем
+        // фолбэк в текстовый режим без mmproj (см. цикл запуска ниже).
+        let mmproj_orig: Option<String> = mmproj_path.map(|s| s.to_string());
+        let mut attempt_mmproj = mmproj_orig.is_some();
+        let mut attempt_reasoning = use_reasoning_default;
+        let auth_value = format!("Bearer {}", api_key);
         let build_cmd = {
             let server_exe = server_exe.clone();
             let server_log = server_log.clone();
             let api_key = api_key.clone();
-            move |use_reasoning: bool| {
+            move |use_reasoning: bool, use_mmproj: bool| {
                 let mut c = Command::new(&server_exe);
                 c.current_dir(engine_dir)
                     .arg("-m").arg(model_path)
@@ -323,9 +331,11 @@ impl LlamaEngine {
                 .arg("--flash-attn").arg("on")
                 .arg("--no-webui")
                 .arg("--log-file").arg(&server_log);
-            if let Some(mmp) = mmproj_path {
-                c.arg("--mmproj").arg(mmp);
-            }
+                if use_mmproj {
+                    if let Some(mmp) = mmproj_path {
+                        c.arg("--mmproj").arg(mmp);
+                    }
+                }
             if kv_quant_keys {
                 c.arg("--cache-type-k").arg("q8_0");
             }
@@ -353,7 +363,7 @@ impl LlamaEngine {
             port,
             global_ctx_limit,
             threads,
-            mmproj_path.unwrap_or("нет"),
+            if attempt_mmproj { mmproj_orig.as_deref().unwrap_or("да") } else { "нет" },
             if use_reasoning_default { format!("до {} токенов (deepseek-формат)", reasoning_budget) } else { "выключен".to_string() }
         ));
 
@@ -387,27 +397,138 @@ impl LlamaEngine {
             }
         };
 
-        let mut use_reasoning = use_reasoning_default;
-        let mut child = match build_cmd(use_reasoning).spawn() {
-            Ok(c) => c,
-            Err(e) => return fail(format!("Ошибка запуска llama-server: {}", e)),
-        };
-        // ── Гарантия зачистки при выходе из приложения ──
-        // Регистрируем PID (для докиля в обработчике выхода main.rs) и назначаем
-        // процесс в Windows Job Object с KILL_ON_JOB_CLOSE — тогда ОС убьёт
-        // сервер даже при насильственном закрытии приложения.
-        crate::infra::process_util::register_engine_pid(child.id());
-        #[cfg(windows)]
-        crate::infra::process_util::assign_child_to_kill_job(&child);
-        if let Some(stderr) = child.stderr.take() {
-            spawn_stderr_reader(stderr);
+        // ── Цикл запуска с фолбэками ──
+        // 1) reasoning-флаги: старая сборка движка не знает --reasoning-* →
+        //    рестарт без них (уже было).
+        // 2) mmproj: проектор повреждён/несовместим → рестарт БЕЗ mmproj
+        //    (текстовый режим), вместо падения всего чата.
+        // 3) VL-модель требует проектор, а мы его не передали → рестарт С ним.
+        let mut engine_child: Option<std::process::Child> = None;
+        let mut tried_no_reasoning = false;
+        let mut tried_no_mmproj = false;
+        let mut tried_with_mmproj = false;
+
+        'launch: loop {
+            let mut c = build_cmd(attempt_reasoning, attempt_mmproj);
+            let mut child = match c.spawn() {
+                Ok(c) => c,
+                Err(e) => return fail(format!("Ошибка запуска llama-server: {}", e)),
+            };
+            // ── Гарантия зачистки при выходе из приложения ──
+            // Регистрируем PID (для докиля в обработчике выхода main.rs) и назначаем
+            // процесс в Windows Job Object с KILL_ON_JOB_CLOSE — тогда ОС убьёт
+            // сервер даже при насильственном закрытии приложения.
+            crate::infra::process_util::register_engine_pid(child.id());
+            #[cfg(windows)]
+            crate::infra::process_util::assign_child_to_kill_job(&child);
+            if let Some(stderr) = child.stderr.take() {
+                spawn_stderr_reader(stderr);
+            }
+
+            let mut deadline = Instant::now() + HEALTH_TIMEOUT;
+            let mut last_progress_log = Instant::now();
+            let mut exit_code: Option<i32> = None;
+            let mut healthy = false;
+            loop {
+                match child.try_wait() {
+                    Ok(state) => {
+                        if let Some(status) = state {
+                            exit_code = Some(status.code().unwrap_or(-1));
+                            break;
+                        }
+                    }
+                    Err(e) => return fail(format!("Ошибка ожидания llama-server: {}", e)),
+                }
+                if engine_health_check(&client, port, &auth_value) {
+                    healthy = true;
+                    break;
+                }
+                if Instant::now() > deadline {
+                    let _ = child.kill();
+                    return fail(format!(
+                        "Таймаут запуска движка llama.cpp ({} сек). Модель не загрузилась. {}",
+                        HEALTH_TIMEOUT.as_secs(),
+                        read_log_tail(&server_log)
+                    ));
+                }
+                if last_progress_log.elapsed() >= Duration::from_secs(5) {
+                    last_progress_log = Instant::now();
+                    log_cb(format!(
+                        "⏳ Загрузка модели в память... ({} сек)",
+                        deadline.duration_since(Instant::now()).as_secs().min(HEALTH_TIMEOUT.as_secs())
+                    ));
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+
+            if healthy {
+                engine_child = Some(child);
+                break 'launch;
+            }
+
+            // ── Сервер завершился с ошибкой при старте ──
+            let code = exit_code.unwrap_or(-1);
+            let log = read_log_tail(&server_log);
+
+            // Фолбэк 1: движок не понимает флаги reasoning (старая сборка)
+            if attempt_reasoning && !tried_no_reasoning && !is_mmproj_load_error(&log) {
+                log_cb(format!(
+                    "⚠️ llama-server завершился при запуске (код {}) — перезапуск БЕЗ reasoning-флагов (движок их не поддерживает). Думатель будет отключён.",
+                    code
+                ));
+                attempt_reasoning = false;
+                tried_no_reasoning = true;
+                crate::infra::process_util::unregister_engine_pid(child.id());
+                continue 'launch;
+            }
+
+            // Фолбэк 2: битый/несовместимый проектор mmproj → текстовый режим
+            if attempt_mmproj && is_mmproj_load_error(&log) && !tried_no_mmproj {
+                log_cb(format!(
+                    "⚠️ Проектор mmproj '{}' не загрузился (вероятно повреждён или несовместим с этой сборкой llama.cpp): {}. Запуск в текстовом режиме без vision.",
+                    mmproj_orig.as_deref().unwrap_or(""),
+                    mmproj_error_detail(&log)
+                ));
+                attempt_mmproj = false;
+                tried_no_mmproj = true;
+                crate::infra::process_util::unregister_engine_pid(child.id());
+                continue 'launch;
+            }
+
+            // Фолбэк 3: VL-модель требует проектор, а мы его не передали
+            if !attempt_mmproj && mmproj_orig.is_some() && !tried_with_mmproj && is_mmproj_required_error(&log) {
+                log_cb("ℹ️ Модель мультимодальная и требует проектор — подключаем mmproj.".to_string());
+                attempt_mmproj = true;
+                tried_with_mmproj = true;
+                crate::infra::process_util::unregister_engine_pid(child.id());
+                continue 'launch;
+            }
+
+            // ── Финальная ошибка ──
+            let msg = if is_mmproj_load_error(&log) || is_mmproj_required_error(&log) {
+                let path = mmproj_orig.as_deref().unwrap_or("<не указан>");
+                format!(
+                    "Ошибка загрузки мультимодального проектора (mmproj) для модели.\nФайл: {}\nПричина: {}\n\nВероятно файл повреждён или собран для несовместимой версии llama.cpp. Скачайте корректный mmproj, соответствующий вашей сборке движка (например cuda-13.x).",
+                    path,
+                    mmproj_error_detail(&log)
+                )
+            } else {
+                format!(
+                    "Движок llama-server завершился при запуске (код {}). {}",
+                    code,
+                    log
+                )
+            };
+            return fail(msg);
         }
+
+        let child = engine_child.expect("engine child after successful launch");
 
         let mut engine = Self {
             global_ctx_limit,
             model_path: model_path.to_string(),
-            mmproj_path: mmproj_path.map(|s| s.to_string()),
-            is_multimodal_engine: mmproj_path.is_some(),
+            mmproj_path: if attempt_mmproj { mmproj_orig.clone() } else { None },
+            is_multimodal_engine: attempt_mmproj,
             stream_cb: Arc::new(stream_cb),
             client,
             server_log,
@@ -420,74 +541,6 @@ impl LlamaEngine {
             last_tok_per_sec: std::cell::Cell::new(0.0),
             pending_grammar: std::sync::Mutex::new(None),
         };
-
-        // ── Ожидание готовности (модель грузится в память) ──
-        let mut child = engine.child.take().expect("child");
-        let mut deadline = Instant::now() + HEALTH_TIMEOUT;
-        let mut last_progress_log = Instant::now();
-        loop {
-            let exit_state = match child.try_wait() {
-                Ok(state) => state,
-                Err(e) => return fail(format!("Ошибка ожидания llama-server: {}", e)),
-            };
-            if let Some(code) = exit_state {
-                if use_reasoning && !code.success() {
-                    // Старая версия движка без reasoning-флагов умирает при старте —
-                    // перезапускаем без них, чтобы не блокировать пользователя.
-                    log_cb(format!(
-                        "⚠️ llama-server завершился при запуске (код {}) — перезапуск БЕЗ reasoning-флагов (движок их не поддерживает). Думатель будет отключён.",
-                        code
-                    ));
-                    use_reasoning = false;
-                    crate::infra::process_util::unregister_engine_pid(child.id());
-                    match build_cmd(false).spawn() {
-                        Ok(c) => {
-                            child = c;
-                            crate::infra::process_util::register_engine_pid(child.id());
-                            #[cfg(windows)]
-                            crate::infra::process_util::assign_child_to_kill_job(&child);
-                            if let Some(stderr) = child.stderr.take() {
-                                spawn_stderr_reader(stderr);
-                            }
-                            deadline = Instant::now() + HEALTH_TIMEOUT;
-                            last_progress_log = Instant::now();
-                            continue;
-                        }
-                        Err(e) => {
-                            engine.child = Some(child);
-                            return fail(format!("Ошибка запуска llama-server без reasoning-флагов: {}", e));
-                        }
-                    }
-                }
-                engine.child = Some(child);
-                return fail(format!(
-                    "Движок llama-server завершился при запуске (код {}). {}",
-                    code,
-                    read_log_tail(&engine.server_log)
-                ));
-            }
-            if engine.is_healthy() {
-                break;
-            }
-            if Instant::now() > deadline {
-                let _ = child.kill();
-                engine.child = Some(child);
-                return fail(format!(
-                    "Таймаут запуска движка llama.cpp ({} сек). Модель не загрузилась. {}",
-                    HEALTH_TIMEOUT.as_secs(),
-                    read_log_tail(&engine.server_log)
-                ));
-            }
-            if last_progress_log.elapsed() >= Duration::from_secs(5) {
-                last_progress_log = Instant::now();
-                log_cb(format!(
-                    "⏳ Загрузка модели в память... ({} сек)",
-                    deadline.duration_since(Instant::now()).as_secs().min(HEALTH_TIMEOUT.as_secs())
-                ));
-            }
-            std::thread::sleep(Duration::from_millis(500));
-        }
-        engine.child = Some(child);
 
         log_cb(format!(
             "✅ Движок llama-server запущен: {} (режим {}), порт {}",
@@ -715,6 +768,7 @@ impl LlamaEngine {
         params: &ModelParams,
         stop_words: &[String],
         grammar: Option<GrammarSpec>,
+        disable_reasoning: bool,
         cancel_flag: Arc<AtomicBool>,
         ctx_label: &str,
         mut progress_cb: F,
@@ -764,6 +818,8 @@ impl LlamaEngine {
             grammar: Option<&'a str>,
             #[serde(skip_serializing_if = "Option::is_none")]
             json_schema: Option<&'a serde_json::Value>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            chat_template_kwargs: Option<serde_json::Value>,
         }
 
         // messages[] — строки; вложения — image-части последнего user-сообщения
@@ -821,6 +877,11 @@ impl LlamaEngine {
             seed: -1,
             grammar: grammar.as_ref().and_then(|g| g.gbnf.as_deref()),
             json_schema: grammar.as_ref().and_then(|g| g.json_schema.as_ref()),
+            chat_template_kwargs: if disable_reasoning {
+                Some(serde_json::json!({"enable_thinking": false}))
+            } else {
+                None
+            },
         };
 
         // ── Телеметрия: старт генерации ──
@@ -1129,6 +1190,7 @@ impl LlamaEngine {
         max_tokens: usize,
         model_params: &ModelParams,
         _format_type: &str,
+        disable_reasoning: bool,
         cancel_flag: Arc<AtomicBool>,
         ctx_label: &str,
         progress_cb: F,
@@ -1147,7 +1209,7 @@ impl LlamaEngine {
         let stop_words = merged_stop_words(&words);
         let pending = self.take_pending_grammar();
         let grammar = pending.or_else(|| build_base_grammar(&actual_format).map(|gbnf| GrammarSpec { gbnf: Some(gbnf), json_schema: None }));
-        self.run_chat_completions(messages, None, max_tokens, model_params, &stop_words, grammar, cancel_flag, ctx_label, progress_cb, log_cb)
+        self.run_chat_completions(messages, None, max_tokens, model_params, &stop_words, grammar, disable_reasoning, cancel_flag, ctx_label, progress_cb, log_cb)
     }
 }
 
@@ -1290,6 +1352,55 @@ fn read_log_tail(path: &Path) -> String {
         }
         Err(_) => String::new(),
     }
+}
+
+/// Проверка: упал ли llama-server из-за ОШИБКИ ЗАГРУЗКИ проектора mmproj
+/// (битый/несовместимый файл, нечитаемый тензор и т.п.).
+fn is_mmproj_load_error(log: &str) -> bool {
+    let l = log.to_lowercase();
+    l.contains("clip_init")
+        || l.contains("mtmd_init")
+        || l.contains("failed to load multimodal")
+        || (l.contains("failed to seek for tensor"))
+        || (l.contains("failed to load model") && l.contains("mmproj"))
+}
+
+/// Проверка: требует ли модель проектор, которого не передали
+/// (VL-модель запущена без --mmproj).
+fn is_mmproj_required_error(log: &str) -> bool {
+    let l = log.to_lowercase();
+    (l.contains("multimodal") && (l.contains("no multimodal projector") || l.contains("no mmproj") || l.contains("no projector") || l.contains("requires a multimodal")))
+        || (l.contains("model is multimodal") && l.contains("projector"))
+}
+
+/// Извлекает из лога конкретную строку с ошибкой проектора — для понятного сообщения.
+fn mmproj_error_detail(log: &str) -> String {
+    for line in log.lines().rev() {
+        let l = line.to_lowercase();
+        if (l.contains("mmproj") || l.contains("clip") || l.contains("mtmd") || l.contains("tensor") || l.contains("multimodal"))
+            && (l.contains("error") || l.contains("failed") || l.contains("exiting"))
+        {
+            return line.trim().to_string();
+        }
+    }
+    for line in log.lines().rev() {
+        let l = line.to_lowercase();
+        if l.contains("error") || l.contains("failed") {
+            return line.trim().to_string();
+        }
+    }
+    "неизвестная ошибка загрузки проектора".to_string()
+}
+
+/// Проверка готовности llama-server по HTTP /health (без создания структуры engine).
+fn engine_health_check(client: &Client, port: u16, auth: &str) -> bool {
+    client
+        .get(format!("http://127.0.0.1:{}/health", port))
+        .header(AUTHORIZATION, auth)
+        .timeout(Duration::from_secs(3))
+        .send()
+        .map(|r| r.status().is_success())
+        .unwrap_or(false)
 }
 
 /// Поиск в логе llama-server реальной причины CPU-фолбэка (почему CUDA не сработала).

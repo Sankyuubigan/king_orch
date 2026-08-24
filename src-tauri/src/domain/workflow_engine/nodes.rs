@@ -43,9 +43,17 @@ where
             let expected_keys = super::fact_extractor::expected_output_keys(&config, Some(workflow_dir));
 
             let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
-            let llm_response = runner.call_llm_direct(&prompt, &input, &resolved_params, &format!("graph:{}", node.id), Some(grammar.clone()))?;
+            let (llm_text, llm_reasoning) = runner.call_llm_direct(&prompt, &input, &resolved_params, &format!("graph:{}", node.id), Some(grammar.clone()), true)?;
 
-            let mut parsed = parse_fact_json(&llm_response);
+            // Reasoning-модели (--reasoning-format deepseek) могут выдать JSON целиком
+            // в блоке размышлений (reasoning_content), оставив content пустым. Это —
+            // ответ модели, просто в отдельном канале (см. deepseek-harness: reasoning
+            // и content разделены). Парсим content, при неудаче — reasoning_content.
+            let mut parsed = parse_fact_json(&llm_text);
+            if !facts_json_valid(&parsed, &expected_keys) && !llm_reasoning.trim().is_empty() {
+                (runner.log_cb)("[fact_extractor] JSON не в ответе — читаем из блока размышлений (reasoning_content)".to_string());
+                parsed = parse_fact_json(&llm_reasoning);
+            }
 
             (runner.log_cb)(format!(
                 "[fact_extractor][DEBUG] expected_keys={:?} first_valid={} parsed_first={}",
@@ -66,16 +74,24 @@ where
                     "{}\n\nВАЖНО: Ответь ТОЛЬКО JSON-объектом строго со всеми ключами: {}. Каждый факт — true/false.",
                     prompt, expected_str
                 );
-                let retry_response = runner.call_llm_direct(&retry_prompt, &input, &resolved_params, &format!("graph:{}#retry", node.id), Some(grammar))?;
-                parsed = parse_fact_json(&retry_response);
+                let (retry_text, retry_reasoning) = runner.call_llm_direct(&retry_prompt, &input, &resolved_params, &format!("graph:{}#retry", node.id), Some(grammar), true)?;
+                parsed = parse_fact_json(&retry_text);
+                if !facts_json_valid(&parsed, &expected_keys) && !retry_reasoning.trim().is_empty() {
+                    parsed = parse_fact_json(&retry_reasoning);
+                }
                 (runner.log_cb)(format!(
                     "[fact_extractor][DEBUG] retry_valid={} parsed_retry={}",
                     facts_json_valid(&parsed, &expected_keys),
                     serde_json::to_string(&parsed).unwrap_or_default()
                 ));
                 if !facts_json_valid(&parsed, &expected_keys) {
-                    (runner.log_cb)("[fact_extractor] Повтор тоже неполный/неверные ключи, используем fallback".to_string());
-                    parsed = fallback_facts_json(&expected_keys);
+                    (runner.log_cb)("[fact_extractor] Повтор тоже неполный/неверные ключи — останавливаем workflow (тихий fallback отключён)".to_string());
+                    return Err(
+                        "[fact_extractor] Не удалось извлечь факты даже после повтора. \
+                         Маршрутизация по умолчанию (false) отключена, чтобы не пропустить гроундер/соматолога. \
+                         Проверьте промпт экстрактора и грамматику."
+                            .to_string(),
+                    );
                 }
             }
 
@@ -86,8 +102,9 @@ where
             ));
 
             (runner.log_cb)(format!(
-                "[fact_extractor] Сырой ответ: {}",
-                llm_response.chars().take(500).collect::<String>()
+                "[fact_extractor] Сырой ответ (content): {}\n[reasoning]: {}",
+                llm_text.chars().take(500).collect::<String>(),
+                llm_reasoning.chars().take(300).collect::<String>()
             ));
 
             Ok(NodeResult {
@@ -833,10 +850,10 @@ fn facts_json_valid(parsed: &serde_json::Value, expected: &[String]) -> bool {
     expected.iter().all(|k| obj.contains_key(k))
 }
 
-/// Последний резерв после двух неудач.
-/// Fail-open: при неуверенности НЕ считаем, что проблемы нет (has_problem=true),
-/// чтобы не проигнорировать запрос юзера. Остальные факты — false.
-/// (Вместо хардкода под конкретную команду агентов.)
+/// Последний резерв после двух неудач (используется только в тестах;
+/// в рабочем пайплайне невалидная экстракция теперь явно останавливает workflow,
+/// см. LlmFactExtractor, чтобы тихо не пропустить гроундер/соматолога).
+#[allow(dead_code)]
 fn fallback_facts_json(expected: &[String]) -> serde_json::Value {
     let mut obj = serde_json::Map::new();
     for k in expected {

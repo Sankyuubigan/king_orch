@@ -169,6 +169,16 @@ fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output_fields: &[
         prompt.push_str(&format!("\n\n### Факты (true/false, определяй по сообщению пользователя)\n{}", facts_list));
     }
 
+    prompt.push_str(
+        "\n\n### Жёсткое правило трактовки критериев\n\
+         Строго следуй написанным критериям каждого факта. НЕ делай собственных выводов вроде \
+         «раз жалоба на тело — соматолог сам разберётся, гроундинг/соматика не нужны». Критерии \
+         могут прямо требовать противоположного. В частности:\n\
+         - Если критерий `has_somatic` говорит TRUE при НОВОЙ жалобе на тело (которой ещё не было в истории) — ставь has_somatic=true, даже если это первое сообщение.\n\
+         - Если критерий `needs_grounding` говорит TRUE при запросе, состоящем ТОЛЬКО из физических симптомов (без описанной жизненной ситуации) — ставь needs_grounding=true.\n\
+         Оценивай каждый факт независимо, по его собственному критерию, а не по «общему смыслу».",
+    );
+
     let signals_trimmed = signals.trim();
     if !signals_trimmed.is_empty() && signals_trimmed != "[]" && signals_trimmed != "null" {
         prompt.push_str(&format!("\n\nСигналы сессии (используй для выбора фазы):\n{}", signals));
@@ -255,6 +265,7 @@ Session signals: []";
                 256,
                 &ModelParams::default(),
                 "Auto",
+                false,
                 cancel,
                 "test:fact_extractor",
                 |_, _| {},
@@ -354,6 +365,7 @@ Session signals: []";
                 256,
                 &ModelParams::default(),
                 "Auto",
+                false,
                 cancel,
                 "test:fact_extractor",
                 |_, _| {},

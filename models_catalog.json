@@ -78,7 +78,7 @@
     "audio": false
   },
   {
-    "name": "lfm2.5-8b-a1b",
+    "name": "lfm2.5-8b",
     "size_gb": "4.51",
     "download_url": "https://huggingface.co/FadedRedStar/LFM2.5-8B-A1B-heretic-imatrix-GGUF/resolve/main/LFM2.5-8B-A1B-heretic-IQ4_NL-imatrix.gguf?download=true",
     "tokenizer_id": "LiquidAI/LFM2.5-8B-A1B",
@@ -87,11 +87,31 @@
     "audio": false
   },
   {
-    "name": "qwen3.8-27b-heretic-ara-i1-3bit",
+    "name": "qwen3.8-27b-3bit",
     "size_gb": "12.9",
     "download_url": "https://huggingface.co/mradermacher/Qwen3.8-27B-heretic-ara-i1-GGUF/resolve/main/Qwen3.8-27B-heretic-ara.i1-IQ3_M.gguf?download=true",
     "mmproj_url": "https://huggingface.co/mradermacher/Qwen3.8-27B-heretic-ara-GGUF/resolve/main/Qwen3.8-27B-heretic-ara.mmproj-Q8_0.gguf?download=true",
     "tokenizer_id": "Qwen/Qwen3.8-27B",
+    "uncen": true,
+    "vision": true,
+    "audio": false
+  },
+  {
+    "name": "qwen3.8-9B",
+    "size_gb": "5.42",
+    "download_url": "https://huggingface.co/mradermacher/Qwen3.8-9B-heretic-uncensored-i1-GGUF/resolve/main/Qwen3.8-9B-heretic-uncensored.i1-IQ4_NL.gguf?download=true",
+    "mmproj_url": "https://huggingface.co/mradermacher/Qwen3.8-9B-heretic-uncensored-GGUF/resolve/main/Qwen3.8-9B-heretic-uncensored.mmproj-Q8_0.gguf?download=true",
+    "tokenizer_id": "Qwen/Qwen3.8-9B",
+    "uncen": true,
+    "vision": true,
+    "audio": false
+  },
+  {
+    "name": "ornith-1.5-9b",
+    "size_gb": "5.42",
+    "download_url": "https://huggingface.co/mradermacher/Ornith-1.5-9B-uncensored-i1-GGUF/resolve/main/Ornith-1.5-9B-uncensored.i1-IQ4_NL.gguf?download=true",
+    "mmproj_url": "https://huggingface.co/mradermacher/Ornith-1.5-9B-uncensored-GGUF/resolve/main/Ornith-1.5-9B-uncensored.mmproj-Q8_0.gguf?download=true",
+    "tokenizer_id": "junafinity/Ornith-1.5-9B-uncensored",
     "uncen": true,
     "vision": true,
     "audio": false
