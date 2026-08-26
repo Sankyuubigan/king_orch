@@ -130,7 +130,26 @@ where
 
     /// Зовёт LLM со свободным ответом (без системного промпта) — для llm_freeform
     pub fn call_llm_freeform(&self, user_text: &str, history: &[ChatMessage], ctx_label: &str) -> Result<String, String> {
-        let mut msgs: Vec<LlmMessage> = history.iter().map(|m| m.to_llm_message()).collect();
+        // Явная инструкция по языку: у freeform нет системного промпта агента,
+        // поэтому вшиваем минимальный system-промпт ТОЛЬКО с правилом языка,
+        // чтобы ответ никогда не уходил на другой язык, чем у пользователя.
+        let mut lang_messages: Vec<ChatMessage> = history.to_vec();
+        lang_messages.push(ChatMessage {
+            id: None,
+            msg_type: "message".to_string(),
+            content: user_text.to_string(),
+            sub_calls: None,
+            author: Some("user".to_string()),
+            model: None,
+            attachments: None,
+        });
+        let directive = crate::domain::orchestrator::prompt::language_directive(&lang_messages);
+
+        let mut msgs: Vec<LlmMessage> = vec![LlmMessage {
+            role: "system".to_string(),
+            content: directive,
+        }];
+        msgs.extend(history.iter().map(|m| m.to_llm_message()));
         msgs.push(LlmMessage {
             role: "user".to_string(),
             content: user_text.to_string(),

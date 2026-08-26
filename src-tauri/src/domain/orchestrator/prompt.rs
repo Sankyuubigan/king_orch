@@ -27,7 +27,7 @@ pub fn current_date_block() -> String {
 
 pub fn build_system_prompt(
     agent: &AgentProfile,
-    _messages: &[ChatMessage],
+    messages: &[ChatMessage],
     has_tools: bool,
     all_tools: &[(String, String, serde_json::Value)],
     max_gen_tokens: usize,
@@ -44,7 +44,7 @@ pub fn build_system_prompt(
     
     sp.push_str("\n\n[ПРОТОКОЛ ЧЕСТНОСТИ]\n");
     sp.push_str(TRUTH_PROTOCOL);
-    sp.push_str("\n\n⚠️ ВАЖНО: ОТВЕЧАЙ НА ТОМ ЖЕ ЯЗЫКЕ, ЧТО И ПОЛЬЗОВАТЕЛЬ.");
+    sp.push_str(&format!("\n\n{}", language_directive(messages)));
 
     if has_tools {
         sp.push_str("\n\n[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]\nЕсли нужен инструмент — верни ОДИН JSON-блок (```json ... ```).\nВ JSON обязательно поле \"thought\".\n\n⚠️ ВАЖНО: Если задача ВЫПОЛНЕНА — пиши ОБЫЧНЫЙ ТЕКСТ без JSON!\n");
@@ -82,4 +82,82 @@ pub fn build_system_prompt(
     }
 
     sp
+}
+
+/// Строгая инструкция по языку ответа, основанная на языке последнего
+/// сообщения пользователя. Слабые модели игнорируют общие фразы вроде
+/// «отвечай на языке пользователя» и сползают в английский по умолчанию,
+/// поэтому инструкция формулируется ЯВНО и (для русского) двуязычно.
+pub(crate) fn language_directive(messages: &[ChatMessage]) -> String {
+    let text: String = messages
+        .iter()
+        .rev()
+        .filter(|m| m.author.as_deref() == Some("user") && !m.content.trim().is_empty())
+        .take(5)
+        .map(|m| m.content.clone())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    let cyr = text
+        .chars()
+        .filter(|c| ('\u{0400}'..='\u{04FF}').contains(c))
+        .count();
+    let lat = text.chars().filter(|c| c.is_ascii_alphabetic()).count();
+
+    if cyr > lat {
+        "⚠️ ВАЖНО: ОТВЕЧАЙ ИСКЛЮЧИТЕЛЬНО НА РУССКОМ ЯЗЫКЕ (RESPOND IN RUSSIAN). Не переключайся на английский и другие языки, даже если в промпте или истории встречается другой язык.".to_string()
+    } else {
+        "IMPORTANT: RESPOND STRICTLY IN THE SAME LANGUAGE AS THE USER'S LAST MESSAGE (mirror it). Do not switch to another language.".to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::infra::ChatMessage;
+
+    fn user_msg(content: &str) -> ChatMessage {
+        ChatMessage {
+            id: None,
+            msg_type: "message".to_string(),
+            content: content.to_string(),
+            sub_calls: None,
+            author: Some("user".to_string()),
+            model: None,
+            attachments: None,
+        }
+    }
+
+    #[test]
+    fn language_directive_russian() {
+        let msgs = vec![user_msg("привет, как у тебя дела?")];
+        let d = language_directive(&msgs);
+        assert!(
+            d.contains("РУССКОМ"),
+            "ожидается русская инструкция, получено: {}",
+            d
+        );
+    }
+
+    #[test]
+    fn language_directive_latin_mirrors() {
+        let msgs = vec![user_msg("hello, how are you?")];
+        let d = language_directive(&msgs);
+        assert!(
+            d.contains("SAME LANGUAGE"),
+            "ожидается mirror-инструкция, получено: {}",
+            d
+        );
+    }
+
+    #[test]
+    fn language_directive_empty_mirrors() {
+        let msgs: Vec<ChatMessage> = vec![];
+        let d = language_directive(&msgs);
+        assert!(
+            d.contains("SAME LANGUAGE"),
+            "при пустых сообщениях — mirror (англ. fallback), получено: {}",
+            d
+        );
+    }
 }
