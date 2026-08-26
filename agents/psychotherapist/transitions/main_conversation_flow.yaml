@@ -14,8 +14,8 @@ nodes:
     User: {{ user_message }}
     Session history (последние сообщения сессии): {{ messages }}
   ui_pos:
-    y: 493
     x: -1990
+    y: 493
   llm_params: strict
 
 - id: check_has_problem
@@ -34,8 +34,8 @@ nodes:
   inject_reports:
   - validator
   ui_pos:
-    y: 151
     x: 3611
+    y: 151
 
 - id: call_soma_translator
   type: llm_worker
@@ -64,8 +64,8 @@ nodes:
   inject_reports:
   - soma_translator
   ui_pos:
-    y: 70
-    x: 1697
+    y: 598
+    x: 1645
 
 - id: call_validator
   type: llm_worker
@@ -73,8 +73,8 @@ nodes:
   inject_reports:
   - decomposer
   ui_pos:
-    y: 276
     x: 2609
+    y: 276
 
 - id: check_validator_signal
   type: signal_router
@@ -101,13 +101,13 @@ nodes:
   - soma_translator
   - pattern_finder_by_floors
   ui_pos:
-    x: 4636
     y: 939
+    x: 4636
   disabled: true
 
 - id: call_pattern_finder
   type: llm_worker
-  agent: pattern_finder_by_floors
+  agent: pattern_finder_by_elements
   inject_reports:
   - soma_translator
   - validator
@@ -117,7 +117,7 @@ nodes:
 
 - id: call_healer
   type: llm_worker
-  agent: neuro_reprogrammer
+  agent: neuro_healer
   task: |
     Из отчёта pattern_finder_by_floors возьми номер типа паттерна.
     Затем выполни ШАГ 2 — прочитай описание этого паттерна в базе знаний инструментом ReadSection.
@@ -145,15 +145,15 @@ nodes:
   true_to: call_decomposer
   false_to: note_1785036347995
   ui_pos:
-    x: 719
     y: 260
+    x: 719
 
 - id: call_cluster_checker
   type: llm_worker
   agent: cluster_checker
   ui_pos:
-    y: 803
-    x: 1326
+    y: 1070
+    x: 1884
 
 - id: check_cluster_signal
   type: signal_router
@@ -164,8 +164,8 @@ nodes:
   - key: Кластер
     to: ''
   ui_pos:
-    x: 1583
-    y: 751
+    x: 2209
+    y: 1041
 
 - id: call_decomposer
   type: llm_worker
@@ -180,8 +180,8 @@ nodes:
   type: llm_worker
   agent: synchronizer
   ui_pos:
-    x: 3901
     y: 160
+    x: 3901
   disabled: true
 
 - id: call_request_helper
@@ -189,8 +189,8 @@ nodes:
   agent: request_helper
   output_type: message
   ui_pos:
-    y: 864
     x: -808
+    y: 864
 
 - id: note_1782220193985
   type: note
@@ -212,8 +212,8 @@ nodes:
   type: note
   input: ослабление сопротивления
   ui_pos:
-    y: 564
     x: 3631
+    y: 564
 
 - id: note_1782221436115
   type: note
@@ -242,8 +242,8 @@ nodes:
   type: note
   input: вычисление типа
   ui_pos:
-    y: 580
     x: 4358
+    y: 580
 
 - id: combining_targets
   type: llm_worker
@@ -252,16 +252,16 @@ nodes:
   - pattern_finder_by_floors
   - validator
   ui_pos:
-    x: 5050
     y: 692
+    x: 5050
 
 - id: note_1785036347995
   type: note
   input: запрос абстрактный. вызываем поиск сценариев
   system_message: Психотерапевт обнаружил, что Ваша проблема является симптомом (фасадом). Для того чтобы найти ментальную причину Вашей проблемы в психике, Вам будут предложены сценарии примерные возможных ментальных проблем в Вашей жизни. Ваша задача - описать Ваш личный кейс опираясь на эти "примерные" сценарии.
   ui_pos:
-    y: 46
-    x: 1255
+    y: 521
+    x: 1088
 
 - id: check_need_handedness
   type: signal_router
@@ -273,8 +273,8 @@ nodes:
     to: check_grounding
   default: check_grounding
   ui_pos:
-    x: 278
     y: 55
+    x: 278
 
 - id: note_1785123862689
   type: note
