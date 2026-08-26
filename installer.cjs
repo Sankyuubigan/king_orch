@@ -55,11 +55,20 @@ async function main() {
         const nsisDir = path.join(releaseDir, 'bundle', 'nsis');
         let installerFound = false;
 
+        // Читаем версию из tauri.conf.json, чтобы выбрать установщик по ТОЧНОЙ версии
+        // (а не по алфавитной сортировке — анти-паттерн rules.md §3.7: "26.8.87" > "26.8.133").
+        let confVersion = '0.0.0';
+        try {
+            const confText = fs.readFileSync(path.join(scriptDir, 'src-tauri', 'tauri.conf.json'), 'utf8');
+            const m = confText.match(/"version"\s*:\s*"(\d+\.\d+\.\d+)"/);
+            if (m) confVersion = m[1];
+        } catch (e) { /* пропускаем, отчёт не критичен */ }
+
         if (fs.existsSync(nsisDir)) {
-            const exeFiles = fs.readdirSync(nsisDir).filter(f => f.endsWith('-setup.exe')).sort();
-            if (exeFiles.length > 0) {
-                const exeFile = exeFiles[exeFiles.length - 1];
-                const finalPath = path.join(nsisDir, exeFile);
+            const exeRe = new RegExp('_' + confVersion.replace(/\./g, '\\.') + '_x64-setup\\.exe$');
+            const matched = fs.readdirSync(nsisDir).filter(f => f.endsWith('-setup.exe') && exeRe.test(f));
+            if (matched.length > 0) {
+                const finalPath = path.join(nsisDir, matched[0]);
                 console.log(`\n✅ Installer successfully generated:\n   👉 ${finalPath}\n`);
                 installerFound = true;
             }

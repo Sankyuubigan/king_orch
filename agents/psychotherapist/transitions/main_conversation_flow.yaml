@@ -14,8 +14,8 @@ nodes:
     User: {{ user_message }}
     Session history (последние сообщения сессии): {{ messages }}
   ui_pos:
-    x: -1990
     y: 493
+    x: -1990
   llm_params: strict
 
 - id: check_has_problem
@@ -24,8 +24,8 @@ nodes:
   true_to: note_1782221436115
   false_to: note_1785141025138
   ui_pos:
-    x: -1700
     y: 495
+    x: -1700
 
 - id: call_provocateur
   type: llm_worker
@@ -34,8 +34,8 @@ nodes:
   inject_reports:
   - validator
   ui_pos:
-    x: 3748
     y: 149
+    x: 3748
 
 - id: call_soma_translator
   type: llm_worker
@@ -52,8 +52,8 @@ nodes:
     Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
   output_type: message
   ui_pos:
-    y: -545
     x: 105
+    y: -545
   disabled: true
 
 - id: call_validator
@@ -62,8 +62,8 @@ nodes:
   inject_reports:
   - decomposer
   ui_pos:
-    x: 2609
     y: 276
+    x: 2609
 
 - id: check_validator_signal
   type: signal_router
@@ -75,8 +75,8 @@ nodes:
   - key: ДАННЫХ ДОСТАТОЧНО
     to: note_1782220629095
   ui_pos:
-    y: 177
     x: 2956
+    y: 177
 
 - id: call_destructor_finder
   type: llm_worker
@@ -90,8 +90,8 @@ nodes:
   - soma_translator
   - pattern_finder_by_floors
   ui_pos:
-    x: 4636
     y: 939
+    x: 4636
   disabled: true
 
 - id: call_pattern_finder
@@ -116,8 +116,8 @@ nodes:
   - pattern_finder_by_floors
   - synthesizer
   ui_pos:
-    x: 5335
     y: 676
+    x: 5335
 
 - id: check_somatic
   type: condition_check
@@ -157,13 +157,14 @@ nodes:
   ui_pos:
     x: 1440
     y: 186
+  disabled: true
 
 - id: synchronize_with_user
   type: llm_worker
   agent: synchronizer
   ui_pos:
-    x: 4038
     y: 158
+    x: 4038
   disabled: true
 
 - id: call_request_helper
@@ -171,8 +172,8 @@ nodes:
   agent: request_helper
   output_type: message
   ui_pos:
-    y: 864
     x: -808
+    y: 864
 
 - id: note_1782220193985
   type: note
@@ -200,24 +201,24 @@ nodes:
   type: note
   input: пересчитываем данные с учетом новых данных от юзера
   ui_pos:
-    y: 241
     x: -682
+    y: 241
 
 - id: call_shadow_worker
   type: llm_worker
   agent: shadow_worker
   output_type: message
   ui_pos:
-    x: 4083
     y: 626
+    x: 4083
   disabled: true
 
 - id: note_1784427848563
   type: note
   input: вычисление типа
   ui_pos:
-    x: 4358
     y: 580
+    x: 4358
 
 - id: combining_targets
   type: llm_worker
@@ -226,8 +227,9 @@ nodes:
   - pattern_finder_by_floors
   - validator
   ui_pos:
-    y: 692
     x: 5050
+    y: 692
+  disabled: true
 
 - id: check_need_handedness
   type: signal_router
@@ -237,8 +239,8 @@ nodes:
     to: call_decomposer
   default: note_1785123862689
   ui_pos:
-    y: 6
     x: 257
+    y: 6
 
 - id: note_1785123862689
   type: note
@@ -264,8 +266,8 @@ nodes:
 
     В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
-    y: 748
     x: -1323
+    y: 748
 
 edges:
 

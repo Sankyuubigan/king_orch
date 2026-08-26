@@ -765,20 +765,20 @@ export class SettingsController {
     no.className = "btn-secondary";
     no.textContent = "Отмена";
     no.style.marginLeft = "6px";
-    yes.addEventListener("click", () => this.doRollback(r.version, yes, no));
+    yes.addEventListener("click", () => this.doRollback(r.downloadUrl, yes, no));
     no.addEventListener("click", () => this.loadHistory());
     right.appendChild(warn);
     right.appendChild(yes);
     right.appendChild(no);
   }
 
-  private async doRollback(version: string, yes: HTMLButtonElement, no: HTMLButtonElement) {
+  private async doRollback(downloadUrl: string, yes: HTMLButtonElement, no: HTMLButtonElement) {
     yes.disabled = true;
     no.disabled = true;
     yes.textContent = "Откат...";
     // Приложение само перезапустится установщиком; дожидаться резолва invoke не нужно.
     try {
-      await invoke("install_release", { version });
+      await invoke("install_release", { downloadUrl });
       yes.textContent = "Перезапустите приложение";
     } catch (e: any) {
       showToast(`Ошибка отката: ${e}`, "error");

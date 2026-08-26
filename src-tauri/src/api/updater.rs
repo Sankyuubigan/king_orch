@@ -1,8 +1,11 @@
 //! API-команды для отката версий (делегируют в инфраструктуру).
 
+use std::path::PathBuf;
+use std::process::Command;
+
 use serde::Serialize;
-use tauri::{AppHandle, Manager};
-use tauri_plugin_updater::UpdaterExt;
+use tauri::AppHandle;
+use tokio::time::{sleep, Duration};
 
 use crate::infra::updater_rollback::backup_before_rollback;
 
@@ -97,42 +100,61 @@ pub async fn get_release_history(_app: AppHandle) -> Result<Vec<ReleaseInfo>, St
     Ok(out)
 }
 
-/// Откат к конкретной версии. Бэкапит данные, затем через плагин updater ставит
-/// выбранную версию из её `manifest.json` (ассет релиза). На Windows процесс завершается
-/// самим установщиком и приложение перезапускается.
+/// Откат к конкретной версии.
+///
+/// Единственный источник правды — GitHub Releases. Фронтенд передаёт сюда реальный
+/// URL установщика (`download_url`, полученный из GitHub API в `get_release_history`),
+/// мы качаем ровно этот ассет и запускаем NSIS-инсталлер (тихо, с даунгрейдом —
+/// `allowDowngrades` включён в `tauri.conf.json`). Так откат не зависит от отдельных
+/// ассетов `manifest.json`, которые могли оказаться устаревшими/битыми (причина бага).
 #[tauri::command]
-pub async fn install_release(app: AppHandle, version: String) -> Result<(), String> {
+pub async fn install_release(app: AppHandle, download_url: String) -> Result<(), String> {
     // 1. Бэкап данных перед понижением версии.
     backup_before_rollback(&app)?;
 
-    // 2. Манифест выбранной версии (загружается как ассет релиза).
-    let manifest_url = format!("https://github.com/{REPO}/releases/download/v{version}/manifest.json")
-        .parse::<url::Url>()
-        .map_err(|e| e.to_string())?;
+    // 2. Имя установщика из URL.
+    let file_name = download_url
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| "Некорректный URL установщика".to_string())?
+        .to_string();
 
-    let update = app
-        .updater_builder()
-        .endpoints(vec![manifest_url])
-        .map_err(|e| e.to_string())?
-        .version_comparator(|_, _| true)
+    // 3. Скачивание установщика во временную папку.
+    let client = reqwest::Client::builder()
+        .user_agent("KingOrch-Rollback")
         .build()
-        .map_err(|e| e.to_string())?
-        .check()
-        .await
         .map_err(|e| e.to_string())?;
 
-    let Some(update) = update else {
-        return Err(
-            "Не удалось получить манифест версии. Возможно, релиз собран без manifest.json \
-             (нужен релиз после внедрения отката)."
-                .into(),
-        );
-    };
-
-    update
-        .download_and_install(|_, _| {}, || {})
+    let resp = client
+        .get(&download_url)
+        .send()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("Ошибка загрузки установщика: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "Не удалось скачать установщик (HTTP {}). Возможно, релиз недоступен или был удалён.",
+            resp.status()
+        ));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("Ошибка чтения установщика: {}", e))?;
 
-    Ok(())
+    let installer_path: PathBuf = std::env::temp_dir().join(&file_name);
+    std::fs::write(&installer_path, &bytes)
+        .map_err(|e| format!("Ошибка записи установщика на диск: {}", e))?;
+
+    // 4. Запуск инсталлера в тихом режиме. NSIS сам перезапишет файлы и перезапустит
+    //    приложение. Завершаем текущий процесс, чтобы он не держал заблокированным
+    //    свой exe (иначе тихая переустановка не сможет заменить файлы).
+    let _ = Command::new(&installer_path)
+        .args(["/S"])
+        .spawn()
+        .map_err(|e| format!("Не удалось запустить установщик: {}", e))?;
+
+    // Даём инсталлеру подняться (в т.ч. UAC-запрос при необходимости).
+    sleep(Duration::from_millis(800)).await;
+    std::process::exit(0);
 }

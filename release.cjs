@@ -129,6 +129,18 @@ async function main() {
         // из старых сборок, чтобы установщик не таскал устаревшие ресурсы).
         syncResources(scriptDir);
 
+        // Очистка старых установщиков из папки бандла ПЕРЕД сборкой, чтобы сборка
+        // и последующий выбор артефакта не подхватили exe чужой версии
+        // (анти-паттерн global_ai_docs/desktop_rust_tauri/rules.md §3.7).
+        const bundleNsisDir = path.join(scriptDir, 'src-tauri', 'target', 'release', 'bundle', 'nsis');
+        if (fs.existsSync(bundleNsisDir)) {
+            for (const f of fs.readdirSync(bundleNsisDir)) {
+                if (f.endsWith('-setup.exe') || f.endsWith('.sig')) {
+                    fs.unlinkSync(path.join(bundleNsisDir, f));
+                }
+            }
+        }
+
         let privKeyPath = process.env.TAURI_PRIVATE_KEY_ORIGINAL || 'D:\\Projects\\docusaurus-starter\\docs\\Sega Mega Note\\Моя картотека\\software\\настройки\\tauri_signed_keys\\tauri.key';
 
         if (!fs.existsSync(privKeyPath)) {
@@ -155,9 +167,23 @@ async function main() {
 
         if (!fs.existsSync(nsisDir)) throw new Error('NSIS directory not found!');
 
-        const exeFiles = fs.readdirSync(nsisDir).filter(f => f.endsWith('-setup.exe')).sort();
-        const exeFile = exeFiles[exeFiles.length - 1];
-        if (!exeFile) throw new Error('Setup.exe not found!');
+        // АНТИ-ПАТТЕРН (global_ai_docs/desktop_rust_tauri/rules.md §3.7):
+        // выбор установщика НЕ по алфавитной сортировке (иначе "26.8.87" > "26.8.133"),
+        // а по точному совпадению версии в имени файла. Ровно 1 совпадение.
+        const exeRe = new RegExp('_' + version.replace(/\./g, '\\.') + '_x64-setup\\.exe$');
+        const matched = fs.readdirSync(nsisDir).filter(f => f.endsWith('-setup.exe') && exeRe.test(f));
+        if (matched.length !== 1) {
+            throw new Error(`Expected exactly 1 installer for v${version}, found: ${matched.join(', ') || '(none)'}`);
+        }
+        let exeFile = matched[0];
+
+        // GitHub нормализует пробелы в именах ассетов (King Orch -> King.Orch),
+        // поэтому переименовываем локально в «безопасное» имя, чтобы URL был детерминирован.
+        const uploadName = exeFile.replace(/ /g, '.');
+        if (uploadName !== exeFile) {
+            fs.renameSync(path.join(nsisDir, exeFile), path.join(nsisDir, uploadName));
+        }
+        exeFile = uploadName;
 
         const sigFile = `${exeFile}.sig`;
         if (!fs.readdirSync(nsisDir).find(f => f === sigFile)) {
@@ -213,21 +239,23 @@ async function main() {
 
         console.log(`\nRelease ${tag} PUBLISHED!`);
 
-        // 7. Generate latest.json from GitHub API (correct asset names) and push to main
+        // 7. Generate latest.json (deterministic, from the LOCAL installer) and push to main.
+        // НЕ запрашиваем GitHub API за именем ассета: он вернул бы неправильный файл,
+        // если в релиз залили не тот exe (rules.md §3.7 + §3.3).
         console.log('\n========================================');
-        console.log('Generating latest.json from GitHub API...');
+        console.log('Generating latest.json...');
 
-        const assetsJson = execSync(
-            `gh api repos/Sankyuubigan/king_orch/releases/tags/${tag} --jq .assets`,
-            { encoding: 'utf8', cwd: scriptDir }
-        ).trim();
+        // Хард-проверки перед публикацией latest.json (fail-fast).
+        if (!exeFile.includes(version)) {
+            throw new Error(`Installer name "${exeFile}" does not contain version ${version}`);
+        }
+        if (!fs.existsSync(sigPathFull)) {
+            throw new Error(`Signature not found for ${exeFile} (run signing first)`);
+        }
 
-        const assets = JSON.parse(assetsJson);
-        const installerAsset = assets.find(a => a.name.endsWith('-setup.exe') && !a.name.endsWith('.sig'));
-        const installerUrl = installerAsset ? installerAsset.browser_download_url : '';
-
-        if (!installerUrl) {
-            throw new Error('Could not find installer URL from GitHub API');
+        const installerUrl = `https://github.com/Sankyuubigan/king_orch/releases/download/${tag}/${exeFile}`;
+        if (!installerUrl.includes(version)) {
+            throw new Error(`Installer URL does not contain version ${version}: ${installerUrl}`);
         }
 
         const sigContent = fs.readFileSync(sigPathFull, 'utf8').trim();
@@ -247,26 +275,6 @@ async function main() {
         const latestJsonPath = path.join(scriptDir, 'latest.json');
         fs.writeFileSync(latestJsonPath, JSON.stringify(latestJson, null, 2), 'utf8');
         console.log(`latest.json generated. URL: ${installerUrl}`);
-
-        // 7.5 Generate per-version manifest.json and attach it to the release.
-        // Used by the in-app "rollback to previous version" feature: the app points
-        // the updater plugin at https://github.com/<repo>/releases/download/v<ver>/manifest.json
-        const manifestJson = {
-          version: version,
-          notes: `King Orch ${version}`,
-          pub_date: new Date().toISOString(),
-          platforms: {
-            "windows-x86_64": {
-              signature: sigContent,
-              url: installerUrl
-            }
-          }
-        };
-        const manifestJsonPath = path.join(scriptDir, 'manifest.json');
-        fs.writeFileSync(manifestJsonPath, JSON.stringify(manifestJson, null, 2), 'utf8');
-        execSync(`gh release upload ${tag} "${manifestJsonPath}"`, { stdio: 'inherit', cwd: scriptDir });
-        fs.unlinkSync(manifestJsonPath);
-        console.log('manifest.json uploaded to release.');
 
         execSync('git add latest.json', { stdio: 'inherit', cwd: scriptDir });
         execSync('git commit -m "chore(release): update latest.json for ' + tag + '"', { stdio: 'inherit', cwd: scriptDir });
