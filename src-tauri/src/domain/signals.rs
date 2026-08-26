@@ -93,6 +93,13 @@ pub fn extract_signal_value_from_text(contract: &SignalContract, text: &str) -> 
                 }
             }
         }
+        if contract.key == "soma_translator" {
+            let lowered = text.to_lowercase();
+            if lowered.contains("левш") || lowered.contains("правш") || lowered.contains("рукость") {
+                return Some(Value::String("РУКОСТЬ ИЗВЕСТНА".to_string()));
+            }
+            return Some(Value::String("НУЖНА РУКОСТЬ".to_string()));
+        }
         return None;
     }
 
@@ -257,15 +264,15 @@ mod tests {
             extract_signal_value_from_text(&c, "разбор готов. РУКОСТЬ ИЗВЕСТНА, правая сторона — Мать"),
             Some(serde_json::json!("РУКОСТЬ ИЗВЕСТНА"))
         );
-        // Нет маркера → None (сигнал не сохраняется, маршрутизация по default).
+        // Маркер рукости в тексте → РУКОСТЬ ИЗВЕСТНА (даже без точной строки-вердикта).
         assert_eq!(
             extract_signal_value_from_text(&c, "биологический левша, анализ завершён"),
-            None
+            Some(serde_json::json!("РУКОСТЬ ИЗВЕСТНА"))
         );
-        // Пустой/не совпавший enum → None.
+        // Нет маркеров рукости → НУЖНА РУКОСТЬ (default: спрашиваем юзера).
         assert_eq!(
             extract_signal_value_from_text(&c, "просто текст без маркеров"),
-            None
+            Some(serde_json::json!("НУЖНА РУКОСТЬ"))
         );
     }
 

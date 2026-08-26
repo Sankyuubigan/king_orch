@@ -30,7 +30,12 @@ pub const VARIANT_HIP: &str = "hip-radeon";
 /// Значение конфига «подобрать автоматически по видеокарте».
 pub const VARIANT_AUTO: &str = "auto";
 
-const LLAMA_CPP_API: &str = "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest";
+/// Список релизов (новые сначала). НЕ используем /releases/latest: с недавних пор
+/// "последний" релиз llama.cpp — это source-only стабильный тег (напр. v0.3.0), в
+/// котором НЕТ готовых бинарников. Сами билды (llama-server.exe) публикуются в
+/// nightly-пре-релизах bXXXX. Поэтому сканируем список и берём первый релиз, где
+/// реально есть нужный бинарник (см. first_release_with_engine).
+const LLAMA_CPP_RELEASES: &str = "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=30";
 const METADATA_FILE: &str = "engine_meta.json";
 
 /// Семейство варианта движка — по нему проверяется совместимость с GPU.
@@ -84,13 +89,13 @@ pub struct EngineMeta {
     pub installed_at: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct GitHubRelease {
     tag_name: String,
     assets: Vec<GitHubAsset>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct GitHubAsset {
     name: String,
     browser_download_url: String,
@@ -235,12 +240,14 @@ fn variant_from_asset_name(name: &str) -> Option<String> {
 /// Поиск ассета по семейству (cuda-12 / cuda-13 / vulkan / hip): мажорная версия
 /// CUDA в имени может отличаться от ожидаемой (например cuda-13.4 вместо cuda-13.3).
 fn find_asset_by_family<'a>(release: &'a GitHubRelease, family: EngineFamily) -> Option<(&'a GitHubAsset, String)> {
-    let needle = match family {
-        EngineFamily::Cuda13 => "-win-cuda-13",
-        EngineFamily::Cuda12 => "-win-cuda-12",
-        EngineFamily::Vulkan => "-win-vulkan",
-        EngineFamily::Hip => "-win-hip",
-        EngineFamily::Cpu => return None,
+    // needle-ы семейства. Для HIP поддерживаем оба имени: старое -win-hip и новое
+    // -win-rocm (реальный ассет теперь llama-<tag>-bin-win-rocm-*.zip).
+    let (needles, fallback): (&[&str], &str) = match family {
+        EngineFamily::Cuda13 => (&["-win-cuda-13"], "cuda-13"),
+        EngineFamily::Cuda12 => (&["-win-cuda-12"], "cuda-12"),
+        EngineFamily::Vulkan => (&["-win-vulkan"], "vulkan"),
+        EngineFamily::Hip => (&["-win-rocm", "-win-hip"], "hip-radeon"),
+        EngineFamily::Cpu => (&["-win-cpu"], "cpu"),
     };
     for asset in &release.assets {
         if asset.name.starts_with("cudart-llama-bin") {
@@ -249,15 +256,15 @@ fn find_asset_by_family<'a>(release: &'a GitHubRelease, family: EngineFamily) ->
         if !asset.name.ends_with("-x64.zip") {
             continue;
         }
-        if asset.name.contains(needle) {
-            let actual = variant_from_asset_name(&asset.name)
-                .unwrap_or_else(|| match family {
-                    EngineFamily::Cuda13 => "cuda-13".to_string(),
-                    EngineFamily::Cuda12 => "cuda-12".to_string(),
-                    EngineFamily::Vulkan => "vulkan".to_string(),
-                    EngineFamily::Hip => "hip-radeon".to_string(),
-                    EngineFamily::Cpu => "cpu".to_string(),
-                });
+        if needles.iter().any(|n| asset.name.contains(n)) {
+            // HIP нормализуем всегда в "hip-radeon" (папка/метаданные зависят от выбора
+            // юзера, а не от конкретной версии ROCm). Остальные — берём фактическую
+            // версию из имени (важно для cudart и метаданных), иначе fallback по семейству.
+            let actual = if family == EngineFamily::Hip {
+                "hip-radeon".to_string()
+            } else {
+                variant_from_asset_name(&asset.name).unwrap_or_else(|| fallback.to_string())
+            };
             return Some((asset, actual));
         }
     }
@@ -420,19 +427,81 @@ fn http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("Ошибка создания HTTP-клиента: {}", e))
 }
 
-async fn fetch_latest_release(client: &reqwest::Client) -> Result<GitHubRelease, String> {
+/// Чистая (без сети) логика выбора релиза: из списка релизов (от новых к старым)
+/// возвращает первый, в котором есть готовый бинарник движка для данного варианта.
+/// Так мы не зависим от того, является ли "последний" релиз source-only (v0.3.0) или
+/// содержит бинарники, и не привязаны к конкретному формату тега/имени файла.
+fn first_release_with_engine(releases: &[GitHubRelease], variant: &str) -> Option<GitHubRelease> {
+    releases
+        .iter()
+        .find(|r| find_engine_asset(r, variant).is_some())
+        .cloned()
+}
+
+/// Получить с GitHub самый свежий релиз llama.cpp, содержащий готовый бинарник
+/// движка для запрошенного варианта (платформа Windows x64).
+async fn fetch_release_with_engine(client: &reqwest::Client, variant: &str) -> Result<GitHubRelease, String> {
+    // 1) Основной путь: сканируем список релизов (новые сначала).
     let resp = client
-        .get(LLAMA_CPP_API)
+        .get(LLAMA_CPP_RELEASES)
         .send()
         .await
         .map_err(|e| format!("Ошибка запроса GitHub API: {}", e))?;
     let status = resp.status();
+    if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+        return Err(
+            "Превышен лимит запросов к GitHub API. Подождите несколько минут и повторите установку."
+                .to_string(),
+        );
+    }
     if !status.is_success() {
         return Err(format!("GitHub API вернул HTTP {}", status));
     }
-    resp.json::<GitHubRelease>()
+    let releases: Vec<GitHubRelease> = resp
+        .json()
         .await
-        .map_err(|e| format!("Ошибка парсинга ответа GitHub: {}", e))
+        .map_err(|e| format!("Ошибка парсинга ответа GitHub: {}", e))?;
+
+    if let Some(rel) = first_release_with_engine(&releases, variant) {
+        return Ok(rel);
+    }
+
+    // 2) Запасной путь: в стабильном source-only релизе есть файл nightly-tag.txt с тегом
+    //    ночной сборки (напр. b10621). Читаем его и запрашиваем релиз по этому тегу —
+    //    это устойчиво на случай, если формат списка релизов когда-либо изменится.
+    for rel in &releases {
+        for asset in &rel.assets {
+            if asset.name != "nightly-tag.txt" {
+                continue;
+            }
+            if let Ok(nightly_resp) = client.get(&asset.browser_download_url).send().await {
+                if let Ok(tag) = nightly_resp.text().await {
+                    let tag = tag.trim();
+                    if tag.is_empty() {
+                        continue;
+                    }
+                    let url = format!(
+                        "https://api.github.com/repos/ggml-org/llama.cpp/releases/tags/{}",
+                        tag
+                    );
+                    if let Ok(resp2) = client.get(&url).send().await {
+                        if resp2.status().is_success() {
+                            if let Ok(rel2) = resp2.json::<GitHubRelease>().await {
+                                if find_engine_asset(&rel2, variant).is_some() {
+                                    return Ok(rel2);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Err(format!(
+        "Не найден релиз llama.cpp с готовым движком для варианта «{}». Проверьте доступ к GitHub (api.github.com) и повторите позже.",
+        variant
+    ))
 }
 
 fn sha256_file(path: &Path) -> Result<String, String> {
@@ -633,15 +702,14 @@ pub async fn install<L: Fn(String), P: Fn(u64, u64)>(
     // удалил бы сам скачанный engine.zip, лежащий внутри target).
     clear_dir(&target);
 
-    on_log(format!("🔄 Вариант «{}»: получение информации о последнем релизе llama.cpp...", variant));
+    on_log(format!("🔄 Вариант «{}»: поиск актуального релиза llama.cpp с готовым движком...", variant));
     let client = http_client()?;
-    let release = fetch_latest_release(&client).await?;
+    let release = fetch_release_with_engine(&client, variant).await?;
 
     let asset = find_engine_asset(&release, variant).ok_or_else(|| {
         format!(
-            "В релизе {} не найден ассет движка: {}",
-            release.tag_name,
-            asset_name_candidates(&release.tag_name, variant).join(" или ")
+            "В релизе {} не найден ассет движка для варианта «{}». Возможно, формат релизов llama.cpp изменился — сообщите разработчику.",
+            release.tag_name, variant
         )
     })?;
     let actual_variant = asset.1.clone();
@@ -729,7 +797,7 @@ pub async fn check_update<L: Fn(String)>(dir: &Path, variant: &str, on_log: L) -
         None => return Ok(None),
     };
     let client = http_client()?;
-    let release = fetch_latest_release(&client).await?;
+    let release = fetch_release_with_engine(&client, variant).await?;
     if release.tag_name != meta.tag {
         on_log(format!(
             "🔄 Доступно обновление бекенда llama.cpp ({}): {} → {}",
@@ -985,5 +1053,79 @@ mod tests {
         assert!(!nested.join("llama-server.exe").exists());
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    fn release_with_tag(tag: &str, names: &[&str]) -> GitHubRelease {
+        GitHubRelease {
+            tag_name: tag.to_string(),
+            assets: names
+                .iter()
+                .map(|n| GitHubAsset {
+                    name: n.to_string(),
+                    browser_download_url: format!("https://example.com/{}", n),
+                    size: 1000,
+                    digest: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn first_release_skips_source_only_stable_and_picks_nightly() {
+        // Имитация реальной ситуации: "последний" релиз v0.3.0 — source-only
+        // (только nightly-tag.txt), а бинарники лежат в nightly b10621.
+        let releases = vec![
+            release_with_tag("v0.3.0", &["nightly-tag.txt"]),
+            release_with_tag(
+                "b10621",
+                &[
+                    "llama-b10621-bin-win-cuda-12.4-x64.zip",
+                    "cudart-llama-bin-win-cuda-12.4-x64.zip",
+                ],
+            ),
+        ];
+        let rel = first_release_with_engine(&releases, VARIANT_CUDA).unwrap();
+        assert_eq!(rel.tag_name, "b10621");
+    }
+
+    #[test]
+    fn first_release_picks_hip_rocm_variant() {
+        let releases = vec![release_with_tag(
+            "b10621",
+            &["llama-b10621-bin-win-rocm-7.14-x64.zip"],
+        )];
+        let rel = first_release_with_engine(&releases, VARIANT_HIP).unwrap();
+        assert_eq!(rel.tag_name, "b10621");
+        let (_asset, actual) = find_engine_asset(&rel, VARIANT_HIP).unwrap();
+        assert_eq!(actual, "hip-radeon");
+    }
+
+    #[test]
+    fn first_release_picks_vulkan_variant() {
+        let releases = vec![release_with_tag(
+            "b10621",
+            &["llama-b10621-bin-win-vulkan-x64.zip"],
+        )];
+        assert_eq!(
+            first_release_with_engine(&releases, VARIANT_VULKAN).unwrap().tag_name,
+            "b10621"
+        );
+    }
+
+    #[test]
+    fn find_engine_asset_resilient_to_renamed_tag() {
+        // Если llama.cpp сменит схему имён (тег v9.9.9, минорная версия CUDA 12.4→12.9)
+        // — движок всё равно должен найтись по семейству -win-cuda-12.
+        let release =
+            release_with_tag("v9.9.9", &["llama-v9.9.9-bin-win-cuda-12.9-x64.zip"]);
+        let (asset, actual) = find_engine_asset(&release, VARIANT_CUDA).unwrap();
+        assert_eq!(asset.name, "llama-v9.9.9-bin-win-cuda-12.9-x64.zip");
+        assert_eq!(actual, "cuda-12.9");
+    }
+
+    #[test]
+    fn first_release_none_when_no_binary_release() {
+        let releases = vec![release_with_tag("v0.3.0", &["nightly-tag.txt"])];
+        assert!(first_release_with_engine(&releases, VARIANT_CUDA).is_none());
     }
 }

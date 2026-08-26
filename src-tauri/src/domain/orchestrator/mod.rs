@@ -1168,7 +1168,13 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
     // и исключает пере-вывод значения отдельным вызовом (который терял контекст).
     if !ctx.signal_saved {
         if let Some(contract) = &signal_contract {
-            if let Some(value) = extract_signal_value_from_text(contract, &ctx.final_response) {
+            let user_text: String = ctx.messages.iter()
+                .filter(|m| m.msg_type == "message" && m.author.as_deref() == Some("user"))
+                .map(|m| m.content.clone())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let extract_input = format!("{}\n{}", user_text, ctx.final_response);
+            if let Some(value) = extract_signal_value_from_text(contract, &extract_input) {
                 let mut map = serde_json::Map::new();
                 map.insert(contract.key.clone(), value.clone());
                 let signal_msg = ChatMessage {
@@ -1629,16 +1635,15 @@ mod tests {
         }
     }
 
-    /// Регрессия (после переименования needs_grounding → scenario_established):
-    /// модель должна выдавать scenario_established=false для жалобы, состоящей ТОЛЬКО из
-    /// телесных симптомов + фактов о себе (без описанной жизненной ситуации). Раньше слабые
-    /// модели (qwen3.8, granite, nanbeige) ошибочно ставили needs_grounding=false и пайплайн
-    /// не доходил до гроундера.
-    /// Запуск: TEST_MODEL_PATH=... test.bat "psychotherapist_scenario_false_for_pure_somatic -- --ignored"
+    /// Регрессия: модель должна выдавать has_problem=true для жалобы, состоящей ТОЛЬКО из
+    /// телесных симптомов + фактов о себе (без описанной жизненной ситуации). Факт
+    /// scenario_established удалён — теперь обязательным «сценарием» является элемент 6
+    /// (событие/триггер), который проверяет валидатор, а не факт-экстрактор.
+    /// Запуск: TEST_MODEL_PATH=... test.bat "psychotherapist_fact_extractor_pure_somatic -- --ignored"
     ///   либо TEST_MODELS="path1,path2" для прогона нескольких моделей за раз.
     #[test]
     #[ignore]
-    fn psychotherapist_scenario_false_for_pure_somatic() {
+    fn psychotherapist_fact_extractor_pure_somatic() {
         use std::sync::{Arc, atomic::AtomicBool};
         use crate::infra::{LlamaEngine, ModelParams, LlmMessage};
         use crate::domain::workflow_engine::fact_extractor::{build_default_prompt, resolve_facts, resolve_phases};
@@ -1748,11 +1753,11 @@ mod tests {
             };
             println!("PARSED: {}", parsed);
 
-            let se = parsed.get("scenario_established").and_then(|v| v.as_bool());
-            match se {
-                Some(false) => println!("✅ {} → scenario_established=false", model_path),
+            let hp = parsed.get("has_problem").and_then(|v| v.as_bool());
+            match hp {
+                Some(true) => println!("✅ {} → has_problem=true", model_path),
                 other => {
-                    println!("❌ {} → scenario_established={:?} (ожидалось false)", model_path, other);
+                    println!("❌ {} → has_problem={:?} (ожидалось true)", model_path, other);
                     failures.push(model_path.clone());
                 }
             }
@@ -1762,17 +1767,18 @@ mod tests {
             failures.len(),
             skipped.len()
         );
-        assert!(failures.is_empty(), "scenario_established != false для: {:?}", failures);
+        assert!(failures.is_empty(), "has_problem != true для: {:?}", failures);
     }
 
     /// Сквозной тест в режиме графа агента «Психотерапевт»: прогоняем жалобу на десну и
-    /// проверяем, что пайплайн ДОХОДИТ до узла call_grounder (в сессии появляется сообщение
-    /// author=="grounder"). Раньше 3 модели (qwen3.8, granite, nanbeige) уходили в decomposer.
-    /// Запуск: TEST_MODEL_PATH=... test.bat "psychotherapist_graph_reaches_grounder -- --ignored"
+    /// проверяем, что пайплайн БОЛЬШЕ НЕ доходит до узла call_grounder (он удалён из пайплайна
+    /// и заархивирован). Маршрутизация теперь идёт через decomposer/validator/provocateur, а
+    /// «сценарий» собирается провокатором через элемент 6 (событие/триггер).
+    /// Запуск: TEST_MODEL_PATH=... test.bat "psychotherapist_graph_skips_grounder -- --ignored"
     ///   либо TEST_MODELS="p1,p2,..." для прогона всех моделей за один раз.
     #[test]
     #[ignore]
-    fn psychotherapist_graph_reaches_grounder() {
+    fn psychotherapist_graph_skips_grounder() {
         use std::sync::{Arc, Mutex, atomic::AtomicBool};
         use crate::infra::{LlamaEngine, ModelParams, SubCall};
         use crate::domain::workflow_engine::{run_workflow, WorkflowRunner};
@@ -1876,10 +1882,10 @@ mod tests {
                     println!("=== АВТОРЫ СООБЩЕНИЙ: {:?} ===", authors);
                     let reached = ctx.messages.iter().any(|m| m.author.as_deref() == Some("grounder"));
                     if reached {
-                        println!("✅ {} — дошёл до grounder", model_path);
-                    } else {
-                        println!("❌ {} — НЕ дошёл до grounder", model_path);
+                        println!("❌ {} — дошёл до grounder (узел удалён из пайплайна)", model_path);
                         failures.push(model_path.clone());
+                    } else {
+                        println!("✅ {} — grounder не задействован (маршрут через decomposer/validator/provocateur)", model_path);
                     }
                 }
                 Err(e) => {
@@ -1888,6 +1894,6 @@ mod tests {
                 }
             }
         }
-        assert!(failures.is_empty(), "следующие модели НЕ дошли до grounder: {:?}", failures);
+        assert!(failures.is_empty(), "следующие модели всё же дошли до grounder: {:?}", failures);
     }
 }

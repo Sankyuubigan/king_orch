@@ -882,7 +882,9 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
         // Если это начало ответа, создаем пустое сообщение в UI
         if (!store.rtStreamUid) {
             store.rtStreamUid = store.nextUid();
-            const displayName = this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace(/^[📁📊]\s*/, '');
+            const displayName = (author && author.trim())
+                ? author
+                : this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace(/^[📁📊]\s*/, '');
             this.appendMessage('agent', '', displayName, undefined, undefined, false, store.rtStreamUid);
         }
 

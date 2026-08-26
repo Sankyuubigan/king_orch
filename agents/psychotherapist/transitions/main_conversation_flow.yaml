@@ -29,13 +29,13 @@ nodes:
 
 - id: call_provocateur
   type: llm_worker
-  agent: provocateur
+  agent: intake_specialist
   output_type: message
   inject_reports:
   - validator
   ui_pos:
-    x: 3611
-    y: 151
+    x: 3748
+    y: 149
 
 - id: call_soma_translator
   type: llm_worker
@@ -55,17 +55,6 @@ nodes:
     y: -545
     x: 105
   disabled: true
-
-- id: call_grounder
-  type: llm_worker
-  agent: grounder
-  task: Проанализируй отчёты коллег и жалобу пользователя. Выдай несколько конкретных, приземлённых бытовых сценариев возможных ментальных причин проблемы. Если данных не хватает — задай пользователю уточняющие вопросы.
-  output_type: message
-  inject_reports:
-  - soma_translator
-  ui_pos:
-    y: 598
-    x: 1645
 
 - id: call_validator
   type: llm_worker
@@ -101,8 +90,8 @@ nodes:
   - soma_translator
   - pattern_finder_by_floors
   ui_pos:
-    y: 939
     x: 4636
+    y: 939
   disabled: true
 
 - id: call_pattern_finder
@@ -133,27 +122,19 @@ nodes:
 - id: check_somatic
   type: condition_check
   field: has_somatic
-  sequential_to: note_1782224256075
+  sequential_to: call_decomposer
   true_to: call_soma_translator
   ui_pos:
     x: -269
     y: 204
 
-- id: check_grounding
-  type: condition_check
-  field: scenario_established
-  true_to: call_decomposer
-  false_to: note_1785036347995
-  ui_pos:
-    y: 260
-    x: 719
-
 - id: call_cluster_checker
   type: llm_worker
   agent: cluster_checker
   ui_pos:
-    y: 1070
     x: 1884
+    y: 1070
+  disabled: true
 
 - id: check_cluster_signal
   type: signal_router
@@ -164,8 +145,9 @@ nodes:
   - key: Кластер
     to: ''
   ui_pos:
-    x: 2209
     y: 1041
+    x: 2209
+  disabled: true
 
 - id: call_decomposer
   type: llm_worker
@@ -173,15 +155,15 @@ nodes:
   inject_reports:
   - decomposer
   ui_pos:
-    x: 1618
-    y: 391
+    x: 1440
+    y: 186
 
 - id: synchronize_with_user
   type: llm_worker
   agent: synchronizer
   ui_pos:
-    y: 160
-    x: 3901
+    x: 4038
+    y: 158
   disabled: true
 
 - id: call_request_helper
@@ -189,31 +171,30 @@ nodes:
   agent: request_helper
   output_type: message
   ui_pos:
-    x: -808
     y: 864
+    x: -808
 
 - id: note_1782220193985
   type: note
   input: |
     проверка данных. развилка на доработку данных или отправку на лечение
   ui_pos:
-    y: 285
     x: 2172
+    y: 285
 
 - id: note_1782220533024
   type: note
   input: уточнение данных у юзера
-  system_message: "Давайте проведем один мысленный эксперимент, чтобы заглянуть в самый корень вашей проблемы. Если вы окажетесь в этой точке и пути назад не будет, с каким самым невыносимым чувством вы столкнетесь внутри себя? \n\n(Пожалуйста, не пишите о том, что вы будете делать или как будете решать проблему. Опишите именно вашу внутреннюю катастрофу. Например: \"я почувствую себя абсолютно бесполезным ничтожеством\", \"я столкнусь с парализующим страхом смерти/пустоты\", \"я почувствую, что я абсолютно одинок и никому не нужен\", \"моя самооценка будет уничтожена\". Что именно сломается внутри вас?)\n\nПредставьте гипотетическую, но абсолютно безвыходную ситуацию. Что Вы почувствуете в этот момент ? Какие эмоции или состояние вы ощутите?"
   ui_pos:
-    x: 3212
-    y: 96
+    x: 3349
+    y: 94
 
 - id: note_1782220629095
   type: note
   input: ослабление сопротивления
   ui_pos:
-    x: 3631
     y: 564
+    x: 3631
 
 - id: note_1782221436115
   type: note
@@ -222,20 +203,13 @@ nodes:
     y: 241
     x: -682
 
-- id: note_1782224256075
-  type: note
-  input: проверяем абстрактный ли запрос
-  ui_pos:
-    x: 21
-    y: 291
-
 - id: call_shadow_worker
   type: llm_worker
   agent: shadow_worker
   output_type: message
   ui_pos:
-    y: 626
     x: 4083
+    y: 626
   disabled: true
 
 - id: note_1784427848563
@@ -255,34 +229,24 @@ nodes:
     y: 692
     x: 5050
 
-- id: note_1785036347995
-  type: note
-  input: запрос абстрактный. вызываем поиск сценариев
-  system_message: Психотерапевт обнаружил, что Ваша проблема является симптомом (фасадом). Для того чтобы найти ментальную причину Вашей проблемы в психике, Вам будут предложены сценарии примерные возможных ментальных проблем в Вашей жизни. Ваша задача - описать Ваш личный кейс опираясь на эти "примерные" сценарии.
-  ui_pos:
-    y: 521
-    x: 1088
-
 - id: check_need_handedness
   type: signal_router
   signal_name: soma_translator
   cases_priority:
-  - key: НУЖНА РУКОСТЬ
-    to: note_1785123862689
   - key: РУКОСТЬ ИЗВЕСТНА
-    to: check_grounding
-  default: check_grounding
+    to: call_decomposer
+  default: note_1785123862689
   ui_pos:
-    y: 55
-    x: 278
+    y: 6
+    x: 257
 
 - id: note_1785123862689
   type: note
   input: уточнение рукости у юзера
   system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
   ui_pos:
-    x: 536
-    y: -156
+    x: 573
+    y: -146
 
 - id: note_1785141025138
   type: note
@@ -300,8 +264,8 @@ nodes:
 
     В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
-    x: -1323
     y: 748
+    x: -1323
 
 edges:
 
@@ -310,9 +274,6 @@ edges:
 
 - from: note_1782220533024
   to: call_provocateur
-
-- from: note_1785036347995
-  to: call_grounder
 
 - from: note_1782220193985
   to: call_validator
@@ -328,9 +289,6 @@ edges:
 
 - from: note_1782221436115
   to: check_somatic
-
-- from: note_1782224256075
-  to: check_grounding
 
 - from: call_cluster_checker
   to: check_cluster_signal
