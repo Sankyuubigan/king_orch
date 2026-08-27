@@ -27,7 +27,7 @@ mod runtime;
 pub use runtime::builtin_tools;
 
 use crate::domain::agent_manager::{load_agents, AgentProfile};
-use crate::domain::signals::{SignalContract, extract_signal_value_from_text, load_signal_contract};
+use crate::domain::signals::{SignalContract, extract_signal_value_from_text, load_signal_contract, build_signal_envelope_schema};
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner, NodeType, WorkflowDef,
 };
@@ -704,7 +704,17 @@ let start_time = Instant::now();
     };
     if let Some(gbnf) = &agent_grammar {
         engine.set_grammar(Some(GrammarSpec { gbnf: Some(gbnf.clone()), json_schema: None }));
-        log_cb(format!("🎯 Агент '{}': применена грамматика {} символов", agent.id, gbnf.len()));
+        log_cb(format!("🎯 Агент '{}': применена per-agent GBNF-грамматика {} символов", agent.id, gbnf.len()));
+    } else if let Some(contract) = &signal_contract {
+        // Сигнальные агенты: контракт (signals/root.schema.json) — единственный SSOT
+        // формы сигнала. Применяем его как json_schema: движок компилирует в GBNF на
+        // лету, и модель ФИЗИЧЕСКИ не может исказить имена/значения полей (напр.
+        // verdict → status). Отключать грамматику для сигнальных агентов ЗАПРЕЩЕНО:
+        // это корень бага «тихо упал, в чат никто не ответил» (маршрутизатор не находит
+        // поле и граф завершается, не дойдя до message-узла). См. docs/SIGNAL_CONTRACTS.md.
+        let schema = build_signal_envelope_schema(contract);
+        engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
+        log_cb(format!("🎯 Агент '{}': применён JSON-schema контракт сигнала (поля вердикта защищены)", agent.id));
     } else {
         engine.set_grammar(None);
         log_cb(format!("⚠️ Грамматика не найдена для агента '{}' (искал в {})", agent.id, grammars_dir.display()));
@@ -751,6 +761,7 @@ let start_time = Instant::now();
         stalled_continuations: 0,
         signal_saved: false,
         signal_analysis: String::new(),
+        signal_contract: signal_contract.clone(),
         continuation_count: 0,
         continuation_restarts: 0,
         continuation_raw: String::new(),

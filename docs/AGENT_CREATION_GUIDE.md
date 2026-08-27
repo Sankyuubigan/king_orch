@@ -153,6 +153,12 @@ edges:
 | `llm_sequential_switch` | Запускает ВСЕ ветки, где факт истин (одна за другой — sequential) | `input_object`, `cases_priority`, `default` |
 | `condition_check` | Ветвление по bool-полю JSON: `true_to`/`false_to` + `sequential_to` | `input_object`, `field`, `true_to`, `false_to`, `sequential_to` |
 | `signal_router` | Маршрутизация по сигналу: ищет в signal-сообщениях значение `signal_name.field` и мапит через `cases_priority` | `signal_name`, `field`, `cases_priority`, `default` |
+
+> ⚠️ **Правило сигнальных агентов:** агент, вызывающий `emit_signal`, ОБЯЗАН генерировать
+> ответ под грамматикой своего контракта (`signals/root.schema.json`), иначе маршрутизатор
+> может не найти поле и граф тихо завершится без ответа. Никогда не добавляй `default` к
+> `signal_router` как «защиту» — это костыль. Подробности и разбор бага:
+> [docs/SIGNAL_CONTRACTS.md](./SIGNAL_CONTRACTS.md).
 | `note` | Комментарий-заглушка. Если задан `system_message` — выводит текст в чат как системное сообщение | `input`, `system_message` |
 | `return` | Завершает текущий workflow | — |
 

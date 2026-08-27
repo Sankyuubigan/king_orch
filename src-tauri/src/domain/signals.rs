@@ -72,6 +72,38 @@ pub fn build_signal_envelope_schema(contract: &SignalContract) -> Value {
     })
 }
 
+/// ЧЕСТНАЯ валидация значения сигнала против контракта (SSOT).
+///
+/// Гарантирует, что `value`, присланный моделью в `emit_signal`, содержит все
+/// обязательные поля контракта (напр. `verdict` у `validator_report`). Если модель
+/// исказила форму (напр. прислала `status` вместо `verdict`) — возвращаем явную
+/// ошибку, которую оркестратор отдаёт модели на retry. Это исключает тихий обрыв
+/// маршрутизации, когда `signal_router` не находит поле и граф завершается, не дойдя
+/// до `message`-узла (см. docs/SIGNAL_CONTRACTS.md). Не является костылём: это
+/// обычная валидация входа, а не «умолчание по дефолту».
+pub fn validate_signal_value(contract: &SignalContract, value: &Value) -> Result<(), String> {
+    let schema = &contract.value_schema;
+    if schema.get("type").and_then(|t| t.as_str()) == Some("object") {
+        if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
+            let mut missing = Vec::new();
+            for req in required {
+                if let Some(name) = req.as_str() {
+                    if value.get(name).is_none() {
+                        missing.push(name.to_string());
+                    }
+                }
+            }
+            if !missing.is_empty() {
+                return Err(format!(
+                    "Ошибка: emit_signal для сигнала '{}' требует обязательные поля [{}], но в value их нет. Исправь и вызови СНОВА.",
+                    contract.key, missing.join(", ")
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Детерминированное извлечение значения сигнала из ТЕКСТА ответа агента по
 /// допустимым значениям контракта. НЕ делает LLM-вызов — просто ищет подстроку
 /// или токен. Используется как fallback, когда агент не вызвал `emit_signal` нативно.
@@ -308,4 +340,52 @@ mod tests {
             None
         );
     }
+
+    #[test]
+    fn validate_signal_value_rejects_missing_verdict() {
+        let c = SignalContract {
+            key: "validator_report".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "verdict": { "type": "string", "enum": ["ДАННЫХ ДОСТАТОЧНО", "УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО"] }
+                },
+                "required": ["verdict"]
+            }),
+        };
+        // Искажённая форма (status вместо verdict) — корень бага «тихо упал».
+        assert!(validate_signal_value(&c, &serde_json::json!({ "status": "Уточнение необходимо" })).is_err());
+        // Пустое значение без обязательного поля — тоже ошибка.
+        assert!(validate_signal_value(&c, &serde_json::Value::Object(serde_json::Map::new())).is_err());
+        // Корректная форма проходит.
+        assert!(validate_signal_value(&c, &serde_json::json!({ "verdict": "УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО" })).is_ok());
+    }
+
+    #[test]
+    fn envelope_schema_is_inline_and_requires_verdict() {
+        let c = SignalContract {
+            key: "validator_report".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "verdict": { "type": "string", "enum": ["ДАННЫХ ДОСТАТОЧНО", "УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО"] }
+                },
+                "required": ["verdict"]
+            }),
+        };
+        let schema = build_signal_envelope_schema(&c);
+        // Допускается свободный текст в thought + защищённый value.verdict.
+        assert_eq!(schema["properties"]["tool"]["const"], serde_json::json!("emit_signal"));
+        assert_eq!(
+            schema["properties"]["arguments"]["properties"]["value"]["required"],
+            serde_json::json!(["verdict"])
+        );
+        assert_eq!(
+            schema["properties"]["arguments"]["properties"]["value"]["additionalProperties"],
+            serde_json::json!(false)
+        );
+    }
+
 }

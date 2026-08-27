@@ -88,7 +88,7 @@ nodes:
     После отправки сигнала ответь target: reply с кратким итогом.
   inject_reports:
   - soma_translator
-  - pattern_finder_by_floors
+  - pattern_finder_by_elements
   ui_pos:
     y: 939
     x: 4636
@@ -108,12 +108,12 @@ nodes:
   type: llm_worker
   agent: neuro_healer
   task: |
-    Из отчёта pattern_finder_by_floors возьми номер типа паттерна.
+    Из отчёта pattern_finder_by_elements возьми номер типа паттерна.
     Затем выполни ШАГ 2 — прочитай описание этого паттерна в базе знаний инструментом ReadSection.
     После этого переведи паттерн на контекст проблемы пользователя.
   output_type: message
   inject_reports:
-  - pattern_finder_by_floors
+  - pattern_finder_by_elements
   - synthesizer
   ui_pos:
     y: 676
@@ -224,7 +224,7 @@ nodes:
   type: llm_worker
   agent: synthesizer
   inject_reports:
-  - pattern_finder_by_floors
+  - pattern_finder_by_elements
   - validator
   ui_pos:
     x: 5050

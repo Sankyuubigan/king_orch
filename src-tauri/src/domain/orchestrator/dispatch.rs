@@ -1,6 +1,7 @@
 use super::*;
 use crate::domain::parsers::*; // parse_orchestrator_response, parse_tool_call, strip_tool_call, ParsedOrchestratorResponse
 use crate::domain::agent_manager::AgentProfile;
+use crate::domain::signals::{SignalContract, validate_signal_value};
 use crate::infra::*; // LlamaEngine, ChatMessage, LlmMessage, SubCall, ToolCallInfo, ModelParams, GrammarSpec, extract_model_filename, push_report
 use std::sync::{Arc, atomic::AtomicBool};
 use std::sync::Mutex;
@@ -70,6 +71,11 @@ where
     pub(crate) stalled_continuations: usize,
     pub(crate) signal_saved: bool,
     pub(crate) signal_analysis: String,
+    /// Контракт сигнала агента (signals/root.schema.json), если агент — emit-агент.
+    /// Используется для ЧЕСТНОЙ валидации формы сигнала (см. docs/SIGNAL_CONTRACTS.md):
+    /// если модель прислала неверное/пустое обязательное поле — возвращаем ей ошибку
+    /// на retry вместо тихого обрыва маршрутизации.
+    pub(crate) signal_contract: Option<SignalContract>,
     pub(crate) continuation_count: usize,
     pub(crate) continuation_restarts: usize,
     pub(crate) continuation_raw: String,
@@ -130,6 +136,18 @@ where
                 .filter(|v| !v.is_null());
 
             if let (Some(key), Some(value)) = (key, value) {
+                // ЧЕСТНАЯ валидация формы сигнала против контракта (SSOT).
+                // Если модель (вдруг) прислала неверное/пустое обязательное поле —
+                // возвращаем ей явную ошибку на retry, а НЕ сохраняем битый сигнал,
+                // который потом тихо оборвёт маршрутизацию (см. docs/SIGNAL_CONTRACTS.md).
+                if let Some(contract) = &self.signal_contract {
+                    if let Err(e) = validate_signal_value(contract, value) {
+                        self.consecutive_failed_tools += 1;
+                        tool_output = Some(e);
+                        (self.log_cb)(format!("⚠️ emit_signal: сигнал '{}' не прошёл валидацию контракта, требуем retry", key));
+                        return Ok(DispatchCtl::Continue);
+                    }
+                }
                 self.consecutive_failed_tools = 0;
                 self.signal_saved = true;
                 let signal_msg = ChatMessage {
