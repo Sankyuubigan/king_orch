@@ -170,14 +170,19 @@ pub fn rename_session(app: &AppHandle, id: &str, new_title: &str) -> Result<(), 
     Ok(())
 }
 
-pub fn open_session_folder(app: &AppHandle, _id: &str) -> Result<(), String> {
+pub fn open_session_folder(app: &AppHandle, id: &str) -> Result<(), String> {
     let dir = sessions_dir(app);
     #[cfg(target_os = "windows")]
     {
+        let file_path = dir.join(format!("{}.json", id));
         std::process::Command::new("explorer")
-            .arg(dir)
+            .arg(format!("/select,\"{}\"", file_path.display()))
             .spawn()
             .map_err(|e| e.to_string())?;
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
     }
     Ok(())
 }

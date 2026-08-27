@@ -676,7 +676,7 @@ export class SettingsController {
       const pct = total > 0 ? (downloaded / total) * 100 : 0;
       this.el.downloadProgressBar.style.width = `${pct}%`;
       const speed = formatSpeed(speed_bps);
-      this.el.downloadStatusLabel.innerText = `${formatBytes(downloaded)} / ${total > 0 ? formatBytes(total) : "?"}${speed ? ` · ${speed}` : ""}`;
+      this.el.downloadStatusLabel.innerText = `${formatBytes(downloaded)} / ${total > 0 ? formatBytes(total) : "?"}${total > 0 ? ` (${pct.toFixed(0)}%)` : ""} · ${speed}`;
     });
     listen("engine_progress", (e: any) => { const { downloaded, total } = e.payload; const pct = total > 0 ? (downloaded / total) * 100 : 0; this.el.engineProgressBar.style.width = `${pct}%`; this.el.engineStatusLabel.innerText = `${(downloaded/1024/1024).toFixed(1)} MB / ${(total/1024/1024).toFixed(1)} MB`; });
   }

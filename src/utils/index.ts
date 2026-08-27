@@ -10,6 +10,7 @@ export function formatBytes(bytes: number): string {
 }
 
 export function formatSpeed(bps?: number): string {
-  if (!bps || !isFinite(bps) || bps <= 0) return "";
+  if (bps == null || !isFinite(bps) || bps < 0) return "0 B/s";
+  if (bps === 0) return "0 B/s";
   return `${formatBytes(bps)}/s`;
 }

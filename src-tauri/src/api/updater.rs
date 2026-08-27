@@ -146,15 +146,41 @@ pub async fn install_release(app: AppHandle, download_url: String) -> Result<(),
     std::fs::write(&installer_path, &bytes)
         .map_err(|e| format!("Ошибка записи установщика на диск: {}", e))?;
 
-    // 4. Запуск инсталлера в тихом режиме. NSIS сам перезапишет файлы и перезапустит
-    //    приложение. Завершаем текущий процесс, чтобы он не держал заблокированным
-    //    свой exe (иначе тихая переустановка не сможет заменить файлы).
-    let _ = Command::new(&installer_path)
-        .args(["/S"])
-        .spawn()
-        .map_err(|e| format!("Не удалось запустить установщик: {}", e))?;
+    // 4. Запуск инсталлера в тихом режиме и авто-перезапуск приложения после
+    //    переустановки. NSIS в режиме /S НЕ перезапускает приложение сам, поэтому
+    //    запускаем отсоединённый cmd, который дожидается завершения инсталлера
+    //    (start /wait) и затем сам запускает обновлённый exe (start "" <exe>).
+    let app_exe = std::env::current_exe()
+        .map_err(|e| format!("Не удалось получить путь к exe: {}", e))?;
+    let installer_str = installer_path.display().to_string();
+    let app_str = app_exe.display().to_string();
 
-    // Даём инсталлеру подняться (в т.ч. UAC-запрос при необходимости).
-    sleep(Duration::from_millis(800)).await;
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const DETACHED_PROCESS: u32 = 0x0000_0008;
+        let relaunch_script = format!(
+            "start \"\" /wait \"{}\" /S & start \"\" \"{}\"",
+            installer_str, app_str
+        );
+        Command::new("cmd")
+            .args(["/c", &relaunch_script])
+            .creation_flags(CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS)
+            .spawn()
+            .map_err(|e| format!("Не удалось запланировать перезапуск: {}", e))?;
+    }
+    #[cfg(not(windows))]
+    {
+        let relaunch_script = format!("\"{}\" /S; \"{}\"", installer_str, app_str);
+        Command::new("sh")
+            .args(["-c", &relaunch_script])
+            .spawn()
+            .map_err(|e| format!("Не удалось запланировать перезапуск: {}", e))?;
+    }
+
+    // Завершаем текущий процесс, чтобы он не держал заблокированным свой exe
+    // (иначе тихая переустановка не сможет заменить файлы). Перезапуск выполнит
+    // отсоединённый релаунчер выше.
     std::process::exit(0);
 }
