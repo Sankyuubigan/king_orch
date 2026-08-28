@@ -93,6 +93,17 @@ async function sendError(
   severity: string,
   kind: string,
 ): Promise<void> {
+  // ── Всегда пишем в ЛОКАЛЬНЫЙ лог (независимо от согласия на телеметрию) ──
+  // иначе реальные ошибки фронта теряются и не видны в king_orch.log / last_logs.txt.
+  try {
+    await invoke("log_frontend_event", {
+      level: "FE-ERR",
+      msg: `[${errorType}] ${message}${stack ? ` | ${stack.slice(0, 1500)}` : ""}`,
+    });
+  } catch {
+    /* локальная лог-команда недоступна — не ломаем UI */
+  }
+
   if (!enabled) return;
   try {
     await invoke("track_error", {

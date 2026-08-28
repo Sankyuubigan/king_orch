@@ -19,6 +19,28 @@ async function initApp() {
   initConfirmDialog();
   initPermissionDialog();
 
+  // ─── Сторожевик зависаний главного потока ───
+  // Если поток UI заблокирован дольше ~1с (тяжёлый рендер/синх. работа),
+  // пишем в локальный лог — помогает диагностировать «белые» окна и фризы.
+  try {
+    if ("PerformanceObserver" in window) {
+      const po = new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          const blocked = Math.round(entry.duration);
+          if (blocked >= 1000) {
+            void invoke("log_frontend_event", {
+              level: "FE-STALL",
+              msg: `main thread blocked ${blocked}ms (${entry.name})`,
+            });
+          }
+        }
+      });
+      po.observe({ entryTypes: ["longtask"] });
+    }
+  } catch {
+    /* PerformanceObserver недоступен — не критично */
+  }
+
   // ─── Контроллер сессий (боковая панель) ───
   const sessionCtrl = new SessionController({
     sessionList: $<HTMLDivElement>("session-list"),

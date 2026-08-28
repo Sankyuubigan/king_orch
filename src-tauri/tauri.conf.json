@@ -1,6 +1,6 @@
 {
   "productName": "King Orch",
-  "version": "26.8.149",
+  "version": "26.8.152",
   "identifier": "com.kingorch.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -17,7 +17,8 @@
         "minWidth": 1100,
         "minHeight": 850,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "additionalBrowserArgs": "--disable-gpu"
       }
     ],
     "security": {

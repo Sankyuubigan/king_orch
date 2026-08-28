@@ -58,6 +58,16 @@ async fn main() {
     );
     infra::startup_log::append("INFO", "Tauri: создание приложения…");
 
+    // ── WebView2: программный рендер UI (без GPU-процесса) ──
+    // Окно в фоне под нагрузкой GPU (llama.cpp + другие программы) может
+    // показывать белый/непрорисованный буфер из-за перезапуска GPU-процесса
+    // WebView2. Перевод UI на софтварный композитинг (--disable-gpu) убирает
+    // эту зависимость (сам llama.cpp живёт в отдельном процессе и грузит GPU).
+    // ВАЖНО: переменная окружения WEBVIEW2_ADDITIONAL_BROWSER_ARGS WebView2
+    // ИГНОРИРУЕТ, т.к. wry сам задаёт доп. аргументы (см. build.cjs). Поэтому
+    // флаг --disable-gpu пробрасывается через additionalBrowserArgs в
+    // tauri.conf.json (и в dev-override в build.cjs), а не через env.
+
     // ── Телеметрия: решение принимаем ДО создания Tauri-приложения ──
     // Читаем настройку «Отправлять анонимные отчёты об ошибках» (по умолчанию
     // включена). Если юзер её снял — плагин Aptabase вообще не регистрируется,
@@ -122,6 +132,38 @@ async fn main() {
             });
 
             infra::startup_log::append("INFO", "setup(): OK");
+
+            // ── Диагностика + страховка WebView2 окна ──
+            // Логируем события окна (фокус/закрытие) в локальный лог и
+            // принудительно перерисовываем при возврате фокуса, чтобы окно не
+            // оставалось белым (глюк compositor под нагрузкой GPU).
+            // Важно: on_window_event вешается на САМО окно (WebviewWindow), а не
+            // на App; события Occluded в WebView2/Tauri нет — только Focused,
+            // Destroyed и пр. (см. docs.rs tauri::WindowEvent).
+            {
+                use tauri::Manager;
+                if let Some(win) = app.get_webview_window("main") {
+                    // Отдельный клон для замыкания: сам `win` борруется методом
+                    // on_window_event(&self), а клон перемещается в замыкание.
+                    let cb_win = win.clone();
+                    win.on_window_event(move |event| {
+                        match event {
+                            tauri::WindowEvent::Focused(focused) => {
+                                let f = *focused;
+                                infra::startup_log::append("WV", &format!("Focused({})", f));
+                                if f {
+                                    let _ = cb_win.eval("void document.documentElement.offsetHeight");
+                                }
+                            }
+                            tauri::WindowEvent::Destroyed => {
+                                infra::startup_log::append("WV", "Destroyed");
+                            }
+                            _ => {}
+                        }
+                    });
+                }
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -176,6 +218,7 @@ async fn main() {
             api::llamacpp::remove_engine,
             api::llamacpp::set_engine_dir,
             api::telemetry::track_error,
+            api::log_frontend_event,
         ])
         .build(tauri::generate_context!())
         .expect("ошибка создания приложения Tauri")

@@ -145,7 +145,7 @@ async function main() {
                     height: 850,
                     resizable: true,
                     fullscreen: false,
-                    additionalBrowserArgs: "--remote-debugging-port=9222 --remote-allow-origins=*"
+                    additionalBrowserArgs: "--disable-gpu --remote-debugging-port=9222 --remote-allow-origins=*"
                 }]
             }
         }));
