@@ -86,7 +86,8 @@ async fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_process::init());
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_about_updates::init());
 
     // Плагин телеметрии подключаем ТОЛЬКО при разрешении пользователя.
     let builder = if telemetry_enabled {
@@ -204,9 +205,6 @@ async fn main() {
             api::test::write_test_results,
             api::coding_test::get_coding_bench_info,
             api::coding_test::run_coding_bench,
-            api::version::get_app_version,
-            api::updater::get_release_history,
-            api::updater::install_release,
             infra::downloader::download_model,
             api::file_utils::write_text_file,
             api::file_utils::read_text_file,

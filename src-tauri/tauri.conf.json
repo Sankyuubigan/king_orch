@@ -1,6 +1,6 @@
 {
   "productName": "King Orch",
-  "version": "26.8.152",
+  "version": "26.8.162",
   "identifier": "com.kingorch.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -51,6 +51,10 @@
       "endpoints": [
         "https://raw.githubusercontent.com/Sankyuubigan/king_orch/main/latest.json"
       ]
+    },
+    "about-updates": {
+      "repo": "Sankyuubigan/king_orch",
+      "support_url": "https://interesting-knowledges.vercel.app/docs/otblagodarit-avtora.-pomosch-proektam"
     }
   }
 }

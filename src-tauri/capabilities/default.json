@@ -12,6 +12,7 @@
     "dialog:allow-open",
     "dialog:allow-save",
     "updater:default",
+    "about-updates:default",
     "process:default",
     "shell:default",
     "shell:allow-open",

@@ -1,6 +1,6 @@
 [package]
 name = "king_orch"
-version = "26.8.152"
+version = "26.8.162"
 description = "Local LLM Multi-Agent Studio"
 authors = ["You"]
 edition = "2021"
@@ -20,6 +20,8 @@ tauri-plugin-shell = "2.0.0"
 tauri-plugin-updater = "2.0.0"
 tauri-plugin-process = "2.0.0"
 tauri-plugin-aptabase = "1.0.0"
+# Переиспользуемый модуль «О приложении / Обновления» (общий репозиторий my-tauri-plugins).
+tauri-plugin-about-updates = { path = "../../my-tauri-plugins/tauri-plugin-about-updates" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["full"] }

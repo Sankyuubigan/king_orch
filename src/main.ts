@@ -4,6 +4,8 @@
  * Импорты идут через двери (index.ts) — модули не лезут в кишки друг друга.
  */
 import { initConfirmDialog, initPermissionDialog, showToast } from "./ui";
+// Регистрирует Web Component <about-updates-panel> из переиспользуемого плагина.
+import "@my-tauri-plugins/plugin-about-updates";
 import { ChatController, SessionController, SettingsController, GraphController, AgentTestController, CodingTestController, UpdatePopupController } from "./controllers";
 import { bus } from "./events";
 import { invoke } from "@tauri-apps/api/core";
@@ -76,13 +78,6 @@ async function initApp() {
     chkErrorReports: $<HTMLInputElement>("chk-error-reports"),
     modelsList: $<HTMLDivElement>("models-list"),
     btnAddModelLlm: $<HTMLButtonElement>("btn-add-model-llm"),
-    btnCheckUpdate: $<HTMLButtonElement>("btn-check-update"),
-    btnInstallUpdate: $<HTMLButtonElement>("btn-install-update"),
-    updateStatus: $<HTMLElement>("update-status"),
-    btnRollback: $<HTMLButtonElement>("btn-rollback"),
-    rollbackStatus: $<HTMLElement>("rollback-status"),
-    rollbackHistory: $<HTMLElement>("rollback-history"),
-    btnSupportProject: $<HTMLButtonElement>("btn-support-project"),
     btnAutoDownload: $<HTMLButtonElement>("btn-auto-download"),
     autoDownloadModal: $<HTMLElement>("auto-download-modal"),
     modalModelName: $<HTMLElement>("modal-model-name"),
