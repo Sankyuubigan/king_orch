@@ -690,9 +690,11 @@ let start_time = Instant::now();
     // ── Per-agent грамматика: agents/<...>/grammars/<agent_id>.gbnf ──
     // Задаётся для ПЕРВОГО вызова LLM агента (consume-and-clear в движке),
     // докачки/компакты/результаты инструментов идут уже с базовой грамматикой.
-    // Сигнальные агенты (есть контракт в signals/root.schema.json) НЕ ограничены
-    // GBNF: сигнальные агенты (есть контракт в signals/root.schema.json) НЕ ограничены
-    // GBNF на первом вызове — сигнал эмитится инструментом emit_signal в этом же ответе.
+    // Сигнальные агенты (есть контракт в signals/root.schema.json) ОБЯЗАНЫ
+    // генерировать ответ под json_schema-грамматикой своего конверта (см.
+    // docs/SIGNAL_CONTRACTS.md — отключать грамматику запрещено). Грамматика
+    // ограничивает только ФОРМУ; свободный текст (анализ агента) живёт в поле
+    // `thought` конверта emit_signal и извлекается как `final_response` в dispatch.rs.
     let signal_contract: Option<SignalContract> = {
         let signals_dir = grammars_dir.parent().unwrap_or(grammars_dir).join("signals");
         load_signal_contract(&signals_dir, &agent.id)

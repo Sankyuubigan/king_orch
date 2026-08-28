@@ -14,8 +14,8 @@ nodes:
     User: {{ user_message }}
     Session history (последние сообщения сессии): {{ messages }}
   ui_pos:
-    y: 493
     x: -1990
+    y: 493
   llm_params: strict
 
 - id: check_has_problem
@@ -24,8 +24,8 @@ nodes:
   true_to: note_1782221436115
   false_to: note_1785141025138
   ui_pos:
-    y: 495
     x: -1700
+    y: 495
 
 - id: call_provocateur
   type: llm_worker
@@ -34,16 +34,16 @@ nodes:
   inject_reports:
   - validator
   ui_pos:
-    y: 149
-    x: 3748
+    x: 4754
+    y: -90
 
 - id: call_soma_translator
   type: llm_worker
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    y: 139
     x: -21
+    y: 139
 
 - id: collect_info
   type: llm_worker
@@ -52,8 +52,8 @@ nodes:
     Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
   output_type: message
   ui_pos:
-    x: 105
     y: -545
+    x: 105
   disabled: true
 
 - id: call_validator
@@ -62,8 +62,8 @@ nodes:
   inject_reports:
   - decomposer
   ui_pos:
-    y: 276
-    x: 2609
+    y: 59
+    x: 3443
 
 - id: check_validator_signal
   type: signal_router
@@ -75,8 +75,8 @@ nodes:
   - key: ДАННЫХ ДОСТАТОЧНО
     to: note_1782220629095
   ui_pos:
-    x: 2956
-    y: 177
+    y: -40
+    x: 3790
 
 - id: call_destructor_finder
   type: llm_worker
@@ -90,8 +90,8 @@ nodes:
   - soma_translator
   - pattern_finder_by_elements
   ui_pos:
-    y: 939
-    x: 4636
+    y: 697
+    x: 5326
   disabled: true
 
 - id: call_pattern_finder
@@ -101,8 +101,8 @@ nodes:
   - soma_translator
   - validator
   ui_pos:
-    x: 4794
-    y: 568
+    x: 5484
+    y: 326
 
 - id: call_healer
   type: llm_worker
@@ -116,38 +116,36 @@ nodes:
   - pattern_finder_by_elements
   - synthesizer
   ui_pos:
-    y: 676
-    x: 5335
+    y: 276
+    x: 6449
 
 - id: check_somatic
   type: condition_check
   field: has_somatic
-  sequential_to: call_decomposer
+  sequential_to: note_1782224256075
   true_to: call_soma_translator
   ui_pos:
-    x: -269
     y: 204
+    x: -269
 
 - id: call_cluster_checker
   type: llm_worker
   agent: cluster_checker
   ui_pos:
-    x: 1884
-    y: 1070
-  disabled: true
+    x: 1998
+    y: -173
 
 - id: check_cluster_signal
   type: signal_router
   signal_name: cluster_checker
   cases_priority:
   - key: Конкретная проблема
-    to: ''
+    to: note_1782220193985
   - key: Кластер
-    to: ''
+    to: call_decomposer
   ui_pos:
-    y: 1041
-    x: 2209
-  disabled: true
+    x: 2296
+    y: -70
 
 - id: call_decomposer
   type: llm_worker
@@ -155,16 +153,15 @@ nodes:
   inject_reports:
   - decomposer
   ui_pos:
-    x: 1440
-    y: 186
-  disabled: true
+    x: 2603
+    y: 169
 
 - id: synchronize_with_user
   type: llm_worker
   agent: synchronizer
   ui_pos:
-    y: 158
-    x: 4038
+    x: 5044
+    y: -81
   disabled: true
 
 - id: call_request_helper
@@ -180,22 +177,22 @@ nodes:
   input: |
     проверка данных. развилка на доработку данных или отправку на лечение
   ui_pos:
-    x: 2172
-    y: 285
+    x: 3006
+    y: 68
 
 - id: note_1782220533024
   type: note
   input: уточнение данных у юзера
   ui_pos:
-    x: 3349
-    y: 94
+    y: -123
+    x: 4183
 
 - id: note_1782220629095
   type: note
   input: ослабление сопротивления
   ui_pos:
-    y: 564
-    x: 3631
+    x: 4321
+    y: 322
 
 - id: note_1782221436115
   type: note
@@ -209,16 +206,16 @@ nodes:
   agent: shadow_worker
   output_type: message
   ui_pos:
-    y: 626
-    x: 4083
+    y: 384
+    x: 4773
   disabled: true
 
 - id: note_1784427848563
   type: note
   input: вычисление типа
   ui_pos:
-    y: 580
-    x: 4358
+    y: 338
+    x: 5048
 
 - id: combining_targets
   type: llm_worker
@@ -227,16 +224,15 @@ nodes:
   - pattern_finder_by_elements
   - validator
   ui_pos:
-    x: 5050
-    y: 692
-  disabled: true
+    x: 6031
+    y: 413
 
 - id: check_need_handedness
   type: signal_router
   signal_name: soma_translator
   cases_priority:
   - key: РУКОСТЬ ИЗВЕСТНА
-    to: call_decomposer
+    to: note_1782224256075
   default: note_1785123862689
   ui_pos:
     x: 257
@@ -247,8 +243,8 @@ nodes:
   input: уточнение рукости у юзера
   system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
   ui_pos:
-    x: 573
     y: -146
+    x: 573
 
 - id: note_1785141025138
   type: note
@@ -266,8 +262,55 @@ nodes:
 
     В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
-    x: -1323
     y: 748
+    x: -1323
+
+- id: call_grounder
+  type: llm_worker
+  agent: grounder
+  task: Проанализируй отчёты коллег и жалобу пользователя. Выдай несколько конкретных, приземлённых бытовых сценариев возможных ментальных причин проблемы. Если данных не хватает — задай пользователю уточняющие вопросы.
+  output_type: message
+  inject_reports:
+  - soma_translator
+  ui_pos:
+    x: 2211
+    y: 582
+
+- id: check_grounding
+  type: condition_check
+  field: scenario_established
+  true_to: call_cluster_checker
+  false_to: note_1785036347995
+  ui_pos:
+    y: 431
+    x: 1279
+
+- id: note_1782224256075
+  type: note
+  input: проверяем абстрактный ли запрос (6 элемент является не ментальным а соматикой)
+  ui_pos:
+    x: 764
+    y: 437
+
+- id: note_1785036347995
+  type: note
+  input: запрос абстрактный. вызываем поиск сценариев
+  system_message: Психотерапевт обнаружил, что Ваша проблема является симптомом (фасадом). Для того чтобы найти ментальную причину Вашей проблемы в психике, Вам будут предложены сценарии примерные возможных ментальных проблем в Вашей жизни. Ваша задача - описать Ваш личный кейс опираясь на эти "примерные" сценарии.
+  ui_pos:
+    x: 1708
+    y: 518
+
+- id: check_cluster_signal2
+  type: signal_router
+  signal_name: cluster_checker
+  cases_priority:
+  - key: Конкретная проблема
+    to: call_healer
+  - key: Кластер
+    to: combining_targets
+  ui_pos:
+    x: 5765
+    y: 198
 
 edges:
 
@@ -310,8 +353,14 @@ edges:
 - from: call_shadow_worker
   to: note_1784427848563
 
-- from: call_pattern_finder
-  to: combining_targets
-
 - from: call_soma_translator
   to: check_need_handedness
+
+- from: note_1785036347995
+  to: call_grounder
+
+- from: note_1782224256075
+  to: check_grounding
+
+- from: call_pattern_finder
+  to: check_cluster_signal2

@@ -247,7 +247,20 @@ pub fn strip_tool_call(text: &str) -> (String, Option<(String, serde_json::Value
     if let Some(json_str) = extract_json_block(text) {
         if let Some(tool_info) = parse_tool_call_from_json(&json_str) {
             let cleaned = remove_fenced_json_blocks(text);
-            return (cleaned, Some(tool_info));
+            // Если весь вывод модели — JSON-конверт инструмента (без окружающего
+            // свободного текста), анализом считаем пустоту. Свободный текст агента в
+            // этом случае живёт в поле `thought` конверта, и оркестратор (dispatch.rs)
+            // корректно подхватит его как `final_response`. Это чинит баг, когда
+            // сигнальный агент под грамматикой контракта отдавал голый конверт вместо
+            // аналитического отчёта (см. docs/SIGNAL_CONTRACTS.md: свободный текст в
+            // поле `thought`, грамматику отключать запрещено).
+            let cleaned_trim = cleaned.trim();
+            let analysis = if cleaned_trim.is_empty() || cleaned_trim == json_str.trim() {
+                String::new()
+            } else {
+                cleaned
+            };
+            return (analysis, Some(tool_info));
         }
     }
     (text.to_string(), None)
