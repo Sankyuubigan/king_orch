@@ -34,6 +34,10 @@ class Store {
 
   // Параметры текущей модели (включая DRY/XTC)
   currentModelParams: ModelParams | null = null;
+
+  // Переводчик сообщений: модель и целевой язык ("ru" | "en")
+  translatorModel: string | null = null;
+  translatorLang: string = "ru";
   
   // Для стриминга текста в реальном времени
   rtStreamUid: string | null = null;

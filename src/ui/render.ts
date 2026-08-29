@@ -13,7 +13,8 @@ export function createMessageElement(
   timeText?: string,
   msgUid?: string,
   menuCallbacks?: MessageMenuCallbacks,
-  attachments?: Attachment[]
+  attachments?: Attachment[],
+  translateLabel?: string
 ): HTMLDivElement {
   const msgDiv = document.createElement("div");
   msgDiv.className = `message message-${role}`;
@@ -60,7 +61,7 @@ export function createMessageElement(
   }
 
   if (msgUid && menuCallbacks && (role === 'user' || role === 'agent')) {
-    const menu = createMessageMenu(msgUid, menuCallbacks);
+    const menu = createMessageMenu(msgUid, menuCallbacks, role === 'agent' ? translateLabel : undefined);
     msgDiv.appendChild(menu);
   }
 

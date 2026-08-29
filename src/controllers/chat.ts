@@ -11,6 +11,14 @@ import { trackError } from "../telemetry";
 import mermaid from "mermaid";
 
 mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
+
+/// Названия целевых языков для переводчика сообщений.
+/// `menu` — текст пункта контекстного меню, `footer` — подпись внутри сообщения.
+const TRANSLATOR_LANGS: Record<string, { menu: string; footer: string }> = {
+  ru: { menu: "Перевести на русский язык", footer: "перевод на русский язык:" },
+  en: { menu: "Перевести на английский язык", footer: "перевод на английский язык:" },
+};
+
 async function renderMermaid() {
   try {
     await mermaid.run();
@@ -75,6 +83,7 @@ export class ChatController {
       onRunFrom: (uid) => this.onRunFromMessage(uid),
       onCopy: (uid) => this.onCopyMessage(uid),
       onEdit: (uid) => this.onEditMessage(uid),
+      onTranslate: (uid) => this.onTranslateMessage(uid),
     };
     this.thoughtMenuCallbacks = {
       onDeleteThoughts: (uid, uids) => this.onDeleteThoughts(uid, uids),
@@ -220,6 +229,52 @@ export class ChatController {
       this.triggerTokenCount();
       showToast("Сообщение обновлено.", "success");
     });
+  }
+
+  /// Возвращает текст пункта меню перевода для текущего целевого языка
+  /// (или undefined, если язык не задан/неизвестен).
+  private translatorMenuLabel(): string | undefined {
+    return TRANSLATOR_LANGS[store.translatorLang]?.menu;
+  }
+
+  /// Срезает ранее вставленный блок перевода, возвращая исходный текст
+  /// сообщения (чтобы повторный перевод брал за основу оригинал, а не
+  /// результат предыдущего перевода).
+  private stripTranslationFooter(content: string): string {
+    const idx = content.search(/\n-{2,}\s*\n\*\*перевод на .*?:\*\*/s);
+    if (idx === -1) return content;
+    return content.slice(0, idx).trimEnd();
+  }
+
+  private async onTranslateMessage(uid: string) {
+    const idx = store.msgUidList.indexOf(uid);
+    if (idx === -1) return;
+    const msg = store.chatHistory[idx];
+    if (!msg || msg.type === "thought") return;
+
+    if (!store.translatorModel) {
+      showToast("Сначала выберите модель переводчика в настройках.", "error");
+      return;
+    }
+    const lang = store.translatorLang || "ru";
+    const langInfo = TRANSLATOR_LANGS[lang] ?? TRANSLATOR_LANGS.ru;
+    const source = this.stripTranslationFooter(msg.content || "");
+
+    showToast("Перевод сообщения…", "info");
+    try {
+      const translated: string = await invoke("translate_message", {
+        modelPath: store.translatorModel,
+        text: source,
+        targetLang: lang,
+      });
+      msg.content = `${source}\n\n---\n**${langInfo.footer}**\n\n${translated.trim()}`;
+      this.renderChatFromHistory();
+      if (store.currentSessionId) this.persistSession();
+      showToast("Сообщение переведено.", "success");
+    } catch (e) {
+      showToast(`Ошибка перевода: ${e}`, "error");
+      void trackError("chat.translateMessage", e);
+    }
   }
 
   private renderEditor(msgEl: HTMLDivElement, contentDiv: HTMLDivElement, initialValue: string, onSave: (newContent: string) => void) {
@@ -397,7 +452,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
       this.el.chatHistory.appendChild(createThoughtsBlock(items, uid, this.thoughtMenuCallbacks, []));
     }
     const hasMenu = uid !== undefined && (role === 'user' || role === 'agent');
-    const msgEl = createMessageElement(role, content, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, attachments);
+    const msgEl = createMessageElement(role, content, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, attachments, this.translatorMenuLabel());
     this.el.chatHistory.appendChild(msgEl); this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
   }
 
@@ -488,7 +543,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
       const timeText = msg.time_sec ? `${msg.time_sec.toFixed(1)} сек` : undefined;
       // Скрываем служебные теги LLM в сохранённых ответах (defence in depth).
       const cleanContent = role === 'agent' ? stripStreamArtifacts(msg.content) : msg.content;
-      this.el.chatHistory.appendChild(createMessageElement(role, cleanContent, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, msg.attachments));
+      this.el.chatHistory.appendChild(createMessageElement(role, cleanContent, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, msg.attachments, this.translatorMenuLabel()));
     }
     if (thoughtsItems.length > 0) this.el.chatHistory.appendChild(createThoughtsBlock(thoughtsItems, lastAssistantUid, this.thoughtMenuCallbacks, thoughtsUids));
     this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();

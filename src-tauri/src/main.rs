@@ -217,6 +217,7 @@ async fn main() {
             api::llamacpp::set_engine_dir,
             api::telemetry::track_error,
             api::log_frontend_event,
+            api::translate::translate_message,
         ])
         .build(tauri::generate_context!())
         .expect("ошибка создания приложения Tauri")

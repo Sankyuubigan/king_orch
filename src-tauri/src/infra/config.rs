@@ -98,6 +98,16 @@ pub struct AppConfig {
     /// Масштаб шрифта чата (1.0 = 100%, текущий размер по умолчанию).
     #[serde(default = "default_chat_font_scale")]
     pub chat_font_scale: f32,
+    /// Путь к .gguf модели, выступающей в роли переводчика сообщений.
+    #[serde(default)]
+    pub translator_model: Option<String>,
+    /// Целевой язык перевода: "ru" — русский, "en" — английский.
+    #[serde(default = "default_translator_lang")]
+    pub translator_lang: String,
+}
+
+fn default_translator_lang() -> String {
+    "ru".to_string()
 }
 
 /// Ищет запись каталога по имени установленного файла модели.
@@ -193,6 +203,8 @@ impl Default for AppConfig {
             engine_variant: None,
             allow_error_reports: default_allow_error_reports(),
             chat_font_scale: default_chat_font_scale(),
+            translator_model: None,
+            translator_lang: default_translator_lang(),
         }
     }
 }

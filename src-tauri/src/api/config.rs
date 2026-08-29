@@ -96,6 +96,16 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
                 cfg.chat_font_scale = v as f32;
             }
         }
+        "translator_model" => {
+            if let Some(v) = value.as_str() {
+                cfg.translator_model = Some(v.to_string());
+            }
+        }
+        "translator_lang" => {
+            if let Some(v) = value.as_str() {
+                cfg.translator_lang = v.to_string();
+            }
+        }
         _ => {}
     }
     infra::save_config(&app, &cfg);

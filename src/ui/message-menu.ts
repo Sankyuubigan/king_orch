@@ -6,6 +6,7 @@ export interface MessageMenuCallbacks {
   onRunFrom: (msgUid: string) => void;
   onCopy: (msgUid: string) => void;
   onEdit: (msgUid: string) => void;
+  onTranslate: (msgUid: string) => void;
 }
 
 let activeMenu: HTMLDivElement | null = null;
@@ -17,7 +18,11 @@ document.addEventListener("click", (e) => {
   }
 });
 
-export function createMessageMenu(msgUid: string, callbacks: MessageMenuCallbacks): HTMLDivElement {
+export function createMessageMenu(
+  msgUid: string,
+  callbacks: MessageMenuCallbacks,
+  translateLabel?: string,
+): HTMLDivElement {
   const wrapper = document.createElement("div");
   wrapper.className = "msg-menu-wrapper";
 
@@ -69,6 +74,16 @@ export function createMessageMenu(msgUid: string, callbacks: MessageMenuCallback
     callbacks.onClone(msgUid);
   });
 
+  const translateItem = document.createElement("button");
+  translateItem.className = "msg-menu-item";
+  translateItem.textContent = translateLabel || "🌐 Перевести";
+  translateItem.addEventListener("click", (e) => {
+    e.stopPropagation();
+    dropdown.classList.remove("show");
+    activeMenu = null;
+    callbacks.onTranslate(msgUid);
+  });
+
   const deleteItem = document.createElement("button");
   deleteItem.className = "msg-menu-item danger";
   deleteItem.textContent = "🗑️ Удалить";
@@ -88,6 +103,9 @@ export function createMessageMenu(msgUid: string, callbacks: MessageMenuCallback
   dropdown.appendChild(copyItem);
   dropdown.appendChild(editItem);
   dropdown.appendChild(cloneItem);
+  if (translateLabel) {
+    dropdown.appendChild(translateItem);
+  }
   dropdown.appendChild(runFromItem);
   dropdown.appendChild(deleteItem);
   wrapper.appendChild(btn);

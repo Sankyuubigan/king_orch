@@ -78,6 +78,8 @@ async function initApp() {
     chkErrorReports: $<HTMLInputElement>("chk-error-reports"),
     modelsList: $<HTMLDivElement>("models-list"),
     btnAddModelLlm: $<HTMLButtonElement>("btn-add-model-llm"),
+    translatorModelSelect: $<HTMLSelectElement>("translator-model-select"),
+    translatorLangSelect: $<HTMLSelectElement>("translator-lang-select"),
     btnAutoDownload: $<HTMLButtonElement>("btn-auto-download"),
     autoDownloadModal: $<HTMLElement>("auto-download-modal"),
     modalModelName: $<HTMLElement>("modal-model-name"),

@@ -34,6 +34,8 @@ export interface SettingsElements {
   chkErrorReports: HTMLInputElement;
   modelsList: HTMLDivElement;
   btnAddModelLlm: HTMLButtonElement;
+  translatorModelSelect: HTMLSelectElement;
+  translatorLangSelect: HTMLSelectElement;
   btnAutoDownload: HTMLButtonElement;
   autoDownloadModal: HTMLElement;
   modalModelName: HTMLElement;
@@ -142,6 +144,22 @@ export class SettingsController {
     if (config.last_model && config.models.includes(config.last_model)) this.el.modelSelect.value = config.last_model;
   }
 
+  /// Заполняет выпадающий список модели-переводчика списком установленных моделей.
+  updateTranslatorModelSelect(config: any) {
+    const sel = this.el.translatorModelSelect;
+    if (!sel) return;
+    sel.innerHTML = '<option value="">— не выбрано —</option>';
+    for (const m of config.models || []) {
+      const o = document.createElement("option");
+      o.value = m;
+      o.text = m.split(/[/\\]/).pop() || m;
+      sel.appendChild(o);
+    }
+    if (config.translator_model && config.models && config.models.includes(config.translator_model)) {
+      sel.value = config.translator_model;
+    }
+  }
+
   private capabilityIcons(meta?: { uncen?: boolean; vision?: boolean; audio?: boolean }): { icon: string; title: string }[] {
     const out: { icon: string; title: string }[] = [];
     if (meta?.uncen) out.push({ icon: "😈", title: "Без цензуры (uncensored)" });
@@ -230,6 +248,17 @@ export class SettingsController {
     try {
       const config: any = await invoke("get_config");
       await this.refreshModelLists(config);
+      this.updateTranslatorModelSelect(config);
+      if (config.translator_model) {
+        this.el.translatorModelSelect.value = config.translator_model;
+        store.translatorModel = config.translator_model;
+      } else {
+        store.translatorModel = null;
+      }
+      if (config.translator_lang) {
+        this.el.translatorLangSelect.value = config.translator_lang;
+        store.translatorLang = config.translator_lang;
+      }
       if (config.context_size) { this.el.contextSlider.value = config.context_size.toString(); this.el.contextValue.innerText = config.context_size.toString(); }
       if (config.max_gen_tokens) { this.el.maxGenSlider.value = config.max_gen_tokens.toString(); this.el.maxGenValue.innerText = config.max_gen_tokens.toString(); }
       if (config.chat_font_scale !== undefined) {
@@ -415,6 +444,16 @@ export class SettingsController {
     this.el.btnResetParams?.addEventListener("click", async () => { const p = this.el.modelSelect.value; if (!p) return; await invoke("reset_model_params", { modelPath: p }); await this.loadModelParams(); showToast("Параметры сброшены.", "success"); });
     this.el.modelSelect?.addEventListener("change", async () => { await invoke("set_last_model", { path: this.el.modelSelect.value }); await this.loadModelParams(); });
     this.el.agentSelect?.addEventListener("change", async () => { await invoke("set_config_value", { key: "last_agent", value: this.el.agentSelect.value }); });
+    this.el.translatorModelSelect?.addEventListener("change", async () => {
+      const v = this.el.translatorModelSelect.value || "";
+      store.translatorModel = v || null;
+      await invoke("set_config_value", { key: "translator_model", value: v });
+    });
+    this.el.translatorLangSelect?.addEventListener("change", async () => {
+      const v = this.el.translatorLangSelect.value;
+      store.translatorLang = v;
+      await invoke("set_config_value", { key: "translator_lang", value: v });
+    });
     this.el.chkShowAdvanced?.addEventListener("change", async () => {
       const val = this.el.chkShowAdvanced.checked;
       store.showAdvancedFeatures = val;
