@@ -1,6 +1,6 @@
 {
   "productName": "King Orch",
-  "version": "26.8.165",
+  "version": "26.8.170",
   "identifier": "com.kingorch.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -38,6 +38,7 @@
       "icons/icon.png"
     ],
     "resources": {
+      "redist/*": "redist/",
       "mcp_servers/*": "mcp_servers/",
       "../agents/": "agents/",
       "../tasks_for_test_llm/": "tasks_for_test_llm/",

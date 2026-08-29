@@ -14,6 +14,7 @@ pub mod llamacpp;
 pub mod permissions;
 pub mod telemetry;
 pub mod translate;
+pub mod updater;
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

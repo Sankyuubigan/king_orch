@@ -1,6 +1,7 @@
 node_modules
 dist
 src-tauri/target
+/src-tauri/redist/
 .env
 /env
 /test
@@ -25,3 +26,4 @@ temp_tauri.key
 /build_rollback.log
 build_rb2.log
 /build_log.txt
+/Projectsking_orch_3

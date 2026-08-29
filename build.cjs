@@ -7,6 +7,7 @@ const http = require('http');
 const scriptDir = __dirname;
 
 const { syncResources } = require('./scripts/sync-resources.cjs');
+const { copyVcRedist } = require('./scripts/copy-vc-redist.cjs');
 
 function downloadFile(url, dest) {
     return new Promise((resolve, reject) => {
@@ -128,6 +129,10 @@ async function main() {
         // Зеркалим agents/ и mcp_servers/ в target-копии, чтобы в списках не было
         // файлов-призраков из старых сборок (Tauri копирует ресурсы аддитивно).
         syncResources(scriptDir);
+
+        // Копируем DLL рантайма VC++ в бандл (чтобы llama-server запускался
+        // «из коробки» без ручной установки Visual C++ Redistributable).
+        copyVcRedist(scriptDir);
 
         // Переопределяем конфиг Tauri — отключаем бандлер (NSIS), но компиляция идёт штатно.
         // Массивы в конфиге Tauri заменяются целиком, поэтому окно указываем полностью.

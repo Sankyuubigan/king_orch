@@ -206,6 +206,27 @@ impl LlamaEngine {
             ));
         }
 
+        // ── Гарантия рантайма VC++ рядом с движком ──
+        // llama-server.exe (MSVC-сборка llama.cpp) требует VCRUNTIME140.dll. Без неё
+        // процесс падает с 0xC0000135 («система не обнаружила VCRUNTIME140.dll»).
+        // Копируем рантайм из бандла приложения (папка redist рядом с exe) рядом с
+        // движком — чтобы работало «из коробки» без ручной установки VC++ Redistributable.
+        let server_dir = std::path::Path::new(&server_exe)
+            .parent()
+            .map(|p| p.to_path_buf())
+            .unwrap_or_else(|| engine_dir.to_path_buf());
+        let vc_log = |s: String| log_cb(s);
+        crate::infra::llamacpp_installer::ensure_vc_redist(&server_dir, &vc_log);
+        let has_runtime = server_dir.join("VCRUNTIME140.dll").exists()
+            || std::path::Path::new(r"C:\Windows\System32\VCRUNTIME140.dll").exists();
+        if !has_runtime {
+            return fail(format!(
+                "Не найден рантайм Visual C++ (VCRUNTIME140.dll) рядом с llama-server.exe и в System32.\n\
+                 Движок llama.cpp не запустится (ошибка 0xC0000135).\n\
+                 Решение: переустановите движок (Настройки → «Движок запуска нейромоделей» → «Переустановить») — установщик автоматически добавит нужные DLL рантайма."
+            ));
+        }
+
         // ── Предлётная проверка CUDA-рантайма ──
         // В релизах llama.cpp b10275+ cublas64_*.dll вынесены из архива движка
         // в отдельный архив cudart-llama-bin. Без них ggml-cuda.dll не грузится
@@ -272,11 +293,16 @@ impl LlamaEngine {
         let use_gpu = installed_family.is_gpu();
         let gpu_layers: u32 = if use_gpu { 999 } else { 0 };
         let engine_mode = if use_gpu { "gpu".to_string() } else { "cpu".to_string() };
+        let variant_source = if cfg_early.engine_variant.as_deref().map(|v| v == "auto" || v.is_empty()).unwrap_or(true) {
+            format!("авто-подбор по GPU → {}", required_label)
+        } else {
+            format!("выбран вручную (рекомендация авто-подбора: {})", required_label)
+        };
         log_cb(format!(
-            "⚙️ Бекенд: {} ({}; авто-подбор для этой машины: {}) | GPU-слои: {} ({})",
+            "⚙️ Бекенд: {} ({}; {}) | GPU-слои: {} ({})",
             crate::infra::llamacpp_installer::variant_label(&selected_variant),
             selected_variant,
-            required_label,
+            variant_source,
             gpu_layers,
             if use_gpu { "оффлоуд на GPU" } else { "CPU-режим" }
         ));

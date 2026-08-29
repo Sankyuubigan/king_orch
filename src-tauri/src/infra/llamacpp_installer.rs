@@ -419,6 +419,59 @@ pub fn migrate_legacy_layout(dir: &Path) -> Result<Option<String>, String> {
     Ok(Some(variant))
 }
 
+/// VC++ 2015-2022 x64 runtime DLL, которые требуются MSVC-сборке llama-server.exe.
+/// Без них процесс падает с 0xC0000135 (STATUS_DLL_NOT_FOUND) — «система не
+/// обнаружила VCRUNTIME140.dll». Чтобы движок работал «из коробки» без ручной
+/// установки Visual C++ Redistributable, эти DLL копируются рядом с llama-server.exe
+/// (берутся из бандла приложения: папка `redist/` рядом с exe приложения).
+const VC_REDIST_DLLS: &[&str] = &[
+    "vcruntime140.dll",
+    "vcruntime140_1.dll",
+    "msvcp140.dll",
+    "msvcp140_1.dll",
+    "concrt140.dll",
+];
+
+/// Гарантирует наличие DLL рантайма VC++ в `engine_exe_dir` (рядом с llama-server.exe).
+/// Источник (по приоритету): папка `redist/` рядом с exe приложения (бандлится в
+/// установщик), затем сама папка exe приложения, затем System32 (если рантайм уже в системе).
+pub fn ensure_vc_redist(engine_exe_dir: &Path, on_log: &dyn Fn(String)) {
+    let app_exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_default();
+
+    let mut sources: Vec<PathBuf> = vec![app_exe_dir.join("redist"), app_exe_dir];
+    if let Some(sysroot) = std::env::var_os("SystemRoot") {
+        sources.push(PathBuf::from(sysroot).join("System32"));
+    }
+
+    for dll in VC_REDIST_DLLS {
+        let dst = engine_exe_dir.join(dll);
+        if dst.exists() {
+            continue;
+        }
+        let mut copied = false;
+        for src_dir in &sources {
+            let src = src_dir.join(dll);
+            if src.exists() {
+                if fs::copy(&src, &dst).is_ok() {
+                    copied = true;
+                    break;
+                }
+            }
+        }
+        if copied {
+            on_log(format!("  ✓ Рантайм VC++ добавлен рядом с движком: {}", dll));
+        } else {
+            on_log(format!(
+                "  ⚠️ Рантайм VC++ {} не найден рядом с приложением — если его нет в System32, движок не запустится.",
+                dll
+            ));
+        }
+    }
+}
+
 fn http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .user_agent("king-orch-app/1.0")
@@ -741,6 +794,10 @@ pub async fn install<L: Fn(String), P: Fn(u64, u64)>(
 
     // Jan-архивы и cudart-архивы имеют вложенную структуру — поднимаем бинарь наверх
     lift_server_files(&target, &on_log)?;
+
+    // Рантайм VC++ рядом с движком (чтобы работало без ручной установки
+    // Visual C++ Redistributable — иначе llama-server падает с 0xC0000135).
+    ensure_vc_redist(&target, &on_log);
 
     // ── CUDA-рантайм (дополнение) ──
     // В релизах b10275+ CUDA-библиотеки вынесены в отдельный архив cudart-llama-bin.

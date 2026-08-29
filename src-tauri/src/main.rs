@@ -218,6 +218,8 @@ async fn main() {
             api::telemetry::track_error,
             api::log_frontend_event,
             api::translate::translate_message,
+            api::updater::check_github_release_update,
+            api::updater::install_update_from_github,
         ])
         .build(tauri::generate_context!())
         .expect("ошибка создания приложения Tauri")
