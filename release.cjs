@@ -281,10 +281,15 @@ async function main() {
         fs.writeFileSync(latestJsonPath, JSON.stringify(latestJson, null, 2), 'utf8');
         console.log(`latest.json generated. URL: ${installerUrl}`);
 
-        execSync('git add latest.json', { stdio: 'inherit', cwd: scriptDir });
-        execSync('git commit -m "chore(release): update latest.json for ' + tag + '"', { stdio: 'inherit', cwd: scriptDir });
+        // Зафиксировать бамп версии в дереве исходников (правило §3.2):
+        // иначе следующая дев-сборка стартует со старой базы и может
+        // оказаться ниже уже выпущенного релиза (инцидент 26.8.173 < 26.8.174).
+        execSync('git add latest.json src-tauri/tauri.conf.json src-tauri/Cargo.toml', { stdio: 'inherit', cwd: scriptDir });
+        execSync('git commit -m "chore(release): ' + tag + '"', { stdio: 'inherit', cwd: scriptDir });
+        execSync('git tag -a ' + tag + ' -m "Release ' + tag + '"', { stdio: 'inherit', cwd: scriptDir });
         execSync('git push origin main', { stdio: 'inherit', cwd: scriptDir });
-        console.log('latest.json pushed to main.');
+        execSync('git push origin ' + tag, { stdio: 'inherit', cwd: scriptDir });
+        console.log('latest.json, version bump и тег ' + tag + ' запушены в main.');
 
         console.log('\n========================================');
         console.log(`DONE! Release ${tag} complete.`);

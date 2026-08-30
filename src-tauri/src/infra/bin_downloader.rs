@@ -61,29 +61,79 @@ fn extract_gzip(gz_bytes: &[u8], bins_dir: &Path, target_exe: &str, log_cb: &dyn
     Ok(())
 }
 
+/// Скачивание через PowerShell (фоллбэк). Использует .NET WebClient —
+/// автоматически читает системный прокси и использует Schannel (как браузер).
+fn download_via_powershell_sync(url: &str, dest: &Path, log_cb: &dyn Fn(String)) -> Result<u64, String> {
+    log_cb(format!("   PowerShell: {}...", &url[..url.len().min(80)]));
+    let dest_str = dest.display().to_string();
+    let ps_script = format!(
+        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
+         $ProgressPreference = 'SilentlyContinue'; \
+         Invoke-WebRequest -Uri '{url}' -OutFile '{dest}' -UseBasicParsing; \
+         (Get-Item '{dest}').Length",
+        url = url.replace('\'', "''"),
+        dest = dest_str.replace('\'', "''"),
+    );
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &ps_script])
+        .output()
+        .map_err(|e| format!("PowerShell не найден: {}", e))?;
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let bytes: u64 = stdout.parse().unwrap_or(0);
+        if bytes > 0 {
+            return Ok(bytes);
+        }
+        return fs::metadata(dest).map(|m| m.len()).map_err(|e| e.to_string());
+    }
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Err(format!("PowerShell: {}", stderr.trim()))
+}
+
+/// Скачивание байтов с фоллбэком: reqwest → PowerShell ( temp-файл → чтение в память).
+fn download_bytes_with_fallback(url: &str, log_cb: &dyn Fn(String)) -> Result<Vec<u8>, String> {
+    // Уровень 1: reqwest
+    if let Ok(resp) = reqwest::blocking::get(url) {
+        if resp.status().is_success() {
+            return resp.bytes().map(|b| b.to_vec()).map_err(|e| e.to_string());
+        }
+        log_cb(format!("⚠️ reqwest HTTP {} — пробуем PowerShell...", resp.status()));
+    } else {
+        log_cb(format!("⚠️ reqwest недоступен — пробуем PowerShell..."));
+    }
+    // Уровень 2: PowerShell → temp-файл → чтение
+    let tmp = std::env::temp_dir().join("king_dl_tmp.bin");
+    download_via_powershell_sync(url, &tmp, log_cb)?;
+    let bytes = fs::read(&tmp).map_err(|e| format!("Ошибка чтения temp-файла: {}", e))?;
+    let _ = fs::remove_file(&tmp);
+    Ok(bytes)
+}
+
 fn download_file_sync(url: &str, dest: &Path, log_cb: &dyn Fn(String)) -> Result<(), String> {
     log_cb(format!("📥 Скачивание {}...", url));
 
-    let resp = reqwest::blocking::get(url)
-        .map_err(|e| format!("Ошибка подключения {}: {}", url, e))?;
-
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(format!("HTTP {} при скачивании {}", status, url));
+    // Уровень 1: reqwest
+    match reqwest::blocking::get(url) {
+        Ok(resp) => {
+            let status = resp.status();
+            if !status.is_success() {
+                log_cb(format!("⚠️ reqwest HTTP {} — пробуем PowerShell...", status));
+                return download_via_powershell_sync(url, dest, log_cb).map(|_| ());
+            }
+            let total = resp.content_length().unwrap_or(0);
+            let bytes = resp.bytes().map_err(|e| format!("Ошибка чтения ответа: {}", e))?;
+            log_cb(format!("📥 Скачано {} МБ", bytes.len() as f64 / 1024.0 / 1024.0));
+            fs::write(dest, &bytes).map_err(|e| format!("Ошибка записи {}: {}", dest.display(), e))?;
+            if total > 0 && (bytes.len() as u64) < total {
+                return Err(format!("Недокачано: {} из {} байт", bytes.len(), total));
+            }
+            Ok(())
+        }
+        Err(e) => {
+            log_cb(format!("⚠️ reqwest не смог: {}. Пробуем PowerShell...", e));
+            download_via_powershell_sync(url, dest, log_cb).map(|_| ())
+        }
     }
-
-    let total = resp.content_length().unwrap_or(0);
-    let bytes = resp.bytes().map_err(|e| format!("Ошибка чтения ответа: {}", e))?;
-
-    log_cb(format!("📥 Скачано {} МБ", bytes.len() as f64 / 1024.0 / 1024.0));
-
-    fs::write(dest, &bytes).map_err(|e| format!("Ошибка записи {}: {}", dest.display(), e))?;
-
-    if total > 0 && (bytes.len() as u64) < total {
-        return Err(format!("Недокачано: {} из {} байт", bytes.len(), total));
-    }
-
-    Ok(())
 }
 
 fn extract_zip_entry(zip_bytes: &[u8], bins_dir: &Path, target_exe: &str, log_cb: &dyn Fn(String)) -> Result<(), String> {
@@ -205,19 +255,9 @@ pub fn ensure_chrome_bin<L: Fn(String)>(bins_dir: &Path, log_cb: &L) -> Result<P
     }
     let url = win64_url.ok_or_else(|| format!("Нет win64-сборки Chrome for Testing (v{})", version))?;
 
-    // 2. Скачивание (большой файл — длинный таймаут)
+    // 2. Скачивание (большой файл — длинный таймаут, с фоллбэком)
     log_cb(format!("📥 Chrome-for-Testing v{} — скачивание...", version));
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(900))
-        .build()
-        .map_err(|e| format!("Ошибка создания HTTP-клиента: {}", e))?;
-    let resp = client.get(&url).send()
-        .map_err(|e| format!("Ошибка подключения {}: {}", url, e))?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(format!("HTTP {} при скачивании {}", status, url));
-    }
-    let bytes = resp.bytes().map_err(|e| format!("Ошибка чтения ответа: {}", e))?;
+    let bytes = download_bytes_with_fallback(&url, log_cb)?;
     log_cb(format!("📥 Скачано {} МБ", bytes.len() as f64 / 1024.0 / 1024.0));
 
     let zip_path = chrome_dir.join("chrome-for-testing.zip");
@@ -276,19 +316,9 @@ pub fn ensure_cloak_browser<L: Fn(String)>(bins_dir: &Path, log_cb: &L) -> Resul
         return Err(format!("{} не найден в SHA256SUMS релиза {}", CLOAK_ZIP_ENTRY, CLOAK_RELEASE_VERSION));
     }
 
-    // 2. Скачивание (большой файл — длинный таймаут)
+    // 2. Скачивание (большой файл — с фоллбэком)
     log_cb(format!("📥 CloakBrowser {} — скачивание...", CLOAK_RELEASE_VERSION));
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(1800))
-        .build()
-        .map_err(|e| format!("Ошибка создания HTTP-клиента: {}", e))?;
-    let resp = client.get(CLOAK_ZIP_URL).send()
-        .map_err(|e| format!("Ошибка подключения {}: {}", CLOAK_ZIP_URL, e))?;
-    let status = resp.status();
-    if !status.is_success() {
-        return Err(format!("HTTP {} при скачивании {}", status, CLOAK_ZIP_URL));
-    }
-    let bytes = resp.bytes().map_err(|e| format!("Ошибка чтения ответа: {}", e))?;
+    let bytes = download_bytes_with_fallback(CLOAK_ZIP_URL, log_cb)?;
     log_cb(format!("📥 Скачано {} МБ", bytes.len() as f64 / 1024.0 / 1024.0));
 
     // 3. Проверка SHA-256 (защита от битой/подменённой сборки)
@@ -334,30 +364,12 @@ pub fn ensure_runtime_bin(name: &str, bins_dir: &Path, log_cb: impl Fn(String)) 
     log_cb(format!("🔄 Первый запуск: скачиваем {}... Это займёт около минуты", name));
 
     if is_zip(name) {
-        let resp = reqwest::blocking::get(url)
-            .map_err(|e| format!("Ошибка подключения {}: {}", url, e))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(format!("HTTP {} при скачивании {}", status, url));
-        }
-
-        let bytes = resp.bytes().map_err(|e| format!("Ошибка чтения ответа: {}", e))?;
+        let bytes = download_bytes_with_fallback(url, &log_cb)?;
         log_cb(format!("📥 Скачано {} МБ, распаковка...", bytes.len() as f64 / 1024.0 / 1024.0));
-
         extract_zip_entry(&bytes, &bins_dir, &bin_name, &log_cb)?;
     } else if is_gzip(name) {
-        let resp = reqwest::blocking::get(url)
-            .map_err(|e| format!("Ошибка подключения {}: {}", url, e))?;
-
-        let status = resp.status();
-        if !status.is_success() {
-            return Err(format!("HTTP {} при скачивании {}", status, url));
-        }
-
-        let bytes = resp.bytes().map_err(|e| format!("Ошибка чтения ответа: {}", e))?;
+        let bytes = download_bytes_with_fallback(url, &log_cb)?;
         log_cb(format!("📥 Скачано {} МБ, распаковка...", bytes.len() as f64 / 1024.0 / 1024.0));
-
         extract_gzip(&bytes, &bins_dir, &bin_name, &log_cb)?;
     } else {
         download_file_sync(url, &bin_path, &log_cb)?;

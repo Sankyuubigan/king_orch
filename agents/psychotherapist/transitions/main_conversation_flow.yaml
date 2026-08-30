@@ -10,10 +10,10 @@ nodes:
 
 - id: extract_facts
   type: llm_fact_extractor
-  input: "{{ user_message }}"
+  input: '{{ user_message }}'
   ui_pos:
-    x: -1990
     y: 493
+    x: -1990
   llm_params: strict
 
 - id: check_has_problem
@@ -22,46 +22,46 @@ nodes:
   true_to: note_1782221436115
   false_to: note_1785141025138
   ui_pos:
-    x: -1700
     y: 495
+    x: -1700
 
-- id: call_provocateur
+- id: call_intake_specialist
   type: llm_worker
   agent: intake_specialist
   output_type: message
   inject_reports:
   - validator
   ui_pos:
-    x: 4754
-    y: -90
+    y: 220
+    x: 2506
 
 - id: call_soma_translator
   type: llm_worker
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    x: -21
-    y: 139
+    y: 153
+    x: -554
 
-- id: collect_info
+- id: call_decomposer
   type: llm_worker
-  agent: liaison
-  task: |
-    Пользователь описал проблему, но не хватает данных. Собери недостающие пункты по Протоколу 3 пунктов: 1. Контекст проблемы (подробное описание) 2. Как клиент хочет, чтобы проблема решилась (жизнь без неё) 3. Как клиент справляется сейчас (адаптация/компенсация)
-  output_type: message
+  agent: decomposer
+  inject_reports:
+  - decomposer
+  - soma_translator
   ui_pos:
-    y: -545
-    x: 105
-  disabled: true
+    y: 382
+    x: 496
 
 - id: call_validator
   type: llm_worker
   agent: validator
   inject_reports:
   - decomposer
+  - soma_translator
   ui_pos:
-    y: 59
-    x: 3443
+    x: 1345
+    y: 152
 
 - id: check_validator_signal
   type: signal_router
@@ -69,28 +69,55 @@ nodes:
   field: verdict
   cases_priority:
   - key: УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО
-    to: note_1782220533024
+    to: check_mental_scenario
   - key: ДАННЫХ ДОСТАТОЧНО
     to: note_1782220629095
+  default: check_mental_scenario
   ui_pos:
-    y: -40
-    x: 3790
+    y: 53
+    x: 1692
 
-- id: call_destructor_finder
+- id: check_mental_scenario
+  type: signal_router
+  signal_name: validator_report
+  field: element6_present
+  cases_priority:
+  - key: PRESENT
+    to: call_intake_specialist
+  default: call_grounder
+  ui_pos:
+    y: 291
+    x: 2166
+
+- id: call_grounder
   type: llm_worker
-  agent: destructor_detector
-  task: |
-    Проанализируй отчёты коллег и определи Деструктор (Этаж -2).
-    Найди: Идол, Угрозу, Деструктор, Запрет удовольствия, Парадоксальную петлю.
-    Сохрани diagnostic_report через инструмент emit_signal.
-    После отправки сигнала ответь target: reply с кратким итогом.
+  agent: grounder
+  task: Проанализируй отчёты коллег и жалобу пользователя. Выдай несколько конкретных, приземлённых бытовых сценариев возможных МЕНТАЛЬНЫХ причин проблемы (6-й элемент невроза, а не соматика). Если данных не хватает — задай пользователю уточняющие вопросы.
+  output_type: message
   inject_reports:
   - soma_translator
-  - pattern_finder_by_elements
   ui_pos:
-    y: 697
-    x: 5326
-  disabled: true
+    x: 2525
+    y: 455
+
+- id: call_cluster_checker
+  type: llm_worker
+  agent: cluster_checker
+  ui_pos:
+    x: -202
+    y: 295
+
+- id: check_cluster_signal
+  type: signal_router
+  signal_name: cluster_checker
+  cases_priority:
+  - key: Конкретная проблема
+    to: note_1782220193985
+  - key: Кластер
+    to: call_decomposer
+  ui_pos:
+    x: 219
+    y: 215
 
 - id: call_pattern_finder
   type: llm_worker
@@ -99,8 +126,8 @@ nodes:
   - soma_translator
   - validator
   ui_pos:
-    x: 5484
-    y: 326
+    y: -107
+    x: 3805
 
 - id: call_healer
   type: llm_worker
@@ -114,106 +141,8 @@ nodes:
   - pattern_finder_by_elements
   - synthesizer
   ui_pos:
-    y: 276
-    x: 6449
-
-- id: check_somatic
-  type: condition_check
-  field: has_somatic
-  sequential_to: note_1782224256075
-  true_to: call_soma_translator
-  ui_pos:
-    y: 204
-    x: -269
-
-- id: call_cluster_checker
-  type: llm_worker
-  agent: cluster_checker
-  ui_pos:
-    x: 1998
-    y: -173
-
-- id: check_cluster_signal
-  type: signal_router
-  signal_name: cluster_checker
-  cases_priority:
-  - key: Конкретная проблема
-    to: note_1782220193985
-  - key: Кластер
-    to: call_decomposer
-  ui_pos:
-    x: 2296
-    y: -70
-
-- id: call_decomposer
-  type: llm_worker
-  agent: decomposer
-  inject_reports:
-  - decomposer
-  ui_pos:
-    x: 2603
-    y: 169
-
-- id: synchronize_with_user
-  type: llm_worker
-  agent: synchronizer
-  ui_pos:
-    x: 5044
-    y: -81
-  disabled: true
-
-- id: call_request_helper
-  type: llm_worker
-  agent: request_helper
-  output_type: message
-  ui_pos:
-    x: -808
-    y: 864
-
-- id: note_1782220193985
-  type: note
-  input: |
-    проверка данных. развилка на доработку данных или отправку на лечение
-  ui_pos:
-    x: 3006
-    y: 68
-
-- id: note_1782220533024
-  type: note
-  input: уточнение данных у юзера
-  ui_pos:
-    y: -123
-    x: 4183
-
-- id: note_1782220629095
-  type: note
-  input: ослабление сопротивления
-  ui_pos:
-    x: 4321
-    y: 322
-
-- id: note_1782221436115
-  type: note
-  input: пересчитываем данные с учетом новых данных от юзера
-  ui_pos:
-    x: -682
-    y: 241
-
-- id: call_shadow_worker
-  type: llm_worker
-  agent: shadow_worker
-  output_type: message
-  ui_pos:
-    y: 384
-    x: 4773
-  disabled: true
-
-- id: note_1784427848563
-  type: note
-  input: вычисление типа
-  ui_pos:
-    y: 338
-    x: 5048
+    x: 4770
+    y: -157
 
 - id: combining_targets
   type: llm_worker
@@ -222,27 +151,72 @@ nodes:
   - pattern_finder_by_elements
   - validator
   ui_pos:
-    x: 6031
-    y: 413
+    x: 4352
+    y: -20
+
+- id: call_shadow_worker
+  type: llm_worker
+  agent: shadow_worker
+  output_type: message
+  ui_pos:
+    x: 3094
+    y: -49
+  disabled: true
+
+- id: note_1782221436115
+  type: note
+  input: пересчитываем данные с учетом новых данных от юзера
+  ui_pos:
+    x: -1215
+    y: 255
+
+- id: note_1782220193985
+  type: note
+  input: проверка данных. развилка на доработку данных или отправку на лечение
+  ui_pos:
+    x: 908
+    y: 161
+
+- id: note_1782220629095
+  type: note
+  input: ослабление сопротивления
+  ui_pos:
+    y: -111
+    x: 2642
+
+- id: note_1784427848563
+  type: note
+  input: вычисление типа
+  ui_pos:
+    y: -95
+    x: 3369
+
+- id: check_somatic
+  type: condition_check
+  field: has_somatic
+  sequential_to: call_cluster_checker
+  true_to: call_soma_translator
+  ui_pos:
+    y: 218
+    x: -802
 
 - id: check_need_handedness
   type: signal_router
   signal_name: soma_translator
   cases_priority:
-  - key: РУКОСТЬ ИЗВЕСТНА
-    to: note_1782224256075
-  default: note_1785123862689
+  - key: НУЖНА РУКОСТЬ
+    to: note_1785123862689
   ui_pos:
-    x: 257
-    y: 6
+    x: -298
+    y: -39
 
 - id: note_1785123862689
   type: note
   input: уточнение рукости у юзера
   system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
   ui_pos:
-    y: -146
-    x: 573
+    x: -44
+    y: -216
 
 - id: note_1785141025138
   type: note
@@ -263,41 +237,6 @@ nodes:
     y: 748
     x: -1323
 
-- id: call_grounder
-  type: llm_worker
-  agent: grounder
-  task: Проанализируй отчёты коллег и жалобу пользователя. Выдай несколько конкретных, приземлённых бытовых сценариев возможных ментальных причин проблемы. Если данных не хватает — задай пользователю уточняющие вопросы.
-  output_type: message
-  inject_reports:
-  - soma_translator
-  ui_pos:
-    x: 2211
-    y: 582
-
-- id: check_grounding
-  type: condition_check
-  field: scenario_established
-  true_to: call_cluster_checker
-  false_to: note_1785036347995
-  ui_pos:
-    y: 431
-    x: 1279
-
-- id: note_1782224256075
-  type: note
-  input: проверяем абстрактный ли запрос (6 элемент является не ментальным а соматикой)
-  ui_pos:
-    x: 764
-    y: 437
-
-- id: note_1785036347995
-  type: note
-  input: запрос абстрактный. вызываем поиск сценариев
-  system_message: Психотерапевт обнаружил, что Ваша проблема является симптомом (фасадом). Для того чтобы найти ментальную причину Вашей проблемы в психике, Вам будут предложены сценарии примерные возможных ментальных проблем в Вашей жизни. Ваша задача - описать Ваш личный кейс опираясь на эти "примерные" сценарии.
-  ui_pos:
-    x: 1708
-    y: 518
-
 - id: check_cluster_signal2
   type: signal_router
   signal_name: cluster_checker
@@ -307,16 +246,21 @@ nodes:
   - key: Кластер
     to: combining_targets
   ui_pos:
-    x: 5765
-    y: 198
+    x: 4086
+    y: -235
+
+- id: call_request_helper
+  type: llm_worker
+  agent: request_helper
+  output_type: message
+  ui_pos:
+    x: -808
+    y: 864
 
 edges:
 
 - from: extract_facts
   to: check_has_problem
-
-- from: note_1782220533024
-  to: call_provocateur
 
 - from: note_1782220193985
   to: call_validator
@@ -324,41 +268,32 @@ edges:
 - from: call_validator
   to: check_validator_signal
 
+- from: call_cluster_checker
+  to: check_cluster_signal
+
 - from: note_1784427848563
   to: call_pattern_finder
 
 - from: combining_targets
   to: call_healer
 
-- from: note_1782221436115
-  to: check_somatic
-
-- from: call_cluster_checker
-  to: check_cluster_signal
-
-- from: call_provocateur
-  to: synchronize_with_user
-
-- from: note_1785141025138
-  to: call_request_helper
+- from: note_1782220629095
+  to: call_shadow_worker
 
 - from: call_decomposer
   to: note_1782220193985
 
-- from: note_1782220629095
-  to: call_shadow_worker
-
 - from: call_shadow_worker
   to: note_1784427848563
+
+- from: note_1782221436115
+  to: check_somatic
 
 - from: call_soma_translator
   to: check_need_handedness
 
-- from: note_1785036347995
-  to: call_grounder
-
-- from: note_1782224256075
-  to: check_grounding
-
 - from: call_pattern_finder
   to: check_cluster_signal2
+
+- from: note_1785141025138
+  to: call_request_helper

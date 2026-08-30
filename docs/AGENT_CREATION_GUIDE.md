@@ -338,10 +338,9 @@ nodes:
 ```
 agents/psychotherapist/
 ├── frontend/                       # Коммуникаторы и фронтовые агенты (общение с юзером)
-│   ├── provocateur.md
+│   ├── intake_specialist.md      # Сбор данных (Режим А + Б)
 │   ├── decomposer.md
 │   ├── grounder.md
-│   ├── request_helper.md
 │   ├── shadow_worker.md
 │   └── compliance_floors_checker.md
 ├── backend/                        # Внутренние воркеры (анализ, снабжение)
@@ -391,10 +390,10 @@ nodes:
     agent: therapist_communicator
     output_type: message
 
-  - id: call_provocateur
+  - id: call_intake_specialist
     type: llm_worker
-    agent: provocateur
-    output_type: message        # провокатор спрашивает вопрос в чат юзеру
+    agent: intake_specialist
+    output_type: message        # сборщик данных задаёт вопрос в чат юзеру
     inject_reports:
       - validator
 

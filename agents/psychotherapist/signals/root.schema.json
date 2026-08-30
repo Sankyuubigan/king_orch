@@ -22,9 +22,13 @@
           },
           "somatic_detected": {
             "type": "boolean"
+          },
+          "element6_present": {
+            "type": "string",
+            "enum": ["PRESENT", "ABSENT"]
           }
         },
-        "required": ["verdict"]
+        "required": ["verdict", "element6_present"]
       }
     },
     "cluster_checker": {

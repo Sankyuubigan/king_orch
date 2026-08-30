@@ -110,15 +110,31 @@ pub async fn download_model(app: AppHandle, url: String, save_path: String) -> R
     match run_download(&app, &client, &url, &save_path).await {
         Ok(()) => Ok(()),
         Err(e) => {
+            // Уровень 2: зеркало HuggingFace
             if let Some(murl) = mirror_url(&url) {
                 eprintln!(
                     "[download] Основной источник не удался ({}). Пробуем зеркало: {}",
                     e, murl
                 );
                 let _ = fs::remove_file(format!("{}{}", save_path, PART_SUFFIX));
-                run_download(&app, &client, &murl, &save_path).await
-            } else {
-                Err(e)
+                if run_download(&app, &client, &murl, &save_path).await.is_ok() {
+                    return Ok(());
+                }
+            }
+            // Уровень 3: PowerShell (системный прокси + Schannel)
+            eprintln!("[download] reqwest/зеркало не сработали. Пробуем PowerShell...");
+            let _ = fs::remove_file(format!("{}{}", save_path, PART_SUFFIX));
+            let dest = std::path::PathBuf::from(&save_path);
+            let on_log = |msg: String| { eprintln!("[download] {}", msg); };
+            let on_progress = |dl: u64, total: u64| {
+                let _ = app.emit("download_progress", DownloadProgress { downloaded: dl, total, speed_bps: 0.0 });
+            };
+            match crate::infra::download_fallback::download_with_fallback(&url, &dest, None, &on_log, &on_progress).await {
+                Ok(()) => {
+                    eprintln!("[download] PowerShell: успешно");
+                    Ok(())
+                }
+                Err(e3) => Err(e3),
             }
         }
     }
@@ -523,6 +539,7 @@ async fn download_single(
 pub async fn download_binary(app: AppHandle, url: String, save_path: String, extract_zip: bool) -> Result<(), String> {
     eprintln!("[download_binary] Старт: {} -> {}", url, save_path);
 
+    // Уровень 1: reqwest
     let client = reqwest::Client::builder()
         .redirect(reqwest::redirect::Policy::default())
         .timeout(std::time::Duration::from_secs(60 * 60))
@@ -533,22 +550,40 @@ pub async fn download_binary(app: AppHandle, url: String, save_path: String, ext
         .get(&url)
         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36")
         .send()
-        .await
-        .map_err(|e| format!("Ошибка подключения: {}", e))?;
+        .await;
 
-    let status = res.status();
-    if !status.is_success() {
-        return Err(format!("HTTP {} при скачивании {}", status, url));
-    }
-
-    let total_size = res.content_length().unwrap_or(0);
-    let bytes = res.bytes().await.map_err(|e| format!("Ошибка чтения: {}", e))?;
-
-    let _ = app.emit("download_progress", DownloadProgress {
-        downloaded: bytes.len() as u64,
-        total: total_size,
-        speed_bps: 0.0,
-    });
+    let bytes = match res {
+        Ok(resp) if resp.status().is_success() => {
+            let total_size = resp.content_length().unwrap_or(0);
+            let b = resp.bytes().await.map_err(|e| format!("Ошибка чтения: {}", e))?;
+            let _ = app.emit("download_progress", DownloadProgress {
+                downloaded: b.len() as u64,
+                total: total_size,
+                speed_bps: 0.0,
+            });
+            b.to_vec()
+        }
+        _ => {
+            // Уровень 2: PowerShell
+            eprintln!("[download_binary] reqwest не сработал. Пробуем PowerShell...");
+            let tmp = std::env::temp_dir().join(format!("king_dl_bin_{}.tmp",
+                std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_secs()));
+            let on_log = |msg: String| { eprintln!("[download_binary] {}", msg); };
+            let on_progress = |dl: u64, total: u64| {
+                let _ = app.emit("download_progress", DownloadProgress { downloaded: dl, total, speed_bps: 0.0 });
+            };
+            crate::infra::download_fallback::download_with_fallback(&url, &tmp, None, &on_log, &on_progress).await
+                .map_err(|e| format!("Ошибка скачивания: {}", e))?;
+            let b = fs::read(&tmp).map_err(|e| format!("Ошибка чтения temp: {}", e))?;
+            let _ = fs::remove_file(&tmp);
+            let _ = app.emit("download_progress", DownloadProgress {
+                downloaded: b.len() as u64,
+                total: b.len() as u64,
+                speed_bps: 0.0,
+            });
+            b
+        }
+    };
 
     if extract_zip {
         let reader = Cursor::new(&bytes);

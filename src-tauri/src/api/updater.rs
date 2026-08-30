@@ -103,30 +103,21 @@ pub async fn install_update_from_github(url: String, app: AppHandle) -> Result<(
     // Бэкап пользовательских данных (best-effort), как при откате версий.
     let _ = crate::infra::updater_rollback::backup_before_rollback(&app);
 
-    let client = reqwest::Client::builder()
-        .user_agent("king-orch-app/1.0")
-        .build()
-        .map_err(|e| e.to_string())?;
-
     let tmp = std::env::temp_dir().join(format!(
         "king_orch_update_{}.exe",
         chrono::Local::now().timestamp()
     ));
 
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(|e| format!("Ошибка скачивания установщика: {}", crate::infra::llm::chain_err(&e, 3)))?;
-    if !resp.status().is_success() {
-        return Err(format!("Скачивание установщика: HTTP {}", resp.status()));
-    }
-    let bytes = resp.bytes().await.map_err(|e| e.to_string())?;
-    {
-        let mut f = std::fs::File::create(&tmp).map_err(|e| e.to_string())?;
-        use std::io::Write;
-        f.write_all(&bytes).map_err(|e| e.to_string())?;
-    }
+    // Скачивание с цепочкой фоллбэков (reqwest → PowerShell → MCP)
+    crate::infra::download_fallback::download_with_fallback(
+        &url,
+        &tmp,
+        None,
+        &|msg| eprintln!("[updater] {}", msg),
+        &|_, _| {},
+    )
+    .await
+    .map_err(|e| format!("Ошибка скачивания установщика: {}", e))?;
 
     // Тихая установка NSIS; после запуска освобождаем свои файлы (exit),
     // чтобы инсталлер мог перезаписать exe приложения.

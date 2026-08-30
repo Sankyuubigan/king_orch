@@ -742,7 +742,7 @@ fn lift_server_files(variant_root: &Path, on_log: &dyn Fn(String)) -> Result<(),
 
 /// Установка (или обновление) варианта бекенда llamacpp: полный архив llama-server.
 /// Ставится в `backends/<variant>/`, остальные установленные варианты не трогаются.
-pub async fn install<L: Fn(String), P: Fn(u64, u64)>(
+pub async fn install<L: Fn(String) + Send + Sync, P: Fn(u64, u64) + Send + Sync>(
     dir: &Path,
     variant: &str,
     on_log: L,
@@ -774,7 +774,14 @@ pub async fn install<L: Fn(String), P: Fn(u64, u64)>(
     }
 
     let zip_path = target.join("engine.zip");
-    download_asset(&client, asset.0, &zip_path, &on_log, &on_progress).await?;
+    crate::infra::download_fallback::download_with_fallback(
+        &asset.0.browser_download_url,
+        &zip_path,
+        Some(asset.0.size),
+        &on_log,
+        &on_progress,
+    )
+    .await?;
 
     if let Some(digest) = &asset.0.digest {
         let expected = digest.strip_prefix("sha256:").unwrap_or(digest);
@@ -809,7 +816,14 @@ pub async fn install<L: Fn(String), P: Fn(u64, u64)>(
         if let Some(cudart) = find_cudart_asset(&release, &actual_variant) {
             on_log(format!("⬇️ Дополнение CUDA-рантайма: {}", cudart.0.name));
             let cudart_zip = target.join("cudart.zip");
-            download_asset(&client, cudart.0, &cudart_zip, &on_log, &on_progress).await?;
+            crate::infra::download_fallback::download_with_fallback(
+                &cudart.0.browser_download_url,
+                &cudart_zip,
+                Some(cudart.0.size),
+                &on_log,
+                &on_progress,
+            )
+            .await?;
             if let Some(digest) = &cudart.0.digest {
                 let expected = digest.strip_prefix("sha256:").unwrap_or(digest);
                 let actual = sha256_file(&cudart_zip)?;

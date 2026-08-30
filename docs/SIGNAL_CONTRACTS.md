@@ -66,7 +66,7 @@ constrained decoding (гарантирует 100% валидный вывод, �
 **Корень:** оркестратор ставил сигнальным агентам `set_grammar(None)`, поэтому модель
 генерировала **без ограничения** и выдала `status` вместо обязательного `verdict`.
 `check_validator_signal` читает `field: verdict` → не находит → `target: None` → граф
-завершается, ни один `message`-узел (`call_provocateur`) не выполняется → в `ctx.messages`
+завершается, ни один `message`-узел (`call_intake_specialist`) не выполняется → в `ctx.messages`
 не добавляется ни одного `message` → workflow-режим (который отдаёт ответ только через
 `message`-записи) возвращает пустоту.
 

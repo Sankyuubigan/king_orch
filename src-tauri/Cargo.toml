@@ -1,6 +1,6 @@
 [package]
 name = "king_orch"
-version = "26.8.173"
+version = "26.8.183"
 description = "Local LLM Multi-Agent Studio"
 authors = ["You"]
 edition = "2021"
@@ -41,4 +41,6 @@ sha2 = "0.10"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 flate2 = "1.0"
 url = "2"
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Networking_WinHttp", "Win32_Foundation"] }
 

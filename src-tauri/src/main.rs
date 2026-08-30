@@ -43,6 +43,9 @@ async fn main() {
             std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_default(),
         ),
     );
+
+    // ── Системный прокси: детект до любых HTTP-запросов ──
+    infra::system_proxy::detect_and_set_proxy();
     let gpu = infra::gpu_detector::detect_gpu();
     infra::startup_log::append(
         "INFO",
