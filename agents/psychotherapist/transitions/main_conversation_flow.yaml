@@ -10,9 +10,7 @@ nodes:
 
 - id: extract_facts
   type: llm_fact_extractor
-  input: |
-    User: {{ user_message }}
-    Session history (последние сообщения сессии): {{ messages }}
+  input: "{{ user_message }}"
   ui_pos:
     x: -1990
     y: 493

@@ -10,6 +10,7 @@ pub fn build_extractor_prompt(
     user_message: &str,
     signals: &str,
     workflow_dir: Option<&Path>,
+    history: &str,
 ) -> String {
     let facts = resolve_facts(config, workflow_dir);
     let phases = resolve_phases(config, workflow_dir);
@@ -23,11 +24,12 @@ pub fn build_extractor_prompt(
             .replace("{{ facts }}", &facts_list)
             .replace("{{ phases }}", &phases_list)
             .replace("{{ signals }}", signals)
-            .replace("{{ user_message }}", user_message);
+            .replace("{{ user_message }}", user_message)
+            .replace("{{ history }}", history);
         return result;
     }
 
-    build_default_prompt(&facts, &phases, &output_fields, user_message, signals)
+    build_default_prompt(&facts, &phases, &output_fields, user_message, signals, history)
 }
 
 /// Ожидаемые ключи выхода экстрактора: id boolean-фактов + строковые поля + фаза.
@@ -152,11 +154,11 @@ fn build_list(items: &[FactDef]) -> String {
         .join("\n")
 }
 
-pub(crate) fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output_fields: &[OutputFieldDef], user_message: &str, signals: &str) -> String {
+pub(crate) fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output_fields: &[OutputFieldDef], user_message: &str, signals: &str, history: &str) -> String {
     let facts_list = build_list(facts);
     let phases_list = build_list(phases);
 
-    let mut prompt = r#"Ты — системный анализатор. Прочитай сообщение пользователя и сигналы сессии."#
+    let mut prompt = r#"Ты — системный анализатор. Прочитай переписку сессии и сигналы."#
         .to_string();
 
     if !phases_list.is_empty() {
@@ -166,7 +168,7 @@ pub(crate) fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output
         ));
     }
     if !facts_list.is_empty() {
-        prompt.push_str(&format!("\n\n### Факты (true/false, определяй по сообщению пользователя)\n{}", facts_list));
+        prompt.push_str(&format!("\n\n### Факты (true/false, определяй по сообщению пользователя и по истории переписки)\n{}", facts_list));
     }
 
     prompt.push_str(
@@ -198,8 +200,19 @@ pub(crate) fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output
         keys.push("\"phase\": \"название_фазы\"".to_string());
     }
     prompt.push_str(&keys.join(", "));
-    prompt.push_str("}\n\nСообщение пользователя:\n");
-    prompt.push_str(user_message);
+    prompt.push_str("}\n\n");
+
+    // Переписка целиком — ОДИН блок, без дублей: текущее сообщение юзера уже
+    // является последним в истории, поэтому отдельно его не дублируем.
+    let msg_block = if !history.trim().is_empty() && history.trim() != "[]" && history.trim() != "null" {
+        format!(
+            "### История переписки сессии (последнее сообщение — текущее; оценивай факты прежде всего по нему, но учитывай весь разговор, включая предложения агента grounder и реакцию юзера на них)\n{}",
+            history
+        )
+    } else {
+        format!("Сообщение пользователя:\n{}", user_message)
+    };
+    prompt.push_str(&msg_block);
     prompt.push_str("\n\nОтветь ТОЛЬКО JSON, без пояснений.");
 
     prompt
@@ -234,7 +247,7 @@ mod tests {
         let user_msg = "User: наблюдаю сниженное настроение и упадок сил, интерес к привычным занятиям пропал, ничего не радует. ощущение безысходности и подавленности без видимой внешней причины.
 Session signals: []";
 
-        let prompt = build_default_prompt(&facts, &phases, &[], user_msg, signals);
+        let prompt = build_default_prompt(&facts, &phases, &[], user_msg, signals, "");
 
         // Print the full prompt for inspection
         println!("=== PROMPT ({}) ===", prompt.len());
@@ -335,7 +348,7 @@ Session signals: []";
             history
         );
 
-        let prompt = build_default_prompt(&facts, &phases, &[], &user_msg, signals);
+        let prompt = build_default_prompt(&facts, &phases, &[], &user_msg, signals, "");
 
         println!("=== PROMPT ({}) ===", prompt.len());
         println!("{}", prompt);

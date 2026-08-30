@@ -1712,7 +1712,7 @@ mod tests {
                 }
             };
 
-            let prompt = build_default_prompt(&facts, &phases, &[], user_msg, "[]");
+            let prompt = build_default_prompt(&facts, &phases, &[], user_msg, "[]", "");
             let msgs = vec![
                 LlmMessage { role: "system".to_string(), content: prompt },
                 LlmMessage { role: "user".to_string(), content: user_msg.to_string() },

@@ -175,16 +175,67 @@ pub fn open_session_folder(app: &AppHandle, id: &str) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
         let file_path = dir.join(format!("{}.json", id));
-        std::process::Command::new("explorer")
-            .arg(format!("/select,\"{}\"", file_path.display()))
-            .spawn()
-            .map_err(|e| e.to_string())?;
+        open_in_explorer_and_select(&file_path);
     }
     #[cfg(not(target_os = "windows"))]
     {
         let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
     }
     Ok(())
+}
+
+/// Открывает проводник Windows и выделяет указанный файл.
+/// `explorer /select,"path"` ненадёжен (вместо выделения открывает
+/// «Этот компьютер»), поэтому используем Shell API
+/// SHOpenFolderAndSelectItems. При сбое парсинга PIDL — fallback на explorer.
+#[cfg(target_os = "windows")]
+fn open_in_explorer_and_select(file_path: &std::path::Path) {
+    use std::ptr;
+
+    type HRESULT = i32;
+    const COINIT_APARTMENTTHREADED: u32 = 2;
+
+    #[link(name = "ole32")]
+    extern "system" {
+        fn CoInitializeEx(pvReserved: *const std::ffi::c_void, dwCoInit: u32) -> HRESULT;
+        fn CoUninitialize();
+    }
+
+    #[link(name = "shell32")]
+    extern "system" {
+        fn SHParseDisplayName(
+            pszName: *const u16,
+            pbc: *mut std::ffi::c_void,
+            ppidl: *mut *mut std::ffi::c_void,
+            sfgaoIn: u32,
+            psfgaoOut: *mut u32,
+        ) -> HRESULT;
+        fn SHOpenFolderAndSelectItems(
+            pidlFolder: *const std::ffi::c_void,
+            cidl: u32,
+            apidl: *const *const std::ffi::c_void,
+            dwFlags: u32,
+        ) -> HRESULT;
+        fn ILFree(pidl: *const std::ffi::c_void);
+    }
+
+    let path_str = file_path.to_string_lossy().replace('/', "\\");
+    let wide: Vec<u16> = path_str.encode_utf16().chain(std::iter::once(0)).collect();
+
+    unsafe {
+        let _ = CoInitializeEx(ptr::null(), COINIT_APARTMENTTHREADED);
+        let mut pidl: *mut std::ffi::c_void = ptr::null_mut();
+        let hr = SHParseDisplayName(wide.as_ptr(), ptr::null_mut(), &mut pidl, 0, ptr::null_mut());
+        if hr >= 0 && !pidl.is_null() {
+            SHOpenFolderAndSelectItems(pidl, 0, ptr::null(), 0);
+            ILFree(pidl);
+        } else {
+            let _ = std::process::Command::new("explorer")
+                .arg(format!("/select,\"{}\"", path_str))
+                .spawn();
+        }
+        CoUninitialize();
+    }
 }
 
 fn sample_session(title: &str, title_manual: bool) -> ChatSession {

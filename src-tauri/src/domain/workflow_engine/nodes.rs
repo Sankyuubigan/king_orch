@@ -32,18 +32,22 @@ where
                 .cloned()
                 .unwrap_or(WorkflowConfig::default());
 
-            let input = context.resolve_template(node.input.as_deref().unwrap_or("{{ user_message }}"));
+            // Только ТЕКУЩЕЕ сообщение юзера — оно уйдёт в user-роль модели.
+            // История переписки ({{ messages }}) попадает ровно в ОДИН блок system-промпта
+            // (см. fact_extractor::build_default_prompt), чтобы не дублироваться.
+            let current_msg = context.resolve_template("{{ user_message }}");
             let signals = context.resolve_template("{{ signals }}");
+            let history = context.resolve_template("{{ messages }}");
             let workflow_dir = std::path::Path::new(&workflow.parent_dir);
             let prompt =
-                super::fact_extractor::build_extractor_prompt(&config, &input, &signals, Some(workflow_dir));
+                super::fact_extractor::build_extractor_prompt(&config, &current_msg, &signals, Some(workflow_dir), &history);
 
             // Строгая грамматика по контракту facts.yaml: точные ключи, без опций.
             let grammar = super::fact_extractor::build_facts_grammar(&config, Some(workflow_dir));
             let expected_keys = super::fact_extractor::expected_output_keys(&config, Some(workflow_dir));
 
             let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
-            let (llm_text, llm_reasoning) = runner.call_llm_direct(&prompt, &input, &resolved_params, &format!("graph:{}", node.id), Some(grammar.clone()), true)?;
+            let (llm_text, llm_reasoning) = runner.call_llm_direct(&prompt, &current_msg, &resolved_params, &format!("graph:{}", node.id), Some(grammar.clone()), true)?;
 
             // Reasoning-модели (--reasoning-format deepseek) могут выдать JSON целиком
             // в блоке размышлений (reasoning_content), оставив content пустым. Это —
@@ -74,7 +78,7 @@ where
                     "{}\n\nВАЖНО: Ответь ТОЛЬКО JSON-объектом строго со всеми ключами: {}. Каждый факт — true/false.",
                     prompt, expected_str
                 );
-                let (retry_text, retry_reasoning) = runner.call_llm_direct(&retry_prompt, &input, &resolved_params, &format!("graph:{}#retry", node.id), Some(grammar), true)?;
+                let (retry_text, retry_reasoning) = runner.call_llm_direct(&retry_prompt, &current_msg, &resolved_params, &format!("graph:{}#retry", node.id), Some(grammar), true)?;
                 parsed = parse_fact_json(&retry_text);
                 if !facts_json_valid(&parsed, &expected_keys) && !retry_reasoning.trim().is_empty() {
                     parsed = parse_fact_json(&retry_reasoning);

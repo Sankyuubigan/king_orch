@@ -58,7 +58,7 @@ pub async fn check_github_release_update(app: AppHandle) -> Result<Option<Github
         .header("Accept", "application/vnd.github+json")
         .send()
         .await
-        .map_err(|e| format!("Ошибка запроса GitHub: {}", e))?;
+        .map_err(|e| format!("Ошибка запроса GitHub: {}", crate::infra::llm::chain_err(&e, 3)))?;
     if !resp.status().is_success() {
         return Err(format!("GitHub API вернул HTTP {}", resp.status()));
     }
@@ -117,7 +117,7 @@ pub async fn install_update_from_github(url: String, app: AppHandle) -> Result<(
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("Ошибка скачивания установщика: {}", e))?;
+        .map_err(|e| format!("Ошибка скачивания установщика: {}", crate::infra::llm::chain_err(&e, 3)))?;
     if !resp.status().is_success() {
         return Err(format!("Скачивание установщика: HTTP {}", resp.status()));
     }

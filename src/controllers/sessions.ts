@@ -1,7 +1,7 @@
 import { store } from "../store";
 import { bus } from "../events";
 import { showToast, confirmDialog } from "../ui";
-import { fetchSessions, deleteSession, renameSession, openSessionFolder } from "../services";
+import { fetchSessions, deleteSession, renameSession, openSessionFolder, loadSession } from "../services";
 import { trackError } from "../telemetry";
 
 export interface SessionElements {
@@ -31,12 +31,14 @@ export class SessionController {
         titleSpan.textContent = s.title;
         const actions = document.createElement("div");
         actions.className = "session-item-actions";
-        actions.innerHTML = `<button class="btn-session-menu">⋮</button><div class="session-menu-dropdown"><button class="session-menu-item btn-rename">✏️ Переименовать</button><button class="session-menu-item btn-explore">📁 Проводник</button><button class="session-menu-item danger btn-delete">🗑️ Удалить</button></div>`;
+        actions.innerHTML = `<button class="btn-session-menu">⋮</button><div class="session-menu-dropdown"><button class="session-menu-item btn-rename"><span class="menu-ico">✏️</span>Переименовать</button><button class="session-menu-item btn-copy"><span class="menu-ico">📋</span>Копировать в буфер</button><button class="session-menu-item btn-explore"><span class="menu-ico">📁</span>Проводник</button><button class="session-menu-item danger btn-delete"><span class="menu-ico">🗑️</span>Удалить</button></div>`;
         const renameBtn = actions.querySelector('.btn-rename') as HTMLElement;
         renameBtn.dataset.id = s.id;
         renameBtn.dataset.title = s.title;
         const exploreBtn = actions.querySelector('.btn-explore') as HTMLElement;
         exploreBtn.dataset.id = s.id;
+        const copyBtn = actions.querySelector('.btn-copy') as HTMLElement;
+        copyBtn.dataset.id = s.id;
         const deleteBtn = actions.querySelector('.btn-delete') as HTMLElement;
         deleteBtn.dataset.id = s.id;
         div.appendChild(titleSpan);
@@ -47,12 +49,42 @@ export class SessionController {
         menuBtn?.addEventListener("click", (e) => { e.stopPropagation(); document.querySelectorAll('.session-menu-dropdown.show').forEach(dd => { if (dd !== dropdown) dd.classList.remove('show'); }); dropdown?.classList.toggle('show'); });
         renameBtn.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); const cur = renameBtn.dataset.title || ''; const newT = prompt("Новое название:", cur); if (newT && newT.trim() !== "" && newT !== cur) { try { await renameSession(s.id, newT.trim()); this.loadSessionsListUI(); } catch(err) { showToast(`Ошибка: ${err}`, "error"); void trackError("sessions.rename", err); } } });
         exploreBtn.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); try { await openSessionFolder(s.id); } catch(err) { void trackError("sessions.openFolder", err); } });
+        copyBtn.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); try { await this.copySessionToClipboard(s); } catch(err) { showToast(`Ошибка: ${err}`, "error"); void trackError("sessions.copy", err); } });
         deleteBtn.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); await this.deleteSessionUI(s.id); });
         this.el.sessionList.appendChild(div);
       }
     } catch(e) {
       void trackError("sessions.loadList", e);
     }
+  }
+
+  private async copySessionToClipboard(s: { id: string; title: string }) {
+    let messages: any[] = [];
+    try {
+      const session = await loadSession(s.id);
+      messages = (session && Array.isArray(session.messages)) ? session.messages : [];
+    } catch (err) {
+      if (store.currentSessionId === s.id) messages = store.chatHistory;
+      else { throw err; }
+    }
+    const md = this.buildSessionMarkdown(s.title, messages);
+    await navigator.clipboard.writeText(md);
+    showToast("Переписка скопирована в буфер", "success");
+  }
+
+  private buildSessionMarkdown(title: string, messages: any[]): string {
+    let out = `# ${title}\n\n`;
+    for (const msg of messages) {
+      if (!msg || msg.type !== "message") continue;
+      const content = (msg.content ?? "").trim();
+      if (!content) continue;
+      let role = "Ассистент";
+      if (msg.author === "user") role = "Пользователь";
+      else if (msg.author === "system") role = "Система";
+      else if (msg.author) role = String(msg.author);
+      out += `### ${role}\n\n${content}\n\n`;
+    }
+    return out.trim() + "\n";
   }
 
   private async deleteSessionUI(id: string) {

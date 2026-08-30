@@ -1355,7 +1355,7 @@ fn truncate_str(s: &str, max: usize) -> String {
 /// Полная цепочка источников ошибки (reqwest → hyper → io/tls), до 3 уровней.
 /// Одиночный to_string() у reqwest скрывает реальную причину (порт закрыт
 /// и т.п.), цепочка source() показывает её.
-fn chain_err(e: &dyn std::error::Error, max: usize) -> String {
+pub(crate) fn chain_err(e: &dyn std::error::Error, max: usize) -> String {
     let mut msg = String::new();
     let mut cur: Option<&dyn std::error::Error> = Some(e);
     for _ in 0..=max {

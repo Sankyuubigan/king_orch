@@ -70,13 +70,44 @@ async function main() {
         let confText = fs.readFileSync(confPath, 'utf8');
         const match = confText.match(/"version"\s*:\s*"(\d+)\.(\d+)\.(\d+)"/);
         if (match) {
-            const oldMaj = match[1];
-            const oldMin = match[2];
+            const oldMaj = parseInt(match[1], 10);
+            const oldMin = parseInt(match[2], 10);
             const oldPat = parseInt(match[3], 10);
+
             const now = new Date();
-            const newMaj = now.getFullYear().toString().slice(-2);
-            const newMin = (now.getMonth() + 1).toString();
-            const newPat = (oldMaj === newMaj && oldMin === newMin) ? oldPat + 1 : 1;
+            const curMaj = parseInt(now.getFullYear().toString().slice(-2), 10);
+            const curMin = now.getMonth() + 1;
+
+            let newMaj = curMaj;
+            let newMin = curMin;
+            let newPat = (oldMaj === curMaj && oldMin === curMin) ? oldPat + 1 : 1;
+
+            // Защита от отката версии ниже уже выпущенного релиза.
+            // Счётчик патчей живёт только в локальном tauri.conf.json, поэтому
+            // после релиза (если бамп не закоммичен обратно) следующая
+            // дев-сборка могла оказаться ниже опубликованной версии.
+            // Сверяемся с latest.json и берём строго бОльшую версию.
+            const latestPath = path.join(scriptDir, 'latest.json');
+            if (fs.existsSync(latestPath)) {
+                try {
+                    const latest = JSON.parse(fs.readFileSync(latestPath, 'utf8'));
+                    const lm = String(latest.version).match(/^(\d+)\.(\d+)\.(\d+)$/);
+                    if (lm) {
+                        const relMaj = parseInt(lm[1], 10);
+                        const relMin = parseInt(lm[2], 10);
+                        const relPat = parseInt(lm[3], 10);
+                        const localBelow = newMaj < relMaj
+                            || (newMaj === relMaj && newMin < relMin)
+                            || (newMaj === relMaj && newMin === relMin && newPat <= relPat);
+                        if (localBelow) {
+                            newMaj = relMaj;
+                            newMin = relMin;
+                            newPat = relPat + 1;
+                        }
+                    }
+                } catch (e) { /* latest.json повреждён — игнорируем */ }
+            }
+
             const version = `${newMaj}.${newMin}.${newPat}`;
             confText = confText.replace(/"version"\s*:\s*".*?"/, `"version": "${version}"`);
             fs.writeFileSync(confPath, confText, 'utf8');

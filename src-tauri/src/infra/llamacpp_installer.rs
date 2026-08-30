@@ -499,7 +499,7 @@ async fn fetch_release_with_engine(client: &reqwest::Client, variant: &str) -> R
         .get(LLAMA_CPP_RELEASES)
         .send()
         .await
-        .map_err(|e| format!("Ошибка запроса GitHub API: {}", e))?;
+        .map_err(|e| format!("Ошибка запроса GitHub API: {}", crate::infra::llm::chain_err(&e, 3)))?;
     let status = resp.status();
     if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::TOO_MANY_REQUESTS {
         return Err(
@@ -596,7 +596,7 @@ async fn download_asset<L: Fn(String), P: Fn(u64, u64)>(
         ));
     }
 
-    let resp = req.send().await.map_err(|e| format!("Ошибка загрузки: {}", e))?;
+    let resp = req.send().await.map_err(|e| format!("Ошибка загрузки: {}", crate::infra::llm::chain_err(&e, 3)))?;
     let status = resp.status();
     let total = asset.size;
 
@@ -617,7 +617,7 @@ async fn download_asset<L: Fn(String), P: Fn(u64, u64)>(
     let mut stream = resp.bytes_stream();
     use futures_util::StreamExt;
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|e| format!("Ошибка приёма данных: {}", e))?;
+        let chunk = chunk.map_err(|e| format!("Ошибка приёма данных: {}", crate::infra::llm::chain_err(&e, 3)))?;
         file.write_all(&chunk)
             .map_err(|e| format!("Ошибка записи на диск: {}", e))?;
         downloaded += chunk.len() as u64;
