@@ -288,7 +288,6 @@ async function main() {
         execSync('git commit -m "chore(release): ' + tag + '"', { stdio: 'inherit', cwd: scriptDir });
         execSync('git tag -a ' + tag + ' -m "Release ' + tag + '"', { stdio: 'inherit', cwd: scriptDir });
         execSync('git push origin main', { stdio: 'inherit', cwd: scriptDir });
-        execSync('git push origin ' + tag, { stdio: 'inherit', cwd: scriptDir });
         console.log('latest.json, version bump и тег ' + tag + ' запушены в main.');
 
         console.log('\n========================================');

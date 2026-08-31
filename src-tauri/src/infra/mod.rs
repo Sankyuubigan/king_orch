@@ -26,6 +26,7 @@ pub mod updater_rollback;
 pub mod process_util;
 pub mod system_proxy;
 pub mod download_fallback;
+pub mod network_diagnostics;
 
 // ─── Публичные типы ───
 pub use config::{AppConfig, CatalogEntry, ModelMeta, ModelParams, SamplingPresets};

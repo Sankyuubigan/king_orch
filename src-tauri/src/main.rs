@@ -46,6 +46,9 @@ async fn main() {
 
     // ── Системный прокси: детект до любых HTTP-запросов ──
     infra::system_proxy::detect_and_set_proxy();
+
+    // ── Диагностика сети: DNS, TCP, proxy ──
+    infra::network_diagnostics::run_diagnostics();
     let gpu = infra::gpu_detector::detect_gpu();
     infra::startup_log::append(
         "INFO",

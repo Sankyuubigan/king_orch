@@ -469,6 +469,19 @@ createMcpServer({
                 },
                 required: ["action"]
             }
+        },
+        {
+            name: "BrowserDownload",
+            description: "Скачивает файл через headless Chrome (BoringSSL — обход DPI/block). Chrome использует тот же TLS-стек что и обычный браузер, поэтому Kaspersky/DPI пропускает трафик. Возвращает путь к скачанному файлу и размер в байтах.",
+            inputSchema: {
+                type: "object",
+                properties: {
+                    url: { type: "string", description: "URL для скачивания" },
+                    outputPath: { type: "string", description: "Путь для сохранения файла (обязательно)" },
+                    timeout: { type: "number", description: "Таймаут в мс (по умолчанию 300000, макс 600000)" }
+                },
+                required: ["url", "outputPath"]
+            }
         }
     ],
     handlers: {
@@ -516,6 +529,100 @@ createMcpServer({
                 return `Профиль '${session}' удалён.`;
             }
             return await listSessions();
+        },
+        BrowserDownload: async (args: Record<string, unknown>) => {
+            const url = String(args.url || "");
+            const outputPath = String(args.outputPath || "");
+            if (!url) throw new Error("url обязателен");
+            if (!outputPath) throw new Error("outputPath обязателен");
+
+            const timeoutMs = Math.max(30000, Math.min(Number(args.timeout) || 300000, 600000));
+            const downloadDir = path.dirname(outputPath);
+            fs.mkdirSync(downloadDir, { recursive: true });
+
+            const exe = resolveChromeExe();
+            if (!exe) throw new Error("Chrome не найден для скачивания");
+
+            const tempProfile = path.join(profilesDir(), `_dl_${Date.now()}`);
+            fs.mkdirSync(tempProfile, { recursive: true });
+
+            let browser: any = null;
+            try {
+                browser = await puppeteer.launch({
+                    executablePath: exe,
+                    headless: true,
+                    userDataDir: tempProfile,
+                    args: [
+                        "--no-sandbox",
+                        "--disable-gpu",
+                        "--disable-extensions",
+                        "--disable-blink-features=AutomationControlled",
+                    ],
+                });
+
+                const page = await browser.newPage();
+
+                // Устанавливаем download behavior через CDP
+                const cdpSession = await page.createCDPSession();
+                await cdpSession.send("Browser.setDownloadBehavior", {
+                    behavior: "allow",
+                    downloadPath: downloadDir,
+                    eventsEnabled: true,
+                });
+
+                // Навигация на URL (начинает скачивание)
+                try {
+                    await page.goto(url, { waitUntil: "commit", timeout: timeoutMs });
+                } catch {
+                    // Навигация может "упасть" из-за скачивания — это нормально
+                }
+
+                // Ждём завершения скачивания (мониторим файл)
+                const filename = path.basename(outputPath);
+                const deadline = Date.now() + timeoutMs;
+                let downloaded = false;
+
+                while (Date.now() < deadline) {
+                    await new Promise(r => setTimeout(r, 1000));
+                    // Проверяем наличие файла (или .crdownload — временный)
+                    const files = fs.readdirSync(downloadDir);
+                    const target = files.find(f => f === filename);
+                    const partial = files.find(f => f.endsWith(".crdownload"));
+
+                    if (target) {
+                        // Файл появился — ждём немного для завершения записи
+                        await new Promise(r => setTimeout(r, 1000));
+                        // Переименовываем если нужно
+                        const src = path.join(downloadDir, target);
+                        if (src !== outputPath) {
+                            fs.copyFileSync(src, outputPath);
+                        }
+                        downloaded = true;
+                        break;
+                    }
+                }
+
+                await page.close().catch(() => {});
+
+                if (!downloaded) {
+                    throw new Error(`Таймаут скачивания (${timeoutMs / 1000}с)`);
+                }
+
+                const stat = fs.statSync(outputPath);
+                log(`[browser] BrowserDownload: OK ${stat.size} bytes → ${outputPath}`);
+                return JSON.stringify({
+                    success: true,
+                    bytes: stat.size,
+                    path: outputPath,
+                    method: "chrome_cdp",
+                });
+            } catch (e) {
+                log(`[browser] BrowserDownload FAILED: ${(e as Error).message}`);
+                throw e;
+            } finally {
+                if (browser) await browser.close().catch(() => {});
+                fs.rmSync(tempProfile, { recursive: true, force: true });
+            }
         }
     }
 });

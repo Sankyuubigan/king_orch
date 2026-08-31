@@ -696,7 +696,16 @@ let start_time = Instant::now();
     // ограничивает только ФОРМУ; свободный текст (анализ агента) живёт в поле
     // `thought` конверта emit_signal и извлекается как `final_response` в dispatch.rs.
     let signal_contract: Option<SignalContract> = {
-        let signals_dir = grammars_dir.parent().unwrap_or(grammars_dir).join("signals");
+        // SSOT контрактов сигналов — команда workflow (agent.folder), а НЕ grammars_dir.
+        // grammars_dir может указать на чужую команду (fallback), а контракты
+        // команд-специфичны. См. docs/SIGNAL_CONTRACTS.md.
+        let signals_dir = agent.folder.as_ref()
+            .and_then(|f| {
+                grammars_dir.parent()          // .../research
+                    .and_then(|p| p.parent())  // .../agents
+                    .map(|base| base.join(f).join("signals"))
+            })
+            .unwrap_or_else(|| grammars_dir.parent().unwrap_or(grammars_dir).join("signals"));
         load_signal_contract(&signals_dir, &agent.id)
     };
     let agent_grammar = if signal_contract.is_none() {

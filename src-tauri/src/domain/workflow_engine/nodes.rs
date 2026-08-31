@@ -45,6 +45,12 @@ where
             // Строгая грамматика по контракту facts.yaml: точные ключи, без опций.
             let grammar = super::fact_extractor::build_facts_grammar(&config, Some(workflow_dir));
             let expected_keys = super::fact_extractor::expected_output_keys(&config, Some(workflow_dir));
+            // Только boolean-факты — к ним применяется coerce_bool; строковые
+            // output_fields (rewritten_query и т.п.) должны остаться строками.
+            let bool_keys: Vec<String> = super::fact_extractor::resolve_facts(&config, Some(workflow_dir))
+                .iter()
+                .map(|f| f.id.clone())
+                .collect();
 
             let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
             let (llm_text, llm_reasoning) = runner.call_llm_direct(&prompt, &current_msg, &resolved_params, &format!("graph:{}", node.id), Some(grammar.clone()), true)?;
@@ -53,10 +59,10 @@ where
             // в блоке размышлений (reasoning_content), оставив content пустым. Это —
             // ответ модели, просто в отдельном канале (см. deepseek-harness: reasoning
             // и content разделены). Парсим content, при неудаче — reasoning_content.
-            let mut parsed = parse_fact_json(&llm_text);
+            let mut parsed = parse_fact_json(&llm_text, &bool_keys);
             if !facts_json_valid(&parsed, &expected_keys) && !llm_reasoning.trim().is_empty() {
                 (runner.log_cb)("[fact_extractor] JSON не в ответе — читаем из блока размышлений (reasoning_content)".to_string());
-                parsed = parse_fact_json(&llm_reasoning);
+                parsed = parse_fact_json(&llm_reasoning, &bool_keys);
             }
 
             (runner.log_cb)(format!(
@@ -79,9 +85,9 @@ where
                     prompt, expected_str
                 );
                 let (retry_text, retry_reasoning) = runner.call_llm_direct(&retry_prompt, &current_msg, &resolved_params, &format!("graph:{}#retry", node.id), Some(grammar), true)?;
-                parsed = parse_fact_json(&retry_text);
+                parsed = parse_fact_json(&retry_text, &bool_keys);
                 if !facts_json_valid(&parsed, &expected_keys) && !retry_reasoning.trim().is_empty() {
-                    parsed = parse_fact_json(&retry_reasoning);
+                    parsed = parse_fact_json(&retry_reasoning, &bool_keys);
                 }
                 (runner.log_cb)(format!(
                     "[fact_extractor][DEBUG] retry_valid={} parsed_retry={}",
@@ -807,18 +813,21 @@ fn extract_json(text: &str) -> Option<String> {
 }
 
 /// Парсит JSON-ответ fact_extractor (прямой парс, затем поиск `{...}` в тексте).
-/// Дополнительно приводит значения фактов к JSON-булевому (защита от выдачи
+/// Приводит к JSON-булевому ТОЛЬКО значения ключей из `bool_keys` (защита от выдачи
 /// "true"/"false" в кавычках или 0/1 вместо булевого типа), чтобы downstream
-/// condition_check корректно читал .as_bool().
-fn parse_fact_json(text: &str) -> serde_json::Value {
+/// condition_check корректно читал .as_bool(). Строковые output_fields (например
+/// `rewritten_query`) остаются нетронутыми.
+fn parse_fact_json(text: &str, bool_keys: &[String]) -> serde_json::Value {
     let mut val = serde_json::from_str(text).unwrap_or_else(|_| {
         extract_json(text)
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_else(|| serde_json::json!({}))
     });
     if let Some(obj) = val.as_object_mut() {
-        for v in obj.values_mut() {
-            *v = coerce_bool(v.take());
+        for (key, v) in obj.iter_mut() {
+            if bool_keys.iter().any(|bk| bk == key) {
+                *v = coerce_bool(v.take());
+            }
         }
     }
     val
@@ -876,7 +885,12 @@ mod tests {
         // После фикса грамматики (экранированные кавычки GBNF) модель выдаёт
         // ВАЛИДНЫЙ JSON с кавычками у ключей — ровно то, что ловил баг "key must be a string".
         let s = "{\n  \"has_problem\" : true,\n  \"has_somatic\" : true,\n  \"scenario_established\" : false\n}";
-        let v = parse_fact_json(s);
+        let bool_keys = vec![
+            "has_problem".to_string(),
+            "has_somatic".to_string(),
+            "scenario_established".to_string(),
+        ];
+        let v = parse_fact_json(s, &bool_keys);
         let expected = vec![
             "has_problem".to_string(),
             "has_somatic".to_string(),
@@ -898,8 +912,23 @@ mod tests {
 
     #[test]
     fn coerce_string_true_to_bool() {
-        let v = parse_fact_json("{\"has_problem\": \"true\"}");
+        let bool_keys = vec!["has_problem".to_string()];
+        let v = parse_fact_json("{\"has_problem\": \"true\"}", &bool_keys);
         assert_eq!(v.get("has_problem").and_then(|x| x.as_bool()), Some(true));
+    }
+
+    #[test]
+    fn parse_fact_json_preserves_string_output_fields() {
+        // rewritten_query — строковый output_field, НЕ должен превращаться в false
+        let s = r#"{"has_known_source":false,"needs_docs":false,"rewritten_query":"анекдоты про программистов"}"#;
+        let bool_keys = vec!["has_known_source".to_string(), "needs_docs".to_string()];
+        let v = parse_fact_json(s, &bool_keys);
+        assert_eq!(v.get("has_known_source").and_then(|x| x.as_bool()), Some(false));
+        assert_eq!(
+            v.get("rewritten_query").and_then(|x| x.as_str()),
+            Some("анекдоты про программистов"),
+            "rewritten_query должен остаться строкой, а не стать false"
+        );
     }
 
     #[test]
