@@ -31,6 +31,8 @@ interface GraphNodeDef {
   cases?: Record<string, string>;
   default?: string;
   cases_priority?: Array<{ key: string; to: string }>;
+  conditions?: Array<{ field: string; equals: any }>;
+  logic?: string;
   input_object?: string;
   inject_reports?: string[];
   output_type?: string;
@@ -76,6 +78,7 @@ const NODE_COLORS: Record<string, string> = {
   llm_sequential_switch: "#e040fb",
   signal_router: "#ff9800",
   condition_check: "#26a69a",
+  condition_router: "#5c6bc0",
   return: "#78909c",
   note: "#e53935",
 };
@@ -91,12 +94,13 @@ const NODE_LABELS: Record<string, string> = {
   llm_sequential_switch: "🔀 SeqSwitch",
   signal_router: "📡 Signal Router",
   condition_check: "🎯 Condition Check",
+  condition_router: "🔀 Condition Router",
   return: "🏁 Return",
   note: "📝 Note",
 };
 
 function isDynamicNode(t: string): boolean {
-  return t === "switch" || t === "llm_sequential_switch" || t === "signal_router" || t === "condition_check";
+  return t === "switch" || t === "llm_sequential_switch" || t === "signal_router" || t === "condition_check" || t === "condition_router";
 }
 
 const OUTPUT_COUNT: Record<string, number> = {
@@ -110,6 +114,7 @@ const OUTPUT_COUNT: Record<string, number> = {
   llm_sequential_switch: 0,
   signal_router: 0,
   condition_check: 0,
+  condition_router: 0,
   return: 0,
   note: 1,
 };
@@ -138,6 +143,11 @@ export class GraphController {
     { key: "true", field: "true_to" as const },
     { key: "false", field: "false_to" as const },
     { key: "seq", field: "sequential_to" as const },
+  ];
+
+  private static readonly CONDITION_ROUTER_CASES = [
+    { key: "true", field: "true_to" as const },
+    { key: "false", field: "false_to" as const },
   ];
 
   constructor(el: GraphElements) {
@@ -484,6 +494,7 @@ export class GraphController {
               <div class="ctx-item" data-type="llm_sequential_switch">🔀 SeqSwitch</div>
               <div class="ctx-item" data-type="signal_router">📡 Signal Router</div>
               <div class="ctx-item" data-type="condition_check">🎯 Condition</div>
+              <div class="ctx-item" data-type="condition_router">🔀 Condition Router</div>
               <div class="ctx-item" data-type="llm_fact_extractor">📋 Extractor</div>
               <div class="ctx-item" data-type="llm_freeform">💬 Freeform</div>
               <div class="ctx-item" data-type="note">📝 Note</div>
@@ -657,6 +668,9 @@ export class GraphController {
           if (node.true_to) targets.push({ to: node.true_to, caseKey: "true" });
           if (node.false_to) targets.push({ to: node.false_to, caseKey: "false" });
           if (node.sequential_to) targets.push({ to: node.sequential_to, caseKey: "seq" });
+        } else if (node.type === "condition_router") {
+          if (node.true_to) targets.push({ to: node.true_to, caseKey: "true" });
+          if (node.false_to) targets.push({ to: node.false_to, caseKey: "false" });
         } else if (node.cases_priority) {
           for (const cp of node.cases_priority) targets.push({ to: cp.to, caseKey: cp.key });
         } else if (node.cases) {
@@ -859,6 +873,44 @@ export class GraphController {
       <div class="graph-detail-section">
         <div class="detail-label">Sequential → цель (всегда)</div>
         <input type="text" id="ge-sequential-to" class="ge-input" placeholder="node id" value="${this.esc(data.sequential_to || "")}" />
+      </div>
+      <div class="graph-detail-section">
+        <div class="detail-label">True → цель</div>
+        <input type="text" id="ge-true-to" class="ge-input" placeholder="node id" value="${this.esc(data.true_to || "")}" />
+      </div>
+      <div class="graph-detail-section">
+        <div class="detail-label">False → цель</div>
+        <input type="text" id="ge-false-to" class="ge-input" placeholder="node id" value="${this.esc(data.false_to || "")}" />
+      </div>`;
+    }
+
+    if (data.type === "condition_router") {
+      if (!data.conditions) data.conditions = [];
+      html += `<div class="graph-detail-section">
+        <div class="detail-label">Имя сигнала</div>
+        <input type="text" id="ge-signal-name" class="ge-input" placeholder="validator_report" value="${this.esc(data.signal_name || "")}" />
+      </div>
+      <div class="graph-detail-section">
+        <div class="detail-label">Логика</div>
+        <select id="ge-logic" class="ge-select">
+          <option value="any" ${data.logic !== "all" ? "selected" : ""}>any — хотя бы одно условие</option>
+          <option value="all" ${data.logic === "all" ? "selected" : ""}>all — все условия</option>
+        </select>
+      </div>
+      <div class="graph-detail-section">
+        <div class="detail-label">Условия</div>
+        <div id="ge-conditions-list">`;
+      for (let i = 0; i < data.conditions.length; i++) {
+        const c = data.conditions[i];
+        html += `<div class="ge-case-row" data-index="${i}">
+          <input class="ge-input ge-cond-field" value="${this.esc(c.field)}" placeholder="field" style="width:45%;" />
+          <span style="color:#888;margin:0 2px;">=</span>
+          <input class="ge-input ge-cond-equals" value="${this.esc(String(c.equals))}" placeholder="value" style="width:40%;" />
+          <button class="ge-cond-remove" title="Удалить">🗑</button>
+        </div>`;
+      }
+      html += `</div>
+        <button id="ge-condition-add" class="btn-secondary" style="margin-top:4px;width:100%;font-size:12px;">+ Добавить условие</button>
       </div>
       <div class="graph-detail-section">
         <div class="detail-label">True → цель</div>
@@ -1078,6 +1130,61 @@ export class GraphController {
       });
     }
 
+    // ─── Condition Router event handlers ───
+
+    const logicSelect = document.getElementById("ge-logic") as HTMLSelectElement;
+    if (logicSelect) {
+      logicSelect.addEventListener("change", () => {
+        this.saveCheckpoint();
+        data.logic = logicSelect.value === "all" ? "all" : undefined;
+        this.updateNodeHtml(nodeId);
+      });
+    }
+
+    const conditionAddBtn = document.getElementById("ge-condition-add");
+    if (conditionAddBtn) {
+      conditionAddBtn.addEventListener("click", () => {
+        this.saveCheckpoint();
+        if (!data.conditions) data.conditions = [];
+        data.conditions.push({ field: "", equals: false });
+        this.rebuildSwitchOutputs(nodeId);
+        this.showNodeEditor(nodeId);
+      });
+    }
+
+    document.querySelectorAll(".ge-cond-remove").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        this.saveCheckpoint();
+        const row = (btn as HTMLElement).closest(".ge-case-row") as HTMLElement;
+        const idx = parseInt(row.dataset.index || "0", 10);
+        data.conditions.splice(idx, 1);
+        this.rebuildSwitchOutputs(nodeId);
+        this.showNodeEditor(nodeId);
+      });
+    });
+
+    document.querySelectorAll(".ge-cond-field").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const row = (inp as HTMLElement).closest(".ge-case-row") as HTMLElement;
+        const idx = parseInt(row.dataset.index || "0", 10);
+        data.conditions[idx].field = (inp as HTMLInputElement).value;
+        this.updateNodeHtml(nodeId);
+      });
+    });
+
+    document.querySelectorAll(".ge-cond-equals").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const row = (inp as HTMLElement).closest(".ge-case-row") as HTMLElement;
+        const idx = parseInt(row.dataset.index || "0", 10);
+        const val = (inp as HTMLInputElement).value;
+        if (val === "true") data.conditions[idx].equals = true;
+        else if (val === "false") data.conditions[idx].equals = false;
+        else if (!isNaN(Number(val))) data.conditions[idx].equals = Number(val);
+        else data.conditions[idx].equals = val;
+        this.updateNodeHtml(nodeId);
+      });
+    });
+
     const addBtn = document.getElementById("ge-case-add");
     if (addBtn) {
       addBtn.addEventListener("click", () => {
@@ -1162,7 +1269,7 @@ export class GraphController {
       cx = (preRect.width / 2 - 100) * (1 / zoom);
       cy = (preRect.height / 2 - 50) * (1 / zoom);
     }
-    const outs = type === "condition_check" ? 3 : (isDynamicNode(type) ? 2 : OUTPUT_COUNT[type] ?? 1);
+    const outs = type === "condition_check" ? 3 : type === "condition_router" ? 2 : (isDynamicNode(type) ? 2 : OUTPUT_COUNT[type] ?? 1);
 
     const inputs: Record<string, { connections: any[] }> = {};
     for (let i = 1; i <= 1; i++) inputs[`input_${i}`] = { connections: [] };
@@ -1246,6 +1353,9 @@ export class GraphController {
       if (!isDynamicNode(nd.type)) continue;
       if (nd.type === "condition_check") {
         if (nd.sequential_to === oldKey) nd.sequential_to = trimmed;
+        if (nd.true_to === oldKey) nd.true_to = trimmed;
+        if (nd.false_to === oldKey) nd.false_to = trimmed;
+      } else if (nd.type === "condition_router") {
         if (nd.true_to === oldKey) nd.true_to = trimmed;
         if (nd.false_to === oldKey) nd.false_to = trimmed;
       } else {
@@ -1364,6 +1474,15 @@ export class GraphController {
       }
       return;
     }
+    if (data.type === "condition_router") {
+      for (let i = 0; i < GraphController.CONDITION_ROUTER_CASES.length; i++) {
+        const cc = GraphController.CONDITION_ROUTER_CASES[i];
+        const outKey = `output_${i + 1}`;
+        const conns = dn.outputs[outKey]?.connections || [];
+        data[cc.field] = conns.length > 0 ? conns[0].node : undefined;
+      }
+      return;
+    }
     const caseKeys = this.getSwitchCaseKeys(data);
     if (data.cases_priority) {
       for (let i = 0; i < data.cases_priority.length; i++) {
@@ -1394,6 +1513,12 @@ export class GraphController {
 
     if (data.type === "condition_check") {
       const cc = GraphController.CONDITION_CHECK_CASES[outIdx];
+      if (cc) data[cc.field] = action === "created" ? toNodeId : undefined;
+      return;
+    }
+
+    if (data.type === "condition_router") {
+      const cc = GraphController.CONDITION_ROUTER_CASES[outIdx];
       if (cc) data[cc.field] = action === "created" ? toNodeId : undefined;
       return;
     }
@@ -1777,6 +1902,7 @@ export class GraphController {
 
   private getSwitchOutputCount(node: GraphNodeDef): number {
     if (node.type === "condition_check") return 3;
+    if (node.type === "condition_router") return 2;
     if (node.cases) return Object.keys(node.cases).length;
     if (node.cases_priority) return node.cases_priority.length + (node.default ? 1 : 0);
     if (node.default) return 1;
@@ -1785,6 +1911,7 @@ export class GraphController {
 
   private getSwitchCaseKeys(node: GraphNodeDef): string[] {
     if (node.type === "condition_check") return GraphController.CONDITION_CHECK_CASES.map(c => c.key);
+    if (node.type === "condition_router") return GraphController.CONDITION_ROUTER_CASES.map(c => c.key);
     if (node.cases) return Object.keys(node.cases);
     if (node.cases_priority) {
       const keys = node.cases_priority.map((c) => c.key);
@@ -1809,6 +1936,11 @@ export class GraphController {
         if (node.true_to) implicit.push({ from: node.id, to: node.true_to });
         if (node.false_to) implicit.push({ from: node.id, to: node.false_to });
         if (node.sequential_to) implicit.push({ from: node.id, to: node.sequential_to });
+        continue;
+      }
+      if (node.type === "condition_router") {
+        if (node.true_to) implicit.push({ from: node.id, to: node.true_to });
+        if (node.false_to) implicit.push({ from: node.id, to: node.false_to });
         continue;
       }
       if (node.cases_priority) {
@@ -1900,6 +2032,14 @@ export class GraphController {
       if (data.true_to) parts.push(`✓ ${this.esc(data.true_to)}`);
       if (data.false_to) parts.push(`✗ ${this.esc(data.false_to)}`);
       signalLine = `<div class="gn-agent" style="color:#26a69a">🎯 ${parts.join(" | ")}</div>`;
+    }
+    if (data.type === "condition_router") {
+      const parts: string[] = [];
+      if (data.signal_name) parts.push(this.esc(data.signal_name));
+      if (data.logic) parts.push(`logic: ${this.esc(data.logic)}`);
+      if (data.true_to) parts.push(`✓ ${this.esc(data.true_to)}`);
+      if (data.false_to) parts.push(`✗ ${this.esc(data.false_to)}`);
+      signalLine = `<div class="gn-agent" style="color:#5c6bc0">🔀 ${parts.join(" | ")}</div>`;
     }
     let casesLine = "";
     if (isDynamicNode(data.type)) {

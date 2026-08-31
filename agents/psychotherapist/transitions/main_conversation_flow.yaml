@@ -22,8 +22,8 @@ nodes:
   true_to: note_1782221436115
   false_to: note_1785141025138
   ui_pos:
-    y: 495
     x: -1700
+    y: 495
 
 - id: call_intake_specialist
   type: llm_worker
@@ -32,16 +32,16 @@ nodes:
   inject_reports:
   - validator
   ui_pos:
-    y: 220
-    x: 2506
+    y: -753
+    x: 2299
 
 - id: call_soma_translator
   type: llm_worker
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    y: 153
     x: -554
+    y: 153
 
 - id: call_decomposer
   type: llm_worker
@@ -50,8 +50,8 @@ nodes:
   - decomposer
   - soma_translator
   ui_pos:
-    y: 382
     x: 496
+    y: 382
 
 - id: call_validator
   type: llm_worker
@@ -69,10 +69,9 @@ nodes:
   field: verdict
   cases_priority:
   - key: УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО
-    to: check_mental_scenario
+    to: checking_insufficient_data
   - key: ДАННЫХ ДОСТАТОЧНО
-    to: note_1782220629095
-  default: check_mental_scenario
+    to: note_1784427848563
   ui_pos:
     y: 53
     x: 1692
@@ -80,14 +79,14 @@ nodes:
 - id: check_mental_scenario
   type: signal_router
   signal_name: validator_report
-  field: element6_present
+  field: element_6_found
   cases_priority:
-  - key: PRESENT
-    to: call_intake_specialist
-  default: call_grounder
+  - key: 'false'
+    to: call_grounder
+  default: call_shadow_worker
   ui_pos:
-    y: 291
-    x: 2166
+    x: 2300
+    y: -490
 
 - id: call_grounder
   type: llm_worker
@@ -97,15 +96,15 @@ nodes:
   inject_reports:
   - soma_translator
   ui_pos:
-    x: 2525
-    y: 455
+    x: 2597
+    y: -757
 
 - id: call_cluster_checker
   type: llm_worker
   agent: cluster_checker
   ui_pos:
-    x: -202
     y: 295
+    x: -202
 
 - id: check_cluster_signal
   type: signal_router
@@ -126,8 +125,8 @@ nodes:
   - soma_translator
   - validator
   ui_pos:
-    y: -107
-    x: 3805
+    y: 45
+    x: 2503
 
 - id: call_healer
   type: llm_worker
@@ -141,8 +140,8 @@ nodes:
   - pattern_finder_by_elements
   - synthesizer
   ui_pos:
-    x: 4770
-    y: -157
+    x: 3468
+    y: -5
 
 - id: combining_targets
   type: llm_worker
@@ -151,17 +150,16 @@ nodes:
   - pattern_finder_by_elements
   - validator
   ui_pos:
-    x: 4352
-    y: -20
+    y: 132
+    x: 3050
 
 - id: call_shadow_worker
   type: llm_worker
   agent: shadow_worker
   output_type: message
   ui_pos:
-    x: 3094
-    y: -49
-  disabled: true
+    y: -731
+    x: 2960
 
 - id: note_1782221436115
   type: note
@@ -177,19 +175,12 @@ nodes:
     x: 908
     y: 161
 
-- id: note_1782220629095
-  type: note
-  input: ослабление сопротивления
-  ui_pos:
-    y: -111
-    x: 2642
-
 - id: note_1784427848563
   type: note
   input: вычисление типа
   ui_pos:
-    y: -95
-    x: 3369
+    y: 57
+    x: 2067
 
 - id: check_somatic
   type: condition_check
@@ -207,8 +198,8 @@ nodes:
   - key: НУЖНА РУКОСТЬ
     to: note_1785123862689
   ui_pos:
-    x: -298
     y: -39
+    x: -298
 
 - id: note_1785123862689
   type: note
@@ -246,8 +237,8 @@ nodes:
   - key: Кластер
     to: combining_targets
   ui_pos:
-    x: 4086
-    y: -235
+    x: 2784
+    y: -83
 
 - id: call_request_helper
   type: llm_worker
@@ -256,6 +247,31 @@ nodes:
   ui_pos:
     x: -808
     y: 864
+
+- id: checking_insufficient_data
+  type: condition_router
+  signal_name: validator_report
+  true_to: call_intake_specialist
+  false_to: check_mental_scenario
+  conditions:
+  - field: element_1_found
+    equals: false
+  - field: element_2_found
+    equals: false
+  - field: element_4_found
+    equals: false
+  - field: element_5_found
+    equals: false
+  - field: element_7_found
+    equals: false
+  - field: element_8_found
+    equals: false
+  - field: element_9_found
+    equals: false
+  logic: any
+  ui_pos:
+    y: -433
+    x: 1973
 
 edges:
 
@@ -277,14 +293,8 @@ edges:
 - from: combining_targets
   to: call_healer
 
-- from: note_1782220629095
-  to: call_shadow_worker
-
 - from: call_decomposer
   to: note_1782220193985
-
-- from: call_shadow_worker
-  to: note_1784427848563
 
 - from: note_1782221436115
   to: check_somatic

@@ -109,6 +109,13 @@ pub struct PriorityCase {
     pub to: String,
 }
 
+/// Единичное условие для condition_router: поле + значение для сравнения
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConditionRule {
+    pub field: String,
+    pub equals: serde_json::Value,
+}
+
 /// Защитный десериалайзер: принимает и массив `[{key, to}, ...]` и мапу `{key: to}`
 fn deserialize_cases_priority<'de, D>(deserializer: D) -> Result<Option<Vec<PriorityCase>>, D::Error>
 where
@@ -178,8 +185,14 @@ pub struct NodeDef {
     pub true_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub false_to: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "deserialize_cases_priority")]
+    #[serde(default, skip_serializing_if = "is_cases_empty", deserialize_with = "deserialize_cases_priority")]
     pub cases_priority: Option<Vec<PriorityCase>>,
+    /// Условия для condition_router: список проверок полей сигнала
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<ConditionRule>,
+    /// Логика комбинирования условий condition_router: "any" | "all" (по умолчанию "any")
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logic: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -209,6 +222,10 @@ pub struct NodeDef {
 
 fn is_false(b: &bool) -> bool { !b }
 
+fn is_cases_empty(v: &Option<Vec<PriorityCase>>) -> bool {
+    v.as_ref().map_or(true, |v| v.is_empty())
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
@@ -225,6 +242,8 @@ pub enum NodeType {
     Return,
     #[serde(rename = "signal_router")]
     SignalRouter,
+    #[serde(rename = "condition_router")]
+    ConditionRouter,
     Note,
 }
 

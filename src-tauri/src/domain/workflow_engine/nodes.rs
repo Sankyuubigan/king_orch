@@ -637,6 +637,85 @@ where
             })
         }
 
+        NodeType::ConditionRouter => {
+            let signal_name = node.signal_name.as_deref().unwrap_or("");
+            let conditions = &node.conditions;
+            let logic = node.logic.as_deref().unwrap_or("any");
+
+            // Ищем последний signal-месседж с нужным ключом
+            let mut signal_value: Option<serde_json::Value> = None;
+            for msg in context.messages.iter().rev() {
+                if msg.msg_type != "signal" { continue; }
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg.content) {
+                    if let Some(signal) = val.get(signal_name) {
+                        signal_value = Some(signal.clone());
+                        break;
+                    }
+                }
+            }
+
+            let signal = signal_value.unwrap_or(serde_json::Value::Null);
+            let mut matched_count = 0u32;
+            let total = conditions.len() as u32;
+
+            for rule in conditions {
+                let field_match = match &rule.equals {
+                    serde_json::Value::Bool(expected) => {
+                        signal.get(&rule.field)
+                            .and_then(|v| v.as_bool())
+                            .map(|actual| actual == *expected)
+                            .unwrap_or(false)
+                    }
+                    serde_json::Value::String(expected) => {
+                        signal.get(&rule.field)
+                            .and_then(|v| v.as_str())
+                            .map(|actual| actual == expected.as_str())
+                            .unwrap_or(false)
+                    }
+                    serde_json::Value::Number(expected) => {
+                        signal.get(&rule.field)
+                            .and_then(|v| v.as_f64())
+                            .map(|actual| actual == expected.as_f64().unwrap_or(0.0))
+                            .unwrap_or(false)
+                    }
+                    _ => false,
+                };
+                if field_match {
+                    matched_count += 1;
+                }
+            }
+
+            let condition_met = match logic {
+                "all" => matched_count == total && total > 0,
+                _     => matched_count > 0, // "any" по умолчанию
+            };
+
+            let target = if condition_met {
+                node.true_to.clone()
+            } else {
+                node.false_to.clone()
+            };
+
+            (runner.log_cb)(format!(
+                "[condition_router] signal '{}' logic='{}' matched={}/{} → {}",
+                signal_name, logic, matched_count, total,
+                target.as_deref().unwrap_or("-")
+            ));
+
+            Ok(NodeResult {
+                output: serde_json::json!({
+                    "condition_met": condition_met,
+                    "matched_count": matched_count,
+                    "total": total,
+                    "logic": logic,
+                    "signal_name": signal_name,
+                    "target": target
+                }),
+                next_node: target,
+                next_nodes: vec![],
+            })
+        }
+
         NodeType::ConditionCheck => {
             let input_obj = node.input_object.as_deref().unwrap_or("{{ nodes.extract_facts.output }}");
             let resolved = context.resolve_template(input_obj);

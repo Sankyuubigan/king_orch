@@ -13,22 +13,20 @@
             "type": "string",
             "enum": ["ДАННЫХ ДОСТАТОЧНО", "УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО"]
           },
-          "found_markers": {
-            "type": "array",
-            "items": { "type": "string" }
-          },
           "missing_data": {
             "type": "string"
           },
-          "somatic_detected": {
-            "type": "boolean"
-          },
-          "element6_present": {
-            "type": "string",
-            "enum": ["PRESENT", "ABSENT"]
-          }
+          "element_1_found": { "type": "boolean" },
+          "element_2_found": { "type": "boolean" },
+          "element_3_found": { "type": "boolean" },
+          "element_4_found": { "type": "boolean" },
+          "element_5_found": { "type": "boolean" },
+          "element_6_found": { "type": "boolean" },
+          "element_7_found": { "type": "boolean" },
+          "element_8_found": { "type": "boolean" },
+          "element_9_found": { "type": "boolean" }
         },
-        "required": ["verdict", "element6_present"]
+        "required": ["verdict"]
       }
     },
     "cluster_checker": {
