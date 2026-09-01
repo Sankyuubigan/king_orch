@@ -30,10 +30,11 @@ nodes:
   agent: intake_specialist
   output_type: message
   inject_reports:
+  - decomposer
   - validator
   ui_pos:
-    y: -753
     x: 2299
+    y: -753
 
 - id: call_soma_translator
   type: llm_worker
@@ -73,8 +74,8 @@ nodes:
   - key: ДАННЫХ ДОСТАТОЧНО
     to: note_1784427848563
   ui_pos:
-    y: 53
     x: 1692
+    y: 53
 
 - id: check_mental_scenario
   type: signal_router
@@ -83,7 +84,8 @@ nodes:
   cases_priority:
   - key: 'false'
     to: call_grounder
-  default: call_shadow_worker
+  - key: 'true'
+    to: call_shadow_worker
   ui_pos:
     x: 2300
     y: -490
@@ -94,10 +96,11 @@ nodes:
   task: Проанализируй отчёты коллег и жалобу пользователя. Выдай несколько конкретных, приземлённых бытовых сценариев возможных МЕНТАЛЬНЫХ причин проблемы (6-й элемент невроза, а не соматика). Если данных не хватает — задай пользователю уточняющие вопросы.
   output_type: message
   inject_reports:
-  - soma_translator
+  - decomposer
+  - validator
   ui_pos:
-    x: 2597
     y: -757
+    x: 2597
 
 - id: call_cluster_checker
   type: llm_worker
@@ -115,8 +118,8 @@ nodes:
   - key: Кластер
     to: call_decomposer
   ui_pos:
-    x: 219
     y: 215
+    x: 219
 
 - id: call_pattern_finder
   type: llm_worker
@@ -150,16 +153,19 @@ nodes:
   - pattern_finder_by_elements
   - validator
   ui_pos:
-    y: 132
     x: 3050
+    y: 132
 
 - id: call_shadow_worker
   type: llm_worker
   agent: shadow_worker
   output_type: message
+  inject_reports:
+  - decomposer
+  - validator
   ui_pos:
+    x: 2957
     y: -731
-    x: 2960
 
 - id: note_1782221436115
   type: note
@@ -198,16 +204,16 @@ nodes:
   - key: НУЖНА РУКОСТЬ
     to: note_1785123862689
   ui_pos:
-    y: -39
     x: -298
+    y: -39
 
 - id: note_1785123862689
   type: note
   input: уточнение рукости у юзера
   system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
   ui_pos:
-    x: -44
     y: -216
+    x: -44
 
 - id: note_1785141025138
   type: note
@@ -225,8 +231,8 @@ nodes:
 
     В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
-    y: 748
     x: -1323
+    y: 748
 
 - id: check_cluster_signal2
   type: signal_router
@@ -270,8 +276,8 @@ nodes:
     equals: false
   logic: any
   ui_pos:
-    y: -433
     x: 1973
+    y: -433
 
 edges:
 

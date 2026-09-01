@@ -84,18 +84,18 @@ pub fn build_signal_envelope_schema(contract: &SignalContract) -> Value {
 pub fn validate_signal_value(contract: &SignalContract, value: &Value) -> Result<(), String> {
     let schema = &contract.value_schema;
     if schema.get("type").and_then(|t| t.as_str()) == Some("object") {
-        if let Some(required) = schema.get("required").and_then(|r| r.as_array()) {
-            let mut missing = Vec::new();
-            for req in required {
-                if let Some(name) = req.as_str() {
-                    if value.get(name).is_none() {
-                        missing.push(name.to_string());
-                    }
+        // Проверяем ВСЕ properties контракта (а не только required).
+        // Это гарантирует, что signal_router найдёт каждое поле (element_X_found и т.д.).
+        if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+            let mut missing: Vec<String> = Vec::new();
+            for (pname, _) in props {
+                if value.get(pname).is_none() {
+                    missing.push(pname.clone());
                 }
             }
             if !missing.is_empty() {
                 return Err(format!(
-                    "Ошибка: emit_signal для сигнала '{}' требует обязательные поля [{}], но в value их нет. Исправь и вызови СНОВА.",
+                    "Ошибка: emit_signal для '{}' требует все поля контракта [{}], но в value их нет. Исправь и вызови СНОВА.",
                     contract.key, missing.join(", ")
                 ));
             }

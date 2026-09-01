@@ -970,6 +970,12 @@ let start_time = Instant::now();
                         ctx.thinking_no_answer
                     ));
                     ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
+                    // Пересстанавливаем json_schema грамматику для сигнальных агентов
+                    // (take_pending_grammar() consume-and-clear сбросил грамматику).
+                    if let Some(contract) = &ctx.signal_contract {
+                        let schema = build_signal_envelope_schema(contract);
+                        ctx.engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
+                    }
                     continue;
                 }
                 ctx.consecutive_incomplete += 1;
@@ -983,11 +989,14 @@ let start_time = Instant::now();
                     "Ты прервал генерацию. ЗАПРЕЩЕНО начинать с размышлений в тегах (<think, 思考, thinking, <|channel>thought) — они запрещены. Сразу пиши финальный ответ ОБЫЧНЫМ ТЕКСТОМ без JSON."
                 };
                 ctx.llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
-                // Хинт требует ответ ЗАНОВО — стейт незавершённой докачки сбрасываем,
-                // иначе следующий вызов парсил бы склеенный combined устаревших кусков.
                 ctx.continuation_raw.clear();
                 ctx.continuation_mark = None;
                 ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: hint.to_string() });
+                // Пересстанавливаем json_schema грамматику для сигнальных агентов
+                if let Some(contract) = &ctx.signal_contract {
+                    let schema = build_signal_envelope_schema(contract);
+                    ctx.engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
+                }
                 continue;
             }
         }
@@ -1108,6 +1117,12 @@ let start_time = Instant::now();
                     ctx.thinking_no_answer
                 ));
                 ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
+                // Пересстанавливаем json_schema грамматику для сигнальных агентов
+                // (take_pending_grammar() consume-and-clear сбросил грамматику).
+                if let Some(contract) = &ctx.signal_contract {
+                    let schema = build_signal_envelope_schema(contract);
+                    ctx.engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
+                }
                 continue;
             }
             ctx.consecutive_incomplete += 1;
@@ -1124,6 +1139,11 @@ let start_time = Instant::now();
             ctx.continuation_raw.clear();
             ctx.continuation_mark = None;
             ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: hint.to_string() });
+            // Пересстанавливаем json_schema грамматику для сигнальных агентов
+            if let Some(contract) = &ctx.signal_contract {
+                let schema = build_signal_envelope_schema(contract);
+                ctx.engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
+            }
             continue;
         }
 

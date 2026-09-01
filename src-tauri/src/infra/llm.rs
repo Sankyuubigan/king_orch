@@ -340,6 +340,12 @@ impl LlamaEngine {
         let mut attempt_mmproj = mmproj_orig.is_some();
         let mut attempt_reasoning = use_reasoning_default;
         let auth_value = format!("Bearer {}", api_key);
+        // PDL (Programmatic Dependent Launch) работает только на Hopper (sm_90+).
+        // На Pascal/Turing/Ampere ядро ggml_cuda_kernel_can_use_pdl падает с
+        // "invalid device function" из-за бага в llama.cpp (проверяет ptxVersion,
+        // но не compute capability). Отключаем через env-var.
+        let is_pre_hopper = gpu_info.compute_major > 0 && gpu_info.compute_major < 9;
+
         let build_cmd = {
             let server_exe = server_exe.clone();
             let server_log = server_log.clone();
@@ -357,6 +363,9 @@ impl LlamaEngine {
                 .arg("--flash-attn").arg("on")
                 .arg("--no-webui")
                 .arg("--log-file").arg(&server_log);
+                if is_pre_hopper {
+                    c.env("GGML_CUDA_PDL", "0");
+                }
                 if use_mmproj {
                     if let Some(mmp) = mmproj_path {
                         c.arg("--mmproj").arg(mmp);
@@ -1442,6 +1451,7 @@ fn diagnose_cuda_fallback(log_path: &Path) -> String {
         ("no kernel image", "в сборке движка нет ядер для вашей видеокарты (для RTX 50xx / Blackwell нужен вариант cuda-13.x)"),
         ("driver version is insufficient", "драйвер NVIDIA слишком старый для этой CUDA-сборки (для cuda-13.x нужен драйвер 580+ / CUDA 13, для cuda-12.4 — 527.41+)"),
         ("compute capability", "в сборке движка нет ядер для вашего GPU (compute capability)"),
+        ("invalid device function", "драйвер NVIDIA слишком старый для этой CUDA-сборки (обновите драйвер до ≥ 551.78 / CUDA 12.4)"),
         ("failed to initialize cuda", "CUDA не инициализировалась — неполадка драйвера"),
         ("cuda error", "ошибка CUDA"),
         ("ggml_cuda", "ошибка CUDA-бэкенда"),

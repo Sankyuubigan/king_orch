@@ -599,7 +599,9 @@ where
                         if field.is_empty() {
                             field_val = signal.as_str().map(|s| s.to_string());
                         } else if let Some(nested) = signal.get(field) {
-                            field_val = nested.as_str().map(|s| s.to_string());
+                            field_val = nested.as_str()
+                                .map(|s| s.to_string())
+                                .or_else(|| nested.as_bool().map(|b| b.to_string()));
                         }
                         if field_val.is_some() { break; }
                     }

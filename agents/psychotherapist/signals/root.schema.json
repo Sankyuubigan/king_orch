@@ -26,7 +26,7 @@
           "element_8_found": { "type": "boolean" },
           "element_9_found": { "type": "boolean" }
         },
-        "required": ["verdict"]
+        "required": ["verdict", "element_1_found", "element_2_found", "element_3_found", "element_4_found", "element_5_found", "element_6_found", "element_7_found", "element_8_found", "element_9_found"]
       }
     },
     "cluster_checker": {
