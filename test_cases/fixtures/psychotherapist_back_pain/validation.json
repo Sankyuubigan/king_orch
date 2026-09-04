@@ -1,0 +1,21 @@
+{
+  "workflow_name": "Психотерапевт",
+  "model_path": "D:\\nn\\models\\llm\\uncen\\qwen3.8-9b\\Qwen3.8-9B-heretic-uncensored.i1-IQ4_NL.gguf",
+  "timeout_sec": 300,
+  "source_file": "_placeholder.md",
+  "target_path": ".agents_workspace/_placeholder.md",
+  "levels": {
+    "structure": {
+      "required_agents": ["data_collector", "soma_translator", "decomposer", "validator"],
+      "forbidden_paths": []
+    },
+    "file_change": {
+      "must_contain": [],
+      "must_not_contain": []
+    },
+    "functional": {
+      "run_cmd": "echo PASS",
+      "expected_stdout_contains": "PASS"
+    }
+  }
+}

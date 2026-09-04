@@ -44,7 +44,10 @@ where
 
             // Строгая грамматика по контракту facts.yaml: точные ключи, без опций.
             let grammar = super::fact_extractor::build_facts_grammar(&config, Some(workflow_dir));
-            let expected_keys = super::fact_extractor::expected_output_keys(&config, Some(workflow_dir));
+            let expected_keys: Vec<String> = super::fact_extractor::expected_output_keys(&config, Some(workflow_dir))
+                .into_iter()
+                .filter(|k| k != "thought_process")
+                .collect();
             // Только boolean-факты — к ним применяется coerce_bool; строковые
             // output_fields (rewritten_query и т.п.) должны остаться строками.
             let bool_keys: Vec<String> = super::fact_extractor::resolve_facts(&config, Some(workflow_dir))
@@ -143,14 +146,17 @@ where
                 task
             };
 
-            // ── inject_reports: Отчёты коллег в system prompt ──
+            // ── inject_reports: Структурированные сигналы коллег в system prompt ──
+            // SSOT: инжектим только signal-сообщения (структурированные JSON-данные),
+            // а НЕ thought-сообщения (свободный текст с интерпретациями, которые
+            // bias'ят downstream-агентов).
             let mut injected_reports = String::new();
             if let Some(ref reports_to_inject) = node.inject_reports {
                 if !reports_to_inject.is_empty() {
                     injected_reports.push_str("### [ОТЧЕТЫ КОЛЛЕГ ДЛЯ АНАЛИЗА]\n");
                     for aid in reports_to_inject {
                         let report = context.messages.iter().rev()
-                            .find(|m| m.msg_type == "thought" && m.author.as_deref() == Some(aid.as_str()))
+                            .find(|m| m.msg_type == "signal" && m.author.as_deref() == Some(aid.as_str()))
                             .map(|m| m.content.clone())
                             .unwrap_or_else(|| "[Отчет не найден]".to_string());
                         injected_reports.push_str(&format!("--- Отчет от {} ---\n{}\n\n", aid, report));
@@ -439,6 +445,22 @@ where
             if let Some(ref input_obj) = node.input_object {
                 let resolved = context.resolve_template(input_obj);
                 let json_val: serde_json::Value = serde_json::from_str(&resolved)
+                    .or_else(|_| {
+                        // Fallback 1: ищем JSON в markdown/тексте
+                        extract_json(&resolved)
+                            .and_then(|s| serde_json::from_str(&s).ok())
+                            .ok_or_else(|| serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::InvalidData, "no json")))
+                    })
+                    .or_else(|_| {
+                        // Fallback 2: key-aware поиск — ищем JSON, содержащий ключи из cases_priority
+                        // (маленькие модели иногда оборачивают JSON в markdown с несколькими блоками)
+                        let keys: Vec<String> = node.cases_priority.as_ref()
+                            .map(|cp| cp.iter().map(|c| c.key.clone()).collect())
+                            .unwrap_or_default();
+                        extract_json_with_keys(&resolved, &keys)
+                            .and_then(|s| serde_json::from_str(&s).ok())
+                            .ok_or_else(|| serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::InvalidData, "no json with required keys")))
+                    })
                     .unwrap_or(serde_json::Value::Null);
 
                 if let Some(ref sf) = node.switch_field {
@@ -589,24 +611,19 @@ where
         NodeType::SignalRouter => {
             let signal_name = node.signal_name.as_deref().unwrap_or("");
             let field = node.field.as_deref().unwrap_or("");
-            let mut field_val: Option<String> = None;
 
-            // Ищем последний signal-месседж с нужным ключом
-            for msg in context.messages.iter().rev() {
-                if msg.msg_type != "signal" { continue; }
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg.content) {
-                    if let Some(signal) = val.get(signal_name) {
-                        if field.is_empty() {
-                            field_val = signal.as_str().map(|s| s.to_string());
-                        } else if let Some(nested) = signal.get(field) {
-                            field_val = nested.as_str()
-                                .map(|s| s.to_string())
-                                .or_else(|| nested.as_bool().map(|b| b.to_string()));
-                        }
-                        if field_val.is_some() { break; }
-                    }
+            // Читаем из signal bus (context.signals) — SSOT, а не сканирование messages
+            let field_val: Option<String> = context.signals.get(signal_name).and_then(|signal| {
+                if field.is_empty() {
+                    signal.as_str().map(|s| s.to_string())
+                } else {
+                    signal.get(field).and_then(|nested| {
+                        nested.as_str()
+                            .map(|s| s.to_string())
+                            .or_else(|| nested.as_bool().map(|b| b.to_string()))
+                    })
                 }
-            }
+            });
 
             let matched = field_val.as_deref().unwrap_or("");
 
@@ -644,19 +661,10 @@ where
             let conditions = &node.conditions;
             let logic = node.logic.as_deref().unwrap_or("any");
 
-            // Ищем последний signal-месседж с нужным ключом
-            let mut signal_value: Option<serde_json::Value> = None;
-            for msg in context.messages.iter().rev() {
-                if msg.msg_type != "signal" { continue; }
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg.content) {
-                    if let Some(signal) = val.get(signal_name) {
-                        signal_value = Some(signal.clone());
-                        break;
-                    }
-                }
-            }
-
-            let signal = signal_value.unwrap_or(serde_json::Value::Null);
+            // Читаем из signal bus (context.signals) — SSOT, а не сканирование messages
+            let signal = context.signals.get(signal_name)
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
             let mut matched_count = 0u32;
             let total = conditions.len() as u32;
 
@@ -891,6 +899,77 @@ fn extract_json(text: &str) -> Option<String> {
 
     text.find('{')
         .and_then(|start| text[start..].rfind('}').map(|end| text[start..start + end + 1].to_string()))
+}
+
+/// Извлекает JSON, содержащий ОДИН из указанных ключей (key-aware).
+/// Ищет все `{...}` блоки и возвращает тот, который содержит хотя бы один
+/// из `required_keys`. Используется как fallback для switch-нод, когда
+/// маленькие модели возвращают markdown вместо JSON (содержит несколько
+/// JSON-блоков: tool call + финальный ответ).
+fn extract_json_with_keys(text: &str, required_keys: &[String]) -> Option<String> {
+    // Сначала пробуем ```json fenced blocks
+    let candidates: Vec<String> = {
+        let mut result = Vec::new();
+        let mut pos = 0;
+        while let Some(start) = text[pos..].find("```json") {
+            let cs = pos + start + 7;
+            if let Some(end) = text[cs..].find("```") {
+                result.push(text[cs..cs + end].trim().to_string());
+                pos = cs + end + 3;
+            } else {
+                result.push(text[cs..].trim().to_string());
+                break;
+            }
+        }
+        if result.is_empty() {
+            // Нет fenced blocks — ищем все {…} кандидаты в исходном тексте
+            let mut i = 0;
+            while i < text.len() {
+                if text.as_bytes()[i] == b'{' {
+                    // Ищем匹配ную закрывающую скобку с учётом вложенности
+                    let mut depth = 0i32;
+                    let mut in_string = false;
+                    let mut escape = false;
+                    for (j, &b) in text.as_bytes()[i..].iter().enumerate() {
+                        if escape { escape = false; continue; }
+                        if b == b'\\' && in_string { escape = true; continue; }
+                        if b == b'"' { in_string = !in_string; continue; }
+                        if in_string { continue; }
+                        if b == b'{' { depth += 1; }
+                        if b == b'}' {
+                            depth -= 1;
+                            if depth == 0 {
+                                result.push(text[i..=i + j].to_string());
+                                break;
+                            }
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+        result
+    };
+
+    // Приоритет: ищем JSON с нужными ключами
+    for candidate in &candidates {
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(candidate) {
+            if let Some(obj) = val.as_object() {
+                if required_keys.iter().any(|k| obj.contains_key(k)) {
+                    return Some(candidate.clone());
+                }
+            }
+        }
+    }
+
+    // Fallback: первый валидный JSON (без проверки ключей)
+    for candidate in &candidates {
+        if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+            return Some(candidate.clone());
+        }
+    }
+
+    None
 }
 
 /// Парсит JSON-ответ fact_extractor (прямой парс, затем поиск `{...}` в тексте).

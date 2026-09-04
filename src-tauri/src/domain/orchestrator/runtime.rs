@@ -237,7 +237,14 @@ fn deno_permissions(mcp_name: &str, bins_dir: &Path) -> Vec<String> {
             "--allow-write".to_string(),
             "--allow-net".to_string(),
         ],
-        // deno_runner и любые неизвестные серверы — только запуск подпроцессов
+        // deno_runner: запуск подпроцессов + чтение/запись в sandbox-директории
+        // (ребёнок получает строгие --allow-read=<sandbox> + --allow-write=<sandbox> из TS-кода)
+        "deno_runner" => vec![
+            "--allow-run".to_string(),
+            "--allow-read".to_string(),
+            "--allow-write".to_string(),
+        ],
+        // Неизвестные серверы — только запуск подпроцессов
         _ => vec!["--allow-run".to_string()],
     }
 }
@@ -294,6 +301,15 @@ fn ensure_mcp_deps<L: Fn(String) + Clone + Send + Sync>(
     if mcp_name == "searxng_search" || mcp_name == "web_search" {
         if let Some(bins_str) = bins_dir.to_str() {
             return vec![("KING_ORCH_BINS_DIR", bins_str.to_string())];
+        }
+    }
+    // deno_runner: передаём корень проекта для вычисления sandbox-директории
+    if mcp_name == "deno_runner" {
+        // bins_dir = project_root/src-tauri/bin → project_root = bins_dir.parent().parent()
+        if let Some(project_root) = bins_dir.parent().and_then(|p| p.parent()) {
+            if let Some(root_str) = project_root.to_str() {
+                return vec![("KING_ORCH_PROJECT_ROOT", root_str.to_string())];
+            }
         }
     }
     vec![]

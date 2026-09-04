@@ -76,6 +76,32 @@ export interface SingleTestResult {
     responses: Record<string, string>;
 }
 
+export interface PipelineTestInfo {
+    id: string;
+    workflow_name: string;
+    model_path: string;
+    source_file: string;
+    timeout_sec: number;
+}
+
+export interface LevelResult {
+    passed: boolean;
+    details: string[];
+}
+
+export interface PipelineTestResult {
+    test_id: string;
+    model_name: string;
+    workflow_name: string;
+    duration_ms: number;
+    level1_structure: LevelResult;
+    level2_file: LevelResult;
+    level3_functional: LevelResult;
+    overall_passed: boolean;
+    messages: { author: string; content_preview: string; msg_type: string }[];
+    report_path: string | null;
+}
+
 export interface Attachment {
     file_name: string;
     mime_type: string;

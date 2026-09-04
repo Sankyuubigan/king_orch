@@ -31,6 +31,7 @@ pub fn build_system_prompt(
     has_tools: bool,
     all_tools: &[(String, String, serde_json::Value)],
     max_gen_tokens: usize,
+    uses_method_3: bool,
 ) -> String {
     let mut sp = agent.system_prompt.clone();
 
@@ -46,11 +47,14 @@ pub fn build_system_prompt(
     sp.push_str(TRUTH_PROTOCOL);
     sp.push_str(&format!("\n\n{}", language_directive(messages)));
 
-    if has_tools {
+    // Для Method 3-агентов грамматика сама принуждает JSON через emit_signal,
+    // поэтому секции [ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ] и [ДОСТУПНЫЕ ИНСТРУМЕНТЫ]
+    // не добавляются — они противоречат грамматике и тратят когнитивную энергию модели.
+    if has_tools && !uses_method_3 {
         sp.push_str("\n\n[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]\nЕсли нужен инструмент — верни ОДИН JSON-блок (```json ... ```).\nВ JSON обязательно поле \"thought\".\n\n⚠️ ВАЖНО: Если задача ВЫПОЛНЕНА — пиши ОБЫЧНЫЙ ТЕКСТ без JSON!\n");
     }
 
-    if has_tools {
+    if has_tools && !uses_method_3 {
         let mut td = String::new();
         for (_, name, tool) in all_tools {
             let desc = tool.get("description").and_then(|d| d.as_str()).unwrap_or("");

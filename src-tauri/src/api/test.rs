@@ -229,3 +229,82 @@ pub fn write_test_results(path: String, results: Vec<SingleTestResult>) -> Resul
     std::fs::write(&path, content).map_err(|e| format!("Ошибка записи файла: {}", e))?;
     Ok(())
 }
+
+// ─── Pipeline Tests ───
+
+#[tauri::command]
+pub fn get_pipeline_test_list(app: AppHandle) -> Result<Vec<domain::pipeline_test::PipelineTestInfo>, String> {
+    let agents_dir = infra::find_agents_dir(&app);
+    let project_root = agents_dir.parent().unwrap_or(&agents_dir).to_path_buf();
+    domain::pipeline_test::get_pipeline_test_infos(&project_root)
+}
+
+#[tauri::command]
+pub async fn run_pipeline_test_cmd(
+    app: AppHandle,
+    _state: State<'_, AppState>,
+    test_id: String,
+    model_path: String,
+) -> Result<domain::pipeline_test::PipelineTestResult, String> {
+    init_test_log_file();
+    append_test_log(&format!(
+        "--- Запуск pipeline test '{}' с моделью '{}' ---",
+        test_id, model_path
+    ));
+
+    let agents_dir = infra::find_agents_dir(&app);
+    let project_root = agents_dir.parent().unwrap_or(&agents_dir).to_path_buf();
+    let fixtures_dir = domain::pipeline_test::find_fixtures_dir(&project_root);
+    let test_dir = fixtures_dir.join(&test_id);
+
+    let mut test_def = domain::pipeline_test::load_single_test(&test_dir)?;
+    test_def.validation.model_path = model_path.clone();
+
+    let engine_dir = crate::api::llamacpp::get_engine_dir(&app);
+    let config = infra::load_config(&app);
+
+    let log_cb = {
+        let app_handle = app.clone();
+        move |msg: String| {
+            append_test_log(&msg);
+            let _ = app_handle.emit("log", format!("[pipeline_test] {}", msg));
+        }
+    };
+
+    let status_cb = {
+        let app_handle = app.clone();
+        move |msg: String, progress: u8| {
+            let _ = app_handle.emit("pipeline_status", &msg);
+            let _ = app_handle.emit("pipeline_progress", progress as f64);
+        }
+    };
+
+    let engine = infra::LlamaEngine::new(
+        &engine_dir,
+        &model_path,
+        config.context_size,
+        config.kv_quant_keys,
+        config.kv_quant_values,
+        config.reasoning_budget,
+        log_cb.clone(),
+        |_| {},
+    )?;
+
+    let result = domain::pipeline_test::run_pipeline_test(
+        &test_def,
+        &engine,
+        &agents_dir,
+        &project_root,
+        log_cb,
+        status_cb,
+    );
+
+    append_test_log(&format!(
+        "--- Pipeline test '{}' завершён: {} ---",
+        test_id,
+        if result.as_ref().map(|r| r.overall_passed).unwrap_or(false) { "PASS" } else { "FAIL" }
+    ));
+
+    let _ = app.emit("pipeline_done", result.as_ref().ok().map(|r| r.overall_passed));
+    result
+}

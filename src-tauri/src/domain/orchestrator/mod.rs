@@ -27,7 +27,7 @@ mod runtime;
 pub use runtime::builtin_tools;
 
 use crate::domain::agent_manager::{load_agents, AgentProfile};
-use crate::domain::signals::{SignalContract, extract_signal_value_from_text, load_signal_contract, build_signal_envelope_schema};
+use crate::domain::signals::{SignalContract, extract_signal_value_from_text, load_signal_contract, build_signal_envelope_grammar};
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner, NodeType, WorkflowDef,
 };
@@ -224,7 +224,7 @@ pub fn build_worst_agent_prompt(
             let mut tools = runtime::builtin_tools();
             tools.extend(runtime::agent_code_tool_schemas(agent));
             let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
-            let mut sp = build_system_prompt(agent, history, has_tools, &tools, 2048);
+            let mut sp = build_system_prompt(agent, history, has_tools, &tools, 2048, false);
             sp.push_str("\n\n");
             sp.push_str(prompt::CRITICAL_LIMIT_BLOCK);
             (sp, has_tools)
@@ -298,7 +298,7 @@ where
                 let mut tools = runtime::builtin_tools();
                 tools.extend(runtime::agent_code_tool_schemas(agent));
                 let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
-                (build_system_prompt(agent, &history, has_tools, &tools, max_gen_usize), has_tools)
+                (build_system_prompt(agent, &history, has_tools, &tools, max_gen_usize, false), has_tools)
             })
             .unwrap_or_else(|| (String::new(), false)),
     };
@@ -525,6 +525,22 @@ where
     if depth > 5 { return Err("Превышена максимальная глубина вложенности сабагентов".into()); }
     log_cb(format!("▶ Запуск агента: {} (глубина: {})", agent.name, depth));
 
+    // ── Определяем signal_contract РАНЬШЕ — нужен для корректного промпта (Method 3). ──
+    let signal_contract: Option<SignalContract> = {
+        let signals_dir = agent.folder.as_ref()
+            .and_then(|f| {
+                grammars_dir.parent()
+                    .and_then(|p| p.parent())
+                    .map(|base| base.join(f).join("signals"))
+            })
+            .unwrap_or_else(|| grammars_dir.parent().unwrap_or(grammars_dir).join("signals"));
+        load_signal_contract(&signals_dir, &agent.id)
+    };
+    let uses_method_3 = signal_contract.is_some();
+    if uses_method_3 {
+        log_cb(format!("📋 Агент '{}': обнаружен signal-контракт (Method 3) — промпт будет адаптирован", agent.id));
+    }
+
     // 4.2: публикуем событие старта в in-process шину (статус агента для UI/логов).
     crate::infra::event_bus::global_bus().publish(crate::infra::event_bus::AgentEvent::Spawned {
         agent: agent.id.clone(),
@@ -565,9 +581,10 @@ where
     }
 
     let has_tools_for_prompt = has_real_tools;
-    let mut system_prompt = build_system_prompt(agent, messages, has_tools_for_prompt, &all_tools, max_gen_tokens);
+    let mut system_prompt = build_system_prompt(agent, messages, has_tools_for_prompt, &all_tools, max_gen_tokens, uses_method_3);
     // 4.5: плагин-слой — точка расширения системного промпта (pass-through, если плагинов нет).
     crate::infra::plugins::global_plugins().on_system_prompt(&agent.id, &mut system_prompt);
+
     if !injected_reports.is_empty() {
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&injected_reports);
@@ -691,23 +708,10 @@ let start_time = Instant::now();
     // Задаётся для ПЕРВОГО вызова LLM агента (consume-and-clear в движке),
     // докачки/компакты/результаты инструментов идут уже с базовой грамматикой.
     // Сигнальные агенты (есть контракт в signals/root.schema.json) ОБЯЗАНЫ
-    // генерировать ответ под json_schema-грамматикой своего конверта (см.
-    // docs/SIGNAL_CONTRACTS.md — отключать грамматику запрещено). Грамматика
-    // ограничивает только ФОРМУ; свободный текст (анализ агента) живёт в поле
-    // `thought` конверта emit_signal и извлекается как `final_response` в dispatch.rs.
-    let signal_contract: Option<SignalContract> = {
-        // SSOT контрактов сигналов — команда workflow (agent.folder), а НЕ grammars_dir.
-        // grammars_dir может указать на чужую команду (fallback), а контракты
-        // команд-специфичны. См. docs/SIGNAL_CONTRACTS.md.
-        let signals_dir = agent.folder.as_ref()
-            .and_then(|f| {
-                grammars_dir.parent()          // .../research
-                    .and_then(|p| p.parent())  // .../agents
-                    .map(|base| base.join(f).join("signals"))
-            })
-            .unwrap_or_else(|| grammars_dir.parent().unwrap_or(grammars_dir).join("signals"));
-        load_signal_contract(&signals_dir, &agent.id)
-    };
+    // генерировать ответ под Method 3 гибридной GBNF-грамматикой (docs/gbnf.md):
+    // think-block + JSON. disable_reasoning НЕ включается для Method 3 —
+    // модель думает в <think>...</think>, а грамматика направляет к JSON после них.
+    // signal_contract определён ранее (перед публикацией старта).
     let agent_grammar = if signal_contract.is_none() {
         load_agent_grammar(grammars_dir, &agent.id)
     } else {
@@ -717,19 +721,27 @@ let start_time = Instant::now();
         engine.set_grammar(Some(GrammarSpec { gbnf: Some(gbnf.clone()), json_schema: None }));
         log_cb(format!("🎯 Агент '{}': применена per-agent GBNF-грамматика {} символов", agent.id, gbnf.len()));
     } else if let Some(contract) = &signal_contract {
-        // Сигнальные агенты: контракт (signals/root.schema.json) — единственный SSOT
-        // формы сигнала. Применяем его как json_schema: движок компилирует в GBNF на
-        // лету, и модель ФИЗИЧЕСКИ не может исказить имена/значения полей (напр.
-        // verdict → status). Отключать грамматику для сигнальных агентов ЗАПРЕЩЕНО:
-        // это корень бага «тихо упал, в чат никто не ответил» (маршрутизатор не находит
-        // поле и граф завершается, не дойдя до message-узла). См. docs/SIGNAL_CONTRACTS.md.
-        let schema = build_signal_envelope_schema(contract);
-        engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
-        log_cb(format!("🎯 Агент '{}': применён JSON-schema контракт сигнала (поля вердикта защищены)", agent.id));
+        // Сигнальные агенты: Method 3 из docs/gbnf.md — гибридная GBNФ.
+        // think-block ( düşünce <think>...</think>) + envelope-json. Модель думает
+        // свободно, грамматика направляет к JSON после </think>.
+        // disable_reasoning НЕ включается — см. has_agent_grammar ниже.
+        let grammar = build_signal_envelope_grammar(contract);
+        engine.set_grammar(Some(GrammarSpec { gbnf: Some(grammar), json_schema: None }));
+        log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены)", agent.id));
     } else {
         engine.set_grammar(None);
         log_cb(format!("⚠️ Грамматика не найдена для агента '{}' (искал в {})", agent.id, grammars_dir.display()));
     }
+
+    // Активная грамматика для восстановления после generate_chat() (consume-and-clear).
+    let active_grammar = if let Some(gbnf) = &agent_grammar {
+        Some(GrammarSpec { gbnf: Some(gbnf.clone()), json_schema: None })
+    } else if let Some(contract) = &signal_contract {
+        let grammar = build_signal_envelope_grammar(contract);
+        Some(GrammarSpec { gbnf: Some(grammar), json_schema: None })
+    } else {
+        None
+    };
 
     // ── Контекст цикла (dispatch.rs): всё разделяемое мутабельное состояние
     // упаковано в RunContext; блоки инструментов и сабагентов вынесены в методы
@@ -779,6 +791,8 @@ let start_time = Instant::now();
         continuation_mark: None,
         action_found: false,
         thought_logged: false,
+        agent_grammar: agent_grammar.clone(),
+        active_grammar,
     };
 
     for iter in 1..=30 {
@@ -836,6 +850,10 @@ let start_time = Instant::now();
         log_cb(format!(">>> [{}] LLM вызов #{}, msgs={}, max_gen={}, глубина={}", agent.name, iter, ctx.llm_messages.len(), max_gen_tokens, depth));
         let ctx_label = format!("{}:{}#{}", mem_mode, agent.name, iter);
         // Обёртка генерации с детектом переполнения контекста и повтором (item 4).
+        // Method 3 агенты (signal_contract): disable_reasoning = false — модель думает в <think>.
+        // Per-agent GBNF агенты (без signal_contract): disable_reasoning = true.
+        let uses_method_3 = signal_contract.is_some();
+        let has_agent_grammar = agent_grammar.is_some() && !uses_method_3;
         let attempt_generate = |msgs: &[LlmMessage]| -> Result<GenerationResult, String> {
             if !attachments.is_empty() && engine.is_multimodal() {
                 engine.generate_chat_multimodal(
@@ -846,7 +864,7 @@ let start_time = Instant::now();
                 )
             } else {
                 engine.generate_chat(
-                    msgs, max_gen_tokens, model_params, format_type, false, cancel_flag.clone(),
+                    msgs, max_gen_tokens, model_params, format_type, has_agent_grammar, cancel_flag.clone(),
                     &ctx_label,
                     |p, _| { status_cb(format!("{} думает (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
                     log_cb.clone(),
@@ -970,12 +988,8 @@ let start_time = Instant::now();
                         ctx.thinking_no_answer
                     ));
                     ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
-                    // Пересстанавливаем json_schema грамматику для сигнальных агентов
-                    // (take_pending_grammar() consume-and-clear сбросил грамматику).
-                    if let Some(contract) = &ctx.signal_contract {
-                        let schema = build_signal_envelope_schema(contract);
-                        ctx.engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
-                    }
+                    // Восстанавливаем активную грамматику (consume-and-clear сбросил)
+                    ctx.restore_grammar();
                     continue;
                 }
                 ctx.consecutive_incomplete += 1;
@@ -992,11 +1006,8 @@ let start_time = Instant::now();
                 ctx.continuation_raw.clear();
                 ctx.continuation_mark = None;
                 ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: hint.to_string() });
-                // Пересстанавливаем json_schema грамматику для сигнальных агентов
-                if let Some(contract) = &ctx.signal_contract {
-                    let schema = build_signal_envelope_schema(contract);
-                    ctx.engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
-                }
+                // Восстанавливаем активную грамматику (consume-and-clear сбросил)
+                ctx.restore_grammar();
                 continue;
             }
         }
@@ -1020,6 +1031,9 @@ let start_time = Instant::now();
                 ctx.final_response = format!("{} Агент '{}' не смог завершить ответ после {} докачек (модель упирается в лимит токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id, MAX_CONTINUATIONS);
                 break;
             }
+            // Восстанавливаем активную грамматику после continuation
+            // (take_pending_grammar() consume-and-clear сбросил грамматику).
+            ctx.restore_grammar();
             continue;
         }
 
@@ -1029,6 +1043,8 @@ let start_time = Instant::now();
                 DispatchCtl::Break => break,
                 DispatchCtl::Return(v) => return Ok(v),
             }
+        } else if ctx.has_tools_for_prompt {
+            log_cb(format!("⚠️ parse_tool_call: не удалось распознать tool call в ответе агента '{}' (первые 200 симв.): {}", agent.name, safe_truncate(&parse_target, 200)));
         }
 
         if let Some(parsed) = parse_orchestrator_response(&parse_target) {
@@ -1117,12 +1133,8 @@ let start_time = Instant::now();
                     ctx.thinking_no_answer
                 ));
                 ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
-                // Пересстанавливаем json_schema грамматику для сигнальных агентов
-                // (take_pending_grammar() consume-and-clear сбросил грамматику).
-                if let Some(contract) = &ctx.signal_contract {
-                    let schema = build_signal_envelope_schema(contract);
-                    ctx.engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
-                }
+                // Восстанавливаем активную грамматику (consume-and-clear сбросил)
+                ctx.restore_grammar();
                 continue;
             }
             ctx.consecutive_incomplete += 1;
@@ -1139,11 +1151,8 @@ let start_time = Instant::now();
             ctx.continuation_raw.clear();
             ctx.continuation_mark = None;
             ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: hint.to_string() });
-            // Пересстанавливаем json_schema грамматику для сигнальных агентов
-            if let Some(contract) = &ctx.signal_contract {
-                let schema = build_signal_envelope_schema(contract);
-                ctx.engine.set_grammar(Some(GrammarSpec { gbnf: None, json_schema: Some(schema) }));
-            }
+            // Восстанавливаем активную грамматику (consume-and-clear сбросил)
+            ctx.restore_grammar();
             continue;
         }
 
@@ -1232,6 +1241,8 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
                 *ctx.msg_counter += 1;
                 ctx.signal_saved = true;
                 log_cb(format!("📡 Сигнал '{}' извлечён из текста ответа (fallback): {}", contract.key, value));
+            } else {
+                log_cb(format!("⚠️ Fallback не смог извлечь сигнал '{}' из текста ответа агента '{}' (тип контракта: проверь supporting enum/bool extraction)", contract.key, agent.id));
             }
         }
     }
@@ -1466,7 +1477,7 @@ mod tests {
         let mut agent = make_agent("search", "ты поисковик");
         agent.mcp_servers = vec!["web_search".to_string()];
         let tools = runtime::builtin_tools();
-        let sp = build_system_prompt(&agent, &[], true, &tools, 2048);
+        let sp = build_system_prompt(&agent, &[], true, &tools, 2048, false);
         assert!(sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"), "legacy-ветка: агент с mcp_servers обязан получать список инструментов");
         assert!(sp.contains("emit_signal"));
         assert!(sp.contains("[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]"));
@@ -1475,16 +1486,26 @@ mod tests {
     #[test]
     fn legacy_agent_without_tools_has_no_tools_section() {
         let agent = make_agent("plain", "просто агент");
-        let sp = build_system_prompt(&agent, &[], false, &[], 2048);
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false);
         assert!(!sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"));
         assert!(!sp.contains("[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]"));
+    }
+
+    #[test]
+    fn method3_agent_with_tools_skips_legacy_sections() {
+        let mut agent = make_agent("validator", "валидатор данных");
+        agent.tools = vec!["emit_signal".to_string()];
+        let tools = vec![("emit_signal".to_string(), "emit_signal".to_string(), serde_json::json!({"description": "Save signal"}))];
+        let sp = build_system_prompt(&agent, &[], true, &tools, 2048, true);
+        assert!(!sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"), "Method 3-агент НЕ должен получать [ДОСТУПНЫЕ ИНСТРУМЕНТЫ]");
+        assert!(!sp.contains("[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]"), "Method 3-агент НЕ должен получать [ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]");
     }
 
     #[test]
     fn agent_with_current_date_flag_gets_date_block() {
         let mut agent = make_agent("dated", "поисковый агент");
         agent.current_date = true;
-        let sp = build_system_prompt(&agent, &[], false, &[], 2048);
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false);
         assert!(sp.contains("[ТЕКУЩАЯ ДАТА]"), "агент с current_date: true обязан получать блок даты");
         assert!(sp.starts_with("[ТЕКУЩАЯ ДАТА]"), "блок даты должен быть в начале промпта");
         assert!(sp.contains("Сегодня"), "блок обязан содержать слово «Сегодня»");
@@ -1495,7 +1516,7 @@ mod tests {
     #[test]
     fn agent_without_current_date_flag_has_no_date_block() {
         let agent = make_agent("plain", "обычный агент");
-        let sp = build_system_prompt(&agent, &[], false, &[], 2048);
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false);
         assert!(!sp.contains("[ТЕКУЩАЯ ДАТА]"), "агент без флага не должен получать блок даты");
     }
 
@@ -1583,7 +1604,7 @@ mod tests {
         let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
         all_tools.extend(tools_of_server_as_all_tools("web_search"));
         all_tools.extend(runtime::builtin_tools());
-        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048);
+        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048, false);
 
         for t in ["WebFetch", "FetchArticle", "FetchGithubReadme", "WebSearch", "emit_signal"] {
             assert!(sp.contains(t), "промпт docs_researcher не содержит '{t}'");
@@ -1606,7 +1627,7 @@ mod tests {
         let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
         all_tools.extend(tools_of_server_as_all_tools("web_search"));
         all_tools.extend(runtime::builtin_tools());
-        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048);
+        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048, false);
         assert!(sp.contains("WebFetch"), "промпт web_researcher не содержит WebFetch");
         assert!(sp.contains("WebSearch"));
     }
@@ -1623,7 +1644,7 @@ mod tests {
         let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
         all_tools.extend(tools_of_server_as_all_tools("web_search"));
         all_tools.extend(runtime::builtin_tools());
-        let mut system_prompt = build_system_prompt(&agent, &[], true, &all_tools, 2048);
+        let mut system_prompt = build_system_prompt(&agent, &[], true, &all_tools, 2048, false);
         system_prompt.push_str("\n\n[КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ]\n");
         system_prompt.push_str(prompt::CRITICAL_LIMIT_BLOCK);
 

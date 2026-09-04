@@ -15,6 +15,10 @@ pub struct WorkflowContext {
     pub history: Vec<ChatMessage>,
     /// Флаг: финальный узел workflow уже сохранил результат как message
     pub output_emitted: bool,
+    /// Явный signal bus: ключ сигнала → JSON значение.
+    /// Заполняется из messages[] при создании контекста и при каждом emit_signal.
+    /// SSOT для SignalRouter/ConditionRouter и {{ signals }} шаблона.
+    pub signals: HashMap<String, serde_json::Value>,
 }
 
 impl WorkflowContext {
@@ -23,13 +27,32 @@ impl WorkflowContext {
         messages: Vec<ChatMessage>,
         history: Vec<ChatMessage>,
     ) -> Self {
+        // Заполняем signal bus из messages (сигналы с предыдущих итераций)
+        let mut signals = HashMap::new();
+        for msg in &messages {
+            if msg.msg_type == "signal" {
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg.content) {
+                    if let Some(obj) = val.as_object() {
+                        for (k, v) in obj {
+                            signals.insert(k.clone(), v.clone());
+                        }
+                    }
+                }
+            }
+        }
         Self {
             user_message,
             node_outputs: HashMap::new(),
             messages,
             history,
             output_emitted: false,
+            signals,
         }
+    }
+
+    /// Добавляет сигнал в bus (вызывается из dispatch.rs после emit_signal).
+    pub fn insert_signal(&mut self, key: String, value: serde_json::Value) {
+        self.signals.insert(key, value);
     }
 
     /// Разрешает шаблонные переменные вида `{{ nodes.X.output.Y }}` и `{{ user_message }}`
@@ -39,17 +62,13 @@ impl WorkflowContext {
         // {{ user_message }}
         result = result.replace("{{ user_message }}", &self.user_message);
 
-        // {{ signals }} — JSON-массив signal-сообщений из сессии
+        // {{ signals }} — JSON-объект из signal bus (ключ → значение)
         if result.contains("{{ signals }}") {
-            let signals: Vec<&ChatMessage> = self.messages
-                .iter()
-                .filter(|m| m.msg_type == "signal")
-                .collect();
-            let signals_json = serde_json::to_string(&signals).unwrap_or_else(|_| "[]".to_string());
+            let signals_json = serde_json::to_string(&self.signals).unwrap_or_else(|_| "{}".to_string());
             result = result.replace("{{ signals }}", &signals_json);
         }
 
-        // {{ messages }} — история сессии для LLM: только не-thought сообщения
+        // {{ messages }} — история сессии для LLM: только не-thought и не-signal сообщения
         // и только их content (без sub_calls — это UI-метаданные, а не переписка).
         if result.contains("{{ messages }}") {
             let history: Vec<serde_json::Value> = llm_history(&self.messages)

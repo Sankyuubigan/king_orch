@@ -296,7 +296,8 @@ pub fn find_agents_dir(app: &AppHandle) -> PathBuf {
     // набор из agents/, а не устаревшая копия ресурсов в target/ (Tauri копирует
     // ресурсы аддитивно и НЕ удаляет выпиленные из исходников файлы-призраки).
     // Паттерн тот же, что в find_mcp_servers_dir ниже.
-    let repo_agents = exe_dir.join("..").join("..").join("agents");
+    // 3 уровня вверх от exe_dir: target/release/ → target/ → src-tauri/ → корень проекта
+    let repo_agents = exe_dir.join("..").join("..").join("..").join("agents");
     if repo_agents.exists() {
         return repo_agents;
     }

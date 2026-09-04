@@ -324,6 +324,25 @@ where
             (runner.log_cb)(format!("[workflow] Узел '{}' выполнен за {:.1}с", node.id, node_start.elapsed().as_secs_f32()));
             context.node_outputs.insert(node.id.clone(), result.output.clone());
             last_node_output = Some(result.output.clone());
+
+            // ── Синхализация signal bus: подхватываем новые сигналы из messages[] ──
+            // emit_signal в dispatch.rs пушит в messages[], но context.signals
+            // заполнялся при создании контекста. Подхватываем здесь.
+            let prev_signal_count = context.signals.len();
+            for msg in context.messages.iter().rev() {
+                if msg.msg_type != "signal" { continue; }
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg.content) {
+                    if let Some(obj) = val.as_object() {
+                        for (k, v) in obj {
+                            context.signals.entry(k.clone()).or_insert_with(|| v.clone());
+                        }
+                    }
+                }
+            }
+            let new_signals = context.signals.len() - prev_signal_count;
+            if new_signals > 0 {
+                (runner.log_cb)(format!("[workflow] Signal bus: +{} сигналов (итого: {})", new_signals, context.signals.len()));
+            }
         }
 
         // Строим новый порядок очереди: [next_node, ...next_nodes, ...остаток очереди]

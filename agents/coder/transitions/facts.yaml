@@ -1,7 +1,17 @@
 extractor_prompt: |
-  Ты — системный маршрутизатор. Определи тип запроса.
-  Верни JSON: {"is_question": false, "is_bug": false, "is_feature": false, "needs_search": false, "is_mapping": false, "is_design": false, "is_testing": false, "is_direct_code": false}
+  Ты — системный маршрутизатор. Определи тип запроса пользователя.
+  В поле thought_process рассмотри каждый факт по его критерию и объясни своё решение.
+  Затем выведи JSON с результатами.
+  {{ facts }}
+  ### Сообщение пользователя
   {{ user_message }}
+  ### История сессии
+  {{ history }}
+  Ответь ТОЛЬКО JSON, без пояснений.
+
+output_fields:
+  - id: thought_process
+    field_type: string
 
 facts:
   - id: is_question

@@ -105,7 +105,9 @@ async function runSandbox(
   timeoutSec: number,
 ): Promise<string> {
   // Резолвим пути и проверяем безопасность
-  const sandboxDir = resolvePath(projectPath, ".agents_workspace", "sandbox");
+  // KING_ORCH_PROJECT_ROOT передаётся из Rust при спавне MCP-сервера
+  const projectRoot = Deno.env.get("KING_ORCH_PROJECT_ROOT") || projectPath;
+  const sandboxDir = resolvePath(projectRoot, ".agents_workspace", "sandbox");
   const resolvedFile = resolvePath(filePath);
 
   if (!isInsideDir(resolvedFile, sandboxDir)) {

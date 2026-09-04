@@ -1,0 +1,10 @@
+root ::= json-answer
+json-answer ::= "{" sp answer-body sp "}"
+answer-body ::= bug-captured-body | pass-body
+bug-captured-body ::= "\"bug-captured\"" sp ":" sp json-bool (sp "," sp "\"logs\"" sp ":" sp json-string)?
+pass-body ::= "\"pass\"" sp ":" sp json-bool (sp "," sp "\"reason\"" sp ":" sp json-string)?
+sp ::= " " | "\n" | "\t" | ""
+json-string ::= "\"" string-char* "\""
+string-char ::= [^"\\] | escape
+escape ::= "\\" ("\\" | "\"" | "n" | "t" | "r" | "b" | "f" | "u" [0-9a-f] [0-9a-f] [0-9a-f] [0-9a-f])
+json-bool ::= "true" | "false"

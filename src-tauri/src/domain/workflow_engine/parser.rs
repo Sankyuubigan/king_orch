@@ -352,6 +352,13 @@ pub fn separate_top_level_fields(yaml: &str) -> String {
 mod tests {
     use super::*;
 
+    fn workspace_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .to_path_buf()
+    }
+
     #[test]
     fn test_cycle_fields_roundtrip() {
         // max_visits (на узле) и max_steps (в config) должны переживать
@@ -996,6 +1003,154 @@ edges: []
             .expect("❌ РЕПРО: полный граф сгенерировал невалидный YAML!");
         assert_eq!(wf2.nodes.len(), 11, "все узлы должны сохраниться");
     }
+
+    #[test]
+    fn test_parse_coding_team_workflow() {
+        let path_str = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../agents/coder/transitions/coding-team.yaml"
+        );
+        let path = Path::new(path_str);
+        assert!(path.exists(), "Файл не найден: {:?}", path);
+        let wf = parse_workflow_file(path).expect("Парсинг YAML не удался");
+        assert_eq!(wf.name, "Кодер");
+        assert!(wf.visible);
+
+        // Конфиг
+        let cfg = wf.config.as_ref().expect("config должен быть");
+        assert_eq!(cfg.facts_file.as_deref(), Some("facts.yaml"));
+        assert_eq!(cfg.max_steps, Some(200));
+        assert!(cfg.facts.is_empty(), "facts не вливаются при парсинге");
+
+        // Все 18 узлов присутствуют
+        let expected_nodes = [
+            "extract_facts", "route",
+            "call_code_explainer",
+            "call_ux_ui_designer", "call_design_coder",
+            "call_qa_diagnost_direct",
+            "call_primary_coder_direct",
+            "call_research_team", "final_research_output",
+            "call_bug_analyst", "route_search",
+            "call_search_for_bug", "call_qa_reproduce",
+            "check_qa_repro", "call_task_planner",
+            "call_arch_reviewer", "check_plan",
+            "call_primary_coder", "call_qa_verify", "check_verify",
+            "final_success", "honest_fail_bug",
+            "call_project_mapper",
+        ];
+        for id in &expected_nodes {
+            assert!(
+                wf.nodes.iter().any(|n| n.id == *id),
+                "узел '{}' не найден в workflow", id
+            );
+        }
+
+        // Типы ключевых узлов
+        let get = |id: &str| wf.nodes.iter().find(|n| n.id == id)
+            .unwrap_or_else(|| panic!("узел {} не найден", id));
+
+        assert_eq!(get("extract_facts").node_type, NodeType::LlmFactExtractor);
+        assert_eq!(get("route").node_type, NodeType::Switch);
+
+        assert_eq!(get("call_code_explainer").node_type, NodeType::LlmWorker);
+        assert_eq!(get("call_code_explainer").agent.as_deref(), Some("code_explainer"));
+        assert_eq!(get("call_code_explainer").output_type.as_deref(), Some("message"));
+
+        assert_eq!(get("call_ux_ui_designer").node_type, NodeType::LlmWorker);
+        assert_eq!(get("call_ux_ui_designer").agent.as_deref(), Some("ux_ui_designer"));
+
+        assert_eq!(get("call_design_coder").node_type, NodeType::LlmWorker);
+        assert_eq!(get("call_design_coder").agent.as_deref(), Some("primary_coder"));
+
+        assert_eq!(get("call_qa_diagnost_direct").node_type, NodeType::LlmWorker);
+        assert_eq!(get("call_qa_diagnost_direct").agent.as_deref(), Some("qa_diagnost"));
+
+        assert_eq!(get("call_primary_coder_direct").node_type, NodeType::LlmWorker);
+        assert_eq!(get("call_primary_coder_direct").agent.as_deref(), Some("primary_coder"));
+
+        assert_eq!(get("call_research_team").node_type, NodeType::SubWorkflow);
+        assert_eq!(get("call_research_team").workflow.as_deref(), Some("search-specialist"));
+
+        assert_eq!(get("final_research_output").node_type, NodeType::SystemCondition);
+        assert_eq!(get("final_research_output").action.as_deref(), Some("aggregate_and_output"));
+
+        assert_eq!(get("call_bug_analyst").node_type, NodeType::LlmWorker);
+        assert_eq!(get("call_bug_analyst").agent.as_deref(), Some("bug_analyst"));
+
+        assert_eq!(get("route_search").node_type, NodeType::ConditionCheck);
+        assert_eq!(get("route_search").field.as_deref(), Some("needs_docs"));
+
+        assert_eq!(get("call_search_for_bug").node_type, NodeType::SubWorkflow);
+        assert_eq!(get("call_qa_reproduce").node_type, NodeType::LlmWorker);
+        assert_eq!(get("call_qa_reproduce").agent.as_deref(), Some("qa_diagnost"));
+
+        assert_eq!(get("check_qa_repro").node_type, NodeType::Switch);
+        let repro_cases = get("check_qa_repro").cases_priority.as_ref().unwrap();
+        assert!(repro_cases.iter().any(|c| c.key == "bug_captured" && c.to == "call_task_planner"));
+        assert_eq!(get("check_qa_repro").default.as_deref(), Some("honest_fail_bug"));
+
+        assert_eq!(get("call_task_planner").node_type, NodeType::LlmWorker);
+        assert_eq!(get("call_task_planner").agent.as_deref(), Some("task_planner"));
+
+        assert_eq!(get("call_arch_reviewer").node_type, NodeType::LlmWorker);
+        assert_eq!(get("call_arch_reviewer").agent.as_deref(), Some("arch_reviewer"));
+
+        assert_eq!(get("check_plan").node_type, NodeType::Switch);
+        let plan_cases = get("check_plan").cases_priority.as_ref().unwrap();
+        assert!(plan_cases.iter().any(|c| c.key == "pass" && c.to == "call_primary_coder"));
+        assert_eq!(get("check_plan").default.as_deref(), Some("call_task_planner"));
+
+        assert_eq!(get("call_primary_coder").node_type, NodeType::LlmWorker);
+        assert_eq!(get("call_primary_coder").agent.as_deref(), Some("primary_coder"));
+
+        assert_eq!(get("call_qa_verify").node_type, NodeType::LlmWorker);
+        assert_eq!(get("call_qa_verify").agent.as_deref(), Some("qa_diagnost"));
+
+        assert_eq!(get("check_verify").node_type, NodeType::Switch);
+        let verify_cases = get("check_verify").cases_priority.as_ref().unwrap();
+        assert!(verify_cases.iter().any(|c| c.key == "pass" && c.to == "final_success"));
+
+        assert_eq!(get("final_success").node_type, NodeType::SystemCondition);
+        assert_eq!(get("final_success").action.as_deref(), Some("aggregate_and_output"));
+
+        assert_eq!(get("honest_fail_bug").node_type, NodeType::LlmWorker);
+        assert_eq!(get("honest_fail_bug").agent.as_deref(), Some("bug_analyst"));
+        assert_eq!(get("honest_fail_bug").output_type.as_deref(), Some("message"));
+
+        assert_eq!(get("call_project_mapper").node_type, NodeType::LlmWorker);
+        assert_eq!(get("call_project_mapper").agent.as_deref(), Some("project_mapper"));
+
+        // Все рёбра ссылаются на существующие узлы (END — допустимый sentinel)
+        let node_ids: Vec<&str> = wf.nodes.iter().map(|n| n.id.as_str()).collect();
+        for edge in &wf.edges {
+            assert!(node_ids.contains(&edge.from.as_str()),
+                "ребро from='{}' ссылается на несуществующий узел", edge.from);
+            if edge.to != "END" {
+                assert!(node_ids.contains(&edge.to.as_str()),
+                    "ребро to='{}' ссылается на несуществующий узел", edge.to);
+            }
+        }
+
+        // Round-trip через save_workflow
+        let yaml_str = serde_yaml::to_string(&wf).expect("ser");
+        let yaml_final = separate_top_level_fields(&yaml_str);
+        let wf2: WorkflowDef = serde_yaml::from_str(&yaml_final)
+            .expect("❌ coding-team.yaml не прошёл конвейер save_workflow!");
+        assert_eq!(wf2.nodes.len(), wf.nodes.len(), "число узлов");
+        assert_eq!(wf2.edges.len(), wf.edges.len(), "число рёбер");
+
+        for n1 in &wf.nodes {
+            let n2 = wf2.nodes.iter().find(|n| n.id == n1.id)
+                .unwrap_or_else(|| panic!("узел {} потерян после round-trip", n1.id));
+            assert_eq!(n1.node_type, n2.node_type, "type узла {}", n1.id);
+            assert_eq!(n1.agent, n2.agent, "agent узла {}", n1.id);
+            assert_eq!(n1.task, n2.task, "task узла {}", n1.id);
+            assert_eq!(n1.output_type, n2.output_type, "output_type узла {}", n1.id);
+        }
+    }
+
+    // Интеграционный тест coding-team вынесен в domain::pipeline_test
+    // (test_cases/fixtures/coding_team_bugfix1/)
 
     #[test]
     fn debug_stage_dump() {

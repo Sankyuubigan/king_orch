@@ -448,7 +448,7 @@ pub fn get_prompt_preview(
         Some(agent) => {
             let tools = crate::domain::builtin_tools();
             let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
-            crate::domain::build_system_prompt(agent, &history, has_tools, &tools, 2048)
+            crate::domain::build_system_prompt(agent, &history, has_tools, &tools, 2048, false)
         }
         None => {
             let workflows = crate::domain::load_workflows(&agents_dir)?;

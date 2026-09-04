@@ -82,6 +82,14 @@ where
     pub(crate) continuation_mark: Option<usize>,
     pub(crate) action_found: bool,
     pub(crate) thought_logged: bool,
+    /// Per-agent GBNF-грамматика (загружена из agents/*/grammars/<agent_id>.gbnf).
+    /// Хранится для повторного применения после каждого tool call
+    /// (take_pending_grammar() consume-and-clear сбрасывает грамматику).
+    pub(crate) agent_grammar: Option<String>,
+    /// Активная грамматика для текущего агента (signal envelope или per-agent GBNF).
+    /// Используется restore_grammar() для единообразного восстановления после
+    /// каждого generate_chat(), tool call, retry. Единая точка вместо 7+ ручных вызовов.
+    pub(crate) active_grammar: Option<GrammarSpec>,
 }
 
 impl<'a, L, S, C> RunContext<'a, L, S, C>
@@ -90,6 +98,15 @@ where
     S: Fn(String, u8) + Clone + Send + Sync + 'static,
     C: Fn(&SubCall) + Clone + Send + Sync + 'static,
 {
+    /// Восстанавливает активную грамматику в движке после generate_chat()
+    /// (consume-and-clear), tool call, retry или continuation.
+    /// Единая точка вместо 7+ ручных вызовов set_grammar().
+    pub(crate) fn restore_grammar(&self) {
+        if let Some(ref spec) = self.active_grammar {
+            self.engine.set_grammar(Some(spec.clone()));
+        }
+    }
+
     /// Блок диспетчеризации инструментов: разбор `parse_tool_call` результата
     /// LLM, исполнение built-in / MCP-инструментов, обработка ошибок.
     ///
@@ -143,17 +160,19 @@ where
                 if let Some(contract) = &self.signal_contract {
                     if let Err(e) = validate_signal_value(contract, value) {
                         self.consecutive_failed_tools += 1;
-                        tool_output = Some(e);
-                        (self.log_cb)(format!("⚠️ emit_signal: сигнал '{}' не прошёл валидацию контракта, требуем retry", key));
+                        tool_output = Some(e.clone());
+                        (self.log_cb)(format!("⚠️ emit_signal: '{}' валидация: {}", key, e));
+                        self.restore_grammar();
                         return Ok(DispatchCtl::Continue);
                     }
                 }
                 self.consecutive_failed_tools = 0;
                 self.signal_saved = true;
+                let signal_content = serde_json::json!({key: value}).to_string();
                 let signal_msg = ChatMessage {
                     id: Some(format!("msg_{}", self.msg_counter)),
                     msg_type: "signal".to_string(),
-                    content: serde_json::json!({key: value}).to_string(),
+                    content: signal_content.clone(),
                     sub_calls: None,
                     author: Some(self.agent.id.clone()),
                     model: None,
@@ -161,6 +180,7 @@ where
                 };
                 self.messages.push(signal_msg);
                 *self.msg_counter += 1;
+                (self.log_cb)(format!("📡 emit_signal: '{}' = {} (в messages[], signal bus подхватит после узла)", key, safe_truncate(&signal_content, 200)));
 
                 // Результат (анализ) агента в messages[] сохраняет вызывающий
                 // (узел workflow / legacy-коллер), иначе получается клон: один
@@ -189,6 +209,7 @@ where
             } else {
                 let key_str = arguments.get("key").map(|v| v.to_string()).unwrap_or_else(|| "отсутствует".to_string());
                 let val_str = arguments.get("value").map(|v| v.to_string()).unwrap_or_else(|| "отсутствует".to_string());
+                (self.log_cb)(format!("❌ emit_signal: невалидный конверт (key={}, value={}). Требуется {{\"key\":\"...\",\"value\":...}}", key_str, val_str));
                 tool_output = Some(format!(
                     "Ошибка: emit_signal требует 'key' (строка) и 'value' (объект). Получено: key={}, value={}. Исправь и вызови СНОВА.",
                     key_str, val_str
@@ -308,6 +329,8 @@ where
             self.continuation_raw.clear();
             self.continuation_mark = None;
             self.llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\n⚠️ Инструмент вернул ошибку. Используй другой инструмент или заверши через {{\"target\": \"reply\"}}.", tool_name, output) });
+            // Восстанавливаем активную грамматику после tool call с ошибкой
+            self.restore_grammar();
             return Ok(DispatchCtl::Continue);
         }
         self.consecutive_failed_tools = 0;
@@ -320,6 +343,8 @@ where
         self.continuation_raw.clear();
         self.continuation_mark = None;
         self.llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\nЕсли задача выполнена — ответь ОБЫЧНЫМ ТЕКСТОМ.", tool_name, model_output) });
+        // Восстанавливаем активную грамматику после tool call
+        self.restore_grammar();
         Ok(DispatchCtl::Continue)
     }
 
@@ -346,7 +371,8 @@ where
             thought_logged, log_cb, status_cb, subcall_cb, stream_meta,
             prompt_log, mcp_servers_dir, bins_dir, grammars_dir, mcp_clients: mcp_pool, model_params,
             format_type, cancel_flag, depth, has_tools_for_prompt, all_tools,
-            continuation_raw, continuation_mark, session_id, workspace_root, ..
+            continuation_raw, continuation_mark, session_id, workspace_root,
+            agent_grammar, active_grammar, ..
         } = self;
 
         if let Some(subagent) = (*agents).iter().find(|a| a.id == parsed.target) {
@@ -407,12 +433,15 @@ where
             push_report(&mut **messages, msg, subagent.single_report);
             **msg_counter += 1;
 
-            let new_sys = build_system_prompt(*agent, &**messages, *has_tools_for_prompt, all_tools, max_gen_tokens);
+            let uses_method_3 = self.signal_contract.is_some();
+            let mut new_sys = build_system_prompt(*agent, &**messages, *has_tools_for_prompt, all_tools, max_gen_tokens, uses_method_3);
             if let Some(f) = llm_messages.first_mut() { if f.role == "system" { f.content = new_sys; } }
             llm_messages.push(LlmMessage { role: "assistant".to_string(), content: if is_continuation { combined.to_string() } else { raw_response.to_string() } });
             continuation_raw.clear();
             *continuation_mark = None;
             llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("Отчет от {}:\n{}\n\nЕсли достаточно — ответь ОБЫЧНЫМ ТЕКСТОМ.", subagent.name, truncate_result(&sub_result, 2000)) });
+            // Восстанавливаем активную грамматику после вызова сабагента
+            self.restore_grammar();
             Ok(DispatchCtl::Continue)
         } else {
             *consecutive_invalid_targets += 1;

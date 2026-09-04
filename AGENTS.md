@@ -71,6 +71,15 @@ infra/    — Инфраструктура (LLM, сессии, MCP, конфиг
 - **Разделение бизнес-логики и маршрутизации**: `.md` файлы агентов содержат ТОЛЬКО бизнес-логику (стиль общения, правила представления). Вся маршрутизация (вызов сабагентов, проверка статусов, циклы) — в `.yaml` workflow графах.
 - **Классификация контекста** — реализована в графах workflow, а НЕ отдельным модулем. Built-in узел `llm_fact_extractor` (`workflow_engine/fact_extractor.rs`) извлекает факты из текста (возвращает JSON `{"fact_id": true/false, ...}`), а дальше маршрутизация идёт по узлам `LlmSequentialSwitch` / `switch` / `condition_check` / `signal_router` (`workflow_engine/nodes.rs`, см. `cases_priority`). Отдельного файла `intent_classifier.rs` **не существует** (это устаревшее упоминание).
 
+### Grammar Architecture (Method 3 — Hybrid GBNF)
+- Все агенты с JSON-выводом используют **hybrid GBNF** (Method 3 из `docs/gbnf.md`):
+  `root ::= think-block json-object`, где `think-block ::= "<think>" [^<]* "</think>" | ""`
+- `disable_reasoning` НЕ включается для Method 3 агентов (signal contracts, fact extractor)
+- `disable_reasoning: true` только для агентов с **обычной** GBNF (без think-block)
+- Грамматика восстанавливается через единую `ctx.restore_grammar()` (не散点 вызовы)
+- Signal contracts: `agents/*/signals/root.schema.json` → `build_signal_envelope_grammar()` → hybrid GBNF
+- Fact extractor: `build_facts_grammar()` → `get_hybrid_grammar()` → hybrid GBNF
+
 ## 2. Сессия и сообщения
 
 ### Формат сообщения

@@ -1,0 +1,10 @@
+root ::= json-answer
+json-answer ::= "{" sp answer-body sp "}"
+answer-body ::= pass-body | fail-body
+pass-body ::= "\"pass\"" sp ":" sp "true" (sp "," sp "\"reasons\"" sp ":" sp json-string-array)?
+fail-body ::= "\"pass\"" sp ":" sp "false" (sp "," sp "\"reasons\"" sp ":" sp json-string-array)?
+json-string-array ::= "[" (sp json-string (sp "," sp json-string)*)? sp "]"
+sp ::= " " | "\n" | "\t" | ""
+json-string ::= "\"" string-char* "\""
+string-char ::= [^"\\] | escape
+escape ::= "\\" ("\\" | "\"" | "n" | "t" | "r" | "b" | "f" | "u" [0-9a-f] [0-9a-f] [0-9a-f] [0-9a-f])

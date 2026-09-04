@@ -9,24 +9,17 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "verdict": {
-            "type": "string",
-            "enum": ["ДАННЫХ ДОСТАТОЧНО", "УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО"]
-          },
-          "missing_data": {
-            "type": "string"
-          },
-          "element_1_found": { "type": "boolean" },
-          "element_2_found": { "type": "boolean" },
-          "element_3_found": { "type": "boolean" },
-          "element_4_found": { "type": "boolean" },
-          "element_5_found": { "type": "boolean" },
-          "element_6_found": { "type": "boolean" },
-          "element_7_found": { "type": "boolean" },
-          "element_8_found": { "type": "boolean" },
-          "element_9_found": { "type": "boolean" }
+          "element_1_mental": { "type": "boolean" },
+          "element_2_mental": { "type": "boolean" },
+          "element_3_mental": { "type": "boolean" },
+          "element_4_mental": { "type": "boolean" },
+          "element_5_mental": { "type": "boolean" },
+          "element_6_mental": { "type": "boolean" },
+          "element_7_mental": { "type": "boolean" },
+          "element_8_mental": { "type": "boolean" },
+          "element_9_mental": { "type": "boolean" }
         },
-        "required": ["verdict", "element_1_found", "element_2_found", "element_3_found", "element_4_found", "element_5_found", "element_6_found", "element_7_found", "element_8_found", "element_9_found"]
+        "required": ["element_1_mental", "element_2_mental", "element_3_mental", "element_4_mental", "element_5_mental", "element_6_mental", "element_7_mental", "element_8_mental", "element_9_mental"]
       }
     },
     "cluster_checker": {

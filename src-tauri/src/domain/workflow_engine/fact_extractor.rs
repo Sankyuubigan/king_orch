@@ -46,7 +46,9 @@ pub fn expected_output_keys(config: &WorkflowConfig, workflow_dir: Option<&Path>
     keys
 }
 
-/// Строгая GBNF-грамматика по контракту из facts.yaml (точные ключи, без опций).
+/// Гибридная GBNF-грамматика (Method 3) по контракту из facts.yaml.
+/// think-block + строгий JSON с точными ключами. Модель думает в <think>...</think>,
+/// затем выдаёт JSON. disable_reasoning НЕ включается.
 pub fn build_facts_grammar(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> String {
     let facts = resolve_facts(config, workflow_dir);
     let output_fields = resolve_output_fields(config, workflow_dir);
@@ -60,7 +62,8 @@ pub fn build_facts_grammar(config: &WorkflowConfig, workflow_dir: Option<&Path>)
     if !phases.is_empty() {
         string_keys.push("phase".to_string());
     }
-    crate::infra::build_json_object_grammar_with_keys(&bool_keys, &string_keys)
+    let base = crate::infra::build_json_object_grammar_with_keys(&bool_keys, &string_keys);
+    crate::infra::get_hybrid_grammar(&base)
 }
 
 pub(crate) fn resolve_facts(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Vec<FactDef> {

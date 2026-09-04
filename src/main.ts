@@ -166,6 +166,17 @@ async function initApp() {
     testResultsBox: $<HTMLDivElement>("test-results-box"),
     testResultsContent: $<HTMLDivElement>("test-results-content"),
     btnSaveTestResults: $<HTMLButtonElement>("btn-save-test-results"),
+    testModeSelect: $<HTMLSelectElement>("test-mode-select"),
+    yamlTestPanel: $<HTMLDivElement>("yaml-test-panel"),
+    pipelineTestPanel: $<HTMLDivElement>("pipeline-test-panel"),
+    pipelineTestList: $<HTMLDivElement>("pipeline-test-list"),
+    pipelineModelList: $<HTMLDivElement>("pipeline-model-list"),
+    btnRunPipelineTest: $<HTMLButtonElement>("btn-run-pipeline-test"),
+    pipelineProgress: $<HTMLDivElement>("pipeline-progress"),
+    pipelineStatusLabel: $<HTMLDivElement>("pipeline-status-label"),
+    pipelineProgressBar: $<HTMLDivElement>("pipeline-progress-bar"),
+    pipelineResultsBox: $<HTMLDivElement>("pipeline-results-box"),
+    pipelineResultsContent: $<HTMLDivElement>("pipeline-results-content"),
   });
 
   // ─── Контроллер кодинг-теста LLM (суб-вкладка в студии агентов) ───

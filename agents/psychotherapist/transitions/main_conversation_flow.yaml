@@ -12,8 +12,8 @@ nodes:
   type: llm_fact_extractor
   input: '{{ user_message }}'
   ui_pos:
-    y: 493
     x: -1990
+    y: 493
   llm_params: strict
 
 - id: check_has_problem
@@ -25,24 +25,24 @@ nodes:
     x: -1700
     y: 495
 
-- id: call_intake_specialist
+- id: call_collector
   type: llm_worker
-  agent: intake_specialist
+  agent: data_collector
   output_type: message
   inject_reports:
   - decomposer
   - validator
   ui_pos:
-    x: 2299
     y: -753
+    x: 2299
 
 - id: call_soma_translator
   type: llm_worker
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    x: -554
     y: 153
+    x: -554
 
 - id: call_decomposer
   type: llm_worker
@@ -64,23 +64,10 @@ nodes:
     x: 1345
     y: 152
 
-- id: check_validator_signal
-  type: signal_router
-  signal_name: validator_report
-  field: verdict
-  cases_priority:
-  - key: УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО
-    to: checking_insufficient_data
-  - key: ДАННЫХ ДОСТАТОЧНО
-    to: note_1784427848563
-  ui_pos:
-    x: 1692
-    y: 53
-
 - id: check_mental_scenario
   type: signal_router
   signal_name: validator_report
-  field: element_6_found
+  field: element_6_mental
   cases_priority:
   - key: 'false'
     to: call_grounder
@@ -99,15 +86,15 @@ nodes:
   - decomposer
   - validator
   ui_pos:
-    y: -757
     x: 2597
+    y: -757
 
 - id: call_cluster_checker
   type: llm_worker
   agent: cluster_checker
   ui_pos:
-    y: 295
     x: -202
+    y: 295
 
 - id: check_cluster_signal
   type: signal_router
@@ -164,15 +151,15 @@ nodes:
   - decomposer
   - validator
   ui_pos:
-    x: 2957
     y: -731
+    x: 2957
 
 - id: note_1782221436115
   type: note
   input: пересчитываем данные с учетом новых данных от юзера
   ui_pos:
-    x: -1215
     y: 255
+    x: -1215
 
 - id: note_1782220193985
   type: note
@@ -185,8 +172,37 @@ nodes:
   type: note
   input: вычисление типа
   ui_pos:
-    y: 57
-    x: 2067
+    x: 2085
+    y: 41
+
+- id: check_critical_elements
+  type: condition_router
+  signal_name: validator_report
+  true_to: checking_insufficient_data
+  false_to: note_1784427848563
+  conditions:
+  - field: element_1_mental
+    equals: false
+  - field: element_2_mental
+    equals: false
+  - field: element_3_mental
+    equals: false
+  - field: element_4_mental
+    equals: false
+  - field: element_5_mental
+    equals: false
+  - field: element_6_mental
+    equals: false
+  - field: element_7_mental
+    equals: false
+  - field: element_8_mental
+    equals: false
+  - field: element_9_mental
+    equals: false
+  logic: any
+  ui_pos:
+    x: 1655
+    y: 85
 
 - id: check_somatic
   type: condition_check
@@ -194,8 +210,8 @@ nodes:
   sequential_to: call_cluster_checker
   true_to: call_soma_translator
   ui_pos:
-    y: 218
     x: -802
+    y: 218
 
 - id: check_need_handedness
   type: signal_router
@@ -204,16 +220,16 @@ nodes:
   - key: НУЖНА РУКОСТЬ
     to: note_1785123862689
   ui_pos:
-    x: -298
     y: -39
+    x: -298
 
 - id: note_1785123862689
   type: note
   input: уточнение рукости у юзера
   system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
   ui_pos:
-    y: -216
     x: -44
+    y: -216
 
 - id: note_1785141025138
   type: note
@@ -257,27 +273,27 @@ nodes:
 - id: checking_insufficient_data
   type: condition_router
   signal_name: validator_report
-  true_to: call_intake_specialist
+  true_to: call_collector
   false_to: check_mental_scenario
   conditions:
-  - field: element_1_found
+  - field: element_1_mental
     equals: false
-  - field: element_2_found
+  - field: element_2_mental
     equals: false
-  - field: element_4_found
+  - field: element_4_mental
     equals: false
-  - field: element_5_found
+  - field: element_5_mental
     equals: false
-  - field: element_7_found
+  - field: element_7_mental
     equals: false
-  - field: element_8_found
+  - field: element_8_mental
     equals: false
-  - field: element_9_found
+  - field: element_9_mental
     equals: false
   logic: any
   ui_pos:
-    x: 1973
     y: -433
+    x: 1973
 
 edges:
 
@@ -286,9 +302,6 @@ edges:
 
 - from: note_1782220193985
   to: call_validator
-
-- from: call_validator
-  to: check_validator_signal
 
 - from: call_cluster_checker
   to: check_cluster_signal
@@ -301,6 +314,9 @@ edges:
 
 - from: call_decomposer
   to: note_1782220193985
+
+- from: call_validator
+  to: check_critical_elements
 
 - from: note_1782221436115
   to: check_somatic

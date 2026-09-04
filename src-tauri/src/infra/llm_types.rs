@@ -109,6 +109,24 @@ pub fn build_json_only_grammar() -> String {
     format!("root ::= json-object\n{}", json_grammar_rules())
 }
 
+/// Универсальная гибридная грамматика (Method 3 из docs/gbnf.md).
+/// Оборачивает базовую JSON-GBNF в think-block: модель может думать в <think>...</think>,
+/// а может сразу выдать JSON. Works для thinking и non-thinking моделей.
+/// Non-thinking модели не имеют токенов <think> в vocab → grammar falling back на "" → сразу JSON.
+pub fn get_hybrid_grammar(base_gbnf: &str) -> String {
+    // Переименовываем корень базовой грамматики, чтобы не конфликтовал с нашим root
+    let renamed = base_gbnf.replacen("root ::=", "json-object ::=", 1);
+    let think_start = "<think>";
+    let think_end = "</think>";
+    format!(
+        "root ::= think-block json-object\n\
+         think-block ::= \"{ts}\" [^<]* \"{te}\" | \"\"\n\n{body}",
+        ts = think_start,
+        te = think_end,
+        body = renamed,
+    )
+}
+
 /// Строго-JSON грамматика с ФИКСИРОВАННЫМИ ключами — контракт fact_extractor.
 /// Ключи перечислены в фиксированном порядке и без опций: boolean-факты строго
 /// `true`/`false`, строковые поля — JSON-строка. Модель физически НЕ может выдать
@@ -205,16 +223,24 @@ pub fn push_report(messages: &mut Vec<ChatMessage>, msg: ChatMessage, single_rep
 }
 
 /// Единое правило «что такое история для LLM»: из сессии в промпт модели
-/// попадают только не-thought сообщения, и только их `content` (без `sub_calls` —
-/// это UI-метаданные, а не переписка). Используется и при инжекции истории
-/// агентам, и в шаблонах workflow (`{{ messages }}`).
+/// попадают только не-thought и не-signal сообщения, и только их `content`
+/// (без `sub_calls` — это UI-метаданные, а не переписка). Используется и при
+/// инжекции истории агентам, и в шаблонах workflow (`{{ messages }}`).
 ///
 /// Системные сообщения (`author == "system"`) НЕ попадают в промпт — они нужны
 /// только юзеру (хранятся в JSON сессии) и лишь зря жрут контекст модели.
+///
+/// Сигналы (`msg_type == "signal"`) НЕ попадают в промпт — это артефакты данных,
+/// а не сообщения диалога. Сигналы доступны через `{{ signals }}` шаблон
+/// (WorkflowContext) или прямой фильтрацию `messages` по `msg_type`.
 pub fn llm_history(messages: &[ChatMessage]) -> Vec<&ChatMessage> {
     messages
         .iter()
-        .filter(|m| m.msg_type != "thought" && m.author.as_deref() != Some("system"))
+        .filter(|m| {
+            m.msg_type != "thought"
+                && m.msg_type != "signal"
+                && m.author.as_deref() != Some("system")
+        })
         .collect()
 }
 
@@ -389,7 +415,7 @@ mod tests {
     }
 
     #[test]
-    fn llm_history_skips_thoughts() {
+    fn llm_history_skips_thoughts_and_signals() {
         let msgs = vec![
             msg("msg_0", "message", "user", "привет"),
             msg("msg_1", "thought", "агент", "внутренняя мысль"),
@@ -398,10 +424,11 @@ mod tests {
             msg("msg_4", "message", "system", "системное уведомление только для юзера"),
         ];
         let history = llm_history(&msgs);
-        assert_eq!(history.len(), 3);
+        // message(user) + message(агент) = 2 сообщения
+        assert_eq!(history.len(), 2);
         assert!(history.iter().all(|m| m.msg_type != "thought"));
+        assert!(history.iter().all(|m| m.msg_type != "signal"));
         assert!(history.iter().all(|m| m.author.as_deref() != Some("system")));
-        assert!(history.iter().any(|m| m.msg_type == "signal"));
     }
 
     #[test]

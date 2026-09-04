@@ -96,43 +96,86 @@
 
         <div id="view-sub-ai-test" class="sub-view">
           <div class="group-box">
-            <div class="group-title">1. Выберите YAML-файл с тест-кейсами</div>
-            <div class="input-row">
-              <input type="text" id="test-file-path" readonly placeholder="Файл не выбран..." style="flex:1;" />
-              <button id="btn-select-test-file" class="btn-secondary">Выбрать файл</button>
-            </div>
+            <div class="group-title">Режим теста</div>
+            <select id="test-mode-select" style="width:100%; padding:6px;">
+              <option value="yaml">YAML тест (input/output сравнение)</option>
+              <option value="pipeline">Pipeline test (fixture-папка, 3-уровневая валидация)</option>
+            </select>
           </div>
 
-          <div class="group-box">
-            <div class="group-title">2. Выберите агентов для тестирования</div>
-            <div id="test-agent-list" class="test-checklist">
-              <span class="test-hint">Загрузка агентов...</span>
-            </div>
-          </div>
-
-          <div class="group-box">
-            <div class="group-title">3. Выберите модели LLM</div>
-            <div id="test-model-list" class="test-checklist">
-              <span class="test-hint">Загрузка моделей...</span>
-            </div>
-          </div>
-
-          <div class="group-box">
-            <button id="btn-run-test" class="btn-primary" disabled>▶ Запустить тест</button>
-            <div id="test-progress" class="test-progress" style="display:none;">
-              <div class="status-label" id="test-status-label">Подготовка...</div>
-              <div class="progress-bar-container">
-                <div id="test-progress-bar" class="progress-bar"></div>
+          <!-- YAML test mode -->
+          <div id="yaml-test-panel">
+            <div class="group-box">
+              <div class="group-title">1. Выберите YAML-файл с тест-кейсами</div>
+              <div class="input-row">
+                <input type="text" id="test-file-path" readonly placeholder="Файл не выбран..." style="flex:1;" />
+                <button id="btn-select-test-file" class="btn-secondary">Выбрать файл</button>
               </div>
             </div>
+
+            <div class="group-box">
+              <div class="group-title">2. Выберите агентов для тестирования</div>
+              <div id="test-agent-list" class="test-checklist">
+                <span class="test-hint">Загрузка агентов...</span>
+              </div>
+            </div>
+
+            <div class="group-box">
+              <div class="group-title">3. Выберите модели LLM</div>
+              <div id="test-model-list" class="test-checklist">
+                <span class="test-hint">Загрузка моделей...</span>
+              </div>
+            </div>
+
+            <div class="group-box">
+              <button id="btn-run-test" class="btn-primary" disabled>▶ Запустить тест</button>
+              <div id="test-progress" class="test-progress" style="display:none;">
+                <div class="status-label" id="test-status-label">Подготовка...</div>
+                <div class="progress-bar-container">
+                  <div id="test-progress-bar" class="progress-bar"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="group-box" id="test-results-box" style="display:none;">
+              <div class="group-title" style="display:flex; justify-content:space-between; align-items:center;">
+                <span>Результаты</span>
+                <button id="btn-save-test-results" class="btn-secondary" style="padding:4px 10px; font-size:12px;">💾 Сохранить</button>
+              </div>
+              <div id="test-results-content"></div>
+            </div>
           </div>
 
-          <div class="group-box" id="test-results-box" style="display:none;">
-            <div class="group-title" style="display:flex; justify-content:space-between; align-items:center;">
-              <span>Результаты</span>
-              <button id="btn-save-test-results" class="btn-secondary" style="padding:4px 10px; font-size:12px;">💾 Сохранить</button>
+          <!-- Pipeline test mode -->
+          <div id="pipeline-test-panel" style="display:none;">
+            <div class="group-box">
+              <div class="group-title">1. Выберите тест</div>
+              <div id="pipeline-test-list" class="test-checklist">
+                <span class="test-hint">Загрузка тестов...</span>
+              </div>
             </div>
-            <div id="test-results-content"></div>
+
+            <div class="group-box">
+              <div class="group-title">2. Выберите модель LLM</div>
+              <div id="pipeline-model-list" class="test-checklist">
+                <span class="test-hint">Загрузка моделей...</span>
+              </div>
+            </div>
+
+            <div class="group-box">
+              <button id="btn-run-pipeline-test" class="btn-primary" disabled>▶ Запустить тест</button>
+              <div id="pipeline-progress" class="test-progress" style="display:none;">
+                <div class="status-label" id="pipeline-status-label">Подготовка...</div>
+                <div class="progress-bar-container">
+                  <div id="pipeline-progress-bar" class="progress-bar"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="group-box" id="pipeline-results-box" style="display:none;">
+              <div class="group-title">Результаты</div>
+              <div id="pipeline-results-content"></div>
+            </div>
           </div>
         </div>
 

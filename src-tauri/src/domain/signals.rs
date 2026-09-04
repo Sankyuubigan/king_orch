@@ -72,20 +72,164 @@ pub fn build_signal_envelope_schema(contract: &SignalContract) -> Value {
     })
 }
 
+/// Собирает гибридную GBNF-грамматику (Method 3 из docs/gbnf.md):
+/// модель ОБЯЗАНА сначала сгенерировать `<think>...</think>` (свободные
+/// рассуждения), и ТОЛЬКО ПОТОМ JSON-объект сигнала. Грамматика физически
+/// не пустит модель к JSON, пока не встретит `</think>`.
+///
+/// Формат как в docs/gbnf.md строка 33:
+/// ```text
+/// root ::= think-block envelope-json (Method 3 из docs/gbnf.md)
+/// thought-content ::= [^<]*
+/// ```
+pub fn build_signal_envelope_grammar(contract: &SignalContract) -> String {
+    let schema = &contract.value_schema;
+
+    // Правило пробелов (ограниченное, как в официальном конвертере llama.cpp)
+    let sp = "sp ::= \" \" | \"\\n\" [ \\t]{0,4}";
+
+    // Базовые JSON-правила
+    let json_rules = concat!(
+        "json-string ::= \"\\\"\" string-char* \"\\\"\"\n",
+        "string-char ::= [^\"\\\\] | escape\n",
+        "escape ::= \"\\\\\" (\"\\\\\" | \"\\\"\" | \"n\" | \"t\" | \"r\" | \"b\" | \"f\" | \"u\" [0-9a-f] [0-9a-f] [0-9a-f] [0-9a-f])\n",
+        "json-number ::= \"-\"? (\"0\" | [1-9] [0-9]*) (\".\" [0-9]+)? ([eE] [-+]? [0-9]+)?\n",
+        "json-bool ::= \"true\" | \"false\"\n",
+        "bool ::= \"true\" | \"false\"\n",
+    );
+
+    // Генерируем value-грамматику в зависимости от типа контракта
+    let value_grammar = build_value_grammar(schema);
+
+    // Method 3 из docs/gbnf.md: гибридная GBNF с think-block.
+    // root ::= think-block envelope-json
+    // think-block ::= "<think>" [^<]* "</think>" | ""  — опциональный thinking.
+    // Thinking-модели генерируют <think>...</think>, non-thinking — сразу JSON.
+    // Без disable_reasoning: модель сама решает, думать или нет.
+    format!(
+        "root ::= think-block envelope-json\n\
+         think-block ::= \"<think>\" [^<]* \"</think>\" | \"\"\n\
+         \n\
+         envelope-json ::= \"{{\" sp thought-field \",\" sp tool-field \",\" sp arguments-field sp \"}}\"\n\
+         thought-field ::= \"\\\"thought\\\"\" sp \":\" sp json-string\n\
+         tool-field ::= \"\\\"tool\\\"\" sp \":\" sp \"\\\"emit_signal\\\"\"\n\
+         arguments-field ::= \"\\\"arguments\\\"\" sp \":\" sp arguments-json\n\
+         arguments-json ::= \"{{\" sp key-field \",\" sp \"\\\"value\\\"\" sp \":\" sp value-field sp \"}}\"\n\
+         key-field ::= \"\\\"key\\\"\" sp \":\" sp \"\\\"{}\\\"\"\n\
+         {}\n\
+         {}\n\
+         {}",
+        contract.key,
+        value_grammar,
+        sp,
+        json_rules,
+    )
+}
+
+/// Генерирует GBNF-грамматику для value-поля в зависимости от типа контракта.
+fn build_value_grammar(schema: &serde_json::Value) -> String {
+    // 1. Enum (массив строк) — альтернативы
+    if let Some(enum_vals) = schema.get("enum").and_then(|e| e.as_array()) {
+        let variants: Vec<String> = enum_vals
+            .iter()
+            .filter_map(|v| v.as_str())
+            .map(|s| format!("\"\\\"{}\\\"\"", s))
+            .collect();
+        return format!("value-field ::= {}", variants.join(" | "));
+    }
+
+    // 2. Pattern одиночного символа (^[1-9]$) — список альтернатив
+    if let Some(pat) = schema.get("pattern").and_then(|p| p.as_str()) {
+        if let Some(inner) = pat.strip_prefix('^').and_then(|p| p.strip_suffix('$')) {
+            if inner.starts_with('[') && inner.ends_with(']') {
+                let chars = &inner[1..inner.len() - 1];
+                // Обрабатываем диапазон X-Y (напр. "1-9")
+                if let Some((lo, hi)) = chars.split_once('-') {
+                    if let (Some(lo_ch), Some(hi_ch)) = (lo.chars().next(), hi.chars().next()) {
+                        let variants: Vec<String> = (lo_ch as u8..=hi_ch as u8)
+                            .map(|b| format!("\"\\\"{}\\\"\"", b as char))
+                            .collect();
+                        return format!("value-field ::= {}", variants.join(" | "));
+                    }
+                }
+                // Обрабатываем список символов
+                let variants: Vec<String> = chars
+                    .chars()
+                    .filter(|c| !c.is_whitespace())
+                    .map(|c| format!("\"\\\"{}\\\"\"", c))
+                    .collect();
+                return format!("value-field ::= {}", variants.join(" | "));
+            }
+        }
+    }
+
+    // 3. Object со свойствами — генерируем фиксированные ключи
+    if schema.get("type").and_then(|t| t.as_str()) == Some("object") {
+        if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
+            let required_set: std::collections::HashSet<String> = schema
+                .get("required")
+                .and_then(|r| r.as_array())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let mut fields: Vec<String> = Vec::new();
+            for (name, pschema) in props {
+                let typ = pschema.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                let value_rule = match typ {
+                    "boolean" => "bool".to_string(),
+                    "string" => "json-string".to_string(),
+                    "number" | "integer" => "json-number".to_string(),
+                    _ => "json-string".to_string(),
+                };
+                fields.push(format!(
+                    "\"\\\"{}\\\"\" sp \":\" sp {}",
+                    name, value_rule
+                ));
+            }
+
+            // Обязательные ключи через запятую, опциональные — не включаем
+            // (генерируем строго фиксированный порядок для required)
+            let required_fields: Vec<String> = props
+                .keys()
+                .filter(|k| required_set.contains(*k))
+                .map(|k| {
+                    let pschema = &props[k];
+                    let typ = pschema.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                    let value_rule = match typ {
+                        "boolean" => "bool".to_string(),
+                        "string" => "json-string".to_string(),
+                        "number" | "integer" => "json-number".to_string(),
+                        _ => "json-string".to_string(),
+                    };
+                    format!("\"\\\"{}\\\"\" sp \":\" sp {}", k, value_rule)
+                })
+                .collect();
+
+            return format!("value-field ::= \"{{\" sp {} sp \"}}\"", required_fields.join(" \",\" sp "));
+        }
+    }
+
+    // Fallback — любое JSON-значение
+    "value-field ::= json-string | json-number | json-bool | \"null\"".to_string()
+}
+
 /// ЧЕСТНАЯ валидация значения сигнала против контракта (SSOT).
 ///
 /// Гарантирует, что `value`, присланный моделью в `emit_signal`, содержит все
-/// обязательные поля контракта (напр. `verdict` у `validator_report`). Если модель
-/// исказила форму (напр. прислала `status` вместо `verdict`) — возвращаем явную
-/// ошибку, которую оркестратор отдаёт модели на retry. Это исключает тихий обрыв
-/// маршрутизации, когда `signal_router` не находит поле и граф завершается, не дойдя
-/// до `message`-узла (см. docs/SIGNAL_CONTRACTS.md). Не является костылём: это
-/// обычная валидация входа, а не «умолчание по дефолту».
+/// обязательные поля контракта (напр. `element_1_mental` у `validator_report`). Если модель
+/// исказила форму — возвращаем явную ошибку, которую оркестратор отдаёт модели на retry.
+/// Это исключает тихий обрыв маршрутизации, когда `signal_router` не находит поле и граф
+/// завершается, не дойдя до `message`-узла (см. docs/SIGNAL_CONTRACTS.md). Не является
+/// костылём: это обычная валидация входа, а не «умолчание по дефолту».
 pub fn validate_signal_value(contract: &SignalContract, value: &Value) -> Result<(), String> {
     let schema = &contract.value_schema;
     if schema.get("type").and_then(|t| t.as_str()) == Some("object") {
         // Проверяем ВСЕ properties контракта (а не только required).
-        // Это гарантирует, что signal_router найдёт каждое поле (element_X_found и т.д.).
+        // Это гарантирует, что signal_router найдёт каждое поле (element_X_mental и т.д.).
         if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
             let mut missing: Vec<String> = Vec::new();
             for (pname, _) in props {
@@ -109,8 +253,8 @@ pub fn validate_signal_value(contract: &SignalContract, value: &Value) -> Result
 /// или токен. Используется как fallback, когда агент не вызвал `emit_signal` нативно.
 ///
 /// Поддерживаемые виды `value_schema`:
-/// - `enum` (массив строк) → первая совпавшая строка (soma_translator/cluster_checker);
-/// - `object` со свойствами-`enum` → объект из совпавших свойств (validator: verdict);
+/// - `enum` (массив строк) → первая совпавшая строка;
+/// - `object` со свойствами-`enum` → объект из совпавших свойств;
 /// - `pattern` вида `^[1-9]$` → первый символ из набора (synthesizer: destructor_type).
 /// Возвращает `None`, если ничего не нашлось (тогда сигнал не сохраняется).
 pub fn extract_signal_value_from_text(contract: &SignalContract, text: &str) -> Option<Value> {
@@ -124,13 +268,6 @@ pub fn extract_signal_value_from_text(contract: &SignalContract, text: &str) -> 
                     return Some(Value::String(s.to_string()));
                 }
             }
-        }
-        if contract.key == "soma_translator" {
-            let lowered = text.to_lowercase();
-            if lowered.contains("левш") || lowered.contains("правш") || lowered.contains("рукость") {
-                return Some(Value::String("РУКОСТЬ ИЗВЕСТНА".to_string()));
-            }
-            return Some(Value::String("НУЖНА РУКОСТЬ".to_string()));
         }
         return None;
     }
@@ -232,11 +369,8 @@ mod tests {
         let dir = path.parent().expect("папка signals");
         let c = load_signal_contract(dir, "validator").expect("контракт валидатора");
         assert_eq!(c.key, "validator_report");
-        assert_eq!(c.value_schema["properties"]["verdict"]["type"].as_str(), Some("string"));
-        assert_eq!(
-            c.value_schema["properties"]["verdict"]["enum"].as_array().map(|e| e.len()),
-            Some(2)
-        );
+        assert_eq!(c.value_schema["properties"]["element_1_mental"]["type"].as_str(), Some("boolean"));
+        assert_eq!(c.value_schema["required"].as_array().map(|e| e.len()), Some(9));
     }
 
     /// Регрессия: soma_translator обязан уметь сообщить, что рукость
@@ -291,20 +425,19 @@ mod tests {
             key: "soma_translator".to_string(),
             value_schema: serde_json::json!({ "type": "string", "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"] }),
         };
-        // Маркер в тексте → значение извлекается без LLM.
+        // Точное совпадение enum-значения в тексте → извлекается.
         assert_eq!(
             extract_signal_value_from_text(&c, "разбор готов. РУКОСТЬ ИЗВЕСТНА, правая сторона — Мать"),
             Some(serde_json::json!("РУКОСТЬ ИЗВЕСТНА"))
         );
-        // Маркер рукости в тексте → РУКОСТЬ ИЗВЕСТНА (даже без точной строки-вердикта).
+        // Нет точного совпадения enum → None (fallback не спасает).
         assert_eq!(
             extract_signal_value_from_text(&c, "биологический левша, анализ завершён"),
-            Some(serde_json::json!("РУКОСТЬ ИЗВЕСТНА"))
+            None
         );
-        // Нет маркеров рукости → НУЖНА РУКОСТЬ (default: спрашиваем юзера).
         assert_eq!(
             extract_signal_value_from_text(&c, "просто текст без маркеров"),
-            Some(serde_json::json!("НУЖНА РУКОСТЬ"))
+            None
         );
     }
 
@@ -315,13 +448,15 @@ mod tests {
             value_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
-                    "verdict": { "type": "string", "enum": ["ДАННЫХ ДОСТАТОЧНО", "УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО"] }
+                    "missing_data": { "type": "string", "enum": ["не найдено", "есть"] },
+                    "element_1_mental": { "type": "boolean" }
                 }
             }),
         };
+        // Текст содержит "не найдено" → missing_data извлекается (enum-свойство внутри объекта).
         assert_eq!(
-            extract_signal_value_from_text(&c, "Вердикт: УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО по причине X"),
-            Some(serde_json::json!({ "verdict": "УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО" }))
+            extract_signal_value_from_text(&c, "Дефицит: элемент 3 не найдено"),
+            Some(serde_json::json!({ "missing_data": "не найдено" }))
         );
     }
 
@@ -342,50 +477,260 @@ mod tests {
     }
 
     #[test]
-    fn validate_signal_value_rejects_missing_verdict() {
+    fn validate_signal_value_rejects_missing_required_fields() {
         let c = SignalContract {
             key: "validator_report".to_string(),
             value_schema: serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "verdict": { "type": "string", "enum": ["ДАННЫХ ДОСТАТОЧНО", "УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО"] }
+                    "element_1_mental": { "type": "boolean" },
+                    "element_2_mental": { "type": "boolean" }
                 },
-                "required": ["verdict"]
+                "required": ["element_1_mental", "element_2_mental"]
             }),
         };
-        // Искажённая форма (status вместо verdict) — корень бага «тихо упал».
-        assert!(validate_signal_value(&c, &serde_json::json!({ "status": "Уточнение необходимо" })).is_err());
-        // Пустое значение без обязательного поля — тоже ошибка.
+        // Искажённая форма (старое поле verdict вместо element_X_mental) — ошибка.
+        assert!(validate_signal_value(&c, &serde_json::json!({ "verdict": "ДАННЫХ ДОСТАТОЧНО" })).is_err());
+        // Пустое значение без обязательных полей — тоже ошибка.
         assert!(validate_signal_value(&c, &serde_json::Value::Object(serde_json::Map::new())).is_err());
         // Корректная форма проходит.
-        assert!(validate_signal_value(&c, &serde_json::json!({ "verdict": "УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО" })).is_ok());
+        assert!(validate_signal_value(&c, &serde_json::json!({ "element_1_mental": true, "element_2_mental": false })).is_ok());
     }
 
     #[test]
-    fn envelope_schema_is_inline_and_requires_verdict() {
+    fn envelope_schema_is_inline_and_requires_all_fields() {
         let c = SignalContract {
             key: "validator_report".to_string(),
             value_schema: serde_json::json!({
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "verdict": { "type": "string", "enum": ["ДАННЫХ ДОСТАТОЧНО", "УТОЧНЕНИЕ ДАННЫХ НЕОБХОДИМО"] }
+                    "element_1_mental": { "type": "boolean" },
+                    "element_2_mental": { "type": "boolean" }
                 },
-                "required": ["verdict"]
+                "required": ["element_1_mental", "element_2_mental"]
             }),
         };
         let schema = build_signal_envelope_schema(&c);
-        // Допускается свободный текст в thought + защищённый value.verdict.
+        // Допускается свободный текст в thought + защищённый value с обязательными полями.
         assert_eq!(schema["properties"]["tool"]["const"], serde_json::json!("emit_signal"));
         assert_eq!(
             schema["properties"]["arguments"]["properties"]["value"]["required"],
-            serde_json::json!(["verdict"])
+            serde_json::json!(["element_1_mental", "element_2_mental"])
         );
         assert_eq!(
             schema["properties"]["arguments"]["properties"]["value"]["additionalProperties"],
             serde_json::json!(false)
         );
+    }
+
+    #[test]
+    fn hybrid_grammar_contains_think_tags_and_json() {
+        let c = SignalContract {
+            key: "validator_report".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "element_1_mental": { "type": "boolean" },
+                    "element_2_mental": { "type": "boolean" },
+                    "missing_data": { "type": "string" }
+                },
+                "required": ["element_1_mental", "element_2_mental"]
+            }),
+        };
+        let grammar = build_signal_envelope_grammar(&c);
+        // Грамматика ОБЯЗАНА содержать think-теги как в docs/gbnf.md (строка 33)
+        assert!(grammar.contains("\"azaar\\n\""), "грамматика должна содержать \"azaar\\n\"");
+        assert!(grammar.contains("thought-content"), "грамматика должна содержать правило thought-content");
+        // Грамматика ОБЯЗАНА содержать ключи сигнала
+        assert!(grammar.contains("element_1_mental"), "грамматика должна содержать element_1_mental");
+        assert!(grammar.contains("element_2_mental"), "грамматика должна содержать element_2_mental");
+        // Грамматика ОБЯЗАНА содержать полный конверт
+        assert!(grammar.contains("emit_signal"), "грамматика должна содержать emit_signal");
+        assert!(grammar.contains("validator_report"), "грамматика должна содержать ключ validator_report");
+    }
+
+    #[test]
+    fn hybrid_grammar_for_validator_contract() {
+        let path = schema_path();
+        let dir = path.parent().expect("папка signals");
+        let c = load_signal_contract(dir, "validator").expect("контракт валидатора");
+        let grammar = build_signal_envelope_grammar(&c);
+        // Все 9 элементов должны быть в грамматике
+        for i in 1..=9 {
+            let key = format!("element_{}_mental", i);
+            assert!(grammar.contains(&key), "грамматика должна содержать {}", key);
+        }
+        // think-теги как в docs/gbnf.md обязательны
+        assert!(grammar.contains("\"azaar\\n\""), "должен быть \"azaar\\n\"");
+    }
+
+    /// Регрессия: грамматика для boolean-полей (element_X_mental) ОБЯЗАНА
+    /// содержать определение правила `bool`, иначе llama-server падает с
+    /// "Undefined rule identifier 'bool'" (HTTP 400).
+    #[test]
+    fn validator_grammar_defines_bool_rule() {
+        let path = schema_path();
+        let dir = path.parent().expect("папка signals");
+        let c = load_signal_contract(dir, "validator").expect("контракт валидатора");
+        let grammar = build_signal_envelope_grammar(&c);
+        // Правило `bool` ДОЛЖНО быть определено (а не только json-bool)
+        assert!(
+            grammar.contains("bool ::="),
+            "грамматика должна содержать определение правила `bool`, grammar:\n{}",
+            grammar
+        );
+        // При этом `bool` не должен быть частью другого имени правила (json-bool и т.д.)
+        // Проверяем что `bool ::=` стоит отдельной(rule definition)
+        assert!(
+            grammar.lines().any(|l| l.trim_start().starts_with("bool ::=")),
+            "правило `bool` должно быть отдельной строкой (rule definition), grammar:\n{}",
+            grammar
+        );
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // ТЕСТЫ ГИПОТЕЗ: формат GBNF для <think> тегов
+    // ═══════════════════════════════════════════════════════════════════
+
+    /// Гипотеза 1: Токенный синтаксис <thingk> / <end_of_think> (канонический из GBNF README llama.cpp)
+    /// Проверяет что грамматика содержит токенные ссылки, а НЕ строковые литералы.
+    #[test]
+    fn hypothesis_token_syntax_no_string_literals() {
+        let c = SignalContract {
+            key: "test_key".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "field_a": { "type": "boolean" }
+                },
+                "required": ["field_a"]
+            }),
+        };
+        let grammar = build_signal_envelope_grammar(&c);
+        // Токенный синтаксис как в docs/gbnf.md: "azaar\n" + [^<]*
+        assert!(grammar.contains("\"azaar\\n\""), "должен быть строковый литерал \"azaar\\n\", grammar:\n{}", grammar);
+        assert!(grammar.contains("thought-content"), "должно быть правило thought-content, grammar:\n{}", grammar);
+        // Не должно быть токенного синтаксиса (не работает с gemma-4)
+        assert!(!grammar.contains("<thingk>"), "не должно быть токена <thingk>");
+        assert!(!grammar.contains("<end_of_think>"), "не должно быть токена <end_of_think>");
+    }
+
+    /// Строковый литерал "azaar\n" как в docs/gbnf.md — проверяем что \n в строковом литерале
+    #[test]
+    fn hypothesis_string_literal_without_newline() {
+        let c = SignalContract {
+            key: "test_key".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "field_a": { "type": "boolean" }
+                },
+                "required": ["field_a"]
+            }),
+        };
+        let grammar = build_signal_envelope_grammar(&c);
+        // Должен быть строковый литерал "azaar\n" как в docs/gbnf.md
+        assert!(grammar.contains("\"azaar\\n\""), "должен быть строковый литерал \"azaar\\n\", grammar:\n{}", grammar);
+        // Корень правила должен начинаться с root ::=
+        let root_line = grammar.lines().next().unwrap_or("");
+        assert!(root_line.starts_with("root ::="), "корень должен быть root ::=");
+    }
+
+    /// Гипотеза 3: Полный конверт — грамматика должна содержать tool, arguments, key
+    #[test]
+    fn hypothesis_full_envelope_structure() {
+        let c = SignalContract {
+            key: "validator_report".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "element_1_mental": { "type": "boolean" }
+                },
+                "required": ["element_1_mental"]
+            }),
+        };
+        let grammar = build_signal_envelope_grammar(&c);
+
+        // Проверяем наличие ключевых частей конверта
+        assert!(grammar.contains("thought"), "должно быть поле thought");
+        assert!(grammar.contains("emit_signal"), "должно быть emit_signal");
+        assert!(grammar.contains("arguments"), "должно быть arguments");
+        assert!(grammar.contains("key"), "должно быть поле key");
+        assert!(grammar.contains("validator_report"), "должен быть ключ validator_report");
+        assert!(grammar.contains("element_1_mental"), "должен быть element_1_mental");
+        assert!(grammar.contains("thought-content"), "должно быть правило thought-content");
+        assert!(grammar.contains("envelope-json"), "должно быть правило envelope-json");
+    }
+
+    /// Гипотеза 4: Enum-контракт (soma_translator) — должен содержать альтернативы строк
+    #[test]
+    fn hypothesis_enum_contract_variants() {
+        let c = SignalContract {
+            key: "soma_translator".to_string(),
+            value_schema: serde_json::json!({
+                "type": "string",
+                "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"]
+            }),
+        };
+        let grammar = build_signal_envelope_grammar(&c);
+
+        // Enum-контракт должен содержать альтернативы
+        assert!(grammar.contains("НУЖНА РУКОСТЬ"), "должен быть вариант НУЖНА РУКОСТЬ");
+        assert!(grammar.contains("РУКОСТЬ ИЗВЕСТНА"), "должен быть вариант РУКОСТЬ ИЗВЕСТНА");
+        // Не должно быть пустого bool_members
+        assert!(!grammar.contains("bool_members ::="), "не должно быть пустого bool_members");
+    }
+
+    /// Гипотеза 5: Pattern-контракт (synthesizer) — должен содержать цифры 1-9
+    #[test]
+    fn hypothesis_pattern_contract_digits() {
+        let c = SignalContract {
+            key: "destructor_type".to_string(),
+            value_schema: serde_json::json!({
+                "type": "string",
+                "pattern": "^[1-9]$"
+            }),
+        };
+        let grammar = build_signal_envelope_grammar(&c);
+        // Pattern ^[1-9]$ должен содержать цифры
+        for d in 1..=9 {
+            let needle = format!("\"\\\"{}\\\"\"", d);
+            assert!(grammar.contains(&needle), "должна быть цифра {} (ищи {}), grammar:\n{}", d, needle, grammar);
+        }
+    }
+
+    /// Гипотеза 6: destructor_detector — object с 5 строковыми ключами
+    #[test]
+    fn hypothesis_destructor_detector_object() {
+        let c = SignalContract {
+            key: "diagnostic_report".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "idol": { "type": "string" },
+                    "threat": { "type": "string" },
+                    "destructor": { "type": "string" },
+                    "pleasure_ban": { "type": "string" },
+                    "paradoxical_loop": { "type": "string" }
+                },
+                "required": ["idol", "threat", "destructor", "pleasure_ban", "paradoxical_loop"]
+            }),
+        };
+        let grammar = build_signal_envelope_grammar(&c);
+
+        // Должны быть все ключи
+        for key in &["idol", "threat", "destructor", "pleasure_ban", "paradoxical_loop"] {
+            assert!(grammar.contains(key), "грамматика должна содержать {}", key);
+        }
+        // Не должно быть пустых правил
+        assert!(!grammar.contains("bool_members ::="), "не должно быть пустого bool_members");
     }
 
 }

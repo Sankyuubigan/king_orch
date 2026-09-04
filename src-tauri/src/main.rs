@@ -209,6 +209,8 @@ async fn main() {
             api::test::run_iterative_test,
             api::test::read_test_file,
             api::test::write_test_results,
+            api::test::get_pipeline_test_list,
+            api::test::run_pipeline_test_cmd,
             api::coding_test::get_coding_bench_info,
             api::coding_test::run_coding_bench,
             infra::downloader::download_model,

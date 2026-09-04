@@ -34,11 +34,10 @@ OpenAI `tool_calls` / Anthropic `tool_use` / llama.cpp `json_schema`.
 
 llama.cpp на лету компилирует JSON Schema (Draft 7) в GBNF (модуль
 `common/json-schema-to-grammar.cpp`), маскируя на каждом шаге недопустимые токены.
-Результат: модель **физически не может** выдать не то имя поля (`status` вместо
-`verdict`) и не то значение (не из `enum`). Источник: официальный README llama.cpp
-(`--json-schema`), DeepWiki «Grammar and Structured Output», и устоявшаяся практика
-constrained decoding (гарантирует 100% валидный вывод, тогда как «просто попроси в
-промпте JSON» падает 5–15% времени).
+Результат: модель **физически не может** выдать не то имя поля и не то значение (не из
+`enum`). Источник: официальный README llama.cpp (`--json-schema`), DeepWiki «Grammar
+and Structured Output», и устоявшаяся практика constrained decoding (гарантирует 100%
+валидный вывод, тогда как «просто попроси в промпте JSON» падает 5–15% времени).
 
 ## Как это проводится в коде (НЕ ломать)
 
@@ -46,29 +45,30 @@ constrained decoding (гарантирует 100% валидный вывод, �
   - `load_signal_contract()` — грузит контракт агента из `root.schema.json`.
   - `build_signal_envelope_schema()` — собирает строгую JSON-schema **обёртки**
     `emit_signal` из контракта (с `additionalProperties:false`, `const` ключей,
-    `required:["verdict"]`). Без `$ref` (сломаны в llama.cpp, #8073).
+    `required`). Без `$ref` (сломаны в llama.cpp, #8073).
   - `validate_signal_value()` — честная валидация `value` против обязательных полей
     контракта. Возвращает явную ошибку на retry, если форма искажена.
 - `domain/orchestrator/mod.rs` (`run_agent_node`):
   - Для сигнального агента (есть контракт) ставится
-    `engine.set_grammar(GrammarSpec { json_schema: Some(build_signal_envelope_schema(contract)) })`.
-  - Ветка `else { None }` для сигнальных агентов **удалена** — отключать грамматику
+    `engine.set_grammar(GrammarSpec { gbnf: Some(build_signal_envelope_grammar(contract)) })`.
+    Метод строит hybrid GBNF: `think-block envelope-json` (Method 3 из `docs/gbnf.md`).
+    `disable_reasoning` НЕ включается — модель думает в `<think>`.
+    Ветка `else { None }` для сигнальных агентов **удалена** — отключать грамматику
     запрещено.
 - `domain/orchestrator/dispatch.rs` (`execute_tool_call`, ветка `emit_signal`):
   - если `value` не прошёл `validate_signal_value()` — возвращается явная ошибка модели
     на retry (честно, не тихо).
 
-## Разбор бага (кейс: валидатор прислал `status` вместо `verdict`)
+## Разбор бага (кейс: модель исказила имя поля сигнала)
 
 **Симптом:** в чат никто не ответил, лог обрывается на `signal_router → нет target`,
 движок остановлен.
 
 **Корень:** оркестратор ставил сигнальным агентам `set_grammar(None)`, поэтому модель
-генерировала **без ограничения** и выдала `status` вместо обязательного `verdict`.
-`check_validator_signal` читает `field: verdict` → не находит → `target: None` → граф
-завершается, ни один `message`-узел (`call_intake_specialist`) не выполняется → в `ctx.messages`
-не добавляется ни одного `message` → workflow-режим (который отдаёт ответ только через
-`message`-записи) возвращает пустоту.
+генерировала **без ограничения** и выдала неправильное имя поля (напр. `status` вместо
+`element_1_mental`). `signal_router` читает нужное поле → не находит → `target: None` → граф
+завершается, ни один `message`-узел не выполняется → в `ctx.messages`
+не добавляется ни одного `message` → workflow-режим возвращает пустоту.
 
 **Почему `default`-ветка — костыль (не делать):** это маскирует корень (модель отпустили
 без грамматики) и зашывает «безопасное» поведение, которое может быть неверным. Правильно
