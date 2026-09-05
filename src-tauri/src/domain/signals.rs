@@ -126,6 +126,44 @@ pub fn build_signal_envelope_grammar(contract: &SignalContract) -> String {
     )
 }
 
+/// Phase 2: JSON-only grammar для fallback (без think-block).
+/// Модель генерирует ТОЛЬКО JSON envelope — никакого think.
+/// Используется когда Phase 1 (hybrid grammar) не дала JSON.
+pub fn build_signal_envelope_json_only_grammar(contract: &SignalContract) -> String {
+    let schema = &contract.value_schema;
+
+    let sp = "sp ::= \" \" | \"\\n\" [ \\t]{0,4}";
+
+    let json_rules = concat!(
+        "json-string ::= \"\\\"\" string-char* \"\\\"\"\n",
+        "string-char ::= [^\"\\\\] | escape\n",
+        "escape ::= \"\\\\\" (\"\\\\\" | \"\\\"\" | \"n\" | \"t\" | \"r\" | \"b\" | \"f\" | \"u\" [0-9a-f] [0-9a-f] [0-9a-f] [0-9a-f])\n",
+        "json-number ::= \"-\"? (\"0\" | [1-9] [0-9]*) (\".\" [0-9]+)? ([eE] [-+]? [0-9]+)?\n",
+        "json-bool ::= \"true\" | \"false\"\n",
+        "bool ::= \"true\" | \"false\"\n",
+    );
+
+    let value_grammar = build_value_grammar(schema);
+
+    format!(
+        "root ::= envelope-json\n\
+         \n\
+         envelope-json ::= \"{{\" sp thought-field \",\" sp tool-field \",\" sp arguments-field sp \"}}\"\n\
+         thought-field ::= \"\\\"thought\\\"\" sp \":\" sp json-string\n\
+         tool-field ::= \"\\\"tool\\\"\" sp \":\" sp \"\\\"emit_signal\\\"\"\n\
+         arguments-field ::= \"\\\"arguments\\\"\" sp \":\" sp arguments-json\n\
+         arguments-json ::= \"{{\" sp key-field \",\" sp \"\\\"value\\\"\" sp \":\" sp value-field sp \"}}\"\n\
+         key-field ::= \"\\\"key\\\"\" sp \":\" sp \"\\\"{}\\\"\"\n\
+         {}\n\
+         {}\n\
+         {}",
+        contract.key,
+        value_grammar,
+        sp,
+        json_rules,
+    )
+}
+
 /// Генерирует GBNF-грамматику для value-поля в зависимости от типа контракта.
 fn build_value_grammar(schema: &serde_json::Value) -> String {
     // 1. Enum (массив строк) — альтернативы

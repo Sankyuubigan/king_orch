@@ -178,6 +178,7 @@ pub async fn run_iterative_test(
             None,
             format!("test_case_{}", i),
             agents_dir.parent().unwrap_or(&agents_dir).to_path_buf(),
+            &mut None,
         ) {
             Ok(response) => {
                 append_test_log(&format!("✅ Ответ LLM: {}", response));

@@ -71,6 +71,9 @@ where
     pub(crate) stalled_continuations: usize,
     pub(crate) signal_saved: bool,
     pub(crate) signal_analysis: String,
+    /// Буфер для сигнала: сохраняется здесь вместо messages[], чтобы
+    /// caller мог сохранить [thought, signal] в правильном порядке.
+    pub(crate) pending_signal: Option<ChatMessage>,
     /// Контракт сигнала агента (signals/root.schema.json), если агент — emit-агент.
     /// Используется для ЧЕСТНОЙ валидации формы сигнала (см. docs/SIGNAL_CONTRACTS.md):
     /// если модель прислала неверное/пустое обязательное поле — возвращаем ей ошибку
@@ -138,83 +141,7 @@ where
 
         if tool_name == "emit_signal" {
             tool_found = true;
-            let mut key_val = arguments.get("key");
-            let mut val_val = arguments.get("value");
-            if key_val.is_none() && val_val.is_none() {
-                if let Some(props) = arguments.get("properties") {
-                    key_val = props.get("key");
-                    val_val = props.get("value");
-                }
-            }
-            let key = key_val
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty());
-            let value = val_val
-                .filter(|v| !v.is_null());
-
-            if let (Some(key), Some(value)) = (key, value) {
-                // ЧЕСТНАЯ валидация формы сигнала против контракта (SSOT).
-                // Если модель (вдруг) прислала неверное/пустое обязательное поле —
-                // возвращаем ей явную ошибку на retry, а НЕ сохраняем битый сигнал,
-                // который потом тихо оборвёт маршрутизацию (см. docs/SIGNAL_CONTRACTS.md).
-                if let Some(contract) = &self.signal_contract {
-                    if let Err(e) = validate_signal_value(contract, value) {
-                        self.consecutive_failed_tools += 1;
-                        tool_output = Some(e.clone());
-                        (self.log_cb)(format!("⚠️ emit_signal: '{}' валидация: {}", key, e));
-                        self.restore_grammar();
-                        return Ok(DispatchCtl::Continue);
-                    }
-                }
-                self.consecutive_failed_tools = 0;
-                self.signal_saved = true;
-                let signal_content = serde_json::json!({key: value}).to_string();
-                let signal_msg = ChatMessage {
-                    id: Some(format!("msg_{}", self.msg_counter)),
-                    msg_type: "signal".to_string(),
-                    content: signal_content.clone(),
-                    sub_calls: None,
-                    author: Some(self.agent.id.clone()),
-                    model: None,
-                    attachments: None,
-                };
-                self.messages.push(signal_msg);
-                *self.msg_counter += 1;
-                (self.log_cb)(format!("📡 emit_signal: '{}' = {} (в messages[], signal bus подхватит после узла)", key, safe_truncate(&signal_content, 200)));
-
-                // Результат (анализ) агента в messages[] сохраняет вызывающий
-                // (узел workflow / legacy-коллер), иначе получается клон: один
-                // и тот же ответ дважды. Здесь остаётся только сигнал.
-                let (analysis, _) = strip_tool_call(parse_target);
-                let analysis = if analysis.trim().is_empty() {
-                    if thought.is_empty() { response.to_string() } else { thought.to_string() }
-                } else {
-                    analysis
-                };
-
-                (self.log_cb)(format!("💭 Мысль {} [d={}] (сигнал + анализ) [⏱{:.1}с]: {}", self.agent.name, self.depth, gen_start.elapsed().as_secs_f32(), safe_truncate(&analysis, 500)));
-                self.tool_calls.push(ToolCallInfo {
-                    tool_name: "emit_signal".to_string(),
-                    arguments: args_str.clone(),
-                    result: format!("✅ Сигнал '{}' сохранён", key),
-                });
-                // При успешной эмиссии сигнала пользовательский ответ агента —
-                // это analysis (результат единственного вызова LLM): возвращаем его, а не голый JSON.
-                self.final_response = if self.signal_analysis.is_empty() {
-                    analysis
-                } else {
-                    self.signal_analysis.clone()
-                };
-                return Ok(DispatchCtl::Break);
-            } else {
-                let key_str = arguments.get("key").map(|v| v.to_string()).unwrap_or_else(|| "отсутствует".to_string());
-                let val_str = arguments.get("value").map(|v| v.to_string()).unwrap_or_else(|| "отсутствует".to_string());
-                (self.log_cb)(format!("❌ emit_signal: невалидный конверт (key={}, value={}). Требуется {{\"key\":\"...\",\"value\":...}}", key_str, val_str));
-                tool_output = Some(format!(
-                    "Ошибка: emit_signal требует 'key' (строка) и 'value' (объект). Получено: key={}, value={}. Исправь и вызови СНОВА.",
-                    key_str, val_str
-                ));
-            }
+            return self.handle_emit_signal(arguments, thought, gen_start, raw_response, combined, parse_target, response);
         } else if tool_name == "read_spill" {
             // Встроенный инструмент дочитки больших результатов инструментов.
             tool_found = true;
@@ -313,6 +240,7 @@ where
                 sub_calls: None,
                 author: Some(self.agent.id.clone()),
                 model: Some(extract_model_filename(&self.engine.model_path)),
+                time_sec: None,
                 attachments: None,
             });
             *self.msg_counter += 1;
@@ -329,8 +257,6 @@ where
             self.continuation_raw.clear();
             self.continuation_mark = None;
             self.llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\n⚠️ Инструмент вернул ошибку. Используй другой инструмент или заверши через {{\"target\": \"reply\"}}.", tool_name, output) });
-            // Восстанавливаем активную грамматику после tool call с ошибкой
-            self.restore_grammar();
             return Ok(DispatchCtl::Continue);
         }
         self.consecutive_failed_tools = 0;
@@ -343,8 +269,6 @@ where
         self.continuation_raw.clear();
         self.continuation_mark = None;
         self.llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\nЕсли задача выполнена — ответь ОБЫЧНЫМ ТЕКСТОМ.", tool_name, model_output) });
-        // Восстанавливаем активную грамматику после tool call
-        self.restore_grammar();
         Ok(DispatchCtl::Continue)
     }
 
@@ -383,6 +307,7 @@ where
             (*log_cb)(format!("📞 {} вызывает сабагента: {}", (*agent).name, subagent.name));
 
             let start_len = (**all_sub_calls).len();
+            let mut sub_pending_signal = None;
             let sub_result = run_agent_node(
                 (*log_cb).clone(), (*status_cb).clone(), (*subcall_cb).clone(),
                 *engine, subagent, *agents, parsed.content.clone(), vec![],
@@ -396,6 +321,7 @@ where
                 prompt_log.clone(),
                 session_id.clone(),
                 workspace_root.clone(),
+                &mut sub_pending_signal,
             )?;
             let end_len = (**all_sub_calls).len();
             let node_sub_calls = if start_len < end_len {
@@ -413,6 +339,7 @@ where
                     sub_calls: node_sub_calls.clone(),
                     author: Some(subagent.id.clone()),
                     model: Some(extract_model_filename(&(*engine).model_path)),
+                    time_sec: None,
                     attachments: None,
                 };
                 push_report(&mut **messages, err_msg, subagent.single_report);
@@ -428,10 +355,16 @@ where
                 sub_calls: node_sub_calls.clone(),
                 author: Some(subagent.id.clone()),
                 model: Some(extract_model_filename(&(*engine).model_path)),
+                time_sec: None,
                 attachments: None,
             };
             push_report(&mut **messages, msg, subagent.single_report);
             **msg_counter += 1;
+            // Сигнал сабагента сохраняется ПОСЛЕ thought.
+            if let Some(signal) = sub_pending_signal.take() {
+                push_report(&mut **messages, signal, false);
+                **msg_counter += 1;
+            }
 
             let uses_method_3 = self.signal_contract.is_some();
             let mut new_sys = build_system_prompt(*agent, &**messages, *has_tools_for_prompt, all_tools, max_gen_tokens, uses_method_3);
@@ -440,8 +373,6 @@ where
             continuation_raw.clear();
             *continuation_mark = None;
             llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("Отчет от {}:\n{}\n\nЕсли достаточно — ответь ОБЫЧНЫМ ТЕКСТОМ.", subagent.name, truncate_result(&sub_result, 2000)) });
-            // Восстанавливаем активную грамматику после вызова сабагента
-            self.restore_grammar();
             Ok(DispatchCtl::Continue)
         } else {
             *consecutive_invalid_targets += 1;
@@ -461,6 +392,108 @@ where
             };
             llm_messages.push(LlmMessage { role: "user".to_string(), content: error_msg });
             Ok(DispatchCtl::Continue)
+        }
+    }
+
+    /// Обработка emit_signal — вынесена из execute_tool_call для переиспользования
+    /// в Phase 2 (JSON-only fallback). Возвращает Break (сигнал сохранён) или
+    /// Continue (ошибка — модель должна исправить конверт).
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn handle_emit_signal(
+        &mut self,
+        arguments: &Value,
+        thought: &str,
+        gen_start: Instant,
+        raw_response: &str,
+        combined: &str,
+        parse_target: &str,
+        response: &str,
+    ) -> Result<DispatchCtl, String> {
+        let mut key_val = arguments.get("key");
+        let mut val_val = arguments.get("value");
+        if key_val.is_none() && val_val.is_none() {
+            if let Some(props) = arguments.get("properties") {
+                key_val = props.get("key");
+                val_val = props.get("value");
+            }
+        }
+        let key = key_val
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty());
+        let value = val_val
+            .filter(|v| !v.is_null());
+
+        if let (Some(key), Some(value)) = (key, value) {
+            // ЧЕСТНАЯ валидация формы сигнала против контракта (SSOT).
+            if let Some(contract) = &self.signal_contract {
+                if let Err(e) = validate_signal_value(contract, value) {
+                    self.consecutive_failed_tools += 1;
+                    (self.log_cb)(format!("⚠️ emit_signal: '{}' валидация: {}", key, e));
+                    return Ok(DispatchCtl::Continue);
+                }
+            }
+            self.consecutive_failed_tools = 0;
+            self.signal_saved = true;
+            let signal_content = serde_json::json!({key: value}).to_string();
+            let signal_msg = ChatMessage {
+                id: Some(format!("msg_{}", self.msg_counter)),
+                msg_type: "signal".to_string(),
+                content: signal_content.clone(),
+                sub_calls: None,
+                author: Some(self.agent.id.clone()),
+                model: None,
+                time_sec: None,
+                attachments: None,
+            };
+            self.pending_signal = Some(signal_msg);
+            *self.msg_counter += 1;
+            (self.log_cb)(format!("📡 emit_signal: '{}' = {} (в messages[], signal bus подхватит после узла)", key, safe_truncate(&signal_content, 200)));
+
+            // Результат (анализ) агента в messages[] сохраняет вызывающий.
+            let (analysis, _) = strip_tool_call(parse_target);
+            let analysis = if analysis.trim().is_empty() {
+                let think_contents = extract_think_content(raw_response);
+                if !think_contents.is_empty() {
+                    think_contents.join("\n\n")
+                } else if thought.is_empty() {
+                    response.to_string()
+                } else {
+                    thought.to_string()
+                }
+            } else {
+                analysis
+            };
+
+            (self.log_cb)(format!("💭 Мысль {} [d={}] (сигнал + анализ) [⏱{:.1}с]: {}", self.agent.name, self.depth, gen_start.elapsed().as_secs_f32(), safe_truncate(&analysis, 500)));
+            self.tool_calls.push(ToolCallInfo {
+                tool_name: "emit_signal".to_string(),
+                arguments: arguments.to_string(),
+                result: format!("✅ Сигнал '{}' сохранён", key),
+            });
+            self.final_response = if self.signal_analysis.is_empty() {
+                analysis
+            } else {
+                self.signal_analysis.clone()
+            };
+            return Ok(DispatchCtl::Break);
+        } else {
+            let key_str = arguments.get("key").map(|v| v.to_string()).unwrap_or_else(|| "отсутствует".to_string());
+            let val_str = arguments.get("value").map(|v| v.to_string()).unwrap_or_else(|| "отсутствует".to_string());
+            (self.log_cb)(format!("❌ emit_signal: невалидный конверт (key={}, value={}). Требуется {{\"key\":\"...\",\"value\":...}}", key_str, val_str));
+            self.consecutive_failed_tools += 1;
+            self.tool_calls.push(ToolCallInfo {
+                tool_name: "emit_signal".to_string(),
+                arguments: arguments.to_string(),
+                result: format!("❌ Невалидный конверт: key={}, value={}", key_str, val_str),
+            });
+            self.llm_messages.push(LlmMessage { role: "assistant".to_string(), content: if combined.is_empty() { raw_response.to_string() } else { combined.to_string() } });
+            self.continuation_raw.clear();
+            self.continuation_mark = None;
+            self.llm_messages.push(LlmMessage { role: "user".to_string(), content: format!(
+                "Ошибка: emit_signal требует 'key' (строка) и 'value' (объект). Получено: key={}, value={}. Исправь и вызови СНОВА.",
+                key_str, val_str
+            ) });
+            return Ok(DispatchCtl::Continue);
         }
     }
 }

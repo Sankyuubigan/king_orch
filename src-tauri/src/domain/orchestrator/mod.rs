@@ -27,7 +27,7 @@ mod runtime;
 pub use runtime::builtin_tools;
 
 use crate::domain::agent_manager::{load_agents, AgentProfile};
-use crate::domain::signals::{SignalContract, extract_signal_value_from_text, load_signal_contract, build_signal_envelope_grammar};
+use crate::domain::signals::{SignalContract, extract_signal_value_from_text, load_signal_contract, build_signal_envelope_grammar, build_signal_envelope_json_only_grammar};
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner, NodeType, WorkflowDef,
 };
@@ -118,12 +118,18 @@ fn push_continuation_for_cutoff(
             .sum::<usize>()
             + continuation_raw.chars().count();
         if acc_chars > COMPACT_THRESHOLD_CHARS {
-            let thinking = llm_messages[mark..]
+            let mut thinking = llm_messages[mark..]
                 .iter()
                 .filter(|m| m.role == "assistant")
                 .map(|m| m.content.clone())
                 .collect::<Vec<_>>()
                 .join("\n");
+            if !continuation_raw.is_empty() {
+                if !thinking.is_empty() {
+                    thinking.push('\n');
+                }
+                thinking.push_str(continuation_raw);
+            }
             log_cb(format!(
                 "🧠 Размышления разрослись ({} символов) — сжатие в тезисы ({} токенов)...",
                 thinking.chars().count(),
@@ -417,6 +423,7 @@ where
             prompt_log.clone(),
             session_id.clone(),
             project_dir.to_path_buf(),
+            &mut None,
         )?;
 
         // Fail-fast: если primary-агент вернул ошибку — не сохраняем её как ответ
@@ -433,6 +440,7 @@ where
                 sub_calls: sub_calls_opt,
                 author: Some(primary_agent.id.clone()),
                 model: Some(extract_model_filename(&engine.model_path)),
+                time_sec: None,
                 attachments: None,
             });
             Ok(ChatRunResult {
@@ -516,6 +524,7 @@ pub(crate) fn run_agent_node<L, S, C>(
     prompt_log: Option<std::path::PathBuf>,
     session_id: String,
     workspace_root: std::path::PathBuf,
+    out_pending_signal: &mut Option<ChatMessage>,
 ) -> Result<String, String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -784,6 +793,7 @@ let start_time = Instant::now();
         stalled_continuations: 0,
         signal_saved: false,
         signal_analysis: String::new(),
+        pending_signal: None,
         signal_contract: signal_contract.clone(),
         continuation_count: 0,
         continuation_restarts: 0,
@@ -797,6 +807,12 @@ let start_time = Instant::now();
 
     for iter in 1..=30 {
         if cancel_flag.load(Ordering::SeqCst) { return Err("Прервано пользователем".to_string()); }
+
+        // Восстанавливаем активную грамматику перед каждым generate_chat().
+        // take_pending_grammar() consume-and-clear сбрасывает грамматику после
+        // каждого вызова; единая точка восстановления вместо ручных вызовов
+        // в каждой ветке continue (устраняет баги пропуска restore).
+        ctx.restore_grammar();
 
         let mut ideal_ctx;
         loop {
@@ -988,8 +1004,6 @@ let start_time = Instant::now();
                         ctx.thinking_no_answer
                     ));
                     ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
-                    // Восстанавливаем активную грамматику (consume-and-clear сбросил)
-                    ctx.restore_grammar();
                     continue;
                 }
                 ctx.consecutive_incomplete += 1;
@@ -1006,8 +1020,6 @@ let start_time = Instant::now();
                 ctx.continuation_raw.clear();
                 ctx.continuation_mark = None;
                 ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: hint.to_string() });
-                // Восстанавливаем активную грамматику (consume-and-clear сбросил)
-                ctx.restore_grammar();
                 continue;
             }
         }
@@ -1031,9 +1043,6 @@ let start_time = Instant::now();
                 ctx.final_response = format!("{} Агент '{}' не смог завершить ответ после {} докачек (модель упирается в лимит токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id, MAX_CONTINUATIONS);
                 break;
             }
-            // Восстанавливаем активную грамматику после continuation
-            // (take_pending_grammar() consume-and-clear сбросил грамматику).
-            ctx.restore_grammar();
             continue;
         }
 
@@ -1092,6 +1101,7 @@ let start_time = Instant::now();
                     sub_calls: None,
                     author: Some(agent.id.clone()),
                     model: Some(extract_model_filename(&engine.model_path)),
+                    time_sec: None,
                     attachments: None,
                 });
                 *ctx.msg_counter += 1;
@@ -1107,6 +1117,7 @@ let start_time = Instant::now();
                         sub_calls: None,
                         author: Some(agent.id.clone()),
                         model: Some(extract_model_filename(&engine.model_path)),
+                        time_sec: None,
                         attachments: None,
                     });
                     *ctx.msg_counter += 1;
@@ -1133,8 +1144,6 @@ let start_time = Instant::now();
                     ctx.thinking_no_answer
                 ));
                 ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
-                // Восстанавливаем активную грамматику (consume-and-clear сбросил)
-                ctx.restore_grammar();
                 continue;
             }
             ctx.consecutive_incomplete += 1;
@@ -1151,8 +1160,6 @@ let start_time = Instant::now();
             ctx.continuation_raw.clear();
             ctx.continuation_mark = None;
             ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: hint.to_string() });
-            // Восстанавливаем активную грамматику (consume-and-clear сбросил)
-            ctx.restore_grammar();
             continue;
         }
 
@@ -1212,6 +1219,67 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
         break;
     }
 
+    // ── Phase 2: JSON-only fallback для signal-агентов ──
+    // Если Phase 1 (hybrid grammar think + JSON) не дала JSON envelope,
+    // делаем второй вызов с JSON-only grammar. Модель видит тот же контекст
+    // (system + user + assistant с think-block из Phase 1), grammar
+    // принуждает к JSON сразу — без user-сообщения.
+    if !ctx.signal_saved && signal_contract.is_some() {
+        let contract = signal_contract.as_ref().unwrap();
+        log_cb(format!("🔄 [{}] Phase 2: JSON-only fallback (grammar: envelope-json)...", agent.name));
+
+        // Сбрасываем стейт для нового вызова
+        ctx.continuation_raw.clear();
+        ctx.continuation_mark = None;
+        ctx.consecutive_incomplete = 0;
+        ctx.thinking_no_answer = 0;
+
+        // Устанавливаем JSON-only grammar
+        let json_only_grammar = build_signal_envelope_json_only_grammar(contract);
+        engine.set_grammar(Some(GrammarSpec { gbnf: Some(json_only_grammar), json_schema: None }));
+
+        // Вызываем LLM — тот же контекст, другая grammar
+        let ctx_label_2 = format!("{}:{}#phase2", mem_mode, agent.name);
+        match engine.generate_chat(
+            &ctx.llm_messages,
+            max_gen_tokens,
+            model_params,
+            format_type,
+            false, // disable_reasoning — grammar не пустит в think
+            cancel_flag.clone(),
+            &ctx_label_2,
+            |p, _| { status_cb(format!("{} Phase 2 (JSON)...", agent.name), 80 + (p * 0.15) as u8); },
+            log_cb.clone(),
+        ) {
+            Ok(gen) => {
+                let phase2_response = gen.text.clone();
+                log_cb(format!("<<< [{}] Phase 2: {} символов, стоп: {}", agent.name, phase2_response.len(), gen.stop_reason));
+
+                // Добавляем ответ Phase 2 в историю для парсинга
+                ctx.llm_messages.push(LlmMessage { role: "assistant".to_string(), content: phase2_response.clone() });
+
+                // Пытаемся распарсить tool call
+                if let Some((tool_name, arguments, thought)) = parse_tool_call(&phase2_response) {
+                    if tool_name == "emit_signal" {
+                        // Обрабатываем emit_signal через общую функцию
+                        let gen_start_2 = Instant::now();
+                        let _ = ctx.handle_emit_signal(&arguments, &thought, gen_start_2, &phase2_response, &phase2_response, &phase2_response, &phase2_response);
+                    }
+                }
+
+                if !ctx.signal_saved {
+                    log_cb(format!("⚠️ [{}] Phase 2: JSON не сгенерирован или невалиден", agent.name));
+                }
+            }
+            Err(e) => {
+                log_cb(format!("⚠️ [{}] Phase 2: ошибка генерации: {}", agent.name, e));
+            }
+        }
+
+        // Восстанавливаем оригинальную грамматику (hybrid) для возможных后续-вызовов
+        ctx.restore_grammar();
+    }
+
     // ── Детерминированный fallback сигнала (БЕЗ LLM-вызова): агент должен звать
     // emit_signal нативно в своём ответе. Если он этого не сделал, но у агента есть
     // контракт сигнала — пытаемся извлечь значение из текста ответа по допустимым
@@ -1235,6 +1303,7 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
                     sub_calls: None,
                     author: Some(agent.id.clone()),
                     model: None,
+                    time_sec: None,
                     attachments: None,
                 };
                 ctx.messages.push(signal_msg);
@@ -1264,6 +1333,7 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
     // 4.5: плагин-слой — уведомление о завершении агента.
     crate::infra::plugins::global_plugins().on_agent_finish(&ctx.agent.id, &ctx.final_response);
 
+    *out_pending_signal = ctx.pending_signal.take();
     Ok(ctx.final_response)
 }
 

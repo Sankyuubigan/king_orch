@@ -128,6 +128,7 @@ mod tests {
             sub_calls: None,
             author: Some("user".to_string()),
             model: None,
+            time_sec: None,
             attachments: None,
         }
     }

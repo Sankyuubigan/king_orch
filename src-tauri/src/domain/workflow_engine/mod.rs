@@ -92,6 +92,7 @@ where
         injected_reports: &str,
         allow_stream: bool,
         resolved_params: &ModelParams,
+        out_pending_signal: &mut Option<ChatMessage>,
     ) -> Result<String, String> {
         let mcp_pool: crate::infra::mcp_client::McpPool = std::sync::Arc::new(std::sync::Mutex::new(
             std::collections::HashMap::<String, crate::infra::mcp_client::SharedMcpClient>::new(),
@@ -125,6 +126,7 @@ where
             self.prompt_log.clone(),
             self.session_id.clone(),
             self.workspace_root.clone(),
+            out_pending_signal,
         )
     }
 
@@ -141,6 +143,7 @@ where
             sub_calls: None,
             author: Some("user".to_string()),
             model: None,
+            time_sec: None,
             attachments: None,
         });
         let directive = crate::domain::orchestrator::prompt::language_directive(&lang_messages);
@@ -329,12 +332,12 @@ where
             // emit_signal в dispatch.rs пушит в messages[], но context.signals
             // заполнялся при создании контекста. Подхватываем здесь.
             let prev_signal_count = context.signals.len();
-            for msg in context.messages.iter().rev() {
+            for msg in context.messages.iter() {
                 if msg.msg_type != "signal" { continue; }
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg.content) {
                     if let Some(obj) = val.as_object() {
                         for (k, v) in obj {
-                            context.signals.entry(k.clone()).or_insert_with(|| v.clone());
+                            context.signals.insert(k.clone(), v.clone());
                         }
                     }
                 }

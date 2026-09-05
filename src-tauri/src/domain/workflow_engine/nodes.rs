@@ -146,18 +146,22 @@ where
                 task
             };
 
-            // ── inject_reports: Структурированные сигналы коллег в system prompt ──
-            // SSOT: инжектим только signal-сообщения (структурированные JSON-данные),
-            // а НЕ thought-сообщения (свободный текст с интерпретациями, которые
-            // bias'ят downstream-агентов).
+            // ── inject_reports: Отчёты коллег в system prompt ──
+            // Приоритет: signal (структурированные JSON-данные) > thought (свободный текст).
+            // Если агент выпускает и signal, и thought — предпочтение у signal.
             let mut injected_reports = String::new();
             if let Some(ref reports_to_inject) = node.inject_reports {
                 if !reports_to_inject.is_empty() {
                     injected_reports.push_str("### [ОТЧЕТЫ КОЛЛЕГ ДЛЯ АНАЛИЗА]\n");
                     for aid in reports_to_inject {
                         let report = context.messages.iter().rev()
-                            .find(|m| m.msg_type == "signal" && m.author.as_deref() == Some(aid.as_str()))
+                            .find(|m| m.author.as_deref() == Some(aid.as_str()) && m.msg_type == "signal")
                             .map(|m| m.content.clone())
+                            .or_else(|| {
+                                context.messages.iter().rev()
+                                    .find(|m| m.author.as_deref() == Some(aid.as_str()) && m.msg_type == "thought")
+                                    .map(|m| m.content.clone())
+                            })
                             .unwrap_or_else(|| "[Отчет не найден]".to_string());
                         injected_reports.push_str(&format!("--- Отчет от {} ---\n{}\n\n", aid, report));
                     }
@@ -175,7 +179,8 @@ where
             // Остальные (thought по умолчанию) стримят мысли в блок «Мысли агентов».
             let allow_stream = node.output_type.as_deref() == Some("message");
             let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
-            let result = runner.call_agent(agent, &task, &mut context.messages, &injected_reports, allow_stream, &resolved_params)?;
+            let mut pending_signal = None;
+            let result = runner.call_agent(agent, &task, &mut context.messages, &injected_reports, allow_stream, &resolved_params, &mut pending_signal)?;
             let end_len = runner.all_sub_calls.len();
 
             // Fail-fast: ошибка агента останавливает workflow (иначе каскад ненужных
@@ -203,10 +208,15 @@ where
             sub_calls: node_sub_calls,
             author: Some(agent_id.to_string()),
             model: Some(extract_model_filename(&runner.engine.model_path)),
+            time_sec: None,
             attachments: None,
         };
         push_report(&mut context.messages, msg, agent.single_report);
         *runner.msg_counter += 1;
+        // Сигнал сохраняется ПОСЛЕ thought для корректного порядка [thought, signal].
+        if let Some(signal) = pending_signal.take() {
+            push_report(&mut context.messages, signal, false);
+        }
         context.output_emitted = node.output_type.as_deref() == Some("message");
 
         Ok(NodeResult {
@@ -364,6 +374,7 @@ where
                         sub_calls: None,
                         author: Some("system".to_string()),
                         model: None,
+                        time_sec: None,
                         attachments: None,
                     };
                     context.messages.push(msg);
@@ -800,6 +811,7 @@ where
                         sub_calls: None,
                         author: Some("system".to_string()),
                         model: None,
+                        time_sec: None,
                         attachments: None,
                     };
                     context.messages.push(msg);

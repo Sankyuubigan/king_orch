@@ -14,7 +14,8 @@ export function createMessageElement(
   msgUid?: string,
   menuCallbacks?: MessageMenuCallbacks,
   attachments?: Attachment[],
-  translateLabel?: string
+  translateLabel?: string,
+  modelName?: string
 ): HTMLDivElement {
   const msgDiv = document.createElement("div");
   msgDiv.className = `message message-${role}`;
@@ -56,7 +57,16 @@ export function createMessageElement(
   if (timeText && role === 'agent') {
     const timeDiv = document.createElement("div");
     timeDiv.className = "msg-time";
-    timeDiv.innerText = timeText;
+    if (modelName) {
+      const modelSpan = document.createElement("span");
+      modelSpan.className = "msg-model";
+      modelSpan.innerText = modelName;
+      timeDiv.appendChild(modelSpan);
+    }
+    const timeSpan = document.createElement("span");
+    timeSpan.className = "msg-time-value";
+    timeSpan.innerText = timeText;
+    timeDiv.appendChild(timeSpan);
     msgDiv.appendChild(timeDiv);
   }
 

@@ -194,6 +194,10 @@ pub struct ChatMessage {
     pub author: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Длительность генерации ответа (секунды). Вычисляется на фронте
+    /// и сохраняется в JSON сессии для отображения при повторном открытии.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_sec: Option<f64>,
     /// Вложения пользовательского сообщения (картинки/файлы). Хранятся в JSON
     /// сессии для отображения в чате; в промпт модели НЕ попадают (llm_history
     /// берёт только content). Текущий ход передаёт их отдельным аргументом.
@@ -410,6 +414,7 @@ mod tests {
             sub_calls: None,
             author: Some(author.to_string()),
             model: None,
+            time_sec: None,
             attachments: None,
         }
     }
@@ -441,6 +446,7 @@ mod tests {
                 time_sec: 1.0,
                 tool_calls: vec![],
             }]),
+            time_sec: None,
             ..msg("msg_5", "message", "grounder", "содержимое")
         };
         let msgs = [with_sub_calls];
