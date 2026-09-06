@@ -167,6 +167,7 @@ where
                 false,
                 self.cancel_flag.clone(),
                 ctx_label,
+                None,
                 |_, _| {},
                 self.log_cb.clone(),
             )
@@ -215,6 +216,7 @@ where
                 disable_reasoning,
                 self.cancel_flag.clone(),
                 ctx_label,
+                None,
                 |_, _| {},
                 self.log_cb.clone(),
             )
@@ -330,24 +332,7 @@ where
             context.node_outputs.insert(node.id.clone(), result.output.clone());
             last_node_output = Some(result.output.clone());
 
-            // ── Синхализация signal bus: подхватываем новые сигналы из messages[] ──
-            // emit_signal в dispatch.rs пушит в messages[], но context.signals
-            // заполнялся при создании контекста. Подхватываем здесь.
-            let prev_signal_count = context.signals.len();
-            for msg in context.messages.iter() {
-                if msg.msg_type != "signal" { continue; }
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg.content) {
-                    if let Some(obj) = val.as_object() {
-                        for (k, v) in obj {
-                            context.signals.insert(k.clone(), v.clone());
-                        }
-                    }
-                }
-            }
-            let new_signals = context.signals.len() - prev_signal_count;
-            if new_signals > 0 {
-                (runner.log_cb)(format!("[workflow] Signal bus: +{} сигналов (итого: {})", new_signals, context.signals.len()));
-            }
+
         }
 
         // Строим новый порядок очереди: [next_node, ...next_nodes, ...остаток очереди]

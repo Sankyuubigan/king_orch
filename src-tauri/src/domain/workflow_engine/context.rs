@@ -27,26 +27,13 @@ impl WorkflowContext {
         messages: Vec<ChatMessage>,
         history: Vec<ChatMessage>,
     ) -> Self {
-        // Заполняем signal bus из messages (сигналы с предыдущих итераций)
-        let mut signals = HashMap::new();
-        for msg in &messages {
-            if msg.msg_type == "signal" {
-                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&msg.content) {
-                    if let Some(obj) = val.as_object() {
-                        for (k, v) in obj {
-                            signals.insert(k.clone(), v.clone());
-                        }
-                    }
-                }
-            }
-        }
         Self {
             user_message,
             node_outputs: HashMap::new(),
             messages,
             history,
             output_emitted: false,
-            signals,
+            signals: HashMap::new(),
         }
     }
 

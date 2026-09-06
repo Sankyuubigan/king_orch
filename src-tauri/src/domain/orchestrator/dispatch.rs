@@ -256,7 +256,7 @@ where
             self.llm_messages.push(LlmMessage { role: "assistant".to_string(), content: if is_continuation { combined.to_string() } else { raw_response.to_string() } });
             self.continuation_raw.clear();
             self.continuation_mark = None;
-            self.llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\n⚠️ Инструмент вернул ошибку. Используй другой инструмент или заверши через {{\"target\": \"reply\"}}.", tool_name, output) });
+            self.llm_messages.push(LlmMessage { role: "user".to_string(), content: format!("[РЕЗУЛЬТАТ ИНСТРУМЕНТА {}]:\n{}\n\n⚠️ Инструмент вернул ошибку. Проверь аргументы и вызови инструмент СНОВА с исправленными данными.", tool_name, output) });
             return Ok(DispatchCtl::Continue);
         }
         self.consecutive_failed_tools = 0;

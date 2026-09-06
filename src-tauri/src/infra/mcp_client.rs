@@ -154,10 +154,11 @@ impl McpClient {
 
     pub fn call_tool(&mut self, name: &str, arguments: Value) -> Result<String, String> {
         let result = self.call("tools/call", json!({ "name": name, "arguments": arguments }))?;
+        let is_error = result.get("type").and_then(|t| t.as_str()) == Some("error");
         if let Some(content_array) = result.get("content").and_then(|c| c.as_array()) {
             let mut output = String::new();
             for item in content_array { if let Some(text) = item.get("text").and_then(|t| t.as_str()) { output.push_str(text); } }
-            Ok(output)
+            if is_error { Err(output) } else { Ok(output) }
         } else { Err("Некорректный формат ответа tools/call".to_string()) }
     }
 }

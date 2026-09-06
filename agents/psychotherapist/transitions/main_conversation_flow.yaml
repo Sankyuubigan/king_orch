@@ -67,7 +67,7 @@ nodes:
 - id: check_mental_scenario
   type: signal_router
   signal_name: validator_report
-  field: element_6_mental
+  field: e6
   cases_priority:
   - key: 'false'
     to: call_grounder
@@ -181,23 +181,23 @@ nodes:
   true_to: checking_insufficient_data
   false_to: note_1784427848563
   conditions:
-  - field: element_1_mental
+  - field: e1
     equals: false
-  - field: element_2_mental
+  - field: e2
     equals: false
-  - field: element_3_mental
+  - field: e3
     equals: false
-  - field: element_4_mental
+  - field: e4
     equals: false
-  - field: element_5_mental
+  - field: e5
     equals: false
-  - field: element_6_mental
+  - field: e6
     equals: false
-  - field: element_7_mental
+  - field: e7
     equals: false
-  - field: element_8_mental
+  - field: e8
     equals: false
-  - field: element_9_mental
+  - field: e9
     equals: false
   logic: any
   ui_pos:
@@ -276,19 +276,19 @@ nodes:
   true_to: call_collector
   false_to: check_mental_scenario
   conditions:
-  - field: element_1_mental
+  - field: e1
     equals: false
-  - field: element_2_mental
+  - field: e2
     equals: false
-  - field: element_4_mental
+  - field: e4
     equals: false
-  - field: element_5_mental
+  - field: e5
     equals: false
-  - field: element_7_mental
+  - field: e7
     equals: false
-  - field: element_8_mental
+  - field: e8
     equals: false
-  - field: element_9_mental
+  - field: e9
     equals: false
   logic: any
   ui_pos:

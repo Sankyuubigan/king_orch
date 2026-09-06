@@ -806,6 +806,7 @@ impl LlamaEngine {
         disable_reasoning: bool,
         cancel_flag: Arc<AtomicBool>,
         ctx_label: &str,
+        tool_choice: Option<&str>,
         mut progress_cb: F,
         log_cb: L,
     ) -> Result<GenerationResult, String>
@@ -855,6 +856,8 @@ impl LlamaEngine {
             json_schema: Option<&'a serde_json::Value>,
             #[serde(skip_serializing_if = "Option::is_none")]
             chat_template_kwargs: Option<serde_json::Value>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            tool_choice: Option<&'a str>,
         }
 
         // messages[] — строки; вложения — image-части последнего user-сообщения
@@ -917,6 +920,7 @@ impl LlamaEngine {
             } else {
                 None
             },
+            tool_choice,
         };
 
         // ── Телеметрия: старт генерации ──
@@ -1228,6 +1232,7 @@ impl LlamaEngine {
         disable_reasoning: bool,
         cancel_flag: Arc<AtomicBool>,
         ctx_label: &str,
+        tool_choice: Option<&str>,
         progress_cb: F,
         log_cb: L,
     ) -> Result<GenerationResult, String>
@@ -1244,7 +1249,7 @@ impl LlamaEngine {
         let stop_words = merged_stop_words(&words);
         let pending = self.take_pending_grammar();
         let grammar = pending.or_else(|| build_base_grammar(&actual_format).map(|gbnf| GrammarSpec { gbnf: Some(gbnf), json_schema: None }));
-        self.run_chat_completions(messages, None, max_tokens, model_params, &stop_words, grammar, disable_reasoning, cancel_flag, ctx_label, progress_cb, log_cb)
+        self.run_chat_completions(messages, None, max_tokens, model_params, &stop_words, grammar, disable_reasoning, cancel_flag, ctx_label, tool_choice, progress_cb, log_cb)
     }
 }
 

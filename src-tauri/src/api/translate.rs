@@ -63,6 +63,7 @@ Output only the translated text — no commentary, no explanations, no quotes ar
         true,
         cancel,
         "translate",
+        None,
         |_, _: &str| {},
         |_: String| {},
     )?;

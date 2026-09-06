@@ -157,6 +157,7 @@ fn push_continuation_for_cutoff(
                 false,
                 cancel_flag.clone(),
                 &format!("{}#compact", ctx_label),
+                None,
                 |_, _| {},
                 log_cb,
             );
@@ -697,6 +698,7 @@ where
                 false,
                 cancel_flag.clone(),
                 "compact:summarize",
+                None,
                 |_, _| {},
                 log_cb.clone(),
             )
@@ -890,11 +892,13 @@ let start_time = Instant::now();
         // Per-agent GBNF агенты (без signal_contract): disable_reasoning = true.
         let uses_method_3 = signal_contract.is_some();
         let has_agent_grammar = agent_grammar.is_some() && !uses_method_3;
+        let enforce_tool_choice = if has_tools_for_prompt { Some("required") } else { None };
         let attempt_generate = |msgs: &[LlmMessage]| -> Result<GenerationResult, String> {
             if !attachments.is_empty() && engine.is_multimodal() {
                 engine.generate_chat_multimodal(
                     msgs, &attachments, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
                     &ctx_label,
+                    enforce_tool_choice,
                     |p, _| { status_cb(format!("{} обрабатывает медиа (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
                     log_cb.clone(),
                 )
@@ -902,6 +906,7 @@ let start_time = Instant::now();
                 engine.generate_chat(
                     msgs, max_gen_tokens, model_params, format_type, has_agent_grammar, cancel_flag.clone(),
                     &ctx_label,
+                    enforce_tool_choice,
                     |p, _| { status_cb(format!("{} думает (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
                     log_cb.clone(),
                 )
@@ -1272,6 +1277,7 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
             false, // disable_reasoning — grammar не пустит в think
             cancel_flag.clone(),
             &ctx_label_2,
+            None,
             |p, _| { status_cb(format!("{} Phase 2 (JSON)...", agent.name), 80 + (p * 0.15) as u8); },
             log_cb.clone(),
         ) {
@@ -1772,7 +1778,7 @@ mod tests {
         ];
         let cancel = Arc::new(AtomicBool::new(false));
         let gen = engine
-            .generate_chat(&msgs, 1024, &params, "Auto", false, cancel, "test:docs_researcher_tool", |_, _| {}, |_| {})
+            .generate_chat(&msgs, 1024, &params, "Auto", false, cancel, "test:docs_researcher_tool", None, |_, _| {}, |_| {})
             .unwrap();
         let response = gen.text;
         println!("=== RAW RESPONSE ===\n{}\n=== END ===", response);
@@ -1870,6 +1876,7 @@ mod tests {
                 false,
                 cancel,
                 "test:fact",
+                None,
                 |_, _| {},
                 |_| {},
             ) {

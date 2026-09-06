@@ -215,6 +215,14 @@ where
         *runner.msg_counter += 1;
         // Сигнал сохраняется ПОСЛЕ thought для корректного порядка [thought, signal].
         if let Some(signal) = pending_signal.take() {
+            // Вставляем сигнал в signal bus — SSOT для SignalRouter/ConditionRouter
+            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal.content) {
+                if let Some(obj) = val.as_object() {
+                    for (k, v) in obj {
+                        context.signals.insert(k.clone(), v.clone());
+                    }
+                }
+            }
             push_report(&mut context.messages, signal, false);
         }
         context.output_emitted = node.output_type.as_deref() == Some("message");

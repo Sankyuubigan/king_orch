@@ -97,11 +97,12 @@ async function handleRequest(req: JsonRpcRequest, config: McpServerConfig): Prom
         sendResponse(id, { content: [{ type: "text", text: String(result) }] });
       } catch (e) {
         sendResponse(id, {
-          content: [{ type: "text", text: `Ошибка выполнения: ${(e as Error).message}` }],
+          type: "error",
+          content: [{ type: "text", text: (e as Error).message }],
         });
       }
     } else {
-      sendResponse(id, { content: [{ type: "text", text: `Неизвестный инструмент: ${toolName}` }] });
+      sendResponse(id, { type: "error", content: [{ type: "text", text: `Неизвестный инструмент: ${toolName}` }] });
     }
   }
 }

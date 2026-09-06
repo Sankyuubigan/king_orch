@@ -27,13 +27,14 @@ function readSection(targetPath: string, heading: string): string {
 }
 
 /// Нечёткий поиск .md файла: модели часто сокращают имена (например,
-/// inner_contour_9_patterns.md → inner_contour.md). Ищем по подстроке basename
-/// во всех .md файлах проекта, ближайший по длине имени — первый.
+/// inner_contour_9_patterns.md → inner_contour.md). Ищем по токенам basename
+/// (split по `_` и `-`), ближайший по совпадению токенов — первый.
 function fuzzyFindMd(targetPath: string): string[] {
     const wantedBase = path.basename(targetPath).toLowerCase().replace(/\.md$/, "");
-    const wanted = wantedBase.replace(/\.md$/, "");
     const skipDirs = new Set(["node_modules", "target", "dist", ".git", ".svn"]);
     const found: { score: number; full: string }[] = [];
+    const tokenize = (s: string) => s.split(/[_\-]/).filter(t => t.length > 0);
+    const wantedTokens = tokenize(wantedBase);
 
     const walk = (dir: string) => {
         let entries: fs.Dirent[];
@@ -47,8 +48,11 @@ function fuzzyFindMd(targetPath: string): string[] {
                 if (!skipDirs.has(e.name)) walk(path.join(dir, e.name));
             } else if (e.isFile() && e.name.toLowerCase().endsWith(".md")) {
                 const base = e.name.toLowerCase().replace(/\.md$/, "");
-                if (wanted.length >= 3 && (base.includes(wanted) || wanted.includes(base))) {
-                    found.push({ score: Math.abs(base.length - wanted.length), full: path.join(dir, e.name) });
+                const fileTokens = tokenize(base);
+                const intersection = wantedTokens.filter(t => fileTokens.includes(t));
+                const ratio = intersection.length / Math.max(wantedTokens.length, 1);
+                if (ratio >= 0.5) {
+                    found.push({ score: Math.abs(fileTokens.length - wantedTokens.length) + (1 - ratio) * 10, full: path.join(dir, e.name) });
                 }
             }
         }
@@ -84,7 +88,7 @@ createMcpServer({
                     console.error(`[ReadSection] Файл не найден: ${targetPath}; использован нечёткий фолбэк: ${candidates[0]}`);
                     return readSection(candidates[0], heading);
                 }
-                return `Файл не найден: ${targetPath}`;
+                throw new Error(`Файл не найден: ${targetPath}`);
             }
 
             return readSection(targetPath, heading);

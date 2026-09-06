@@ -445,16 +445,24 @@ pub fn is_thinking_truncated(raw: &str) -> bool {
     false
 }
 
-/// Нужна ли «докачка» оборванной генерации: размышления не завершены, а причина
-/// остановки — обрыв, а не патология (зацикливание) или отмена пользователем.
-/// Решение принимается по СОДЕРЖИМОМУ ответа (незакрытый думатель), а не по
-/// stop_reason: обрыв случается и по лимиту токенов, и по стоп-слову, и по EOS
-/// в середине думателя. LOOP_DETECTED/CANCELLED докачку не запускают.
+/// Нужна ли «докачка» оборванной генерации: размышления не завершены или JSON
+/// незакрыт, а причина остановки — обрыв, а не патология (зацикливание) или
+/// отмена пользователем. Решение принимается по СОДЕРЖИМОМУ ответа (незакрытый
+/// думатель или неполный JSON-конверт), а не по stop_reason.
+/// LOOP_DETECTED/CANCELLED докачку не запускают.
 pub fn needs_cutoff_continuation(raw: &str, stop_reason: &str) -> bool {
     if matches!(stop_reason, "CANCELLED" | "LOOP_DETECTED") {
         return false;
     }
-    is_thinking_truncated(raw)
+    if is_thinking_truncated(raw) {
+        return true;
+    }
+    // Проверка незакрытого JSON: ответ содержит `{` (начало JSON-конверта),
+    // но parse_tool_call не смог извлечь валидный tool call — значит JSON обрезан.
+    if raw.contains('{') && !is_valid_json_action(raw) {
+        return true;
+    }
+    false
 }
 
 #[cfg(test)]

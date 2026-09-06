@@ -160,6 +160,7 @@ fn run_single_task(
         false,
         cancel_flag.clone(),
         "coding_bench",
+        None,
         |_progress: f32, _msg: &str| {},
         log_cb.clone(),
     );

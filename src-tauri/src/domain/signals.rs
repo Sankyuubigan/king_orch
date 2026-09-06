@@ -258,7 +258,7 @@ fn build_value_grammar(schema: &serde_json::Value) -> String {
 /// ЧЕСТНАЯ валидация значения сигнала против контракта (SSOT).
 ///
 /// Гарантирует, что `value`, присланный моделью в `emit_signal`, содержит все
-/// обязательные поля контракта (напр. `element_1_mental` у `validator_report`). Если модель
+/// обязательные поля контракта (напр. `e1` у `validator_report`). Если модель
 /// исказила форму — возвращаем явную ошибку, которую оркестратор отдаёт модели на retry.
 /// Это исключает тихий обрыв маршрутизации, когда `signal_router` не находит поле и граф
 /// завершается, не дойдя до `message`-узла (см. docs/SIGNAL_CONTRACTS.md). Не является
@@ -267,7 +267,7 @@ pub fn validate_signal_value(contract: &SignalContract, value: &Value) -> Result
     let schema = &contract.value_schema;
     if schema.get("type").and_then(|t| t.as_str()) == Some("object") {
         // Проверяем ВСЕ properties контракта (а не только required).
-        // Это гарантирует, что signal_router найдёт каждое поле (element_X_mental и т.д.).
+        // Это гарантирует, что signal_router найдёт каждое поле (eX и т.д.).
         if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
             let mut missing: Vec<String> = Vec::new();
             for (pname, _) in props {
@@ -407,7 +407,7 @@ mod tests {
         let dir = path.parent().expect("папка signals");
         let c = load_signal_contract(dir, "validator").expect("контракт валидатора");
         assert_eq!(c.key, "validator_report");
-        assert_eq!(c.value_schema["properties"]["element_1_mental"]["type"].as_str(), Some("boolean"));
+        assert_eq!(c.value_schema["properties"]["e1"]["type"].as_str(), Some("boolean"));
         assert_eq!(c.value_schema["required"].as_array().map(|e| e.len()), Some(9));
     }
 
@@ -487,7 +487,7 @@ mod tests {
                 "type": "object",
                 "properties": {
                     "missing_data": { "type": "string", "enum": ["не найдено", "есть"] },
-                    "element_1_mental": { "type": "boolean" }
+                    "e1": { "type": "boolean" }
                 }
             }),
         };
@@ -522,18 +522,18 @@ mod tests {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "element_1_mental": { "type": "boolean" },
-                    "element_2_mental": { "type": "boolean" }
+                    "e1": { "type": "boolean" },
+                    "e2": { "type": "boolean" }
                 },
-                "required": ["element_1_mental", "element_2_mental"]
+                "required": ["e1", "e2"]
             }),
         };
-        // Искажённая форма (старое поле verdict вместо element_X_mental) — ошибка.
+        // Искажённая форма (старое поле verdict вместо eX) — ошибка.
         assert!(validate_signal_value(&c, &serde_json::json!({ "verdict": "ДАННЫХ ДОСТАТОЧНО" })).is_err());
         // Пустое значение без обязательных полей — тоже ошибка.
         assert!(validate_signal_value(&c, &serde_json::Value::Object(serde_json::Map::new())).is_err());
         // Корректная форма проходит.
-        assert!(validate_signal_value(&c, &serde_json::json!({ "element_1_mental": true, "element_2_mental": false })).is_ok());
+        assert!(validate_signal_value(&c, &serde_json::json!({ "e1": true, "e2": false })).is_ok());
     }
 
     #[test]
@@ -544,10 +544,10 @@ mod tests {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "element_1_mental": { "type": "boolean" },
-                    "element_2_mental": { "type": "boolean" }
+                    "e1": { "type": "boolean" },
+                    "e2": { "type": "boolean" }
                 },
-                "required": ["element_1_mental", "element_2_mental"]
+                "required": ["e1", "e2"]
             }),
         };
         let schema = build_signal_envelope_schema(&c);
@@ -555,7 +555,7 @@ mod tests {
         assert_eq!(schema["properties"]["tool"]["const"], serde_json::json!("emit_signal"));
         assert_eq!(
             schema["properties"]["arguments"]["properties"]["value"]["required"],
-            serde_json::json!(["element_1_mental", "element_2_mental"])
+            serde_json::json!(["e1", "e2"])
         );
         assert_eq!(
             schema["properties"]["arguments"]["properties"]["value"]["additionalProperties"],
@@ -571,11 +571,11 @@ mod tests {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "element_1_mental": { "type": "boolean" },
-                    "element_2_mental": { "type": "boolean" },
+                    "e1": { "type": "boolean" },
+                    "e2": { "type": "boolean" },
                     "missing_data": { "type": "string" }
                 },
-                "required": ["element_1_mental", "element_2_mental"]
+                "required": ["e1", "e2"]
             }),
         };
         let grammar = build_signal_envelope_grammar(&c);
@@ -583,8 +583,8 @@ mod tests {
         assert!(grammar.contains("\"azaar\\n\""), "грамматика должна содержать \"azaar\\n\"");
         assert!(grammar.contains("thought-content"), "грамматика должна содержать правило thought-content");
         // Грамматика ОБЯЗАНА содержать ключи сигнала
-        assert!(grammar.contains("element_1_mental"), "грамматика должна содержать element_1_mental");
-        assert!(grammar.contains("element_2_mental"), "грамматика должна содержать element_2_mental");
+        assert!(grammar.contains("e1"), "грамматика должна содержать e1");
+        assert!(grammar.contains("e2"), "грамматика должна содержать e2");
         // Грамматика ОБЯЗАНА содержать полный конверт
         assert!(grammar.contains("emit_signal"), "грамматика должна содержать emit_signal");
         assert!(grammar.contains("validator_report"), "грамматика должна содержать ключ validator_report");
@@ -598,14 +598,14 @@ mod tests {
         let grammar = build_signal_envelope_grammar(&c);
         // Все 9 элементов должны быть в грамматике
         for i in 1..=9 {
-            let key = format!("element_{}_mental", i);
+            let key = format!("e{}", i);
             assert!(grammar.contains(&key), "грамматика должна содержать {}", key);
         }
         // think-теги как в docs/gbnf.md обязательны
         assert!(grammar.contains("\"azaar\\n\""), "должен быть \"azaar\\n\"");
     }
 
-    /// Регрессия: грамматика для boolean-полей (element_X_mental) ОБЯЗАНА
+    /// Регрессия: грамматика для boolean-полей (eX) ОБЯЗАНА
     /// содержать определение правила `bool`, иначе llama-server падает с
     /// "Undefined rule identifier 'bool'" (HTTP 400).
     #[test]
@@ -688,9 +688,9 @@ mod tests {
                 "type": "object",
                 "additionalProperties": false,
                 "properties": {
-                    "element_1_mental": { "type": "boolean" }
+                    "e1": { "type": "boolean" }
                 },
-                "required": ["element_1_mental"]
+                "required": ["e1"]
             }),
         };
         let grammar = build_signal_envelope_grammar(&c);
@@ -701,7 +701,7 @@ mod tests {
         assert!(grammar.contains("arguments"), "должно быть arguments");
         assert!(grammar.contains("key"), "должно быть поле key");
         assert!(grammar.contains("validator_report"), "должен быть ключ validator_report");
-        assert!(grammar.contains("element_1_mental"), "должен быть element_1_mental");
+        assert!(grammar.contains("e1"), "должен быть e1");
         assert!(grammar.contains("thought-content"), "должно быть правило thought-content");
         assert!(grammar.contains("envelope-json"), "должно быть правило envelope-json");
     }

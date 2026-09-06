@@ -9,17 +9,17 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "element_1_mental": { "type": "boolean" },
-          "element_2_mental": { "type": "boolean" },
-          "element_3_mental": { "type": "boolean" },
-          "element_4_mental": { "type": "boolean" },
-          "element_5_mental": { "type": "boolean" },
-          "element_6_mental": { "type": "boolean" },
-          "element_7_mental": { "type": "boolean" },
-          "element_8_mental": { "type": "boolean" },
-          "element_9_mental": { "type": "boolean" }
+          "e1": { "type": "boolean" },
+          "e2": { "type": "boolean" },
+          "e3": { "type": "boolean" },
+          "e4": { "type": "boolean" },
+          "e5": { "type": "boolean" },
+          "e6": { "type": "boolean" },
+          "e7": { "type": "boolean" },
+          "e8": { "type": "boolean" },
+          "e9": { "type": "boolean" }
         },
-        "required": ["element_1_mental", "element_2_mental", "element_3_mental", "element_4_mental", "element_5_mental", "element_6_mental", "element_7_mental", "element_8_mental", "element_9_mental"]
+        "required": ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9"]
       }
     },
     "cluster_checker": {

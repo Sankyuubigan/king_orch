@@ -281,6 +281,7 @@ Session signals: []";
                 false,
                 cancel,
                 "test:fact_extractor",
+                None,
                 |_, _| {},
                 |_| {},
             )
@@ -381,6 +382,7 @@ Session signals: []";
                 false,
                 cancel,
                 "test:fact_extractor",
+                None,
                 |_, _| {},
                 |_| {},
             )

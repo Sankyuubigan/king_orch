@@ -23,6 +23,7 @@ impl LlamaEngine {
         _format_type: &str,
         cancel_flag: Arc<AtomicBool>,
         ctx_label: &str,
+        tool_choice: Option<&str>,
         progress_cb: F,
         log_cb: L,
     ) -> Result<GenerationResult, String>
@@ -54,6 +55,7 @@ impl LlamaEngine {
             false,
             cancel_flag,
             ctx_label,
+            tool_choice,
             progress_cb,
             log_cb,
         )
