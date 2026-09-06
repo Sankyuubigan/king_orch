@@ -1,5 +1,5 @@
 ﻿pub(crate) const AGENT_ERROR_PREFIX: &str = "⚠️ ОШИБКА_АГЕНТА:";
-pub(crate) const MAX_CONTINUATIONS: usize = 12;          // предел «докачек» после обрыва
+pub(crate) const MAX_CONTINUATIONS: usize = 3;           // предел «докачек» после обрыва
 pub(crate) const MAX_CONTINUATION_RESTARTS: usize = 3;
 pub(crate) const COMPACT_THRESHOLD_CHARS: usize = 6000;  // накопленных размышлений → сжать в тезисы
 pub(crate) const COMPACT_MAX_TOKENS: usize = 300;

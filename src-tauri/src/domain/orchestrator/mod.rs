@@ -389,9 +389,29 @@ where
             session_id: session_id.clone(),
             workspace_root: project_dir.to_path_buf(),
         };
-        crate::domain::workflow_engine::run_workflow(
+        match crate::domain::workflow_engine::run_workflow(
             workflow, &mut ctx, &mut runner,
-        )?;
+        ) {
+            Ok(_) => {},
+            Err((e, partial_msgs)) => {
+                log_cb(format!("⚠️ Workflow прерван: {}", e));
+                for msg in partial_msgs {
+                    if !ctx.messages.iter().any(|m| m.id == msg.id) {
+                        ctx.messages.push(msg);
+                    }
+                }
+                ctx.messages.push(ChatMessage {
+                    id: Some(format!("msg_{}", ctx.messages.len())),
+                    msg_type: "message".to_string(),
+                    content: "⚠️ Прервано пользователем.".to_string(),
+                    sub_calls: None,
+                    author: Some("system".to_string()),
+                    model: None,
+                    time_sec: None,
+                    attachments: None,
+                });
+            }
+        }
         return Ok(ChatRunResult {
             text: String::new(),
             sub_calls: all_sub_calls,
@@ -945,11 +965,15 @@ let start_time = Instant::now();
                 // прекращаем и уходим в перегенерацию с хинтом-запретом думателей.
                 if ctx.stalled_continuations >= MAX_STALLED_CONTINUATIONS {
                     log_cb(format!(
-                        "🛑 Докачка забуксовала: {} итераций подряд без роста размышлений и без видимого ответа — переключаемся на перегенерацию.",
+                        "🛑 Докачка забуксовала: {} итераций подряд без роста размышлений и без видимого ответа — выходим из цикла.",
                         ctx.stalled_continuations
                     ));
+                    // Сохраняем накопленные размышления в сессию для Phase 2 fallback
+                    let think_text = combined.trim().to_string();
+                    ctx.final_response = format!("{} Агент '{}' застрял в бесконечных размышлениях ({} симв. думателя без ответа).", AGENT_ERROR_PREFIX, agent.id, think_text.len());
                     ctx.stalled_continuations = 0;
                     ctx.last_thinking_len = 0;
+                    break;
                 } else {
                     // Новая серия докачек (стейт «докачки» сброшен) — стартуем с чистых метрик
                     if ctx.continuation_mark.is_none() {
@@ -2021,7 +2045,7 @@ mod tests {
                         println!("✅ {} — grounder не задействован (маршрут через decomposer/validator/provocateur)", model_path);
                     }
                 }
-                Err(e) => {
+                Err((e, _)) => {
                     println!("❌ {} — ошибка workflow: {}", model_path, e);
                     failures.push(model_path.clone());
                 }

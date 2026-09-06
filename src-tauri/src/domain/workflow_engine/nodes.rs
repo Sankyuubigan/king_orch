@@ -429,7 +429,18 @@ where
                 context.history.clone(),
             );
 
-            let sub_result = super::run_workflow(sub_wf, &mut sub_ctx, runner)?;
+            let sub_result = match super::run_workflow(sub_wf, &mut sub_ctx, runner) {
+                Ok(r) => r,
+                Err((e, partial)) => {
+                    for msg in partial {
+                        if !sub_ctx.messages.iter().any(|m| m.id == msg.id) {
+                            sub_ctx.messages.push(msg);
+                        }
+                    }
+                    context.messages = sub_ctx.messages;
+                    return Err(e);
+                }
+            };
 
             // Синхронизируем messages обратно в родительский контекст
             context.messages = sub_ctx.messages;

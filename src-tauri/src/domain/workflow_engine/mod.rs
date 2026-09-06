@@ -230,7 +230,7 @@ pub fn run_workflow<L, S, C>(
     workflow: &WorkflowDef,
     context: &mut WorkflowContext,
     runner: &mut WorkflowRunner<L, S, C>,
-) -> Result<String, String>
+) -> Result<String, (String, Vec<ChatMessage>)>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
     S: Fn(String, u8) + Clone + Send + Sync + 'static,
@@ -265,14 +265,13 @@ where
         if queue.is_empty() { None } else { Some(queue.remove(0)) }
     } {
         if runner.cancel_flag.load(Ordering::SeqCst) {
-            return Err("Прервано пользователем".to_string());
+            return Err(("Прервано пользователем".to_string(), context.messages.clone()));
         }
 
-        let node = workflow
-            .nodes
-            .iter()
-            .find(|n| n.id == node_id)
-            .ok_or_else(|| format!("Узел '{}' не найден в workflow", node_id))?;
+        let node = match workflow.nodes.iter().find(|n| n.id == node_id) {
+            Some(n) => n,
+            None => return Err((format!("Узел '{}' не найден в workflow", node_id), context.messages.clone())),
+        };
 
         let node_max_visits = max_visits_map.get(&node_id).copied().unwrap_or(1);
         let visit_count = visits.get(&node_id).copied().unwrap_or(0);
@@ -285,10 +284,10 @@ where
         // а не тихий выход (§2.2).
         executed_steps += 1;
         if executed_steps > max_steps {
-            return Err(format!(
+            return Err((format!(
                 "[workflow] '{}' превысил лимит шагов (max_steps={}) — вероятно бесконечный цикл",
                 workflow.name, max_steps
-            ));
+            ), context.messages.clone()));
         }
 
         let node_start = Instant::now();
@@ -320,7 +319,10 @@ where
                 next_nodes: vec![],
             }
         } else {
-            nodes::execute_node(node, workflow, context, runner)?
+            match nodes::execute_node(node, workflow, context, runner) {
+                Ok(r) => r,
+                Err(e) => return Err((e, context.messages.clone())),
+            }
         };
 
         if !node.disabled {

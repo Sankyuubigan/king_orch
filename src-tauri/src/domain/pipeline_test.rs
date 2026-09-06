@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::infra::{LlamaEngine, ModelParams, SubCall};
+use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SubCall};
 use crate::domain::agent_manager::load_agents;
 use crate::domain::workflow_engine::{run_workflow, WorkflowRunner};
 use crate::domain::workflow_engine::context::WorkflowContext;
@@ -312,7 +312,7 @@ pub fn run_pipeline_test(
 // ─── Валидация ───
 
 fn validate_structure(
-    workflow_result: &Result<String, String>,
+    workflow_result: &Result<String, (String, Vec<ChatMessage>)>,
     ctx: &WorkflowContext,
     rules: &StructureLevel,
 ) -> LevelResult {
@@ -322,7 +322,7 @@ fn validate_structure(
     // Проверяем что workflow завершился OK
     match workflow_result {
         Ok(_) => details.push("✅ Workflow завершился OK".to_string()),
-        Err(e) => {
+        Err((e, _)) => {
             details.push(format!("❌ Workflow упал: {}", e));
             passed = false;
         }
