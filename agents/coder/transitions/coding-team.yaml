@@ -1,4 +1,5 @@
 name: Кодер
+
 visible: true
 
 config:
@@ -7,245 +8,298 @@ config:
   max_steps: 200
 
 nodes:
-  # ── Извлечение фактов и маршрутизация ──
-  - id: extract_facts
-    type: llm_fact_extractor
-    input: |
-      User: {{ user_message }}
-      Session history: {{ messages }}
-    llm_params: strict
 
-  - id: route
-    type: switch
-    input_object: "{{ nodes.extract_facts.output }}"
-    cases_priority:
-      - key: is_question
-        to: call_code_explainer
-      - key: is_mapping
-        to: call_project_mapper
-      - key: is_design
-        to: call_ux_ui_designer
-      - key: is_testing
-        to: call_qa_diagnost_direct
-      - key: is_bug
-        to: call_bug_analyst
-      - key: needs_search
-        to: call_research_team
-      - key: is_direct_code
-        to: call_primary_coder_direct
-      - key: is_feature
-        to: call_task_planner
-    default: call_task_planner
+- id: extract_facts
+  type: llm_fact_extractor
+  input: |
+    User: {{ user_message }}
+    Session history: {{ messages }}
+  ui_pos:
+    x: 100
+    y: 130
+  llm_params: strict
 
-  # ── Просто ответ на вопрос (READ-ONLY) ──
-  - id: call_code_explainer
-    type: llm_worker
-    agent: code_explainer
-    task: "Ответь на вопрос пользователя, изучив код: {{ user_message }}"
-    output_type: message
+- id: route
+  type: switch
+  input_object: '{{ nodes.extract_facts.output }}'
+  cases_priority:
+  - key: is_question
+    to: call_code_explainer
+  - key: is_mapping
+    to: call_project_mapper
+  - key: is_design
+    to: call_ux_ui_designer
+  - key: is_testing
+    to: call_qa_diagnost_direct
+  - key: is_bug
+    to: call_bug_analyst
+  - key: needs_search
+    to: call_research_team
+  - key: is_direct_code
+    to: call_primary_coder_direct
+  - key: is_feature
+    to: call_task_planner
+  ui_pos:
+    x: 384
+    y: 124
 
-  # ── Дизайн: Дизайнер проектирует -> Кодер применяет ──
-  - id: call_ux_ui_designer
-    type: llm_worker
-    agent: ux_ui_designer
-    task: |
-      Спроектируй UI/UX для задачи: {{ user_message }}
-      Верни подробные визуальные инструкции для Primary Coder: файлы, компоненты, CSS/Tailwind-классы, цвета, отступы, анимации. Сам код в файлы не пиши — только инструкции.
-    output_type: thought
+- id: call_code_explainer
+  type: llm_worker
+  agent: code_explainer
+  task: 'Ответь на вопрос пользователя, изучив код: {{ user_message }}'
+  output_type: message
+  ui_pos:
+    y: -554
+    x: 750
 
-  - id: call_design_coder
-    type: llm_worker
-    agent: primary_coder
-    task: |
-      Примени визуальные инструкции дизайнера строго как описано, в указанные файлы.
-      Дизайн-инструкции: {{ nodes.call_ux_ui_designer.output.result }}
-      Исходная задача: {{ user_message }}
-    output_type: message
+- id: call_ux_ui_designer
+  type: llm_worker
+  agent: ux_ui_designer
+  task: |
+    Спроектируй UI/UX для задачи: {{ user_message }}
+    Верни подробные визуальные инструкции для Primary Coder: файлы, компоненты, CSS/Tailwind-классы, цвета, отступы, анимации. Сам код в файлы не пиши — только инструкции.
+  output_type: thought
+  ui_pos:
+    y: -220
+    x: 740
 
-  # ── Прямой заказ тестов (без полного цикла) ──
-  - id: call_qa_diagnost_direct
-    type: llm_worker
-    agent: qa_diagnost
-    task: "Выполни напрямую: {{ user_message }}"
-    output_type: message
+- id: call_design_coder
+  type: llm_worker
+  agent: primary_coder
+  task: |
+    Примени визуальные инструкции дизайнера строго как описано, в указанные файлы.
+    Дизайн-инструкции: {{ nodes.call_ux_ui_designer.output.result }}
+    Исходная задача: {{ user_message }}
+  output_type: message
+  ui_pos:
+    y: -379
+    x: 1065
 
-  # ── Прямой заказ кода (план не нужен) ──
-  - id: call_primary_coder_direct
-    type: llm_worker
-    agent: primary_coder
-    task: |
-      Выполни напрямую, без отдельного плана: {{ user_message }}
-      Если не хватает контекста — верни 'Не хватает контекста файла X'. Обязательно ставь логи.
-    output_type: message
+- id: call_qa_diagnost_direct
+  type: llm_worker
+  agent: qa_diagnost
+  task: 'Выполни напрямую: {{ user_message }}'
+  output_type: message
+  ui_pos:
+    x: 740
+    y: -80
 
-  # ── Делегирование в команду поиска ──
-  - id: call_research_team
-    type: sub_workflow
-    workflow: search-specialist
-    task: "{{ user_message }}"
-    output_type: thought
+- id: call_primary_coder_direct
+  type: llm_worker
+  agent: primary_coder
+  task: |
+    Выполни напрямую, без отдельного плана: {{ user_message }}
+    Если не хватает контекста — верни 'Не хватает контекста файла X'. Обязательно ставь логи.
+  output_type: message
+  ui_pos:
+    x: 744
+    y: 279
 
-  - id: final_research_output
-    type: system_condition
-    action: aggregate_and_output
-    required: ["web_researcher", "docs_researcher", "quick_finder"]
+- id: call_research_team
+  type: sub_workflow
+  task: '{{ user_message }}'
+  output_type: thought
+  workflow: search-specialist
+  ui_pos:
+    x: 750
+    y: 181
 
-  # ── Ветка бага: Анализ -> Поиск практики -> Воспроизведение -> План ──
-  - id: call_bug_analyst
-    type: llm_worker
-    agent: bug_analyst
-    task: "Найди первопричину бага: {{ user_message }}"
-    output_type: thought
+- id: final_research_output
+  type: system_condition
+  action: aggregate_and_output
+  required:
+  - web_researcher
+  - docs_researcher
+  - quick_finder
+  ui_pos:
+    x: 1060
+    y: 192
 
-  - id: route_search
-    type: condition_check
-    input_object: "{{ nodes.call_bug_analyst.output.result }}"
-    field: needs_docs
-    true_to: call_search_for_bug
-    false_to: call_qa_reproduce
+- id: call_bug_analyst
+  type: llm_worker
+  agent: bug_analyst
+  task: 'Найди первопричину бага: {{ user_message }}'
+  output_type: thought
+  ui_pos:
+    y: 48
+    x: 751
 
-  - id: call_search_for_bug
-    type: sub_workflow
-    workflow: search-specialist
-    task: "Найди документацию и best practice для решения: {{ nodes.call_bug_analyst.output.result }}"
-    output_type: thought
+- id: route_search
+  type: condition_check
+  input_object: '{{ nodes.call_bug_analyst.output.result }}'
+  field: needs_docs
+  true_to: call_search_for_bug
+  false_to: call_qa_reproduce
+  ui_pos:
+    y: -80
+    x: 1063
 
-  - id: call_qa_reproduce
-    type: llm_worker
-    agent: qa_diagnost
-    task: |
-      Напиши падающий тест (Failing Test First) в песочнице, чтобы поймать баг с поличным.
-      Отчёт аналитика: {{ nodes.call_bug_analyst.output.result }}
-      Best practice из инета (если был): {{ nodes.call_search_for_bug.output.result }}
-    output_type: thought
-    max_visits: 2
+- id: call_search_for_bug
+  type: sub_workflow
+  task: 'Найди документацию и best practice для решения: {{ nodes.call_bug_analyst.output.result }}'
+  output_type: thought
+  workflow: search-specialist
+  ui_pos:
+    x: 1380
+    y: -10
 
-  - id: check_qa_repro
-    type: switch
-    input_object: "{{ nodes.call_qa_reproduce.output.result }}"
-    cases_priority:
-      - key: bug_captured
-        to: call_task_planner
-    default: honest_fail_bug
+- id: call_qa_reproduce
+  type: llm_worker
+  agent: qa_diagnost
+  task: |
+    Напиши падающий тест (Failing Test First) в песочнице, чтобы поймать баг с поличным.
+    Отчёт аналитика: {{ nodes.call_bug_analyst.output.result }}
+    Best practice из инета (если был): {{ nodes.call_search_for_bug.output.result }}
+  output_type: thought
+  ui_pos:
+    y: 91
+    x: 1611
+  max_visits: 2
 
-  - id: call_task_planner
-    type: llm_worker
-    agent: task_planner
-    task: |
-      Составь PRP (Product Requirement Prompt). Учти архитектурные ошибки. Разбей на микро-шаги.
-      Исходная задача: {{ user_message }}
-      Отчёт аналитика: {{ nodes.call_bug_analyst.output.result }}
-      Отчёт QA (падающий тест): {{ nodes.call_qa_reproduce.output.result }}
-    output_type: thought
-    max_visits: 2
+- id: check_qa_repro
+  type: switch
+  input_object: '{{ nodes.call_qa_reproduce.output.result }}'
+  cases_priority:
+  - key: bug_captured
+    to: call_task_planner
+  default: honest_fail_bug
+  ui_pos:
+    x: 1928
+    y: 278
 
-  # ── Проверка плана архитектором ──
-  - id: call_arch_reviewer
-    type: llm_worker
-    agent: arch_reviewer
-    task: |
-      Проверь план на архитектурную чистоту, размер файлов (<500 строк) и наличие логирования.
-      План: {{ nodes.call_task_planner.output.result }}
-    output_type: thought
+- id: call_task_planner
+  type: llm_worker
+  agent: task_planner
+  task: |
+    Составь PRP (Product Requirement Prompt). Учти архитектурные ошибки. Разбей на микро-шаги.
+    Исходная задача: {{ user_message }}
+    Отчёт аналитика: {{ nodes.call_bug_analyst.output.result }}
+    Отчёт QA (падающий тест): {{ nodes.call_qa_reproduce.output.result }}
+  output_type: thought
+  ui_pos:
+    x: 2433
+    y: 651
+  max_visits: 2
 
-  - id: check_plan
-    type: switch
-    input_object: "{{ nodes.call_arch_reviewer.output.result }}"
-    cases_priority:
-      - key: pass
-        to: call_primary_coder
-    default: call_task_planner
+- id: call_arch_reviewer
+  type: llm_worker
+  agent: arch_reviewer
+  task: |
+    Проверь план на архитектурную чистоту, размер файлов (<500 строк) и наличие логирования.
+    План: {{ nodes.call_task_planner.output.result }}
+  output_type: thought
+  ui_pos:
+    y: 626
+    x: 2778
 
-  # ── Финальное кодирование и проверка ──
-  - id: call_primary_coder
-    type: llm_worker
-    agent: primary_coder
-    task: |
-      Реализуй задачу строго по утвержденному плану. Обязательно ставь логи.
-      План: {{ nodes.call_task_planner.output.result }}
-    output_type: thought
-    max_visits: 2
+- id: check_plan
+  type: switch
+  input_object: '{{ nodes.call_arch_reviewer.output.result }}'
+  cases_priority:
+  - key: pass
+    to: call_primary_coder
+  default: call_task_planner
+  ui_pos:
+    y: 369
+    x: 3055
 
-  - id: call_qa_verify
-    type: llm_worker
-    agent: qa_diagnost
-    task: |
-      Проверь написанный кодером код. Запусти тесты. Убедись, что баг исправлен и новые фичи работают.
-      План: {{ nodes.call_task_planner.output.result }}
-      Внесенные изменения: {{ nodes.call_primary_coder.output.result }}
-    output_type: thought
-    max_visits: 2
+- id: call_primary_coder
+  type: llm_worker
+  agent: primary_coder
+  task: |
+    Реализуй задачу строго по утвержденному плану. Обязательно ставь логи.
+    План: {{ nodes.call_task_planner.output.result }}
+  output_type: thought
+  ui_pos:
+    x: 3376
+    y: 253
+  max_visits: 2
 
-  - id: check_verify
-    type: switch
-    input_object: "{{ nodes.call_qa_verify.output.result }}"
-    cases_priority:
-      - key: pass
-        to: final_success
-    default: call_primary_coder
+- id: call_qa_verify
+  type: llm_worker
+  agent: qa_diagnost
+  task: |
+    Проверь написанный кодером код. Запусти тесты. Убедись, что баг исправлен и новые фичи работают.
+    План: {{ nodes.call_task_planner.output.result }}
+    Внесенные изменения: {{ nodes.call_primary_coder.output.result }}
+  output_type: thought
+  ui_pos:
+    y: 120
+    x: 3654
+  max_visits: 2
 
-  - id: final_success
-    type: system_condition
-    action: aggregate_and_output
-    required: ["primary_coder"]
+- id: check_verify
+  type: switch
+  input_object: '{{ nodes.call_qa_verify.output.result }}'
+  cases_priority:
+  - key: pass
+    to: final_success
+  default: call_primary_coder
+  ui_pos:
+    y: 103
+    x: 3955
 
-  - id: honest_fail_bug
-    type: llm_worker
-    agent: bug_analyst
-    task: "QA не смог поймать баг с поличным. Честно сообщи пользователю, что корень не найден и нужен ручной аудит."
-    output_type: message
+- id: final_success
+  type: system_condition
+  action: aggregate_and_output
+  required:
+  - primary_coder
+  ui_pos:
+    y: 55
+    x: 4226
 
-  # ── Маппинг проекта ──
-  - id: call_project_mapper
-    type: llm_worker
-    agent: project_mapper
-    task: "Сделай карту проекта: {{ user_message }}"
-    output_type: message
+- id: honest_fail_bug
+  type: llm_worker
+  agent: bug_analyst
+  task: QA не смог поймать баг с поличным. Честно сообщи пользователю, что корень не найден и нужен ручной аудит.
+  output_type: message
+  ui_pos:
+    y: 172
+    x: 2308
+
+- id: call_project_mapper
+  type: llm_worker
+  agent: project_mapper
+  task: 'Сделай карту проекта: {{ user_message }}'
+  output_type: message
+  ui_pos:
+    x: 759
+    y: -419
+
+- id: llm_freeform_1788875538269
+  type: llm_freeform
+  ui_pos:
+    x: 762
+    y: 625
 
 edges:
-  - from: extract_facts
-    to: route
 
-  - from: call_research_team
-    to: final_research_output
+- from: extract_facts
+  to: route
 
-  - from: call_bug_analyst
-    to: route_search
-  - from: route_search
-    to: call_search_for_bug
-  - from: route_search
-    to: call_qa_reproduce
-  - from: call_search_for_bug
-    to: call_qa_reproduce
-  - from: call_qa_reproduce
-    to: check_qa_repro
-  - from: check_qa_repro
-    to: call_task_planner
-  - from: call_task_planner
-    to: call_arch_reviewer
-  - from: call_arch_reviewer
-    to: check_plan
-  - from: check_plan
-    to: call_primary_coder
-  - from: call_primary_coder
-    to: call_qa_verify
-  - from: call_qa_verify
-    to: check_verify
-  - from: check_verify
-    to: final_success
-  - from: check_qa_repro
-    to: honest_fail_bug
+- from: call_ux_ui_designer
+  to: call_design_coder
 
-  - from: call_project_mapper
-    to: END
-  - from: call_code_explainer
-    to: END
+- from: call_research_team
+  to: final_research_output
 
-  - from: call_ux_ui_designer
-    to: call_design_coder
-  - from: call_design_coder
-    to: END
-  - from: call_qa_diagnost_direct
-    to: END
-  - from: call_primary_coder_direct
-    to: END
+- from: call_bug_analyst
+  to: route_search
+
+- from: call_search_for_bug
+  to: call_qa_reproduce
+
+- from: call_qa_reproduce
+  to: check_qa_repro
+
+- from: call_task_planner
+  to: call_arch_reviewer
+
+- from: call_arch_reviewer
+  to: check_plan
+
+- from: call_primary_coder
+  to: call_qa_verify
+
+- from: call_qa_verify
+  to: check_verify
