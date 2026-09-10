@@ -49,7 +49,6 @@ export interface ChatElements {
   subchatTitle: HTMLSpanElement;
   btnBackChat: HTMLButtonElement;
   logView: HTMLTextAreaElement;
-  contextSlider: HTMLInputElement;
   maxGenSlider: HTMLInputElement;
   chkKvQuantK: HTMLInputElement;
   chkKvQuantV: HTMLInputElement;
@@ -127,7 +126,7 @@ export class ChatController {
     const modelPath = this.el.modelSelect?.value;
     const agentId = this.el.agentSelect?.value;
     const text = this.el.chatInput?.value || "";
-    const contextSize = parseInt(this.el.contextSlider?.value || "24576", 10);
+    const contextSize = store.contextSize;
 
     if (!modelPath || !agentId) return;
 
@@ -357,7 +356,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
         agentId: activeAgent,
         message: "",
         history: allHistory,
-        contextSize: parseInt(this.el.contextSlider.value, 10),
+        contextSize: store.contextSize,
         maxGenTokens: parseInt(this.el.maxGenSlider.value, 10),
         kvQuantKeys: this.el.chkKvQuantK.checked,
         kvQuantValues: this.el.chkKvQuantV.checked,
@@ -646,7 +645,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
           agentId: activeAgent, 
           message: text, 
           history: allHistory, 
-          contextSize: parseInt(this.el.contextSlider.value, 10), 
+          contextSize: store.contextSize, 
           maxGenTokens: parseInt(this.el.maxGenSlider.value, 10), 
           kvQuantKeys: this.el.chkKvQuantK.checked, 
           kvQuantValues: this.el.chkKvQuantV.checked, 

@@ -180,7 +180,7 @@ where
             let allow_stream = node.output_type.as_deref() == Some("message");
             let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
             let mut pending_signal = None;
-            let result = runner.call_agent(agent, &task, &mut context.messages, &injected_reports, allow_stream, &resolved_params, &mut pending_signal)?;
+            let result = runner.call_agent(agent, &task, &mut context.messages, &injected_reports, allow_stream, &resolved_params, &mut pending_signal, node.two_phase_thinking)?;
             let end_len = runner.all_sub_calls.len();
 
             // Fail-fast: ошибка агента останавливает workflow (иначе каскад ненужных

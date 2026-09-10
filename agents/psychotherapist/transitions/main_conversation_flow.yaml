@@ -57,6 +57,7 @@ nodes:
 - id: call_validator
   type: llm_worker
   agent: validator
+  two_phase_thinking: true
   inject_reports:
   - decomposer
   - soma_translator

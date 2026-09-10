@@ -466,6 +466,7 @@ where
             session_id.clone(),
             tools_root.clone(),
             &mut None,
+            false, // two_phase_thinking — только для signal-агентов из workflow
         )?;
 
         // Fail-fast: если primary-агент вернул ошибку — не сохраняем её как ответ
@@ -567,6 +568,7 @@ pub(crate) fn run_agent_node<L, S, C>(
     session_id: String,
     workspace_root: std::path::PathBuf,
     out_pending_signal: &mut Option<ChatMessage>,
+    two_phase_thinking: bool,
 ) -> Result<String, String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -847,6 +849,59 @@ let start_time = Instant::now();
         agent_grammar: agent_grammar.clone(),
         active_grammar,
     };
+
+    // ── Two-Phase Thinking: Phase 1 (свободные размышления) ──
+    // Для signal-агентов с two_phase_thinking: сначала модель думает без грамматики
+    // (max_gen_tokens токенов), затем Phase 2 генерирует строгий JSON.
+    // Это позволяет модели тщательно проанализировать все элементы, не упираясь
+    // в лимит грамматики think-block + envelope-json.
+    if two_phase_thinking && signal_contract.is_some() {
+        let contract = signal_contract.as_ref().unwrap();
+        engine.set_grammar(None);
+        log_cb(format!("🧠 [{}] Phase 1: свободные размышления (лимит: {} токенов)",
+            agent.name, max_gen_tokens));
+
+        let ctx_label_p1 = format!("{}:{}#phase1", mem_mode, agent.name);
+        match engine.generate_chat(
+            &ctx.llm_messages,
+            max_gen_tokens,
+            model_params, format_type,
+            false,  // disable_reasoning = false — модель думает
+            cancel_flag.clone(),
+            &ctx_label_p1,
+            None,
+            |p, _| { status_cb(format!("{} думает (Фаза 1)...", agent.name),
+                20 + (p * 0.1) as u8); },
+            log_cb.clone(),
+        ) {
+            Ok(gen) => {
+                let thinking_text = gen.text.clone();
+                log_cb(format!("<<< [{}] Phase 1: {} символов, стоп: {}",
+                    agent.name, thinking_text.len(), gen.stop_reason));
+
+                // Сохраняем размышления как assistant-сообщение в контекст
+                ctx.llm_messages.push(LlmMessage {
+                    role: "assistant".to_string(),
+                    content: thinking_text,
+                });
+
+                // Phase 2: envelope-json грамматика (без think-block)
+                let grammar = build_signal_envelope_json_only_grammar(contract);
+                engine.set_grammar(Some(GrammarSpec {
+                    gbnf: Some(grammar.clone()), json_schema: None
+                }));
+                ctx.active_grammar = Some(GrammarSpec {
+                    gbnf: Some(grammar), json_schema: None
+                });
+                log_cb(format!("🎯 [{}] Phase 2: JSON-грамматика ({} символов)",
+                    agent.name, ctx.active_grammar.as_ref().unwrap().gbnf.as_ref().unwrap().len()));
+            }
+            Err(e) => {
+                log_cb(format!("⚠️ [{}] Phase 1 ошибка: {} — fallback на стандартный режим",
+                    agent.name, e));
+            }
+        }
+    }
 
     for iter in 1..=30 {
         if cancel_flag.load(Ordering::SeqCst) { return Err("Прервано пользователем".to_string()); }

@@ -39,6 +39,9 @@ class Store {
   translatorModel: string | null = null;
   translatorLang: string = "ru";
 
+  // Лимит контекста (из конфига, обновляется при loadConfig)
+  contextSize = 0;
+
   // Рабочая директория для кодера (bash tool current_dir)
   workdir: string | null = null;
   

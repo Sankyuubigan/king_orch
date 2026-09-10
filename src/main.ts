@@ -53,7 +53,6 @@ async function initApp() {
   const settingsCtrl = new SettingsController({
     modelSelect: $<HTMLSelectElement>("model-select"),
     agentSelect: $<HTMLSelectElement>("agent-select"),
-    contextSlider: $<HTMLInputElement>("context-slider"), contextValue: $<HTMLElement>("context-value"),
     maxGenSlider: $<HTMLInputElement>("max-gen-slider"), maxGenValue: $<HTMLElement>("max-gen-value"),
     chatFontSlider: $<HTMLInputElement>("chat-font-slider"), chatFontValue: $<HTMLElement>("chat-font-value"),
     chkKvQuantK: $<HTMLInputElement>("chk-kv-quant-k"),
@@ -119,7 +118,6 @@ async function initApp() {
     subchatTitle: $<HTMLSpanElement>("subchat-title"),
     btnBackChat: $<HTMLButtonElement>("btn-back-chat"),
     logView: $<HTMLTextAreaElement>("log-view"),
-    contextSlider: $<HTMLInputElement>("context-slider"),
     maxGenSlider: $<HTMLInputElement>("max-gen-slider"),
     chkKvQuantK: $<HTMLInputElement>("chk-kv-quant-k"),
     chkKvQuantV: $<HTMLInputElement>("chk-kv-quant-v"),

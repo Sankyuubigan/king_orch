@@ -322,6 +322,7 @@ where
                 session_id.clone(),
                 workspace_root.clone(),
                 &mut sub_pending_signal,
+                false, // two_phase_thinking — только для signal-агентов из workflow
             )?;
             let end_len = (**all_sub_calls).len();
             let node_sub_calls = if start_len < end_len {

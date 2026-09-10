@@ -551,7 +551,7 @@ pub fn run_pipeline_test_cli(
     };
 
     let engine = LlamaEngine::new(
-        &engine_dir, model_path, 24576, false, false, 0,
+        &engine_dir, model_path, crate::infra::config::load_config_early().context_size, false, false, 0,
         &|msg| { eprintln!("[LOG] {}", msg); },
         |_| {},
     ).map_err(|e| format!("Ошибка запуска движка: {}", e))?;

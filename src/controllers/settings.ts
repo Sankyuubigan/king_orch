@@ -10,7 +10,6 @@ import { formatBytes, formatSpeed } from "../utils";
 export interface SettingsElements {
   modelSelect: HTMLSelectElement;
   agentSelect: HTMLSelectElement;
-  contextSlider: HTMLInputElement; contextValue: HTMLElement;
   maxGenSlider: HTMLInputElement; maxGenValue: HTMLElement;
   chkKvQuantK: HTMLInputElement;
   chkKvQuantV: HTMLInputElement;
@@ -259,7 +258,7 @@ export class SettingsController {
         this.el.translatorLangSelect.value = config.translator_lang;
         store.translatorLang = config.translator_lang;
       }
-      if (config.context_size) { this.el.contextSlider.value = config.context_size.toString(); this.el.contextValue.innerText = config.context_size.toString(); }
+      if (config.context_size) store.contextSize = config.context_size;
       if (config.max_gen_tokens) { this.el.maxGenSlider.value = config.max_gen_tokens.toString(); this.el.maxGenValue.innerText = config.max_gen_tokens.toString(); }
       if (config.chat_font_scale !== undefined) {
         const pct = Math.round(config.chat_font_scale * 100);
@@ -416,10 +415,6 @@ export class SettingsController {
   }
 
   private bindDomEvents() {
-    this.el.contextSlider?.addEventListener("input", async () => { 
-        this.el.contextValue.innerText = this.el.contextSlider.value; 
-        await invoke("set_config_value", { key: "context_size", value: parseInt(this.el.contextSlider.value, 10) });
-    });
     this.el.maxGenSlider?.addEventListener("input", async () => { 
         this.el.maxGenValue.innerText = this.el.maxGenSlider.value; 
         await invoke("set_config_value", { key: "max_gen_tokens", value: parseInt(this.el.maxGenSlider.value, 10) });

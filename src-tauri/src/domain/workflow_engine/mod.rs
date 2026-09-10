@@ -93,6 +93,7 @@ where
         allow_stream: bool,
         resolved_params: &ModelParams,
         out_pending_signal: &mut Option<ChatMessage>,
+        two_phase_thinking: bool,
     ) -> Result<String, String> {
         let mcp_pool: crate::infra::mcp_client::McpPool = std::sync::Arc::new(std::sync::Mutex::new(
             std::collections::HashMap::<String, crate::infra::mcp_client::SharedMcpClient>::new(),
@@ -127,6 +128,7 @@ where
             self.session_id.clone(),
             self.workspace_root.clone(),
             out_pending_signal,
+            two_phase_thinking,
         )
     }
 
