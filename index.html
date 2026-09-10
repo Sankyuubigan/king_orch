@@ -46,6 +46,8 @@
             <div class="chat-input-controls-left">
               <button id="btn-attach" class="btn-icon" title="Прикрепить файл (изображение/аудио)">📎</button>
               <input type="file" id="file-input" accept="image/*,audio/*,.wav,.mp3,.flac,.jpg,.jpeg,.png,.webp" multiple style="display: none;" />
+              <button id="btn-set-workdir" class="btn-icon" title="Текущий каталог">📂</button>
+              <span id="current-workdir" class="workdir-path" title="Текущий каталог">—</span>
               <select id="agent-select" title="Выбор агента"></select>
               <select id="model-select" title="Выбор модели GGUF"></select>
               <button id="btn-add-model" class="btn-secondary" title="Добавить новую модель (локально)">+</button>

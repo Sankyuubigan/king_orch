@@ -106,6 +106,13 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
                 cfg.translator_lang = v.to_string();
             }
         }
+        "workdir" => {
+            if value.is_null() {
+                cfg.workdir = None;
+            } else if let Some(v) = value.as_str() {
+                cfg.workdir = Some(v.to_string());
+            }
+        }
         _ => {}
     }
     infra::save_config(&app, &cfg);

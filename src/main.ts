@@ -136,6 +136,8 @@ async function initApp() {
     filePreview: $<HTMLDivElement>("file-preview"),
     tokenCounter: $<HTMLDivElement>("token-counter"),
     engineBadge: $<HTMLDivElement>("engine-badge"),
+    btnSetWorkdir: $<HTMLButtonElement>("btn-set-workdir"),
+    currentWorkdir: $<HTMLSpanElement>("current-workdir"),
   });
 
   // ─── Контроллер графа (вкладка 🔀 в студии агентов) ───

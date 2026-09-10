@@ -103,7 +103,8 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .chat-input-area { display: flex; flex-direction: column; gap: 10px; padding: 10px; background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px; }
 .chat-input-controls { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
 .chat-input-controls-left { display: flex; gap: 10px; align-items: center; flex: 1; min-width: 0; flex-wrap: wrap; }
-.chat-input-controls-right { display: flex; gap: 10px; flex-shrink: 0; margin-left: auto; }
+.chat-input-controls-right { display: flex; gap: 10px; flex-shrink: 0; margin-left: auto; align-items: center; }
+.workdir-path { font-size: 11px; color: var(--text-muted, #888); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
 #chat-input { width: 100%; resize: none; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit; font-size: calc(var(--chat-font-scale, 1) * 14px); min-height: 80px; max-height: 600px; overflow-y: auto; box-sizing: border-box; background: var(--input-bg); color: var(--text); }
 
 /* --- Token Counter Styles --- */

@@ -104,6 +104,9 @@ pub struct AppConfig {
     /// Целевой язык перевода: "ru" — русский, "en" — английский.
     #[serde(default = "default_translator_lang")]
     pub translator_lang: String,
+    /// Рабочая директория для кодера (bash tool current_dir).
+    #[serde(default)]
+    pub workdir: Option<String>,
 }
 
 fn default_translator_lang() -> String {
@@ -205,6 +208,7 @@ impl Default for AppConfig {
             chat_font_scale: default_chat_font_scale(),
             translator_model: None,
             translator_lang: default_translator_lang(),
+            workdir: None,
         }
     }
 }

@@ -38,6 +38,9 @@ class Store {
   // Переводчик сообщений: модель и целевой язык ("ru" | "en")
   translatorModel: string | null = null;
   translatorLang: string = "ru";
+
+  // Рабочая директория для кодера (bash tool current_dir)
+  workdir: string | null = null;
   
   // Для стриминга текста в реальном времени
   rtStreamUid: string | null = null;

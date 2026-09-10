@@ -361,6 +361,7 @@ pub async fn chat_request(
             stream_meta,
             prompt_log,
             session_id,
+            cfg.workdir.clone(),
         );
         let app_rss_after = crate::infra::current_process_rss();
         match (app_rss_before, app_rss_after) {

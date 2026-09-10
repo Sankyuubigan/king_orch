@@ -272,6 +272,8 @@ pub fn run_chat<L, S, C, ST>(
     stream_meta: Arc<Mutex<StreamMeta>>,
     prompt_log: Option<std::path::PathBuf>,
     session_id: String,
+    // Рабочая директория для инструментов кодера (bash/fs). None = корень проекта.
+    workdir: Option<String>,
 ) -> Result<ChatRunResult, String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -357,6 +359,25 @@ where
     let project_dir = agents_dir.parent().unwrap_or(&agents_dir);
     let sampling_presets = crate::infra::load_sampling_presets(project_dir);
 
+    // 🔐 Корень для инструментов кодинга (запись внутри — авто, проверяется
+    // тулами через ctx.workspace_root). Если пользователь выбрал рабочую
+    // директорию в чате — работаем в ней; иначе — песочница во временной папке
+    // (кодер может спокойно тестировать/играться, не трогая реальный проект).
+    let tools_root = workdir
+        .as_ref()
+        .filter(|p| !p.trim().is_empty())
+        .map(|p| {
+            let dir = std::path::PathBuf::from(p);
+            let _ = std::fs::create_dir_all(&dir);
+            dir
+        })
+        .unwrap_or_else(|| {
+            let sandbox = std::env::temp_dir().join("king_orch_sandbox");
+            let _ = std::fs::create_dir_all(&sandbox);
+            sandbox
+        });
+    log_cb(format!("📂 Корень инструментов кодера: {}", tools_root.display()));
+
     // 🔐 Корень проекта для инструментов кодинга (запись внутри — авто,
     // проверяется тулами через ctx.workspace_root). Сбрасываем гранты сессии.
     crate::infra::global_approver().reset_session(&session_id);
@@ -388,7 +409,7 @@ where
             sampling_presets: &sampling_presets,
             prompt_log: prompt_log.clone(),
             session_id: session_id.clone(),
-            workspace_root: project_dir.to_path_buf(),
+            workspace_root: tools_root.clone(),
         };
         match crate::domain::workflow_engine::run_workflow(
             workflow, &mut ctx, &mut runner,
@@ -443,7 +464,7 @@ where
             stream_meta.clone(), true,
             prompt_log.clone(),
             session_id.clone(),
-            project_dir.to_path_buf(),
+            tools_root.clone(),
             &mut None,
         )?;
 

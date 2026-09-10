@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { store } from "../store";
 import { bus } from "../events";
 import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, showToast, showPermissionRequest } from "../ui";
@@ -65,6 +66,8 @@ export interface ChatElements {
   filePreview: HTMLDivElement;
   tokenCounter: HTMLDivElement;
   engineBadge: HTMLDivElement;
+  btnSetWorkdir: HTMLButtonElement;
+  currentWorkdir: HTMLSpanElement;
 }
 
 export class ChatController {
@@ -856,6 +859,18 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     this.el.fileInput?.addEventListener("change", (e) => this.handleFileSelect((e.target as HTMLInputElement).files));
     this.el.modelSelect?.addEventListener("change", () => { this.updateAttachButtonState(); this.triggerTokenCount(); if (store.currentSessionId) this.persistSession(); });
     this.el.agentSelect?.addEventListener("change", () => { this.triggerTokenCount(); if (store.currentSessionId) this.persistSession(); });
+    this.el.btnSetWorkdir?.addEventListener("click", async () => {
+      try {
+        const dir = await openDialog({ directory: true });
+        if (dir) {
+          store.workdir = dir as string;
+          this.el.currentWorkdir.textContent = dir as string;
+          this.el.currentWorkdir.title = dir as string;
+          await invoke("set_config_value", { key: "workdir", value: dir });
+          showToast(`Рабочая директория: ${dir}`, "success");
+        }
+      } catch (e) { showToast(`Ошибка: ${e}`, "error"); void trackError("chat.setWorkdir", e); }
+    });
   }
 
   private thoughtDedupSet = new Set<string>();
@@ -1026,6 +1041,14 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
   private bindBusEvents() {
     bus.on("session:new", () => this.startNewSession());
     bus.on("session:open", (id: string) => this.openSession(id));
-    bus.on("config:loaded", () => { this.updateAttachButtonState(); this.triggerTokenCount(); });
+    bus.on("config:loaded", (config: any) => {
+      this.updateAttachButtonState();
+      this.triggerTokenCount();
+      if (config.workdir) {
+        store.workdir = config.workdir;
+        this.el.currentWorkdir.textContent = config.workdir;
+        this.el.currentWorkdir.title = config.workdir;
+      }
+    });
   }
 }
