@@ -109,7 +109,9 @@ pub struct PriorityCase {
     pub to: String,
 }
 
-/// Единичное условие для condition_router: поле + значение для сравнения
+/// Единичное условие для condition_router: поле + значение для сравнения.
+/// `field` с точкой (`signal.field`) — доступ к signal bus; без точки (`agent_id`) —
+/// проверка существования отчёта агента в сессии.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConditionRule {
     pub field: String,
@@ -187,7 +189,8 @@ pub struct NodeDef {
     pub false_to: Option<String>,
     #[serde(default, skip_serializing_if = "is_cases_empty", deserialize_with = "deserialize_cases_priority")]
     pub cases_priority: Option<Vec<PriorityCase>>,
-    /// Условия для condition_router: список проверок полей сигнала
+    /// Условия для condition_router: `field` с точкой = доступ к сигналу
+    /// (`signal.field`), без точки = существование отчёта агента (`agent_id`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub conditions: Vec<ConditionRule>,
     /// Логика комбинирования условий condition_router: "any" | "all" (по умолчанию "any")

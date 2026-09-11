@@ -115,10 +115,6 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
   if (data.type === "condition_router") {
     if (!data.conditions) data.conditions = [];
     html += `<div class="graph-detail-section">
-      <div class="detail-label">Имя сигнала</div>
-      <input type="text" id="ge-signal-name" class="ge-input" placeholder="validator_report" value="${this.esc(data.signal_name || "")}" />
-    </div>
-    <div class="graph-detail-section">
       <div class="detail-label">Логика</div>
       <select id="ge-logic" class="ge-select">
         <option value="any" ${data.logic !== "all" ? "selected" : ""}>any — хотя бы одно условие</option>
@@ -131,9 +127,9 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
     for (let i = 0; i < data.conditions.length; i++) {
       const c = data.conditions[i];
       html += `<div class="ge-case-row" data-index="${i}">
-        <input class="ge-input ge-cond-field" value="${this.esc(c.field)}" placeholder="field" style="width:45%;" />
+        <input class="ge-input ge-cond-field" value="${this.esc(c.field)}" placeholder="validator_report.e1 или soma_translator" style="width:45%;" />
         <span style="color:#888;margin:0 2px;">=</span>
-        <input class="ge-input ge-cond-equals" value="${this.esc(String(c.equals))}" placeholder="value" style="width:40%;" />
+        <input class="ge-input ge-cond-equals" value="${this.esc(String(c.equals))}" placeholder="true" style="width:40%;" />
         <button class="ge-cond-remove" title="Удалить">🗑</button>
       </div>`;
     }

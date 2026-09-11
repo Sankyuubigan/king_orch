@@ -33,7 +33,7 @@ export function buildNodeInnerHtml(this: GraphController, data: any, fallbackId:
   }
   if (data.type === "condition_router") {
     const parts: string[] = [];
-    if (data.signal_name) parts.push(this.esc(data.signal_name));
+    if (Array.isArray(data.conditions) && data.conditions.length > 0) parts.push(data.conditions.map((c: { field: string; equals: unknown }) => `${c.field}=${String(c.equals)}`).join(", "));
     if (data.logic) parts.push(`logic: ${this.esc(data.logic)}`);
     if (data.true_to) parts.push(`✓ ${this.esc(data.true_to)}`);
     if (data.false_to) parts.push(`✗ ${this.esc(data.false_to)}`);

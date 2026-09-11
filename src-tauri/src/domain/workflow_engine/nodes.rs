@@ -1,5 +1,5 @@
 use crate::domain::workflow_engine::context::WorkflowContext;
-use crate::domain::workflow_engine::parser::{EdgeDef, NodeDef, NodeType, WorkflowConfig, WorkflowDef};
+use crate::domain::workflow_engine::parser::{ConditionRule, EdgeDef, NodeDef, NodeType, WorkflowConfig, WorkflowDef};
 use crate::domain::workflow_engine::WorkflowRunner;
 use crate::infra::{ChatMessage, SubCall, push_report, extract_model_filename};
 
@@ -10,6 +10,62 @@ pub struct NodeResult {
     pub next_node: Option<String>,
     /// Дополнительные следующие узлы (для SequentialSwitch)
     pub next_nodes: Vec<String>,
+}
+
+/// Сравнивает одно условие condition_router с текущим состоянием контекста.
+///
+/// Разбор `rule.field` (без отдельного `signal_name` у ноды):
+/// - Поле с точкой (`validator_report.e1`, `a.b.c`): доступ к signal bus.
+///   Первый сегмент — имя сигнала, остальные — вложенный dot-path поиск.
+///   Сравнение с `rule.equals` по типу (bool/string/number).
+/// - Поле без точки (`soma_translator`): проверка существования отчёта агента
+///   в сообщениях сессии (`author == field`). `rule.equals` должен быть bool:
+///   `true` — отчёт должен существовать, `false` — должен отсутствовать.
+pub fn condition_rule_matches(
+    rule: &ConditionRule,
+    signals: &std::collections::HashMap<String, serde_json::Value>,
+    messages: &[ChatMessage],
+) -> bool {
+    let field = &rule.field;
+
+    if field.contains('.') {
+        let mut parts = field.splitn(2, '.');
+        let signal_key = parts.next().unwrap_or("");
+        let rest = parts.next().unwrap_or("");
+        let signal = signals
+            .get(signal_key)
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        let mut current = signal;
+        for part in rest.split('.') {
+            match current.get(part) {
+                Some(next) => current = next.clone(),
+                None => return false,
+            }
+        }
+        return match &rule.equals {
+            serde_json::Value::Bool(expected) => {
+                current.as_bool().map(|v| v == *expected).unwrap_or(false)
+            }
+            serde_json::Value::String(expected) => {
+                current.as_str().map(|v| v == expected.as_str()).unwrap_or(false)
+            }
+            serde_json::Value::Number(expected) => {
+                current.as_f64().map(|v| v == expected.as_f64().unwrap_or(0.0)).unwrap_or(false)
+            }
+            _ => false,
+        };
+    }
+
+    match &rule.equals {
+        serde_json::Value::Bool(expected) => {
+            let exists = messages
+                .iter()
+                .any(|m| m.author.as_deref() == Some(field.as_str()));
+            exists == *expected
+        }
+        _ => false,
+    }
 }
 
 /// Выполняет один узел графа и возвращает результат + id следующего узла
@@ -687,40 +743,14 @@ where
         }
 
         NodeType::ConditionRouter => {
-            let signal_name = node.signal_name.as_deref().unwrap_or("");
             let conditions = &node.conditions;
             let logic = node.logic.as_deref().unwrap_or("any");
 
-            // Читаем из signal bus (context.signals) — SSOT, а не сканирование messages
-            let signal = context.signals.get(signal_name)
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
             let mut matched_count = 0u32;
             let total = conditions.len() as u32;
 
             for rule in conditions {
-                let field_match = match &rule.equals {
-                    serde_json::Value::Bool(expected) => {
-                        signal.get(&rule.field)
-                            .and_then(|v| v.as_bool())
-                            .map(|actual| actual == *expected)
-                            .unwrap_or(false)
-                    }
-                    serde_json::Value::String(expected) => {
-                        signal.get(&rule.field)
-                            .and_then(|v| v.as_str())
-                            .map(|actual| actual == expected.as_str())
-                            .unwrap_or(false)
-                    }
-                    serde_json::Value::Number(expected) => {
-                        signal.get(&rule.field)
-                            .and_then(|v| v.as_f64())
-                            .map(|actual| actual == expected.as_f64().unwrap_or(0.0))
-                            .unwrap_or(false)
-                    }
-                    _ => false,
-                };
-                if field_match {
+                if condition_rule_matches(rule, &context.signals, &context.messages) {
                     matched_count += 1;
                 }
             }
@@ -737,8 +767,8 @@ where
             };
 
             (runner.log_cb)(format!(
-                "[condition_router] signal '{}' logic='{}' matched={}/{} → {}",
-                signal_name, logic, matched_count, total,
+                "[condition_router] logic='{}' matched={}/{} → {}",
+                logic, matched_count, total,
                 target.as_deref().unwrap_or("-")
             ));
 
@@ -748,7 +778,6 @@ where
                     "matched_count": matched_count,
                     "total": total,
                     "logic": logic,
-                    "signal_name": signal_name,
                     "target": target
                 }),
                 next_node: target,
@@ -1128,5 +1157,70 @@ mod tests {
         let v = fallback_facts_json(&expected);
         assert_eq!(v.get("has_problem").and_then(|x| x.as_bool()), Some(true));
         assert_eq!(v.get("has_somatic").and_then(|x| x.as_bool()), Some(false));
+    }
+
+    fn signal_map(pairs: &[(&str, serde_json::Value)]) -> std::collections::HashMap<String, serde_json::Value> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    }
+
+    fn rule(field: &str, equals: serde_json::Value) -> ConditionRule {
+        ConditionRule {
+            field: field.to_string(),
+            equals,
+        }
+    }
+
+    fn msg(author: &str) -> ChatMessage {
+        ChatMessage {
+            id: None,
+            msg_type: "thought".to_string(),
+            content: "отчёт".to_string(),
+            sub_calls: None,
+            author: Some(author.to_string()),
+            model: None,
+            time_sec: None,
+            attachments: None,
+        }
+    }
+
+    #[test]
+    fn condition_router_dotted_signal_field_matches() {
+        let signals = signal_map(&[("validator_report", serde_json::json!({"e1": false, "e3": true}))]);
+        let messages = vec![msg("validator")];
+        assert!(condition_rule_matches(&rule("validator_report.e1", serde_json::json!(false)), &signals, &messages));
+        assert!(condition_rule_matches(&rule("validator_report.e3", serde_json::json!(true)), &signals, &messages));
+        assert!(!condition_rule_matches(&rule("validator_report.e2", serde_json::json!(true)), &signals, &messages));
+        assert!(!condition_rule_matches(&rule("missing_signal.e1", serde_json::json!(false)), &signals, &messages));
+    }
+
+    #[test]
+    fn condition_router_dotted_nested_path() {
+        let signals = signal_map(&[("s", serde_json::json!({"a": {"b": 42}}))]);
+        let messages = vec![];
+        assert!(condition_rule_matches(&rule("s.a.b", serde_json::json!(42)), &signals, &messages));
+        assert!(!condition_rule_matches(&rule("s.a.c", serde_json::json!(42)), &signals, &messages));
+    }
+
+    #[test]
+    fn condition_router_agent_report_exists() {
+        let signals = signal_map(&[]);
+        let messages = vec![msg("soma_translator"), msg("validator")];
+        assert!(condition_rule_matches(&rule("soma_translator", serde_json::json!(true)), &signals, &messages));
+        assert!(!condition_rule_matches(&rule("decomposer", serde_json::json!(true)), &signals, &messages));
+        assert!(!condition_rule_matches(&rule("soma_translator", serde_json::json!(false)), &signals, &messages));
+    }
+
+    #[test]
+    fn condition_router_agent_report_missing_with_equals_false() {
+        let signals = signal_map(&[]);
+        let messages = vec![msg("validator")];
+        assert!(condition_rule_matches(&rule("soma_translator", serde_json::json!(false)), &signals, &messages));
+    }
+
+    #[test]
+    fn condition_router_agent_report_with_non_bool_equals_is_no_match() {
+        let signals = signal_map(&[]);
+        let messages = vec![msg("soma_translator")];
+        assert!(!condition_rule_matches(&rule("soma_translator", serde_json::json!("present")), &signals, &messages));
     }
 }
