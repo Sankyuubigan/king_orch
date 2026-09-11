@@ -286,9 +286,12 @@ async function main() {
         // оказаться ниже уже выпущенного релиза (инцидент 26.8.173 < 26.8.174).
         execSync('git add latest.json src-tauri/tauri.conf.json src-tauri/Cargo.toml', { stdio: 'inherit', cwd: scriptDir });
         execSync('git commit -m "chore(release): ' + tag + '"', { stdio: 'inherit', cwd: scriptDir });
-        execSync('git tag -a ' + tag + ' -m "Release ' + tag + '"', { stdio: 'inherit', cwd: scriptDir });
         execSync('git push origin main', { stdio: 'inherit', cwd: scriptDir });
-        console.log('latest.json, version bump и тег ' + tag + ' запушены в main.');
+        // Локальный тег НЕ создаём: он был бы на другом коммите, чем remote-тег
+        // (созданный gh release create выше), что даёт конфликт тегов при fetch.
+        // Вместо этого синхронизируем локальные теги с remote (перезапись принудительно).
+        execSync('git fetch --tags --force origin', { stdio: 'inherit', cwd: scriptDir });
+        console.log('latest.json и version bump запушены в main, теги синхронизированы с remote.');
 
         console.log('\n========================================');
         console.log(`DONE! Release ${tag} complete.`);

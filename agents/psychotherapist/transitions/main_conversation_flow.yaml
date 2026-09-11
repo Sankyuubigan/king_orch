@@ -12,8 +12,8 @@ nodes:
   type: llm_fact_extractor
   input: '{{ user_message }}'
   ui_pos:
-    x: -1990
     y: 493
+    x: -1990
   llm_params: strict
 
 - id: check_has_problem
@@ -22,8 +22,8 @@ nodes:
   true_to: note_1782221436115
   false_to: note_1785141025138
   ui_pos:
-    x: -1700
     y: 495
+    x: -1700
 
 - id: call_collector
   type: llm_worker
@@ -33,16 +33,16 @@ nodes:
   - decomposer
   - validator
   ui_pos:
-    y: -753
-    x: 2299
+    y: -347
+    x: 2765
 
 - id: call_soma_translator
   type: llm_worker
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    y: 153
     x: -554
+    y: 153
 
 - id: call_decomposer
   type: llm_worker
@@ -51,32 +51,32 @@ nodes:
   - decomposer
   - soma_translator
   ui_pos:
-    x: 496
     y: 382
+    x: 496
 
 - id: call_validator
   type: llm_worker
   agent: validator
-  two_phase_thinking: true
   inject_reports:
   - decomposer
   - soma_translator
   ui_pos:
-    x: 1345
     y: 152
+    x: 1345
+  two_phase_thinking: true
 
 - id: check_mental_scenario
   type: signal_router
   signal_name: validator_report
-  field: e6
+  field: e3
   cases_priority:
   - key: 'false'
-    to: call_grounder
-  - key: 'true'
     to: call_shadow_worker
+  - key: 'true'
+    to: call_collector
   ui_pos:
-    x: 2300
-    y: -490
+    y: -464
+    x: 2353
 
 - id: call_grounder
   type: llm_worker
@@ -87,15 +87,15 @@ nodes:
   - decomposer
   - validator
   ui_pos:
-    x: 2597
-    y: -757
+    x: 2290
+    y: -163
 
 - id: call_cluster_checker
   type: llm_worker
   agent: cluster_checker
   ui_pos:
-    x: -202
     y: 295
+    x: -202
 
 - id: check_cluster_signal
   type: signal_router
@@ -106,8 +106,8 @@ nodes:
   - key: Кластер
     to: call_decomposer
   ui_pos:
-    y: 215
     x: 219
+    y: 215
 
 - id: call_pattern_finder
   type: llm_worker
@@ -116,8 +116,8 @@ nodes:
   - soma_translator
   - validator
   ui_pos:
-    y: 45
     x: 2503
+    y: 45
 
 - id: call_healer
   type: llm_worker
@@ -131,8 +131,8 @@ nodes:
   - pattern_finder_by_elements
   - synthesizer
   ui_pos:
-    x: 3468
     y: -5
+    x: 3468
 
 - id: combining_targets
   type: llm_worker
@@ -152,15 +152,15 @@ nodes:
   - decomposer
   - validator
   ui_pos:
-    y: -731
-    x: 2957
+    x: 2735
+    y: -704
 
 - id: note_1782221436115
   type: note
   input: пересчитываем данные с учетом новых данных от юзера
   ui_pos:
-    y: 255
     x: -1215
+    y: 255
 
 - id: note_1782220193985
   type: note
@@ -179,7 +179,7 @@ nodes:
 - id: check_critical_elements
   type: condition_router
   signal_name: validator_report
-  true_to: checking_insufficient_data
+  true_to: signal_router_1789089419158
   false_to: note_1784427848563
   conditions:
   - field: e1
@@ -202,8 +202,8 @@ nodes:
     equals: false
   logic: any
   ui_pos:
+    y: 81
     x: 1655
-    y: 85
 
 - id: check_somatic
   type: condition_check
@@ -211,8 +211,8 @@ nodes:
   sequential_to: call_cluster_checker
   true_to: call_soma_translator
   ui_pos:
-    x: -802
     y: 218
+    x: -802
 
 - id: check_need_handedness
   type: signal_router
@@ -221,16 +221,16 @@ nodes:
   - key: НУЖНА РУКОСТЬ
     to: note_1785123862689
   ui_pos:
-    y: -39
     x: -298
+    y: -39
 
 - id: note_1785123862689
   type: note
   input: уточнение рукости у юзера
   system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
   ui_pos:
-    x: -44
     y: -216
+    x: -44
 
 - id: note_1785141025138
   type: note
@@ -248,8 +248,8 @@ nodes:
 
     В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
-    x: -1323
     y: 748
+    x: -1323
 
 - id: check_cluster_signal2
   type: signal_router
@@ -260,41 +260,35 @@ nodes:
   - key: Кластер
     to: combining_targets
   ui_pos:
-    x: 2784
     y: -83
+    x: 2784
 
 - id: call_request_helper
   type: llm_worker
   agent: request_helper
   output_type: message
   ui_pos:
-    x: -808
     y: 864
+    x: -808
 
-- id: checking_insufficient_data
-  type: condition_router
+- id: signal_router_1789089419158
+  type: signal_router
   signal_name: validator_report
-  true_to: call_collector
-  false_to: check_mental_scenario
-  conditions:
-  - field: e1
-    equals: false
-  - field: e2
-    equals: false
-  - field: e4
-    equals: false
-  - field: e5
-    equals: false
-  - field: e7
-    equals: false
-  - field: e8
-    equals: false
-  - field: e9
-    equals: false
-  logic: any
+  field: e6
+  cases_priority:
+  - key: 'true'
+    to: check_mental_scenario
+  - key: 'false'
+    to: call_grounder
   ui_pos:
-    y: -433
-    x: 1973
+    x: 1928
+    y: -250
+
+- id: condition_router_1789091303243
+  type: condition_router
+  ui_pos:
+    y: -576
+    x: 1663
 
 edges:
 

@@ -682,6 +682,11 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   text-align: center;
   flex-shrink: 0;
 }
+.graph-context-menu .ctx-item.disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
 
 /* Submenu for "Создать" */
 .ctx-item.has-submenu {
