@@ -3,7 +3,7 @@
  * Вся логика изолирована в модулях-контроллерах.
  * Импорты идут через двери (index.ts) — модули не лезут в кишки друг друга.
  */
-import { initConfirmDialog, initPermissionDialog, showToast } from "./ui";
+import { initConfirmDialog, initPermissionDialog, initVramDialog, showToast } from "./ui";
 // Регистрирует Web Component <about-updates-panel> из переиспользуемого плагина.
 import "@my-tauri-plugins/plugin-about-updates";
 import { ChatController, SessionController, SettingsController, GraphController, AgentTestController, CodingTestController, UpdatePopupController } from "./controllers";
@@ -20,6 +20,7 @@ async function initApp() {
   await initTelemetry();
   initConfirmDialog();
   initPermissionDialog();
+  initVramDialog();
 
   // ─── Сторожевик зависаний главного потока ───
   // Если поток UI заблокирован дольше ~1с (тяжёлый рендер/синх. работа),

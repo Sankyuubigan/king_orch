@@ -851,14 +851,23 @@ let start_time = Instant::now();
     };
 
     // ── Two-Phase Thinking: Phase 1 (свободные размышления) ──
-    // Для signal-агентов с two_phase_thinking: сначала модель думает без грамматики
-    // (max_gen_tokens токенов), затем Phase 2 генерирует строгий JSON.
-    // Это позволяет модели тщательно проанализировать все элементы, не упираясь
-    // в лимит грамматики think-block + envelope-json.
-    if two_phase_thinking && signal_contract.is_some() {
-        let contract = signal_contract.as_ref().unwrap();
+    // Включение: YAML-флаг узла two_phase_thinking ИЛИ глобальный конфиг
+    // two_phase_default (по умолчанию ВКЛЮЧЁН для ВСЕХ агентов). Сигнальные
+    // агенты думают свободно, затем отвечают envelope-json (без think-block);
+    // per-agent GBNF и freeform-агенты (pattern_finder и др.) — отвечают
+    // с enable_thinking=false (фикс думателя Gemma-4: мысли жгут
+    // --reasoning-budget, content остаётся пустым, оркестратор падает).
+    // Размышления Phase 1 — внутренний контекст агента для ЕГО Phase 2:
+    // в сессию кладутся как thought (юзер раскрывает в GUI), но НЕ попадают
+    // в контекст других агентов (llm_history() фильтрует type != "message").
+    let two_phase_thinking = two_phase_thinking
+        || crate::infra::load_config_early().two_phase_default;
+    // true, если Phase 1 прошла → Phase 2 отвечает БЕЗ думателя (enable_thinking=false)
+    // для ЛЮБОЙ грамматики, включая freeform-агентов.
+    let mut phase2_disable_reasoning = false;
+    if two_phase_thinking {
         engine.set_grammar(None);
-        log_cb(format!("🧠 [{}] Phase 1: свободные размышления (лимит: {} токенов)",
+        log_cb(format!("🧠 [{}] Phase 1: свободные размышления (лимит: {} токенов)...",
             agent.name, max_gen_tokens));
 
         let ctx_label_p1 = format!("{}:{}#phase1", mem_mode, agent.name);
@@ -878,14 +887,41 @@ let start_time = Instant::now();
                 let thinking_text = gen.text.clone();
                 log_cb(format!("<<< [{}] Phase 1: {} символов, стоп: {}",
                     agent.name, thinking_text.len(), gen.stop_reason));
+                // Phase 2 в любом случае отвечает без думателя: размышления уже
+                // собраны, модель должна выдать итоговый результат.
+                phase2_disable_reasoning = true;
+                if !thinking_text.trim().is_empty() {
+                    ctx.llm_messages.push(LlmMessage {
+                        role: "assistant".to_string(),
+                        content: thinking_text.clone(),
+                    });
+                    // Сохраняем размышления в сессию как thought (раскрытие в GUI).
+                    ctx.messages.push(ChatMessage {
+                        id: Some(format!("msg_{}", *ctx.msg_counter)),
+                        msg_type: "thought".to_string(),
+                        content: safe_truncate(&thinking_text, THOUGHT_STORE_MAX_CHARS),
+                        sub_calls: None,
+                        author: Some(agent.id.clone()),
+                        model: Some(extract_model_filename(&engine.model_path)),
+                        time_sec: None,
+                        attachments: None,
+                    });
+                    *ctx.msg_counter += 1;
+                } else {
+                    log_cb(format!("⚠️ [{}] Phase 1: пустые размышления — Phase 2 сразу без думателя", agent.name));
+                }
+            }
+            Err(e) => {
+                log_cb(format!("⚠️ [{}] Phase 1 ошибка: {} — стандартный режим (думатель по грамматике)",
+                    agent.name, e));
+            }
+        }
 
-                // Сохраняем размышления как assistant-сообщение в контекст
-                ctx.llm_messages.push(LlmMessage {
-                    role: "assistant".to_string(),
-                    content: thinking_text,
-                });
-
-                // Phase 2: envelope-json грамматика (без think-block)
+        // Phase 2 грамматика для signal-агентов: envelope-json БЕЗ think-block
+        // (размышления уже были в Phase 1). Per-agent GBNF и freeform не трогаем:
+        // restore_grammar() в цикле восстановит их для первого вызова Phase 2.
+        if two_phase_thinking && phase2_disable_reasoning {
+            if let Some(contract) = &signal_contract {
                 let grammar = build_signal_envelope_json_only_grammar(contract);
                 engine.set_grammar(Some(GrammarSpec {
                     gbnf: Some(grammar.clone()), json_schema: None
@@ -895,10 +931,6 @@ let start_time = Instant::now();
                 });
                 log_cb(format!("🎯 [{}] Phase 2: JSON-грамматика ({} символов)",
                     agent.name, ctx.active_grammar.as_ref().unwrap().gbnf.as_ref().unwrap().len()));
-            }
-            Err(e) => {
-                log_cb(format!("⚠️ [{}] Phase 1 ошибка: {} — fallback на стандартный режим",
-                    agent.name, e));
             }
         }
     }
@@ -963,13 +995,19 @@ let start_time = Instant::now();
         let gen_start = Instant::now();
         log_cb(format!(">>> [{}] LLM вызов #{}, msgs={}, max_gen={}, глубина={}", agent.name, iter, ctx.llm_messages.len(), max_gen_tokens, depth));
         let ctx_label = format!("{}:{}#{}", mem_mode, agent.name, iter);
-        // Обёртка генерации с детектом переполнения контекста и повтором (item 4).
-        // Method 3 агенты (signal_contract): disable_reasoning = false — модель думает в <think>.
+// Обёртка генерации с детектом переполнения контекста и повтором (item 4).
+        // Method 3 агенты (signal_contract): disable_reasoning = false — модель думает в  thinking.
         // Per-agent GBNF агенты (без signal_contract): disable_reasoning = true.
+        // Двухфазный режим: Phase 2 ОТВЕЧАЕТ без думателя для ЛЮБОЙ грамматики
+        // (enable_thinking=false на уровне запроса) — фикс думателя Gemma-4.
+        // force_no_thinking — Cell: поднимается в ретрай-обёртках (думатель без
+        // ответа), т.к. attempt_generate живёт вне цикла (заимствует ctx_label).
         let uses_method_3 = signal_contract.is_some();
         let has_agent_grammar = agent_grammar.is_some() && !uses_method_3;
+        let force_no_thinking = std::cell::Cell::new(phase2_disable_reasoning);
         let enforce_tool_choice = if has_tools_for_prompt { Some("required") } else { None };
         let attempt_generate = |msgs: &[LlmMessage]| -> Result<GenerationResult, String> {
+            let disable_reasoning = force_no_thinking.get() || has_agent_grammar;
             if !attachments.is_empty() && engine.is_multimodal() {
                 engine.generate_chat_multimodal(
                     msgs, &attachments, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
@@ -980,7 +1018,7 @@ let start_time = Instant::now();
                 )
             } else {
                 engine.generate_chat(
-                    msgs, max_gen_tokens, model_params, format_type, has_agent_grammar, cancel_flag.clone(),
+                    msgs, max_gen_tokens, model_params, format_type, disable_reasoning, cancel_flag.clone(),
                     &ctx_label,
                     enforce_tool_choice,
                     |p, _| { status_cb(format!("{} думает (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
@@ -1101,14 +1139,25 @@ let start_time = Instant::now();
                     }
                     ctx.continuation_raw.clear();
                     ctx.continuation_mark = None;
-                    log_cb(format!(
-                        "🧠 Агент '{}' выдал только думатель ({} симв.) без ответа ({}) — повторный вызов с требованием отвечать сразу ({}/3).",
-                        agent.id,
-                        reasoning.chars().count(),
-                        stop_reason,
-                        ctx.thinking_no_answer
-                    ));
-                    ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
+                    if ctx.thinking_no_answer >= 2 {
+                        // Второй провал подряд — отключаем думатель НА УРОВНЕ ЗАПРОСА
+                        // (enable_thinking=false), а не текстовым хинтом: модели вроде
+                        // Gemma-4 игнорируют просьбы и снова жгут бюджет на мысли.
+                        force_no_thinking.set(true);
+                        log_cb(format!(
+                            "🧠 Агент '{}' выдал думатель без ответа ({}/3) — ПРИНУДИТЕЛЬНО отключаем думатель на уровне запроса (enable_thinking=false).",
+                            agent.id, ctx.thinking_no_answer
+                        ));
+                    } else {
+                        log_cb(format!(
+                            "🧠 Агент '{}' выдал только думатель ({} симв.) без ответа ({}) — повторный вызов с требованием отвечать сразу ({}/3).",
+                            agent.id,
+                            reasoning.chars().count(),
+                            stop_reason,
+                            ctx.thinking_no_answer
+                        ));
+                        ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
+                    }
                     continue;
                 }
                 ctx.consecutive_incomplete += 1;
@@ -1241,14 +1290,25 @@ let start_time = Instant::now();
                 }
                 ctx.continuation_raw.clear();
                 ctx.continuation_mark = None;
-                log_cb(format!(
-                    "🧠 Агент '{}' выдал только думатель ({} симв.) без ответа ({}) — повторный вызов с требованием отвечать сразу ({}/3).",
-                    agent.id,
-                    reasoning.chars().count(),
-                    stop_reason,
-                    ctx.thinking_no_answer
-                ));
-                ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
+                if ctx.thinking_no_answer >= 2 {
+                    // Второй провал подряд — отключаем думатель НА УРОВНЕ ЗАПРОСА
+                    // (enable_thinking=false), а не текстовым хинтом: модели вроде
+                    // Gemma-4 игнорируют просьбы и снова жгут бюджет на мысли.
+                    force_no_thinking.set(true);
+                    log_cb(format!(
+                        "🧠 Агент '{}' выдал думатель без ответа ({}/3) — ПРИНУДИТЕЛЬНО отключаем думатель на уровне запроса (enable_thinking=false).",
+                        agent.id, ctx.thinking_no_answer
+                    ));
+                } else {
+                    log_cb(format!(
+                        "🧠 Агент '{}' выдал только думатель ({} симв.) без ответа ({}) — повторный вызов с требованием отвечать сразу ({}/3).",
+                        agent.id,
+                        reasoning.chars().count(),
+                        stop_reason,
+                        ctx.thinking_no_answer
+                    ));
+                    ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
+                }
                 continue;
             }
             ctx.consecutive_incomplete += 1;

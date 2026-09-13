@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { store } from "../store";
 import { bus } from "../events";
-import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, showToast, showPermissionRequest } from "../ui";
+import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, showToast, showPermissionRequest, showVramRequest } from "../ui";
 import type { Role, MessageMenuCallbacks } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, CatalogEntry } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
@@ -76,6 +76,7 @@ export class ChatController {
   private attachments: Attachment[] = [];
   private modelAudioCapable: boolean = false;
   private countTimer: number | null = null;
+  private lastPromptTokens: number = 0;
 
   constructor(el: ChatElements) {
     this.el = el;
@@ -149,6 +150,7 @@ export class ChatController {
         });
 
         const tokens = await countTokens(promptText, tokenizerId);
+        this.lastPromptTokens = tokens;
 
         const vramMb = await invoke<number>("get_prompt_memory", {
             modelPath,
@@ -357,6 +359,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
         message: "",
         history: allHistory,
         contextSize: store.contextSize,
+        promptTokens: this.lastPromptTokens,
         maxGenTokens: parseInt(this.el.maxGenSlider.value, 10),
         kvQuantKeys: this.el.chkKvQuantK.checked,
         kvQuantValues: this.el.chkKvQuantV.checked,
@@ -646,6 +649,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
           message: text, 
           history: allHistory, 
           contextSize: store.contextSize, 
+          promptTokens: this.lastPromptTokens,
           maxGenTokens: parseInt(this.el.maxGenSlider.value, 10), 
           kvQuantKeys: this.el.chkKvQuantK.checked, 
           kvQuantValues: this.el.chkKvQuantV.checked, 
@@ -880,6 +884,8 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     listen("log", (e) => { this.logToGUI(e.payload as string); });
 
     listen("tool_permission_request", (e) => { showPermissionRequest(e.payload as any); });
+
+    listen("vram_confirm_request", (e) => { showVramRequest(e.payload as any); });
 
     listen("download_progress", (e) => {
       const { downloaded, total, speed_bps } = e.payload as { downloaded: number; total: number; speed_bps?: number };

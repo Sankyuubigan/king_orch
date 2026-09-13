@@ -121,6 +121,15 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
 #[tauri::command]
 pub fn set_last_model(app: AppHandle, path: String) {
     let mut cfg = infra::load_config(&app);
+    // 🛡 Проектор mmproj нельзя выбирать активной моделью (см. is_mmproj_file).
+    // Пропускаем игнор в лог, конфиг не трогаем.
+    if infra::is_mmproj_file(&path) {
+        infra::startup_log::append("WARN", &format!(
+            "set_last_model: отклонён выбор mmproj «{}»",
+            path
+        ));
+        return;
+    }
     cfg.last_model = Some(path);
     infra::save_config(&app, &cfg);
 }

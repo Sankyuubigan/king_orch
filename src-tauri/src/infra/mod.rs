@@ -21,6 +21,7 @@ pub mod mem_profiler;
 pub mod telemetry;
 pub mod tools;
 pub mod permissions;
+pub mod vram;
 pub mod lsp;
 pub mod updater_rollback;
 pub mod process_util;
@@ -35,10 +36,11 @@ pub use session_manager::{ChatSession, SessionMeta};
 pub use mcp_client::{McpClient, McpPool, SharedMcpClient};
 
 // ─── Публичные функции ───
-pub use config::{load_config, save_config, load_catalog, load_sampling_presets, auto_detect_mmproj, find_catalog_entry_for_model, find_agents_dir, find_mcp_servers_dir, find_coding_tests_dir};
+pub use config::{load_config, load_config_early, save_config, load_catalog, load_sampling_presets, auto_detect_mmproj, find_catalog_entry_for_model, find_sibling_llm_for_mmproj, is_mmproj_file, find_agents_dir, find_mcp_servers_dir, find_coding_tests_dir};
 pub use mmproj::ensure_mmproj_for_model;
 pub use llm::{extract_f32_from_gguf, extract_u32_from_gguf};
 pub use session_manager::{get_session, get_sessions, save_session, delete_session, rename_session, open_session_folder};
 pub use mem_profiler::{MemSampler, MemGuard, peak_line, current_process_rss};
 pub use permissions::{PermissionApprover, GrantDecision, global_approver, test_approver};
+pub use vram::{VramChoice, global_vram_approver, set_ui_ready};
 pub use tools::{Tool, ToolCtx, ToolError, tool_schemas, execute_tool, all_tools};

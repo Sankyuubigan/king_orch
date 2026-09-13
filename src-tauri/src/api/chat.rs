@@ -189,6 +189,7 @@ pub async fn chat_request(
     message: String,
     history: Vec<ChatMessage>,
     context_size: u32,
+    prompt_tokens: u32,
     max_gen_tokens: u32,
     reasoning_budget: Option<u32>,
     kv_quant_keys: bool,
@@ -330,6 +331,25 @@ pub async fn chat_request(
     let prompt_log = app.path().app_data_dir().ok().map(|d| {
         d.join("prompt_logs").join(format!("{}_{}.prompt_log.jsonl", agent_id, prompt_log_ts))
     });
+
+    // ── Предварительный подсчёт памяти ДО запуска (цифра как внизу поля ввода) ──
+    // Точное число токенов присылает фронтенд (Xenova + get_prompt_preview) — логируем
+    // тот же прогноз VRAM, который юзер видит в UI под полем ввода.
+    let file_mb = std::fs::metadata(&model_path)
+        .map(|m| m.len() as f64 / (1024.0 * 1024.0))
+        .unwrap_or(0.0);
+    let effective_ctx = (prompt_tokens + max_gen_tokens + 128).min(context_size);
+    let total_mb = infra::estimate_vram_mb(&model_path, effective_ctx, kv_quant_keys, kv_quant_values);
+    let kv_mb = (total_mb - file_mb).max(0.0);
+    log_cb(format!(
+        "📐 Промпт: ~{} токенов, max_gen={}, ожидаемый финал: ~{}/{} (n_ctx)",
+        prompt_tokens, max_gen_tokens, prompt_tokens + max_gen_tokens, context_size
+    ));
+    log_cb(format!(
+        "💾 Ожидаемое потребление VRAM (GPU): Модель ~{:.1} МБ + Кэш ~{:.1} МБ = Итого ~{:.1} МБ",
+        file_mb, kv_mb, total_mb
+    ));
+
     let run_result = tokio::task::spawn_blocking(move || {
         // ── Контроль утечек: RSS приложения до и после запроса ──
         // Рост между последовательными запросами = утечка в приложении.

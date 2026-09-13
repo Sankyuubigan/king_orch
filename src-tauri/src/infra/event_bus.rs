@@ -38,6 +38,13 @@ pub enum AgentEvent {
         tool: String,
         path: String,
     },
+    /// Запрос решения по pre-flight VRAM: модель не влезает в видеопамять.
+    /// Фронтенд показывает диалог «Отмена / Запустить с выгрузкой в ОЗУ» и
+    /// вызывает `respond_vram_choice`.
+    VramConfirmRequest {
+        request_id: String,
+        note: String,
+    },
 }
 
 type Listener = Arc<dyn Fn(&AgentEvent) + Send + Sync>;

@@ -12,6 +12,7 @@ pub mod coding_test;
 pub mod file_utils;
 pub mod llamacpp;
 pub mod permissions;
+pub mod vram;
 pub mod telemetry;
 pub mod translate;
 pub mod updater;

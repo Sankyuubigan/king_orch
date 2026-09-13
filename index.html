@@ -475,6 +475,19 @@
     </div>
   </div>
 
+  <!-- Диалог pre-flight VRAM: модель не влезает в видеопамять (2 кнопки) -->
+  <div id="vram-overlay" class="confirm-overlay">
+    <div class="confirm-dialog">
+      <div class="confirm-icon">🎛️</div>
+      <h3 id="vram-title" class="confirm-title">Не хватает видеопамяти</h3>
+      <p id="vram-message" class="confirm-message">Запуск с выгрузкой части слоёв в ОЗУ?</p>
+      <div class="confirm-buttons">
+        <button id="vram-btn-cancel" class="btn-danger confirm-btn">Отмена</button>
+        <button id="vram-btn-proceed" class="btn-primary confirm-btn">Запустить с выгрузкой в ОЗУ</button>
+      </div>
+    </div>
+  </div>
+
   <!-- Контейнер для всплывающих уведомлений -->
   <div id="toast-container"></div>
 

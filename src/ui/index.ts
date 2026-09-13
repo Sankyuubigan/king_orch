@@ -12,5 +12,7 @@ export { confirmDialog, initConfirmDialog } from './confirm'
 
 export { initPermissionDialog, showPermissionRequest } from './permission'
 
+export { initVramDialog, showVramRequest } from './vram'
+
 export { createMessageMenu } from './message-menu'
 export type { MessageMenuCallbacks } from './message-menu'

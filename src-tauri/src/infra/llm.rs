@@ -177,11 +177,55 @@ impl LlamaEngine {
             Err(msg)
         };
 
+        // ── 🛡 mmproj-гард: проектор нельзя запускать как -m ──
+        // add_model / set_last_model уже отклоняют mmproj (см. is_mmproj_file),
+        // но легаси-конфиги («отравленные» списки моделей) могут содержать
+        // проектор как путь к модели. Запуск mmproj как LLM роняет llama-server
+        // при обработке промпта. Восстанавливаемся:
+        //   1) обратный маппинг mmproj_files (модель → её проектор);
+        //   2) «братская» LLM в той же папке (единственный не-mmproj .gguf).
+        // Затеняем model_path на String — ниже он может быть подменён.
+        let mut model_path = model_path.to_string();
+        if crate::infra::is_mmproj_file(&model_path) {
+            let cfg_early0 = crate::infra::config::load_config_early();
+            let via_config = cfg_early0
+                .mmproj_files
+                .iter()
+                .find(|(_, v)| v.as_str() == model_path)
+                .map(|(m, _)| m.clone());
+            let resolved = via_config.or_else(|| {
+                crate::infra::find_sibling_llm_for_mmproj(&model_path, &[])
+            });
+            match resolved {
+                Some(llm) => {
+                    let fname = std::path::Path::new(&model_path)
+                        .file_name()
+                        .map(|s| s.to_string_lossy().to_string())
+                        .unwrap_or_else(|| model_path.clone());
+                    crate::infra::startup_log::append("WARN", &format!(
+                        "LlamaEngine::new: mmproj «{}» подменён на братскую LLM «{}»",
+                        model_path, llm
+                    ));
+                    log_cb(format!(
+                        "⚠️ «{}» — это mmproj (мультимодальный проектор), а не языковая модель. Используется братская LLM «{}».",
+                        fname, llm
+                    ));
+                    model_path = llm;
+                }
+                None => return fail(format!(
+                    "Файл «{}» — это mmproj (мультимодальный проектор для изображений), \
+                     а не языковая модель. Запускать его как LLM нельзя: движок не сможет \
+                     обработать промпт.\n\nРядом не найдена основная LLM (другой .gguf в той же папке).",
+                    model_path
+                )),
+            }
+        }
+
         // ── Проверка целостности GGUF-файла модели ──
         // Битые/криво сконвертированные файлы (напр. block_count объявлен
         // больше, чем реально есть тензоров blk.N) роняют llama-server с
         // непонятным хвостом лога. Проверяем заранее и даём понятную ошибку.
-        if let Err(msg) = crate::infra::llm_gguf::validate_gguf(model_path) {
+        if let Err(msg) = crate::infra::llm_gguf::validate_gguf(&model_path) {
             return fail(format!("Файл модели повреждён.\n{}", msg));
         }
 
@@ -291,7 +335,72 @@ impl LlamaEngine {
         }
 
         let use_gpu = installed_family.is_gpu();
-        let gpu_layers: u32 = if use_gpu { 999 } else { 0 };
+        let mut gpu_layers: u32 = if use_gpu { 999 } else { 0 };
+
+        // ── Pre-flight VRAM: модель не влезает в GPU? ──
+        // Раньше при переполнении llama-server падал CUDA OOM на ПЕРВОМ промпте
+        // (веса грузятся почти на всю VRAM, KV+compute некуда) — юзер видел
+        // бессмысленное «Ошибка чтения потока генерации: error decoding response
+        // body» (баг Ternary-Bonsai-27B-Q2 на 8 ГБ). Теперь ДО спавна считаем,
+        // сколько слоёв реально помещается в свободную VRAM, и ДОБАВОЧНО
+        // спрашиваем юзера: «Отмена» или «Запустить с выгрузкой оффлоада в ОЗУ»
+        // (-ngl меньше). Диалог блокирует агентский цикл (паттерн как у
+        // permissions); без UI (тесты/ранний старт) — авто-решение «запустить
+        // с выгрузкой» (fallback не блокирует модель).
+        if use_gpu && vram_before > 0 {
+            if let Ok(nvml) = nvml_wrapper::Nvml::init() {
+                if let Ok(device) = nvml.device_by_index(0) {
+                    if let Ok(mem) = device.memory_info() {
+                        let total_vram_mb = mem.total / 1024 / 1024;
+                        let free_vram_mb = mem.free as f64 / (1024.0 * 1024.0);
+                        let need_mb = estimate_vram_mb(&model_path, global_ctx_limit, kv_quant_keys, kv_quant_values) + 512.0;
+                        if need_mb > free_vram_mb {
+                            let file_mb = std::fs::metadata(&model_path)
+                                .map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
+                            let kv_mb = (estimate_vram_mb(&model_path, global_ctx_limit, kv_quant_keys, kv_quant_values) - file_mb).max(0.0);
+                            // Workspace CUDA-буферов ggml (промежуточные тензоры).
+                            let compute_mb = (need_mb * 0.10).min(256.0);
+                            let budget_for_weights = (free_vram_mb - kv_mb - compute_mb).max(0.0);
+                            let total_layers = crate::infra::llm_gguf::extract_u32_from_gguf(&model_path, "llama.block_count").unwrap_or(32);
+                            let layers_fit = if file_mb > 0.0 {
+                                ((budget_for_weights / file_mb) * total_layers as f64) as u32
+                            } else {
+                                0
+                            };
+                            let new_ngl = layers_fit.min(gpu_layers);
+                            let note = format!(
+                                "⚠️ Модели нужно ~{:.0} МБ VRAM (файл {:.0} МБ + KV {:.0} МБ + буферы ~{:.0} МБ), свободно всего {:.0} МБ из {:.0} МБ. \
+                                 Модель НЕ влезает в видеопамять — GPU-оффлоад нужно урезать с {} до {} слоёв, остаток пойдёт в ОЗУ (медленнее, но запустится вместо CUDA-краша).",
+                                need_mb, file_mb, kv_mb, compute_mb, free_vram_mb, total_vram_mb, gpu_layers, new_ngl
+                            );
+                            // Только если реально есть что урезать: спрашиваем юзера.
+                            if new_ngl < gpu_layers {
+                                let choice = crate::infra::global_vram_approver()
+                                    .confirm_vram_reduction(&note);
+                                match choice {
+                                    crate::infra::VramChoice::Cancel => return fail(format!(
+                                        "Запуск отменён: модель не помещается в видеопамять \
+                                         (~{:.0} МБ нужно, свободно ~{:.0} МБ).\n\nЧто можно сделать:\n\
+                                         • уменьшить размер контекста в Настройках;\n\
+                                         • выбрать CPU-бекенд в Настройках → «Движок запуска нейромоделей»;\n\
+                                         • использовать более лёгкую квантизацию модели.",
+                                        need_mb, free_vram_mb
+                                    )),
+                                    crate::infra::VramChoice::ProceedWithRam => {
+                                        log_cb(note.clone());
+                                        crate::infra::startup_log::append("WARN", &note);
+                                        gpu_layers = new_ngl;
+                                    }
+                                }
+                            } else {
+                                log_cb(note.clone());
+                                crate::infra::startup_log::append("WARN", &note);
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let engine_mode = if use_gpu { "gpu".to_string() } else { "cpu".to_string() };
         let variant_source = if cfg_early.engine_variant.as_deref().map(|v| v == "auto" || v.is_empty()).unwrap_or(true) {
             format!("авто-подбор по GPU → {}", required_label)
@@ -350,10 +459,11 @@ impl LlamaEngine {
             let server_exe = server_exe.clone();
             let server_log = server_log.clone();
             let api_key = api_key.clone();
+            let model_path = model_path.clone();
             move |use_reasoning: bool, use_mmproj: bool| {
                 let mut c = Command::new(&server_exe);
                 c.current_dir(engine_dir)
-                    .arg("-m").arg(model_path)
+                    .arg("-m").arg(&model_path)
                     .arg("--host").arg("127.0.0.1")
                     .arg("--port").arg(port.to_string())
                     .arg("--api-key").arg(&api_key)
@@ -561,7 +671,7 @@ impl LlamaEngine {
 
         let mut engine = Self {
             global_ctx_limit,
-            model_path: model_path.to_string(),
+            model_path: model_path.clone(),
             mmproj_path: if attempt_mmproj { mmproj_orig.clone() } else { None },
             is_multimodal_engine: attempt_mmproj,
             stream_cb: Arc::new(stream_cb),
@@ -619,7 +729,7 @@ impl LlamaEngine {
         // ── Предупреждение о нехватке памяти (не блокирует запуск) ──
         // Оценка (модель + KV-кэш) сравнивается со свободной RAM. На CPU-режиме
         // модель живёт в RAM (вместе с KV), на GPU — файл всё равно мапится.
-        let need_mb = estimate_vram_mb(model_path, global_ctx_limit, kv_quant_keys, kv_quant_values) + 512.0;
+        let need_mb = estimate_vram_mb(&model_path, global_ctx_limit, kv_quant_keys, kv_quant_values) + 512.0;
         let free_ram_mb = sys.free_memory() as f64 / (1024.0 * 1024.0);
         if need_mb > free_ram_mb {
             let warn = format!(
@@ -632,11 +742,11 @@ impl LlamaEngine {
         }
 
         let mut gguf_params = Vec::new();
-        if let Some(v) = extract_f32_from_gguf(model_path, "tokenizer.ggml.temp") { gguf_params.push(format!("Temp={:.2}", v)); }
-        if let Some(v) = extract_u32_from_gguf(model_path, "tokenizer.ggml.top_k") { gguf_params.push(format!("Top_K={}", v)); }
-        if let Some(v) = extract_f32_from_gguf(model_path, "tokenizer.ggml.top_p") { gguf_params.push(format!("Top_P={:.2}", v)); }
-        if let Some(v) = extract_f32_from_gguf(model_path, "tokenizer.ggml.min_p") { gguf_params.push(format!("Min_P={:.2}", v)); }
-        if let Some(v) = extract_f32_from_gguf(model_path, "tokenizer.ggml.repetition_penalty") { gguf_params.push(format!("Rep_Pen={:.2}", v)); }
+        if let Some(v) = extract_f32_from_gguf(&model_path, "tokenizer.ggml.temp") { gguf_params.push(format!("Temp={:.2}", v)); }
+        if let Some(v) = extract_u32_from_gguf(&model_path, "tokenizer.ggml.top_k") { gguf_params.push(format!("Top_K={}", v)); }
+        if let Some(v) = extract_f32_from_gguf(&model_path, "tokenizer.ggml.top_p") { gguf_params.push(format!("Top_P={:.2}", v)); }
+        if let Some(v) = extract_f32_from_gguf(&model_path, "tokenizer.ggml.min_p") { gguf_params.push(format!("Min_P={:.2}", v)); }
+        if let Some(v) = extract_f32_from_gguf(&model_path, "tokenizer.ggml.repetition_penalty") { gguf_params.push(format!("Rep_Pen={:.2}", v)); }
 
         if !gguf_params.is_empty() {
             log_cb(format!("📦 Вшитые параметры GGUF: {}", gguf_params.join(", ")));
@@ -770,7 +880,10 @@ impl LlamaEngine {
         } else {
             String::new()
         };
-        format!("{}{}.{}", reason, mem, read_log_tail(&self.server_log))
+        // CUDA OOM — юзеру нужен ГЛАВНЫЙ совет, а не хвост лога ggml.
+        let log_tail = read_log_tail(&self.server_log);
+        let reason = cuda_oom_friendly_reason(&log_tail, reason);
+        format!("{}{}.{}", reason, mem, log_tail)
     }
 
     /// Ошибка генерации гарантированно уходит в лог-файл и телеметрию.
@@ -1432,6 +1545,29 @@ fn mmproj_error_detail(log: &str) -> String {
     "неизвестная ошибка загрузки проектора".to_string()
 }
 
+/// Возвращает понятную формулировку ошибки, если llama-server реально упал
+/// от нехватки видеопамяти (CUDA OOM). Иначе возвращает исходный `reason`
+/// без изменений. Юзер видит ГЛАВНЫЙ совет, а не хвост ggml-лога.
+fn cuda_oom_friendly_reason(log_tail: &str, reason: &str) -> String {
+    let lower = log_tail.to_lowercase();
+    let is_oom = lower.contains("out of memory")
+        || lower.contains("cuda error: out of memory")
+        || lower.contains("cuda_malloc failed")
+        || lower.contains("ggml_cuda: out of memory")
+        || (lower.contains("cu memory") && lower.contains("failed"))
+        || lower.contains("not enough memory")
+        || lower.contains("insufficient memory");
+    if !is_oom {
+        return reason.to_string();
+    }
+    format!(
+        "{} Модель не поместилась в видеопамять (CUDA OOM): GPU-слои + KV-кэш + буферы превысили свободную VRAM. \
+         Решение: уменьшите контекст (Настройки → размер контекста) или дайте GPU-оффлоаду уйти в ОЗУ — \
+         запуск с меньшим -ngl происходит автоматически при нехватке видеопамяти.",
+        reason
+    )
+}
+
 /// Проверка готовности llama-server по HTTP /health (без создания структуры engine).
 fn engine_health_check(client: &Client, port: u16, auth: &str) -> bool {
     client
@@ -1504,5 +1640,21 @@ mod tests {
         std::fs::write(&log, "llama server listening on port 17800").unwrap();
         assert_eq!(diagnose_cuda_fallback(&log), "");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn cuda_oom_reason_is_friendly() {
+        let log_tail = "CUDA error: out of memory\n  ggml_cuda: allocating 8388608 bytes failed\n  failed to allocate 8.0 MB\n";
+        let friendly = cuda_oom_friendly_reason(log_tail, "Ошибка чтения потока генерации: error decoding response body");
+        assert!(friendly.contains("CUDA OOM"), "friendly: {}", friendly);
+        assert!(friendly.contains("не поместилась в видеопамять"), "friendly: {}", friendly);
+        assert!(friendly.contains("уменьшите контекст"), "friendly: {}", friendly);
+    }
+
+    #[test]
+    fn cuda_oom_reason_passthrough_when_not_oom() {
+        let log_tail = "llama server listening on port 17800";
+        let reason = "Ошибка чтения потока генерации: error decoding response body";
+        assert_eq!(cuda_oom_friendly_reason(log_tail, reason), reason);
     }
 }

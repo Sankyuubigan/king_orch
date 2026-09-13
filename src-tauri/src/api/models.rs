@@ -214,6 +214,43 @@ pub fn add_model(
         warning = Some(w);
     }
 
+    // 🛡 mmproj — это мультимодальный ПРОЕКТОР, а не языковая модель.
+    // Запуск его как `-m` валит llama-server (или крашится при обработке
+    // промпта). Отклоняем файл, а если рядом лежит «братская» LLM из каталога
+    // или единственный другой .gguf — добавляем её вместо mmproj, чтобы юзер
+    // не остался без модели после выбора проектора (детали в is_mmproj_file).
+    if infra::is_mmproj_file(&path) {
+        let catalog = infra::load_catalog(&app);
+        if let Some(sibling) = infra::find_sibling_llm_for_mmproj(&path, &catalog) {
+            let warning = format!(
+                "Файл «{}» — это mmproj (проектор для изображений), он не является \
+                 языковой моделью и не может работать как LLM.\n\nВместо него добавлена \
+                 модель «{}». Если нужен именно проектор — он автоматически подхватится \
+                 для моделей с поддержкой изображений из той же папки.",
+                std::path::Path::new(&path).file_name().map(|s| s.to_string_lossy()).unwrap_or_else(|| path.clone().into()),
+                std::path::Path::new(&sibling).file_name().map(|s| s.to_string_lossy()).unwrap_or_default(),
+            );
+            return add_model_impl(app, sibling, flags, Some(warning));
+        }
+        return Err(format!(
+            "Файл «{}» — это mmproj (мультимодальный проектор для изображений), \
+             а не языковая модель. Запускать его как LLM нельзя: движок не сможет \
+             обработать промпт.\n\nРядом не найдена основная LLM (нужен файл из \
+             каталога или единственный другой .gguf в той же папке). Добавьте \
+             языковую модель — проектор подхватится автоматически.",
+            path
+        ));
+    }
+
+    add_model_impl(app, path, flags, warning)
+}
+
+fn add_model_impl(
+    app: AppHandle,
+    path: String,
+    flags: Option<infra::ModelMeta>,
+    warning: Option<String>,
+) -> Result<AddModelOutcome, String> {
     let mut cfg = infra::load_config(&app);
     if !cfg.models.contains(&path) {
         cfg.models.push(path.clone());

@@ -113,6 +113,12 @@ async fn main() {
             // 🔐 Форвардинг запросов разрешений в UI (плашка с 3 кнопками).
             api::permissions::init_permission_forwarding(&app_handle);
 
+            // 🎛 Форвардинг диалога pre-flight VRAM в UI + помечаем, что фронт
+            // готов принимать блокирующие диалоги (иначе pre-flight НЕ блокирует
+            // запуск модели и молча урезает -ngl — fallback для тестов).
+            api::vram::init_vram_forwarding(&app_handle);
+            infra::set_ui_ready(true);
+
             // Телеметрия: инициализация только если юзер не против.
             if telemetry_enabled {
                 infra::telemetry::init(&app_handle);
@@ -122,6 +128,36 @@ async fn main() {
             let _ = infra::session_manager::sessions_dir(&app_handle);
             api::chat::init_log_file();
             infra::startup_log::append("INFO", "setup(): сессии и чат-лог готовы");
+
+            // ── 🛡 Авто-чистка «отравленных» конфигов ──
+            // Легаси-версии могли добавить mmproj (мультимодальный ПРОЕКТОР) в
+            // список моделей/активную модель. Запуск проектора как LLM валит
+            // llama-server. Игнорируем такие записи на старте (см. is_mmproj_file).
+            // Модели удаляются из списка, но файл юзера на диске не трогаем.
+            {
+                let mut cfg = infra::load_config(&app_handle);
+                let removed: Vec<String> = cfg
+                    .models
+                    .iter()
+                    .filter(|m| infra::is_mmproj_file(m))
+                    .cloned()
+                    .collect();
+                if !removed.is_empty() {
+                    cfg.models.retain(|m| !infra::is_mmproj_file(m));
+                    if let Some(last) = &cfg.last_model {
+                        if infra::is_mmproj_file(last) {
+                            cfg.last_model = None;
+                        }
+                    }
+                    infra::save_config(&app_handle, &cfg);
+                    for m in &removed {
+                        infra::startup_log::append("WARN", &format!(
+                            "setup(): удалён mmproj из списка моделей: {} (файл не тронут)",
+                            m
+                        ));
+                    }
+                }
+            }
 
             // ── Новая архитектура: движок llama.cpp — ОТДЕЛЬНЫЙ процесс ──
             // Приложение НЕ линкует llama.cpp нативно (нет PE-импортов и DLL
@@ -202,6 +238,7 @@ async fn main() {
             api::chat::chat_request,
             api::chat::stop_processing,
             api::permissions::respond_permission,
+            api::vram::respond_vram_choice,
             api::chat::get_prompt_preview,
             api::chat::get_prompt_memory,
             api::graph::read_workflow_file,
