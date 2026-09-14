@@ -7,8 +7,7 @@
 
 ## Запуск
 
-1. Запусти приложение: `build.bat`. Порт включает **конфиг-оверрайд** в `build.cjs`
-   (`app.windows[].additionalBrowserArgs: "--remote-debugging-port=9222 --remote-allow-origins=*"`).
+1. Запусти приложение: `build.bat`. Порт включает **конфиг-оверрайд**: `app.windows[].additionalBrowserArgs: "--remote-debugging-port=9222 --remote-allow-origins=*"` (берётся из `.build-config.json`/`tauri-dev-override.json`, логика в `tauri-build-toolkit`).
    ⚠️ env-переменная `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` НЕ работает (wry игнорирует её — задаёт свои аргументы).
 2. Проверь, что порт жив: `Invoke-RestMethod http://127.0.0.1:9222/json/version`.
 3. ⚠️ Агенту: не запускать `cmd /c build.bat` синхронно (виснет, пока открыто приложение) —

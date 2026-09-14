@@ -183,7 +183,9 @@ pub struct ChatMessage {
 ## 8. Сборка и тестирование (специфика King Orch)
 
 > ✅ **ТЕСТИРУЕМ ЧЕРЕЗ `build.bat` — просто запустить его, и всё.**
-> `build.bat` → `build.cjs` — готовая и правильная реализация запуска билда: автоопределение VS (`vswhere`), инициализация MSVC (`vcvarsall.bat`), `npm install`, обновление версии, генерация иконок, сборка Tauri (без установщика), запуск приложения. Ничего вручную вызывать не нужно.
+> `build.bat` → `tauri-build-toolkit` — готовая и правильная реализация запуска билда: автоопределение VS (`vswhere`), инициализация MSVC (`vcvarsall.bat`), `npm install`, обновление версии, генерация иконок, сборка Tauri (без установщика), запуск приложения. Ничего вручную вызывать не нужно.
+>
+> Скрипты сборки — общие для всех проектов, вынесены в пакет `D:\Projects\my-tauri-plugins\tauri-build-toolkit` (логка: `build` / `prep` / `installer` / `release` / `test`, конфиг проекта — `.build-config.json`). Настройки для King Orch: `repo`, `syncDirs` (`agents`, `tasks_for_test_llm`, `mcp_servers`), `devWindow` (CDP-порт 9222), `vcRedist`. Правила — в `tauri-build-toolkit/docs/build_release_rules.md`.
 
 > ⚠️ **ЗАПРЕЩЁН прямой вызов `cargo build` / `cargo test` / `cargo check` / `npx tauri build` / `npx tauri dev`**
 > (см. `global_ai_docs/desktop_rust_tauri/rules.md:29`, `global_ai_docs/desktop_rust_tauri/rules.md:34`)

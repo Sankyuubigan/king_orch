@@ -70,9 +70,9 @@ async fn main() {
     // WebView2. Перевод UI на софтварный композитинг (--disable-gpu) убирает
     // эту зависимость (сам llama.cpp живёт в отдельном процессе и грузит GPU).
     // ВАЖНО: переменная окружения WEBVIEW2_ADDITIONAL_BROWSER_ARGS WebView2
-    // ИГНОРИРУЕТ, т.к. wry сам задаёт доп. аргументы (см. build.cjs). Поэтому
+    // ИГНОРИРУЕТ, т.к. wry сам задаёт доп. аргументы (см. build.bat). Поэтому
     // флаг --disable-gpu пробрасывается через additionalBrowserArgs в
-    // tauri.conf.json (и в dev-override в build.cjs), а не через env.
+    // tauri.conf.json (и в dev-override, подключаемом через build.bat), а не через env.
 
     // ── Телеметрия: решение принимаем ДО создания Tauri-приложения ──
     // Читаем настройку «Отправлять анонимные отчёты об ошибках» (по умолчанию

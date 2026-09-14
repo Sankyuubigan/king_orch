@@ -1,0 +1,22 @@
+{
+  "repo": "Sankyuubigan/king_orch",
+  "branch": "main",
+  "appExe": "king_orch",
+  "productName": "King Orch",
+  "npmInstallArgs": ["--legacy-peer-deps"],
+  "syncDirs": ["agents", "tasks_for_test_llm", "src-tauri/mcp_servers"],
+  "devWindow": {
+    "title": "King Orch - Multi-Agent Studio",
+    "width": 1100,
+    "height": 850,
+    "resizable": true,
+    "fullscreen": false,
+    "additionalBrowserArgs": "--disable-gpu --remote-debugging-port=9222 --remote-allow-origins=*"
+  },
+  "vcRedist": true,
+  "vcRedistDir": "redist",
+  "vcRedistDlls": ["vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll", "msvcp140_1.dll", "concrt140.dll"],
+  "signing": {},
+  "syncPackageJsonVersion": false,
+  "releaseNotesTemplate": "Auto release ${product} ${tag}"
+}

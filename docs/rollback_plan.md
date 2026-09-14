@@ -49,7 +49,7 @@
    при откате остаётся новый (не ломает, но может предлагать «обновить движок»).
 
 ## Порядок реализации
-1. `release.cjs` — НЕ генерирует `manifest.json` (убрано: было источником бага);
+1. `tauri-build-toolkit` (шаг release) — НЕ генерирует `manifest.json` (убрано: было источником бага);
    `latest.json` для обычных обновлений остаётся.
 2. `src-tauri/src/infra/updater_rollback.rs` — `backup_before_rollback`.
 3. `src-tauri/src/api/updater.rs` — `get_release_history`, `install_release(download_url)`.
