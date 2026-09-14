@@ -36,6 +36,18 @@ fn skip_gguf_value(data: &[u8], mut offset: usize, val_type: u32) -> Option<usiz
     }
 }
 
+/// Размер скалярного GGUF-значения в байтах (для расчёта длины массива).
+/// Строки внутри массивов не поддерживаются (в GGUF-гиперпараметрах не бывают).
+fn gguf_scalar_size(val_type: u32) -> Option<usize> {
+    match val_type {
+        0 | 1 | 7 => Some(1),
+        2 | 3 => Some(2),
+        4 | 5 | 6 => Some(4),
+        10 | 11 | 12 => Some(8),
+        _ => None,
+    }
+}
+
 fn find_gguf_value(path: &str, target_key: &str, expected_type: u32) -> Option<Vec<u8>> {
     let data = read_gguf_header(path)?;
     let kv_count = u64::from_le_bytes(data[16..24].try_into().unwrap());
@@ -51,7 +63,7 @@ fn find_gguf_value(path: &str, target_key: &str, expected_type: u32) -> Option<V
         let val_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
         offset += 4;
 
-        if key == target_key && val_type == expected_type {
+        if key == target_key && (val_type == expected_type || expected_type == 9) {
             match val_type {
                 4 | 6 => {
                     if offset + 4 > data.len() { break; }
@@ -64,6 +76,18 @@ fn find_gguf_value(path: &str, target_key: &str, expected_type: u32) -> Option<V
                     if offset + val_len > data.len() { break; }
                     return Some(data[offset..offset+val_len].to_vec());
                 },
+                9 => {
+                    // Массив: возвращаем сырые байты (тип элемента + длина + элементы) —
+                    // парсинг в extract_i64_array_from_gguf. Едем только по размеру
+                    // элементов, чтобы не читать (и не скипать) их здесь повторно.
+                    if offset + 12 > data.len() { break; }
+                    let elem_type = u32::from_le_bytes(data[offset..offset+4].try_into().unwrap());
+                    let count = u64::from_le_bytes(data[offset+4..offset+12].try_into().unwrap()) as usize;
+                    let elem_size = gguf_scalar_size(elem_type)?;
+                    let total = 12 + count.checked_mul(elem_size)?;
+                    if offset + total > data.len() { break; }
+                    return Some(data[offset..offset+total].to_vec());
+                },
                 _ => return None,
             }
         } else {
@@ -71,6 +95,47 @@ fn find_gguf_value(path: &str, target_key: &str, expected_type: u32) -> Option<V
         }
     }
     None
+}
+
+/// Читает значение GGUF типа ARRAY по ключу и возвращает его как `Vec<i64>`.
+/// Поддерживаются числовые типы элементов (u8..i64, bool, f32); строковый
+/// массив не имеет смысла для гиперпараметров — возвращает None. Формат хранения
+/// (u32 head_count_kv и т.п.) часто скалярен: ищем ровно массив (тип 9).
+pub fn extract_i64_array_from_gguf(path: &str, target_key: &str) -> Option<Vec<i64>> {
+    let data = find_gguf_value(path, target_key, 9)?;
+    if data.len() < 12 { return None; }
+    let elem_type = u32::from_le_bytes(data[0..4].try_into().unwrap());
+    let count = u64::from_le_bytes(data[4..12].try_into().unwrap()) as usize;
+    let mut out = Vec::with_capacity(count);
+    let mut o = 12;
+    for _ in 0..count {
+        let v: i64 = match elem_type {
+            0 => { let b = data.get(o)?; o += 1; *b as i64 },                 // uint8
+            1 => { let b = data.get(o)?; o += 1; *b as i8 as i64 },           // int8
+            2 => { let b = data.get(o..o+2)?.try_into().ok()?; o += 2; u16::from_le_bytes(b) as i64 },
+            3 => { let b = data.get(o..o+2)?.try_into().ok()?; o += 2; i16::from_le_bytes(b) as i64 },
+            4 => { let b = data.get(o..o+4)?.try_into().ok()?; o += 4; u32::from_le_bytes(b) as i64 },
+            5 => { let b = data.get(o..o+4)?.try_into().ok()?; o += 4; i32::from_le_bytes(b) as i64 },
+            6 => { let b = data.get(o..o+4)?.try_into().ok()?; o += 4; f32::from_le_bytes(b) as i64 },
+            7 => { let b = data.get(o)?; o += 1; (*b != 0) as i64 },          // bool
+            10 => { let b = data.get(o..o+8)?.try_into().ok()?; o += 8; u64::from_le_bytes(b) as i64 },
+            11 | 12 => { let b = data.get(o..o+8)?.try_into().ok()?; o += 8; i64::from_le_bytes(b) },
+            _ => return None,
+        };
+        out.push(v);
+    }
+    Some(out)
+}
+
+/// Читает i64-массив GGUF с учётом префикса архитектуры (`<arch>.<suffix>`,
+/// затем legacy `llama.<suffix>`). Скалярный ключ (обычная GQA-модель) → None.
+pub fn extract_i64_array_with_arch(path: &str, arch: Option<&str>, suffix: &str) -> Option<Vec<i64>> {
+    if let Some(arch) = arch.filter(|a| !a.is_empty()) {
+        if let Some(v) = extract_i64_array_from_gguf(path, &format!("{}.{}", arch, suffix)) {
+            return Some(v);
+        }
+    }
+    extract_i64_array_from_gguf(path, &format!("llama.{}", suffix))
 }
 
 pub fn extract_string_from_gguf(path: &str, target_key: &str) -> Option<String> {
@@ -83,6 +148,28 @@ pub fn extract_f32_from_gguf(path: &str, target_key: &str) -> Option<f32> {
 
 pub fn extract_u32_from_gguf(path: &str, target_key: &str) -> Option<u32> {
     Some(u32::from_le_bytes(find_gguf_value(path, target_key, 4)?.try_into().unwrap()))
+}
+
+/// Архитектура модели из метаданных GGUF (`general.architecture`).
+///
+/// Современные GGUF хранят гиперпараметры под префиксом архитектуры:
+/// `qwen35.block_count`, `granite.attention.head_count`, ... — ключей `llama.*`
+/// в таких файлах НЕТ. Префикс нужен для `extract_u32_with_arch`.
+pub fn extract_gguf_arch(path: &str) -> Option<String> {
+    extract_string_from_gguf(path, "general.architecture")
+}
+
+/// Читает u32-ключ GGUF с учётом префикса архитектуры.
+///
+/// Сначала пробует `<arch>.<suffix>` (современная спецификация GGUF), затем
+/// legacy `llama.<suffix>` (старые модели). Ни один не найден → `None`.
+pub fn extract_u32_with_arch(path: &str, arch: Option<&str>, suffix: &str) -> Option<u32> {
+    if let Some(arch) = arch.filter(|a| !a.is_empty()) {
+        if let Some(v) = extract_u32_from_gguf(path, &format!("{}.{}", arch, suffix)) {
+            return Some(v);
+        }
+    }
+    extract_u32_from_gguf(path, &format!("llama.{}", suffix))
 }
 
 // ============================================================
@@ -474,6 +561,26 @@ mod tests {
         b.v
     }
 
+    fn kv_i64_array(key: &str, vals: &[i64]) -> Vec<u8> {
+        let mut b = Buf::new();
+        b.string(key);
+        b.u32(9);          // GGUF_TYPE_ARRAY
+        b.u32(12);         // элемент массива: INT64
+        b.u64(vals.len() as u64);
+        for v in vals { b.v.extend_from_slice(&v.to_le_bytes()); }
+        b.v
+    }
+
+    fn kv_bool_array(key: &str, vals: &[i64]) -> Vec<u8> {
+        let mut b = Buf::new();
+        b.string(key);
+        b.u32(9);          // GGUF_TYPE_ARRAY
+        b.u32(7);          // элемент массива: BOOL
+        b.u64(vals.len() as u64);
+        for v in vals { b.v.push(if *v != 0 { 1 } else { 0 }); }
+        b.v
+    }
+
     fn kv_string(key: &str, val: &str) -> Vec<u8> {
         let mut b = Buf::new();
         b.string(key); b.u32(8); b.string(val);
@@ -489,16 +596,23 @@ mod tests {
     /// Минимальный валидный GGUF: F32-тензоры по 4 элемента, arch "testarch".
     /// `data_extra` — сколько лишних байт данных дописать в конец.
     fn build_gguf(declared_blocks: u32, tensors: &[TensorSpec]) -> Vec<u8> {
+        build_gguf_with("testarch", &[], declared_blocks, tensors)
+    }
+
+    /// GGUF с произвольным `arch` и дополнительными KV-парами (`extra_kv`).
+    /// База: `general.architecture`, `<arch>.block_count`, `general.alignment`.
+    fn build_gguf_with(arch: &str, extra_kv: &[Vec<u8>], declared_blocks: u32, tensors: &[TensorSpec]) -> Vec<u8> {
         let mut kv = Vec::new();
-        kv.extend_from_slice(&kv_string("general.architecture", "testarch"));
-        kv.extend_from_slice(&kv_u32("testarch.block_count", declared_blocks));
+        kv.extend_from_slice(&kv_string("general.architecture", arch));
+        kv.extend_from_slice(&kv_u32(&format!("{}.block_count", arch), declared_blocks));
         kv.extend_from_slice(&kv_u32("general.alignment", 32));
+        for e in extra_kv { kv.extend_from_slice(e); }
 
         let mut header = Buf::new();
         header.v.extend_from_slice(b"GGUF");
         header.u32(3);
         header.u64(tensors.len() as u64);
-        header.u64(3);
+        header.u64((3 + extra_kv.len()) as u64);
         header.v.extend_from_slice(&kv);
 
         // Tensor-info идёт сразу после метаданных (по спецификации GGUF).
@@ -581,5 +695,240 @@ mod tests {
         let file = TempFile::new("not_gguf", b"This is definitely not a GGUF model file, just plain text. 0123456789");
         let err = validate_gguf(file.path.to_str().unwrap()).unwrap_err();
         assert!(err.contains("не является GGUF-моделью"), "ошибка: {}", err);
+    }
+
+    // ── Новые helpers: extract_gguf_arch / extract_u32_with_arch ──
+
+    #[test]
+    fn extract_arch_and_keys_with_arch_prefix() {
+        let extra = vec![
+            kv_u32("qwen35.attention.head_count", 24),
+            kv_u32("qwen35.attention.head_count_kv", 4),
+            kv_u32("qwen35.embedding_length", 5120),
+            kv_u32("qwen35.attention.key_length", 256),
+            kv_u32("qwen35.attention.value_length", 256),
+            kv_u32("qwen35.full_attention_interval", 4),
+        ];
+        let bytes = build_gguf_with("qwen35", &extra, 64, &valid_tensors());
+        let file = TempFile::new("arch_qwen35", &bytes);
+        let p = file.path.to_str().unwrap();
+
+        assert_eq!(extract_gguf_arch(p).as_deref(), Some("qwen35"));
+        let arch = extract_gguf_arch(p);
+        assert_eq!(extract_u32_with_arch(p, arch.as_deref(), "block_count"), Some(64));
+        assert_eq!(extract_u32_with_arch(p, arch.as_deref(), "attention.head_count"), Some(24));
+        assert_eq!(extract_u32_with_arch(p, arch.as_deref(), "attention.head_count_kv"), Some(4));
+        assert_eq!(extract_u32_with_arch(p, arch.as_deref(), "attention.key_length"), Some(256));
+        assert_eq!(extract_u32_with_arch(p, arch.as_deref(), "full_attention_interval"), Some(4));
+        // Ключа нет ни под префиксом, ни под llama.* → None (не дефолт).
+        assert_eq!(extract_u32_with_arch(p, arch.as_deref(), "attention.scale"), None);
+    }
+
+    #[test]
+    fn extract_u32_with_arch_falls_back_to_llama_prefix() {
+        // У модели arch = gemma3, но гиперпараметры лежат под legacy llama.*.
+        let extra = vec![kv_u32("llama.embedding_length", 4096)];
+        let bytes = build_gguf_with("gemma3", &extra, 8, &valid_tensors());
+        let file = TempFile::new("arch_legacy", &bytes);
+        let p = file.path.to_str().unwrap();
+
+        assert_eq!(extract_gguf_arch(p).as_deref(), Some("gemma3"));
+        let arch = extract_gguf_arch(p);
+        // <arch>.embedding_length отсутствует → берём llama.embedding_length.
+        assert_eq!(extract_u32_with_arch(p, arch.as_deref(), "embedding_length"), Some(4096));
+    }
+
+    #[test]
+    fn extract_u32_with_arch_without_arch_uses_llama_only() {
+        let extra = vec![kv_u32("llama.block_count", 12)];
+        let bytes = build_gguf_with("gemma3", &extra, 8, &valid_tensors());
+        let file = TempFile::new("arch_noarch", &bytes);
+        let p = file.path.to_str().unwrap();
+        // arch=None → только llama.* (архитектура не прочиталась — не бывает в валидных файлах).
+        assert_eq!(extract_u32_with_arch(p, None, "block_count"), Some(12));
+        assert_eq!(extract_u32_with_arch(p, None, "attention.head_count"), None);
+    }
+
+    // ── Массивы i64 (head_count_kv как ARRAY — gemma4 и др.) ──
+
+    #[test]
+    fn extract_i64_array_with_arch_reads_array_key() {
+        // gemma4-style: head_count_kv — массив 48 значений (8 для 40 SWA-слоёв,
+        // 1 для 8 dense-слоёв). Скалярный читатель head_count_kv вернул бы None —
+        // это и был корень завышенного KV (фоллбэк heads=16). Обрати внимание:
+        // у gemma4 SWA-слои несут БОЛЬШЕ KV-голов, чем dense (инверсия от того,
+        // как обычно устроены гибриды) — граница определяется sliding_window_pattern.
+        let mut kv_row: Vec<i64> = vec![8; 40];
+        kv_row.extend(vec![1; 8]);
+        let extra = vec![kv_i64_array("gemma4.attention.head_count_kv", &kv_row)];
+        let bytes = build_gguf_with("gemma4", &extra, 48, &valid_tensors());
+        let file = TempFile::new("array_gemma4", &bytes);
+        let p = file.path.to_str().unwrap();
+
+        let arch = extract_gguf_arch(p);
+        assert_eq!(arch.as_deref(), Some("gemma4"));
+        let arr = extract_i64_array_with_arch(p, arch.as_deref(), "attention.head_count_kv").unwrap();
+        assert_eq!(arr.len(), 48, "массив должен содержать 48 значений (по слою)");
+        assert!(arr[..40].iter().all(|&v| v == 8), "первые 40 (SWA): {arr:?}");
+        assert!(arr[40..].iter().all(|&v| v == 1), "последние 8 (dense): {arr:?}");
+        // Скалярный extract_u32_with_arch НЕ должен находить массив (None, а не дефолт).
+        assert_eq!(extract_u32_with_arch(p, arch.as_deref(), "attention.head_count_kv"), None);
+    }
+
+    #[test]
+    fn extract_i64_array_with_arch_falls_back_to_llama_prefix() {
+        let extra = vec![kv_i64_array("llama.attention.head_count_kv", &[4, 4, 1])];
+        let bytes = build_gguf_with("gemma4", &extra, 3, &valid_tensors());
+        let file = TempFile::new("array_legacy", &bytes);
+        let p = file.path.to_str().unwrap();
+
+        let arch = extract_gguf_arch(p);
+        let arr = extract_i64_array_with_arch(p, arch.as_deref(), "attention.head_count_kv").unwrap();
+        assert_eq!(arr, vec![4, 4, 1]);
+    }
+
+    #[test]
+    fn extract_i64_array_scalar_key_returns_none() {
+        // head_count_kv хранится скаляром u32 (обычная GQA-модель) — массив не читается.
+        let extra = vec![kv_u32("qwen35.attention.head_count_kv", 4)];
+        let bytes = build_gguf_with("qwen35", &extra, 8, &valid_tensors());
+        let file = TempFile::new("array_scalar", &bytes);
+        let p = file.path.to_str().unwrap();
+
+        let arch = extract_gguf_arch(p);
+        assert_eq!(extract_i64_array_with_arch(p, arch.as_deref(), "attention.head_count_kv"), None);
+        // Зато скаляр читается как раньше.
+        assert_eq!(extract_u32_with_arch(p, arch.as_deref(), "attention.head_count_kv"), Some(4));
+    }
+
+    // ── Интеграция: estimate_vram читает arch-ключи и KV считает по GQA/hybrid ──
+
+    #[test]
+    fn estimate_vram_uses_arch_prefixed_gqa_hybrid_kv() {
+        // qwen35-гибрид как в Ternary-Bonsai-27B: 64 блока, attention в каждом 4-м,
+        // heads_kv=4, key/value_len=256 → attn_layers=16.
+        let extra = vec![
+            kv_u32("qwen35.attention.head_count", 24),
+            kv_u32("qwen35.attention.head_count_kv", 4),
+            kv_u32("qwen35.embedding_length", 5120),
+            kv_u32("qwen35.attention.key_length", 256),
+            kv_u32("qwen35.attention.value_length", 256),
+            kv_u32("qwen35.full_attention_interval", 4),
+        ];
+        let bytes = build_gguf_with("qwen35", &extra, 64, &valid_tensors());
+        let file = TempFile::new("vram_hybrid", &bytes);
+        let p = file.path.to_str().unwrap();
+
+        let est = crate::infra::vram_estimate::estimate_vram(p, 24576, false, false);
+        // KV = 16 · 24576 · 4 · (256+256)·2 байт = 1 610 612 736 = 1536 МБ.
+        assert!((est.kv_mb - 1536.0).abs() < 0.01, "KV: {} МБ (ожидалось 1536)", est.kv_mb);
+        // Старые дефолты (32 слоя, heads 32, heads_kv 32, embd 4096) дали бы ≥12 288 МБ.
+        assert!(est.kv_mb < 2000.0, "KV всё ещё завышен: {} МБ", est.kv_mb);
+    }
+
+    #[test]
+    fn estimate_vram_falls_back_to_llama_prefix() {
+        let extra = vec![
+            kv_u32("llama.block_count", 8),
+            kv_u32("llama.attention.head_count", 32),
+            kv_u32("llama.attention.head_count_kv", 4),
+            kv_u32("llama.embedding_length", 4096),
+        ];
+        let bytes = build_gguf_with("gemma3", &extra, 8, &valid_tensors());
+        let file = TempFile::new("vram_legacy", &bytes);
+        let p = file.path.to_str().unwrap();
+
+        // arch=gemma3, но gemma3.* параметров нет → читаются llama.*:
+        // layers=8, heads_kv=4, key/value=embd/heads=128, KV=8·1024·4·512=16 МБ.
+        let est = crate::infra::vram_estimate::estimate_vram(p, 1024, false, false);
+        assert!((est.kv_mb - 16.0).abs() < 0.01, "KV: {} МБ (ожидалось 16)", est.kv_mb);
+    }
+
+    #[test]
+    fn estimate_vram_per_layer_kv_array_gemma4() {
+        // gemma4-12B: 48 слоёв (40 SWA + 8 dense), head_count_kv — массив
+        // (8 для SWA, 1 для dense — инверсия от классических гибридов),
+        // key/value 512, SWA 256, window 1024. Граница SWA — sliding_window_pattern.
+        let mut kv_row: Vec<i64> = vec![8; 40];
+        kv_row.extend(vec![1; 8]);
+        let mut swa_row: Vec<i64> = vec![1; 40];
+        swa_row.extend(vec![0; 8]);
+        let extra = vec![
+            kv_i64_array("gemma4.attention.head_count_kv", &kv_row),
+            kv_bool_array("gemma4.attention.sliding_window_pattern", &swa_row),
+            kv_u32("gemma4.attention.sliding_window", 1024),
+            kv_u32("gemma4.attention.head_count", 16),
+            kv_u32("gemma4.embedding_length", 7168),
+            kv_u32("gemma4.attention.key_length", 512),
+            kv_u32("gemma4.attention.value_length", 512),
+            kv_u32("gemma4.attention.key_length_swa", 256),
+            kv_u32("gemma4.attention.value_length_swa", 256),
+        ];
+        let bytes = build_gguf_with("gemma4", &extra, 48, &valid_tensors());
+        let file = TempFile::new("vram_gemma4", &bytes);
+        let p = file.path.to_str().unwrap();
+
+        // Dense: 8·1·(512+512)·2 = 16384 Б/токен; SWA: 40·8·(256+256)·2 = 327680 Б/ячейку.
+        // ctx 1024 (n_ctx_seq=1024, SWA cells = min(1024, 1024·4+512)=1024):
+        //   dense 16384·1024 = 16 MiB + SWA 327680·1024 = 320 MiB → 336 MiB.
+        let est = crate::infra::vram_estimate::estimate_vram(p, 1024, false, false);
+        assert!((est.kv_mb - 336.0).abs() < 0.01, "KV: {} МБ (ожидалось 336)", est.kv_mb);
+        assert_eq!(est.num_attn_layers, 48);
+
+        // ctx 18204 (n_ctx_seq=18432; SWA cells = min(18432, 4608)=4608):
+        //   dense 16384·18432 = 288 MiB + SWA 327680·4608 = 1440 MiB → 1728 MiB.
+        let est2 = crate::infra::vram_estimate::estimate_vram(p, 18_204, false, false);
+        assert!((est2.kv_mb - 1728.0).abs() < 0.01, "KV: {} МБ (ожидалось 1728)", est2.kv_mb);
+        assert!((est2.kv_swa_mb - 1440.0).abs() < 0.01, "SWA KV: {} МБ (ожидалось 1440)", est2.kv_swa_mb);
+    }
+
+    #[test]
+    fn estimate_vram_gemma4_without_pattern_falls_back_to_smaller_head_swa() {
+        // Паттерна нет (гибриды вроде gemma3n): признак SWA = меньше KV-голов.
+        // Здесь 8-head слои «перенесём» в dense, а 1-head — в SWA, чтобы проверить
+        // fallback (порядок слоёв: [8;40] dense + [1;8] SWA — наоборот от gemma4).
+        let mut kv_row: Vec<i64> = vec![8; 40];
+        kv_row.extend(vec![1; 8]);
+        let extra = vec![
+            kv_i64_array("gemma4.attention.head_count_kv", &kv_row),
+            kv_u32("gemma4.attention.sliding_window", 1024),
+            kv_u32("gemma4.attention.head_count", 16),
+            kv_u32("gemma4.embedding_length", 7168),
+            kv_u32("gemma4.attention.key_length", 512),
+            kv_u32("gemma4.attention.value_length", 512),
+            kv_u32("gemma4.attention.key_length_swa", 256),
+            kv_u32("gemma4.attention.value_length_swa", 256),
+        ];
+        let bytes = build_gguf_with("gemma4", &extra, 48, &valid_tensors());
+        let file = TempFile::new("vram_gemma4_nopattern", &bytes);
+        let p = file.path.to_str().unwrap();
+
+        // Fallback: 1-head слои считаются SWA (8 шт), 8-head — dense (40 шт):
+        //   dense 40·8·(512+512)·2 = 655360 Б/токен; SWA 8·1·(256+256)·2 = 8192 Б/ячейку.
+        // ctx 1024: dense 655360·1024 = 640 MiB + SWA 8192·1024 = 8 MiB → 648 MiB.
+        let est = crate::infra::vram_estimate::estimate_vram(p, 1024, false, false);
+        assert!((est.kv_mb - 648.0).abs() < 0.01, "KV: {} МБ (ожидалось 648)", est.kv_mb);
+    }
+
+    #[test]
+    fn estimate_vram_total_includes_buffers_minus_kv() {
+        // total = модель + KV + буферы (≤256) — буферы отделены от KV.
+        let extra = vec![
+            kv_u32("qwen35.attention.head_count", 24),
+            kv_u32("qwen35.attention.head_count_kv", 4),
+            kv_u32("qwen35.embedding_length", 5120),
+            kv_u32("qwen35.attention.key_length", 256),
+            kv_u32("qwen35.attention.value_length", 256),
+            kv_u32("qwen35.full_attention_interval", 4),
+        ];
+        let bytes = build_gguf_with("qwen35", &extra, 64, &valid_tensors());
+        let file = TempFile::new("vram_total", &bytes);
+        let p = file.path.to_str().unwrap();
+
+        let est = crate::infra::vram_estimate::estimate_vram(p, 24576, false, false);
+        let file_mb = bytes.len() as f64 / (1024.0 * 1024.0);
+        assert!((est.model_mb - file_mb).abs() < 0.01, "model_mb: {}", est.model_mb);
+        assert!((est.buffers_mb - ((est.model_mb + est.kv_mb) * 0.10).min(256.0)).abs() < 0.01);
+        assert!((est.total_mb - (est.model_mb + est.kv_mb + est.buffers_mb)).abs() < 0.01, "total: {}", est.total_mb);
     }
 }

@@ -27,7 +27,7 @@ use crate::infra::config::ModelParams;
 use crate::infra::detokenizer::compute_stream_diff;
 
 pub use super::llm_types::{ChatMessage, ChatAttachment, SubCall, ToolCallInfo, PromptFormat, push_report, LlmMessage, extract_model_filename, GenerationResult, LlmMetrics, llm_history, GrammarSpec, build_base_grammar, build_json_only_grammar, build_json_object_grammar_with_keys, get_hybrid_grammar};
-pub use super::llm_gguf::{extract_string_from_gguf, extract_f32_from_gguf, extract_u32_from_gguf};
+pub use super::llm_gguf::{extract_string_from_gguf, extract_f32_from_gguf, extract_u32_from_gguf, extract_gguf_arch, extract_u32_with_arch};
 
 /// Таймаут ожидания готовности движка (загрузка модели в память)
 const HEALTH_TIMEOUT: Duration = Duration::from_secs(120);
@@ -49,23 +49,13 @@ const DEFAULT_STOP_WORDS: &[&str] = &[
 ];
 
 /// Прогноз потребления VRAM для заданного размера контекста:
-/// размер файла модели + KV-кэш (зависит от архитектуры и n_ctx).
+/// размер файла модели + KV-кэш (зависит от архитектуры GGUF и n_ctx).
+///
+/// KV-кэш считается по реальным параметрам архитектуры из метаданных GGUF
+/// Единственная точка расчёта VRAM — `infra::vram_estimate` (SSOT, см. модуль).
+/// Все формульные фрагменты здесь запрещены: расхождение между UI и логом — баг.
 pub fn estimate_vram_mb(model_path: &str, ctx_size: u32, kv_quant_keys: bool, kv_quant_values: bool) -> f64 {
-    let model_size_mb = std::fs::metadata(model_path).map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
-
-    let layers = extract_u32_from_gguf(model_path, "llama.block_count").unwrap_or(32);
-    let heads = extract_u32_from_gguf(model_path, "llama.attention.head_count").unwrap_or(32);
-    let heads_kv = extract_u32_from_gguf(model_path, "llama.attention.head_count_kv").unwrap_or(heads);
-    let embd = extract_u32_from_gguf(model_path, "llama.embedding_length").unwrap_or(4096);
-    let head_dim = embd / heads.max(1);
-
-    let b_k = if kv_quant_keys { 1.06 } else { 2.0 };
-    let b_v = if kv_quant_values { 1.06 } else { 2.0 };
-
-    let kv_bytes = (layers as f64 * head_dim as f64 * ctx_size as f64) * (heads as f64 * b_k + heads_kv as f64 * b_v);
-    let kv_mb = kv_bytes / (1024.0 * 1024.0);
-
-    model_size_mb + kv_mb
+    crate::infra::vram_estimate::estimate_vram(model_path, ctx_size, kv_quant_keys, kv_quant_values).total_mb
 }
 
 pub struct LlamaEngine {
@@ -75,15 +65,23 @@ pub struct LlamaEngine {
     /// true = движок запущен с mmproj (может принимать изображения)
     pub is_multimodal_engine: bool,
     stream_cb: Arc<dyn Fn(String) + Send + Sync>,
+    /// Канал логов движка (нужен для stderr-ридера при перезапуске из-за CUDA OOM)
+    log_cb: Arc<dyn Fn(String) + Send + Sync>,
     client: Client,
     server_log: PathBuf,
     port: u16,
     api_key: String,
-    child: Option<Child>,
-    /// Режим работы: "gpu" (модель реально загружена в VRAM) или "cpu"
-    engine_mode: String,
+    child: std::sync::Mutex<Option<Child>>,
+    /// Текущее значение -ngl (оффлоад). Меняется на меньшее при автоперезапуске
+    /// после CUDA OOM (внутренняя изменяемость — генерация идёт через &self).
+    current_ngl: std::cell::Cell<u32>,
+    /// Параметры, достаточные для перезапуска llama-server с новым -ngl (после OOM).
+    respawn_ctx: Option<Box<RespawnCtx>>,
+    /// Режим работы: "gpu" (модель реально загружена в VRAM) или "cpu".
+    /// RefCell — режим меняется при автоперезапуске после OOM (метод на &self).
+    engine_mode: std::cell::RefCell<String>,
     /// Причина CPU-режима (пустая строка, если режим GPU)
-    engine_mode_detail: String,
+    engine_mode_detail: std::cell::RefCell<String>,
     /// Занятая VRAM (байты, device-level) ДО старта движка — база для дельты пиков
     vram_before: u64,
     /// Скорость последней генерации (tok/s)
@@ -92,6 +90,20 @@ pub struct LlamaEngine {
     /// Per-node/per-agent грамматика задаётся через set_grammar() перед вызовом;
     /// если не задана — generate_chat подставляет базовую (текст|JSON).
     pending_grammar: std::sync::Mutex<Option<GrammarSpec>>,
+}
+
+/// Снимок параметров запуска llama-server, достаточных для авто-перезапуска
+/// с меньшим -ngl при CUDA OOM (см. respawn_with_ngl). Хранится в движке один раз.
+struct RespawnCtx {
+    server_exe: PathBuf,
+    engine_dir: PathBuf,
+    threads: i32,
+    reasoning_budget: u32,
+    kv_quant_keys: bool,
+    kv_quant_values: bool,
+    /// Финальные флаги запуска ПОСЛЕ фолбэков цикла запуска (реально применились).
+    reasoning_enabled: bool,
+    is_pre_hopper: bool,
 }
 
 // ─── Простой ГПСЧ для порта/ключа (без внешних зависимостей) ───
@@ -338,70 +350,63 @@ impl LlamaEngine {
         let mut gpu_layers: u32 = if use_gpu { 999 } else { 0 };
 
         // ── Pre-flight VRAM: модель не влезает в GPU? ──
-        // Раньше при переполнении llama-server падал CUDA OOM на ПЕРВОМ промпте
-        // (веса грузятся почти на всю VRAM, KV+compute некуда) — юзер видел
-        // бессмысленное «Ошибка чтения потока генерации: error decoding response
-        // body» (баг Ternary-Bonsai-27B-Q2 на 8 ГБ). Теперь ДО спавна считаем,
-        // сколько слоёв реально помещается в свободную VRAM, и ДОБАВОЧНО
-        // спрашиваем юзера: «Отмена» или «Запустить с выгрузкой оффлоада в ОЗУ»
-        // (-ngl меньше). Диалог блокирует агентский цикл (паттерн как у
-        // permissions); без UI (тесты/ранний старт) — авто-решение «запустить
-        // с выгрузкой» (fallback не блокирует модель).
+        // Ступенчатый авто-offload («сколько влезет»), БЕЗ блокирующего диалога:
+        // считаем честную оценку (единый `infra::vram_estimate` — та же формула,
+        // что у счётчика под полем ввода), и если не влезает — урезаем -ngl ровно
+        // до максимального числа слоёв, помещающихся в свободную VRAM. Остальные
+        // слои пойдут в ОЗУ. Юзеру шлём неблокирующее окно-уведомление с фактами
+        // (одна кнопка «ОК»). Враньё «запуск с меньшим -ngl происходит автоматически»
+        // из cuda_oom_friendly_reason тут не нужно — offload честно выполняем ДО старта.
+        let mut vram_notice: Option<String> = None;
         if use_gpu && vram_before > 0 {
             if let Ok(nvml) = nvml_wrapper::Nvml::init() {
                 if let Ok(device) = nvml.device_by_index(0) {
                     if let Ok(mem) = device.memory_info() {
                         let total_vram_mb = mem.total / 1024 / 1024;
                         let free_vram_mb = mem.free as f64 / (1024.0 * 1024.0);
-                        let need_mb = estimate_vram_mb(&model_path, global_ctx_limit, kv_quant_keys, kv_quant_values) + 512.0;
+                        let est = crate::infra::vram_estimate::estimate_vram(
+                            &model_path, global_ctx_limit, kv_quant_keys, kv_quant_values,
+                        );
+                        // Запас сверх оценки на фрагментацию/пиковые compute-тензоры
+                        // + CUDA-контекст/драйвер (в breakdown llama это «unaccounted»,
+                        // ~1.3 GiB на RTX; llama-fit-params по умолчанию резервирует 1024 MiB).
+                        const VRAM_RESERVE_MB: f64 = 1024.0;
+                        let need_mb = est.total_mb + VRAM_RESERVE_MB;
                         if need_mb > free_vram_mb {
-                            let file_mb = std::fs::metadata(&model_path)
-                                .map(|m| m.len() as f64 / (1024.0 * 1024.0)).unwrap_or(0.0);
-                            let kv_mb = (estimate_vram_mb(&model_path, global_ctx_limit, kv_quant_keys, kv_quant_values) - file_mb).max(0.0);
-                            // Workspace CUDA-буферов ggml (промежуточные тензоры).
-                            let compute_mb = (need_mb * 0.10).min(256.0);
-                            let budget_for_weights = (free_vram_mb - kv_mb - compute_mb).max(0.0);
-                            let total_layers = crate::infra::llm_gguf::extract_u32_from_gguf(&model_path, "llama.block_count").unwrap_or(32);
-                            let layers_fit = if file_mb > 0.0 {
-                                ((budget_for_weights / file_mb) * total_layers as f64) as u32
-                            } else {
-                                0
-                            };
-                            let new_ngl = layers_fit.min(gpu_layers);
-                            let note = format!(
-                                "⚠️ Модели нужно ~{:.0} МБ VRAM (файл {:.0} МБ + KV {:.0} МБ + буферы ~{:.0} МБ), свободно всего {:.0} МБ из {:.0} МБ. \
-                                 Модель НЕ влезает в видеопамять — GPU-оффлоад нужно урезать с {} до {} слоёв, остаток пойдёт в ОЗУ (медленнее, но запустится вместо CUDA-краша).",
-                                need_mb, file_mb, kv_mb, compute_mb, free_vram_mb, total_vram_mb, gpu_layers, new_ngl
+                            // Ступенчатый offload: максимальное число слоёв из бюджета.
+                            let new_ngl = crate::infra::vram_estimate::max_fitting_ngl(
+                                &model_path, global_ctx_limit, kv_quant_keys, kv_quant_values,
+                                free_vram_mb, VRAM_RESERVE_MB,
                             );
-                            // Только если реально есть что урезать: спрашиваем юзера.
-                            if new_ngl < gpu_layers {
-                                let choice = crate::infra::global_vram_approver()
-                                    .confirm_vram_reduction(&note);
-                                match choice {
-                                    crate::infra::VramChoice::Cancel => return fail(format!(
-                                        "Запуск отменён: модель не помещается в видеопамять \
-                                         (~{:.0} МБ нужно, свободно ~{:.0} МБ).\n\nЧто можно сделать:\n\
-                                         • уменьшить размер контекста в Настройках;\n\
-                                         • выбрать CPU-бекенд в Настройках → «Движок запуска нейромоделей»;\n\
-                                         • использовать более лёгкую квантизацию модели.",
-                                        need_mb, free_vram_mb
-                                    )),
-                                    crate::infra::VramChoice::ProceedWithRam => {
-                                        log_cb(note.clone());
-                                        crate::infra::startup_log::append("WARN", &note);
-                                        gpu_layers = new_ngl;
-                                    }
-                                }
-                            } else {
-                                log_cb(note.clone());
-                                crate::infra::startup_log::append("WARN", &note);
-                            }
+                            let was_ngl = gpu_layers;
+                            gpu_layers = new_ngl.min(gpu_layers);
+                            let components = format!(
+                                "файл {:.0} МБ + KV {:.0} МБ + буферы {:.0} МБ + запас {:.0} МБ",
+                                est.model_mb, est.kv_mb, est.buffers_mb, VRAM_RESERVE_MB
+                            );
+                            let note = format!(
+                                "Pre-flight VRAM: модели по оценке нужно ~{:.0} МБ ({}) — свободно {:.0} МБ из {:.0} МБ. \
+                                 Оффлоад урезан с {} до {} слоёв на GPU, остальные — в ОЗУ (медленнее, но модель запустится).",
+                                need_mb, components, free_vram_mb, total_vram_mb, was_ngl, gpu_layers
+                            );
+                            log_cb(format!("⚠️ {}", note));
+                            crate::infra::startup_log::append("WARN", &note);
+                            vram_notice = Some(format!("⚠️ Не хватает видеопамяти.\n\n{}", note));
+                        } else {
+                            log_cb(format!(
+                                "💾 Pre-flight VRAM: файл {:.0} МБ + KV {:.0} МБ + буферы {:.0} МБ (итого ~{:.0} МБ с запасом) — свободно {:.0} МБ из {:.0} МБ, полный оффлоад.",
+                                est.model_mb, est.kv_mb, est.buffers_mb, need_mb, free_vram_mb, total_vram_mb
+                            ));
                         }
                     }
                 }
             }
         }
         let engine_mode = if use_gpu { "gpu".to_string() } else { "cpu".to_string() };
+        // Неблокирующее уведомление юзеру (если pre-flight урезал оффлоад).
+        if let Some(note) = vram_notice {
+            crate::infra::notify_vram(note);
+        }
         let variant_source = if cfg_early.engine_variant.as_deref().map(|v| v == "auto" || v.is_empty()).unwrap_or(true) {
             format!("авто-подбор по GPU → {}", required_label)
         } else {
@@ -675,13 +680,25 @@ impl LlamaEngine {
             mmproj_path: if attempt_mmproj { mmproj_orig.clone() } else { None },
             is_multimodal_engine: attempt_mmproj,
             stream_cb: Arc::new(stream_cb),
+            log_cb: log_cb.clone(),
             client,
             server_log,
             port,
             api_key,
-            child: Some(child),
-            engine_mode: engine_mode.clone(),
-            engine_mode_detail: String::new(),
+            child: std::sync::Mutex::new(Some(child)),
+            current_ngl: std::cell::Cell::new(gpu_layers),
+            respawn_ctx: Some(Box::new(RespawnCtx {
+                server_exe: server_exe.clone(),
+                engine_dir: engine_dir.to_path_buf(),
+                threads,
+                reasoning_budget,
+                kv_quant_keys,
+                kv_quant_values,
+                reasoning_enabled: attempt_reasoning,
+                is_pre_hopper,
+            })),
+            engine_mode: std::cell::RefCell::new(engine_mode.clone()),
+            engine_mode_detail: std::cell::RefCell::new(String::new()),
             vram_before,
             last_tok_per_sec: std::cell::Cell::new(0.0),
             pending_grammar: std::sync::Mutex::new(None),
@@ -689,10 +706,13 @@ impl LlamaEngine {
 
         log_cb(format!(
             "✅ Движок llama-server запущен: {} (режим {}), порт {}",
-            engine.model_path, engine.engine_mode, engine.port
+            engine.model_path, engine.engine_mode.borrow(), engine.port
         ));
 
         // ── Проверка: реально ли модель ушла в VRAM? ──
+        // Честная сверка фактического прироста VRAM с ОЖИДАЕМЫМИ весами оффлоада.
+        // Порог «>100 МБ» сам по себе врёт (буферы CUDA ~400 МБ даже при ngl=0) —
+        // сравниваем с долей весов, которую должны были загрузить в VRAM.
         if vram_before > 0 {
             let vram_after = nvml_wrapper::Nvml::init().ok().and_then(|nvml| {
                 nvml.device_by_index(0)
@@ -701,15 +721,24 @@ impl LlamaEngine {
             }).unwrap_or(0);
 
             let diff = vram_after as i64 - vram_before as i64;
-            if diff > 100_000_000 { // > 100 MB
-                engine.engine_mode = "gpu".to_string();
-                log_cb(format!("✅ GPU: Модель загружена в VRAM. Занято {} МБ видеопамяти.", diff / 1024 / 1024));
+            let est = crate::infra::vram_estimate::estimate_vram(&model_path, global_ctx_limit, kv_quant_keys, kv_quant_values);
+            let layers = est.num_layers.max(1);
+            let frac = (gpu_layers.min(est.num_layers) as f64) / layers as f64;
+            let expected_weights_mb = est.model_mb * frac;
+            let diff_mb = diff as f64 / (1024.0 * 1024.0);
+            if use_gpu && gpu_layers > 0 && expected_weights_mb > 100.0 && diff_mb >= expected_weights_mb * 0.4 {
+                engine.engine_mode.replace("gpu".to_string());
+                log_cb(format!(
+                    "✅ GPU: модель загружена в VRAM. Прирост {} МБ (оффлоад {} слоёв, ожидалось ~{:.0} МБ весов).",
+                    diff_mb.round() as i64, gpu_layers, expected_weights_mb
+                ));
             } else if use_gpu {
-                // Намерение было GPU, но VRAM не выросла — llama-server тихо ушёл в CPU.
+                // Намерение было GPU, но VRAM выросла заметно меньше ожидаемого —
+                // llama-server тихо ушёл в CPU (или оффлоад почти весь в ОЗУ).
                 // Сообщаем ПРИЧИНУ (из лога сервера), а не выдуманный диагноз.
-                engine.engine_mode = "cpu".to_string();
+                engine.engine_mode.replace("cpu".to_string());
                 let diag = diagnose_cuda_fallback(&engine.server_log);
-                engine.engine_mode_detail = if !diag.is_empty() {
+                engine.engine_mode_detail.replace(if !diag.is_empty() {
                     format!("Модель не попала в VRAM: {}", diag)
                 } else {
                     format!(
@@ -717,9 +746,12 @@ impl LlamaEngine {
                         selected_variant, gpu_info.gpu_name, gpu_info.cuda_major, gpu_info.cuda_minor,
                         gpu_info.compute_major, gpu_info.compute_minor
                     )
-                };
-                log_cb("❌ ВНИМАНИЕ: VRAM не увеличилась! Модель работает на CPU, а не на GPU!".to_string());
-                log_cb(format!("❌ Диагноз: {}", engine.engine_mode_detail));
+                });
+                log_cb(format!(
+                    "❌ ВНИМАНИЕ: VRAM выросла лишь на {} МБ при оффлоаде {} слоёв (ожидалось ~{:.0} МБ весов) — модель работает на CPU!",
+                    diff_mb.round() as i64, gpu_layers, expected_weights_mb
+                ));
+                log_cb(format!("❌ Диагноз: {}", engine.engine_mode_detail.borrow()));
                 log_cb("❌ Решение: Настройки → «Движок запуска нейромоделей» → выберите подходящий бекенд.".to_string());
             } else {
                 log_cb("ℹ️ GPU-ускорение не используется (CPU-режим) — VRAM не занята. Это ожидаемо.".to_string());
@@ -762,13 +794,13 @@ impl LlamaEngine {
     }
 
     /// Режим движка: "gpu" (модель в VRAM) или "cpu" (fallback)
-    pub fn engine_mode(&self) -> &str {
-        &self.engine_mode
+    pub fn engine_mode(&self) -> String {
+        self.engine_mode.borrow().clone()
     }
 
     /// Причина CPU-режима (пусто, если GPU)
-    pub fn engine_mode_detail(&self) -> &str {
-        &self.engine_mode_detail
+    pub fn engine_mode_detail(&self) -> String {
+        self.engine_mode_detail.borrow().clone()
     }
 
     /// Скорость последней генерации (tok/s), 0 до первой генерации
@@ -894,7 +926,7 @@ impl LlamaEngine {
             json!({
                 "ctx": ctx_label,
                 "model": extract_model_filename(&self.model_path),
-                "mode": self.engine_mode,
+                "mode": self.engine_mode.borrow().clone(),
                 "samples": report.samples,
                 "error": message,
             }),
@@ -1042,7 +1074,7 @@ impl LlamaEngine {
             json!({
                 "ctx": ctx_label,
                 "model": extract_model_filename(&self.model_path),
-                "mode": self.engine_mode,
+                "mode": self.engine_mode.borrow().clone(),
                 "ctx_limit": self.global_ctx_limit,
                 "max_tokens": max_tokens,
             }),
@@ -1050,7 +1082,7 @@ impl LlamaEngine {
 
         // ── Замер пиков памяти (RAM + VRAM) на время генерации ──
         // Гвард останавливает семплер на любом пути выхода (успех/ошибка/cancel).
-        let server_pid = self.child.as_ref().map(|c| c.id());
+        let server_pid = self.child.lock().unwrap().as_ref().map(|c| c.id());
         let sampler = crate::infra::MemSampler::start(server_pid);
         let mem_guard = crate::infra::MemGuard::new(sampler, ctx_label, &log_cb);
 
@@ -1202,10 +1234,10 @@ impl LlamaEngine {
             progress_cb(50.0 + gen_p, &format!("Генерация: {} токенов...", total_tokens));
 
             if let Some(t) = event.timings {
-                if t.predicted_per_second > 0.0 {
+                if is_sane_rate(t.predicted_per_second) {
                     predicted_per_second = Some(t.predicted_per_second);
                 }
-                if t.prompt_per_second > 0.0 {
+                if is_sane_rate(t.prompt_per_second) {
                     prompt_per_second = Some(t.prompt_per_second);
                 }
                 if t.prompt_n > 0 {
@@ -1241,10 +1273,10 @@ impl LlamaEngine {
         let gen_elapsed = gen_start.elapsed().as_secs_f64();
         let total_tokens = generated_tokens + reasoning_tokens;
         let speed = predicted_per_second
-            .or_else(|| final_timings.as_ref().map(|t| t.predicted_per_second))
+            .or_else(|| final_timings.as_ref().map(|t| t.predicted_per_second).filter(|&v| is_sane_rate(v)))
             .unwrap_or_else(|| if gen_elapsed > 0.0 { total_tokens as f64 / gen_elapsed } else { 0.0 });
         let prompt_speed = prompt_per_second
-            .or_else(|| final_timings.as_ref().map(|t| t.prompt_per_second))
+            .or_else(|| final_timings.as_ref().map(|t| t.prompt_per_second).filter(|&v| is_sane_rate(v)))
             .unwrap_or(0.0);
         let ttft_sec = first_token_at
             .map(|t| t.duration_since(gen_start).as_secs_f64())
@@ -1290,7 +1322,7 @@ impl LlamaEngine {
             json!({
                 "ctx": ctx_label,
                 "model": extract_model_filename(&self.model_path),
-                "mode": self.engine_mode,
+                "mode": self.engine_mode.borrow().clone(),
                 "tokens": generated_tokens,
                 "reasoning_tokens": reasoning_tokens,
                 "elapsed_s": (gen_elapsed * 10.0).round() / 10.0,
@@ -1321,6 +1353,254 @@ impl LlamaEngine {
 
     pub fn is_multimodal(&self) -> bool {
         self.is_multimodal_engine
+    }
+
+    // ─── Автоповтор при CUDA OOM (честный, без блокировки) ───
+    //
+    // Запуск с меньшим -ngl реально выполняется ЗДЕСЬ (а не обещается в тексте
+    // ошибки): при нехватке видеопамяти в РАБОТАЮЩЕЙ генерации движок перезапускается
+    // с урезанным оффлоадом и запрос повторяется автоматически (одна попытка →
+    // вторая OOM → ngl=0 → третья OOM → понятная ошибка). История сессии не успевает
+    // измениться — результат записывается оркестратором только после Ok.
+
+    /// Есть ли контекст для авто-перезапуска при OOM (тестовые stub-движки — нет).
+    fn can_oom_retry(&self) -> bool {
+        self.respawn_ctx.is_some()
+    }
+
+    /// Следующее значение -ngl для авто-повтора при CUDA OOM:
+    /// шаг 1 — «сколько влезает в свободную VRAM сейчас» (процесс умер, память
+    /// освободилась) по единой оценке; если NVML недоступен — половина текущего.
+    /// шаг 2 — полный перевод в ОЗУ (0).
+    fn oom_next_ngl(&self, step: u8) -> u32 {
+        Self::oom_next_ngl_impl(step, self.current_ngl.get(), self.fitting_ngl_from_current_vram())
+    }
+
+    /// Чистая версия (без NVML) — для юнит-тестов.
+    fn oom_next_ngl_impl(step: u8, cur: u32, fitting: Option<u32>) -> u32 {
+        if cur == 0 {
+            return 0;
+        }
+        if step >= 2 {
+            return 0;
+        }
+        if let Some(est) = fitting {
+            if est < cur {
+                return est;
+            }
+        }
+        if cur >= 999 {
+            return (cur / 2).max(1);
+        }
+        (cur / 2).min(cur.saturating_sub(1))
+    }
+
+    /// Максимальное число GPU-слоёв, помещающихся в свободную VRAM СЕЙЧАС
+    /// (единая формула vram_estimate). None — NVML недоступен или нет контекста.
+    fn fitting_ngl_from_current_vram(&self) -> Option<u32> {
+        let ctx = self.respawn_ctx.as_deref()?;
+        let nvml = nvml_wrapper::Nvml::init().ok()?;
+        let device = nvml.device_by_index(0).ok()?;
+        let mem = device.memory_info().ok()?;
+        let free_mb = mem.free as f64 / (1024.0 * 1024.0);
+        Some(crate::infra::vram_estimate::max_fitting_ngl(
+            &self.model_path,
+            self.global_ctx_limit,
+            ctx.kv_quant_keys,
+            ctx.kv_quant_values,
+            free_mb,
+            256.0,
+        ))
+    }
+
+    /// Убивает текущий llama-server и запускает заново с указанным -ngl.
+    /// Возвращает Ok, когда сервер здоров. Логи попадают в UI (self.log_cb).
+    fn respawn_with_ngl(&self, new_ngl: u32) -> Result<(), String> {
+        let ctx = match self.respawn_ctx.as_deref() {
+            Some(c) => c,
+            None => return Err("Нет контекста для перезапуска движка".to_string()),
+        };
+
+        // ── Убить старый процесс (если ещё жив) ──
+        let old = self.child.lock().unwrap().take();
+        if let Some(mut child) = old {
+            let pid = child.id();
+            crate::infra::process_util::unregister_engine_pid(pid);
+            crate::infra::startup_log::append(
+                "INFO",
+                &format!("🔻 Перезапуск llama-server (pid {}) на -ngl {}", pid, new_ngl),
+            );
+            crate::infra::process_util::kill_process_tree(&mut child);
+            let _ = child.wait();
+        }
+
+        // ── Спавн с тем же конфигом, но меньшим -ngl ──
+        let mut c = Command::new(&ctx.server_exe);
+        c.current_dir(&ctx.engine_dir)
+            .arg("-m").arg(&self.model_path)
+            .arg("--host").arg("127.0.0.1")
+            .arg("--port").arg(self.port.to_string())
+            .arg("--api-key").arg(&self.api_key)
+            .arg("--ctx-size").arg(self.global_ctx_limit.to_string())
+            .arg("-t").arg(ctx.threads.to_string())
+            .arg("-ngl").arg(new_ngl.to_string())
+            .arg("--flash-attn").arg("on")
+            .arg("--no-webui")
+            .arg("--log-file").arg(&self.server_log);
+        if ctx.is_pre_hopper {
+            c.env("GGML_CUDA_PDL", "0");
+        }
+        if let Some(mmp) = &self.mmproj_path {
+            c.arg("--mmproj").arg(mmp);
+        }
+        if ctx.kv_quant_keys {
+            c.arg("--cache-type-k").arg("q8_0");
+        }
+        if ctx.kv_quant_values {
+            c.arg("--cache-type-v").arg("q8_0");
+        }
+        if ctx.reasoning_enabled {
+            c.arg("--reasoning-format").arg("deepseek");
+            c.arg("--reasoning-budget").arg(ctx.reasoning_budget.to_string());
+            c.arg("--no-reasoning-preserve");
+        }
+        #[cfg(target_os = "windows")]
+        { use std::os::windows::process::CommandExt; c.creation_flags(0x08000000); }
+        // CUDA/ggml-ошибки идут в stderr — захватываем их (тот же паттерн, что при старте).
+        c.stderr(std::process::Stdio::piped());
+
+        let mut child = c.spawn().map_err(|e| format!("Ошибка перезапуска llama-server: {}", e))?;
+        crate::infra::process_util::register_engine_pid(child.id());
+        #[cfg(windows)]
+        crate::infra::process_util::assign_child_to_kill_job(&child);
+        if let Some(stderr) = child.stderr.take() {
+            let log_cb = self.log_cb.clone();
+            std::thread::spawn(move || {
+                let reader = std::io::BufReader::new(stderr);
+                for line in reader.lines() {
+                    let line = match line {
+                        Ok(l) => l,
+                        Err(_) => break,
+                    };
+                    let line = line.trim().to_string();
+                    if !line.is_empty() {
+                        log_cb(format!("[llama-server] {}", line));
+                    }
+                }
+            });
+        }
+
+        // ── Ждём здоровья (без фолбэков — конфиг уже проверен при первом старте) ──
+        let deadline = Instant::now() + HEALTH_TIMEOUT;
+        loop {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    let _ = child.wait();
+                    let log_tail = read_log_tail(&self.server_log);
+                    return Err(format!(
+                        "Перезапущенный llama-server завершился с кодом {} при старте. {}",
+                        status.code().unwrap_or(-1),
+                        log_tail
+                    ));
+                }
+                Ok(None) => {}
+                Err(e) => return Err(format!("Ошибка ожидания перезапущенного llama-server: {}", e)),
+            }
+            if engine_health_check(&self.client, self.port, &self.auth_header()) {
+                break;
+            }
+            if Instant::now() > deadline {
+                let _ = child.kill();
+                let log_tail = read_log_tail(&self.server_log);
+                return Err(format!(
+                    "Таймаут загрузки модели после перезапуска движка ({} сек). {}",
+                    HEALTH_TIMEOUT.as_secs(),
+                    log_tail
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+
+        *self.child.lock().unwrap() = Some(child);
+        self.current_ngl.set(new_ngl);
+        if new_ngl == 0 {
+            self.engine_mode.replace("cpu".to_string());
+            self.engine_mode_detail.replace(
+                "После CUDA OOM движок перезапущен с полной выгрузкой оффлоада в ОЗУ.".to_string(),
+            );
+        }
+        (self.log_cb)(format!("✅ Перезапуск движка с -ngl {} завершён, сервер здоров.", new_ngl));
+        Ok(())
+    }
+
+    /// Обёртка над run_chat_completions с авто-повтором при CUDA OOM.
+    /// Повторяет ЗАПРОС (не трогая историю сессии — результат ещё не записан):
+    /// 1-я OOM → перезапуск с влезающим -ngl; 2-я OOM → полный перевод в ОЗУ (ngl=0);
+    /// 3-я → честная ошибка (без обещаний «запуск с меньшим -ngl автоматический»).
+    pub(crate) fn run_chat_completions_with_oom_retry<F, L>(
+        &self,
+        messages: &[LlmMessage],
+        attachments: Option<&[ChatAttachment]>,
+        max_tokens: usize,
+        params: &ModelParams,
+        stop_words: &[String],
+        grammar: Option<GrammarSpec>,
+        disable_reasoning: bool,
+        cancel_flag: Arc<AtomicBool>,
+        ctx_label: &str,
+        tool_choice: Option<&str>,
+        mut progress_cb: F,
+        log_cb: L,
+    ) -> Result<GenerationResult, String>
+    where F: FnMut(f32, &str), L: Fn(String) {
+        let mut step: u8 = 0;
+        loop {
+            let result = self.run_chat_completions(
+                messages,
+                attachments,
+                max_tokens,
+                params,
+                stop_words,
+                grammar.clone(),
+                disable_reasoning,
+                cancel_flag.clone(),
+                ctx_label,
+                tool_choice,
+                &mut progress_cb,
+                &log_cb,
+            );
+            let err = match result {
+                Ok(r) => return Ok(r),
+                Err(e) => e,
+            };
+            // OOM может быть в тексте ошибки и/или в хвосте лога движка.
+            let err_is_oom = is_cuda_oom_text(&err) || is_cuda_oom_text(&read_log_tail(&self.server_log));
+            if step >= 2 || !self.can_oom_retry() || !err_is_oom {
+                return Err(err);
+            }
+            step += 1;
+            let next_ngl = self.oom_next_ngl(step);
+            if next_ngl >= self.current_ngl.get() {
+                // урезать нечего — повтор не поможет
+                return Err(err);
+            }
+            (self.log_cb)(format!(
+                "🔄 CUDA OOM при генерации — автоматический перезапуск движка с меньшим оффлоадом (-ngl {} → {}), шаг {}/2...",
+                self.current_ngl.get(),
+                next_ngl,
+                step
+            ));
+            crate::infra::startup_log::append(
+                "WARN",
+                &format!("CUDA OOM → автоперезапуск с -ngl {} (шаг {}/2)", next_ngl, step),
+            );
+            if let Err(resp_err) = self.respawn_with_ngl(next_ngl) {
+                return Err(format!(
+                    "{}\n\nНе удалось перезапустить движок для авто-повтора: {}",
+                    err, resp_err
+                ));
+            }
+        }
     }
 
     /// Задаёт грамматику для СЛЕДУЮЩЕГО вызова generate_chat/generate_chat_multimodal.
@@ -1362,13 +1642,13 @@ impl LlamaEngine {
         let stop_words = merged_stop_words(&words);
         let pending = self.take_pending_grammar();
         let grammar = pending.or_else(|| build_base_grammar(&actual_format).map(|gbnf| GrammarSpec { gbnf: Some(gbnf), json_schema: None }));
-        self.run_chat_completions(messages, None, max_tokens, model_params, &stop_words, grammar, disable_reasoning, cancel_flag, ctx_label, tool_choice, progress_cb, log_cb)
+        self.run_chat_completions_with_oom_retry(messages, None, max_tokens, model_params, &stop_words, grammar, disable_reasoning, cancel_flag, ctx_label, tool_choice, progress_cb, log_cb)
     }
 }
 
 impl Drop for LlamaEngine {
     fn drop(&mut self) {
-        if let Some(mut child) = self.child.take() {
+        if let Some(mut child) = self.child.lock().unwrap().take() {
             let pid = child.id();
             crate::infra::process_util::unregister_engine_pid(pid);
             crate::infra::startup_log::append(
@@ -1381,6 +1661,18 @@ impl Drop for LlamaEngine {
             let _ = child.wait();
         }
     }
+}
+
+/// Верхняя «санитарная» граница скорости (токен/с). Скорости выше — заведомый мусор:
+/// llama.cpp печатает/отдаёт fallback 1000000.0 ток/с, когда время генерации замерилось
+/// нулём (обычно на генерации из одного токена с `predicted_ms == 0`).
+const MAX_SANE_TOK_PER_SEC: f64 = 10_000.0;
+
+/// Принимает только достоверные скорости движка: конечные, положительные и ниже
+/// физически достижимого потолка. Мусор (0, inf, nan, fallback 1_000_000) отсекается,
+/// чтобы в бейдж/логи не попадало «1 млн ток/с» из llama.cpp.
+fn is_sane_rate(v: f64) -> bool {
+    v.is_finite() && v > 0.0 && v < MAX_SANE_TOK_PER_SEC
 }
 
 #[derive(Deserialize, Default)]
@@ -1545,25 +1837,31 @@ fn mmproj_error_detail(log: &str) -> String {
     "неизвестная ошибка загрузки проектора".to_string()
 }
 
+/// Детектор CUDA OOM по тексту (ошибка/хвост лога llama-server).
+fn is_cuda_oom_text(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("out of memory")
+        || lower.contains("cuda error: out of memory")
+        || lower.contains("cuda_malloc failed")
+        || lower.contains("ggml_cuda: out of memory")
+        || ((lower.contains("cu memory") || lower.contains("cumemalloc")) && lower.contains("failed"))
+        || lower.contains("not enough memory")
+        || lower.contains("insufficient memory")
+        || lower.contains("cudaerrormemoryallocation")
+        || lower.contains("nomemory")
+}
+
 /// Возвращает понятную формулировку ошибки, если llama-server реально упал
 /// от нехватки видеопамяти (CUDA OOM). Иначе возвращает исходный `reason`
 /// без изменений. Юзер видит ГЛАВНЫЙ совет, а не хвост ggml-лога.
 fn cuda_oom_friendly_reason(log_tail: &str, reason: &str) -> String {
-    let lower = log_tail.to_lowercase();
-    let is_oom = lower.contains("out of memory")
-        || lower.contains("cuda error: out of memory")
-        || lower.contains("cuda_malloc failed")
-        || lower.contains("ggml_cuda: out of memory")
-        || (lower.contains("cu memory") && lower.contains("failed"))
-        || lower.contains("not enough memory")
-        || lower.contains("insufficient memory");
-    if !is_oom {
+    if !is_cuda_oom_text(log_tail) {
         return reason.to_string();
     }
     format!(
         "{} Модель не поместилась в видеопамять (CUDA OOM): GPU-слои + KV-кэш + буферы превысили свободную VRAM. \
-         Решение: уменьшите контекст (Настройки → размер контекста) или дайте GPU-оффлоаду уйти в ОЗУ — \
-         запуск с меньшим -ngl происходит автоматически при нехватке видеопамяти.",
+         Приложение автоматически повторит запрос с меньшим GPU-оффлоадом (шаг 1: урезан до влезающего; шаг 2: весь оффлоад в ОЗУ). \
+         Если не поможет — уменьшите контекст (Настройки → размер контекста) или выберите более лёгкую квантизацию модели.",
         reason
     )
 }
@@ -1656,5 +1954,66 @@ mod tests {
         let log_tail = "llama server listening on port 17800";
         let reason = "Ошибка чтения потока генерации: error decoding response body";
         assert_eq!(cuda_oom_friendly_reason(log_tail, reason), reason);
+    }
+
+    #[test]
+    fn cuda_oom_text_detects_only_oom_markers() {
+        assert!(is_cuda_oom_text("ggml_cuda: out of memory\n  failed to allocate 8 MB\n"));
+        assert!(is_cuda_oom_text("llama_model_load: error loading model: not enough memory"));
+        assert!(is_cuda_oom_text("CUDA error: out of memory"));
+        assert!(is_cuda_oom_text("cuMemAlloc failed to allocate 484644864 bytes"));
+        // НЕ путаем с другими CUDA-проблемами (нет ядер, драйвер и т.п.).
+        assert!(!is_cuda_oom_text("no kernel image is available for execution on the device"));
+        assert!(!is_cuda_oom_text("driver version is insufficient"));
+        assert!(!is_cuda_oom_text("invalid device function"));
+    }
+
+    #[test]
+    fn is_sane_rate_rejects_llama_fallback_and_garbage() {
+        // Fallback llama.cpp: скорость «1 млн ток/с» при генерации 1 токена с нулевым временем.
+        assert!(!is_sane_rate(1_000_000.0), "llama fallback не должен приниматься");
+        assert!(!is_sane_rate(f64::INFINITY), "inf не должен приниматься");
+        assert!(!is_sane_rate(f64::NAN), "nan не должен приниматься");
+        assert!(!is_sane_rate(0.0), "0 не должен приниматься (пусто), а не скорость");
+        assert!(!is_sane_rate(-5.0), "отрицательная скорость — мусор");
+        // Реальные скорости GPU-генерации влезают с запасом.
+        assert!(is_sane_rate(0.1), "малые скорости принимаются");
+        assert!(is_sane_rate(84.0), "обычная скорость принимается");
+        assert!(is_sane_rate(9_999.9), "нижняя граница потолка принимается");
+        assert!(!is_sane_rate(10_000.0), "граница порога — уже мусор");
+    }
+
+    #[test]
+    fn oom_ngl_step_logic() {
+        // Шаг 2 всегда переводит в ОЗУ.
+        assert_eq!(LlamaEngine::oom_next_ngl_impl(2, 999, Some(44)), 0);
+        assert_eq!(LlamaEngine::oom_next_ngl_impl(2, 44, None), 0);
+        // Уже в ОЗУ — остаёмся в ОЗУ.
+        assert_eq!(LlamaEngine::oom_next_ngl_impl(1, 0, Some(44)), 0);
+        // Шаг 1 с оценкой «влезает» — берём оценку.
+        assert_eq!(LlamaEngine::oom_next_ngl_impl(1, 999, Some(44)), 44);
+        // Шаг 1 без оценки — половина текущего (после пред.урезания).
+        assert_eq!(LlamaEngine::oom_next_ngl_impl(1, 44, None), 22);
+        // Половинное урезание не зацикливается на единице.
+        assert_eq!(LlamaEngine::oom_next_ngl_impl(1, 1, None), 0);
+    }
+
+    // ── Smoke на реальной модели (локальный файл) ──
+
+    #[test]
+    fn estimate_vram_mb_smoke_ternary_qwen35() {
+        // Ternary-Bonsai-27B-Q2_g64.gguf: qwen35-гибрид, файл ~7234 МБ,
+        // KV на ctx 24576 должен быть ~1536 МБ (16 из 64 слоёв, heads_kv=4,
+        // key/value 256), а НЕ 12 288 МБ по старым дефолтам. Сумма ~9 ГБ
+        // влезает в ~13 316 МБ свободной VRAM → ложного диалога нет.
+        let path = r"D:\nn\models\llm\censored\Ternary-Bonsai-27B-Q2_g64.gguf";
+        if !std::path::Path::new(path).exists() {
+            eprintln!("smoke: файл {} не найден — тест пропущен", path);
+            return;
+        }
+        let est = crate::infra::vram_estimate::estimate_vram(path, 24576, false, false);
+        assert!((est.kv_mb - 1536.0).abs() < 1.0, "KV: {} МБ (ожидалось ~1536)", est.kv_mb);
+        assert!(est.kv_mb < 2000.0, "KV всё ещё завышен: {} МБ", est.kv_mb);
+        assert!(est.total_mb < 13000.0, "Завышенная оценка VRAM: {:.0} МБ", est.total_mb);
     }
 }

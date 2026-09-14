@@ -38,11 +38,9 @@ pub enum AgentEvent {
         tool: String,
         path: String,
     },
-    /// Запрос решения по pre-flight VRAM: модель не влезает в видеопамять.
-    /// Фронтенд показывает диалог «Отмена / Запустить с выгрузкой в ОЗУ» и
-    /// вызывает `respond_vram_choice`.
-    VramConfirmRequest {
-        request_id: String,
+    /// Неблокирующее уведомление об итоге pre-flight VRAM (факты, одна кнопка
+    /// «ОК»). Запуск модели НЕ блокируется и не запрашивает решение юзера.
+    VramNotice {
         note: String,
     },
 }

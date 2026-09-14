@@ -45,7 +45,7 @@ impl LlamaEngine {
         let pending = self.take_pending_grammar();
         let grammar = pending.or_else(|| build_base_grammar(&actual_format).map(|gbnf| GrammarSpec { gbnf: Some(gbnf), json_schema: None }));
 
-        self.run_chat_completions(
+        self.run_chat_completions_with_oom_retry(
             messages,
             Some(attachments),
             max_tokens,

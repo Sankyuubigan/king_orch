@@ -152,7 +152,7 @@ export class ChatController {
         const tokens = await countTokens(promptText, tokenizerId);
         this.lastPromptTokens = tokens;
 
-        const vramMb = await invoke<number>("get_prompt_memory", {
+        const vram = await invoke<{ need_mb: number; vram_used_mb: number; vram_total_mb: number }>("get_prompt_memory", {
             modelPath,
             contextSize,
             kvQuantKeys,
@@ -164,8 +164,11 @@ export class ChatController {
         if (this.el.tokenCounter) {
             const isGraph = this.el.agentSelect.options[this.el.agentSelect.selectedIndex]?.text.startsWith("📁") ?? false;
             const graphHint = isGraph ? " Оценка по самому тяжёлому агенту графа." : "";
-            const memStr = isFinite(vramMb) && vramMb > 0 ? ` (~${vramMb.toFixed(1)} МБ)` : "";
-            this.el.tokenCounter.innerText = `${tokens} / ${contextSize}${memStr}`;
+            // Формат: (расчётная потребность + уже занятая VRAM) / точный объём VRAM в MiB.
+            const memStr = vram && vram.vram_used_mb > 0 && vram.vram_total_mb > 0
+                ? ` (~${Math.round(vram.need_mb + vram.vram_used_mb)} МБ / ${Math.round(vram.vram_total_mb)} МБ)`
+                : (isFinite(vram?.need_mb) && (vram?.need_mb ?? 0) > 0 ? ` (~${Math.round(vram.need_mb)} МБ)` : "");
+            this.el.tokenCounter.innerText = `${tokens}${memStr}`;
             this.el.tokenCounter.classList.remove("warning", "danger");
             if (tokens > contextSize) {
                 this.el.tokenCounter.classList.add("danger");
@@ -174,7 +177,7 @@ export class ChatController {
                 this.el.tokenCounter.classList.add("warning");
                 this.el.tokenCounter.title = "Контекст заполняется. Близко к лимиту." + graphHint;
             } else {
-                this.el.tokenCounter.title = "Токены: Текущие / Лимит контекста." + graphHint;
+                this.el.tokenCounter.title = "Токены: текущие / Лимит контекста. Память: оценка (потребность + занято) / объём VRAM." + graphHint;
             }
         }
     } catch (e) {
@@ -505,7 +508,9 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
 
   /** Обновление бейджа по событию engine_mode после каждого запроса */
   private updateEngineBadge(mode: string, tokPerSec: number, detail: string) {
-    const tok = tokPerSec > 0 ? ` · ${Math.round(tokPerSec)} tok/s` : "";
+    const tok = (Number.isFinite(tokPerSec) && tokPerSec > 0 && tokPerSec < 10_000)
+      ? ` · ${Math.round(tokPerSec)} tok/s`
+      : "";
     if (mode === "gpu") {
       this.setEngineBadge("engine-gpu", `GPU${tok}`, detail || "Модель работает в VRAM (GPU-ускорение)");
     } else {
@@ -885,7 +890,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
 
     listen("tool_permission_request", (e) => { showPermissionRequest(e.payload as any); });
 
-    listen("vram_confirm_request", (e) => { showVramRequest(e.payload as any); });
+    listen("vram_notice", (e) => { showVramRequest(e.payload as any); });
 
     listen("download_progress", (e) => {
       const { downloaded, total, speed_bps } = e.payload as { downloaded: number; total: number; speed_bps?: number };

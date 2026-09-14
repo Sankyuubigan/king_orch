@@ -113,11 +113,8 @@ async fn main() {
             // 🔐 Форвардинг запросов разрешений в UI (плашка с 3 кнопками).
             api::permissions::init_permission_forwarding(&app_handle);
 
-            // 🎛 Форвардинг диалога pre-flight VRAM в UI + помечаем, что фронт
-            // готов принимать блокирующие диалоги (иначе pre-flight НЕ блокирует
-            // запуск модели и молча урезает -ngl — fallback для тестов).
+            // 🔔 Форвардинг уведомлений о VRAM в UI (non-blocking, одна кнопка ОК).
             api::vram::init_vram_forwarding(&app_handle);
-            infra::set_ui_ready(true);
 
             // Телеметрия: инициализация только если юзер не против.
             if telemetry_enabled {
@@ -238,7 +235,6 @@ async fn main() {
             api::chat::chat_request,
             api::chat::stop_processing,
             api::permissions::respond_permission,
-            api::vram::respond_vram_choice,
             api::chat::get_prompt_preview,
             api::chat::get_prompt_memory,
             api::graph::read_workflow_file,
