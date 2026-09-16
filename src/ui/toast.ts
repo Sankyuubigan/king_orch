@@ -1,4 +1,4 @@
-import { bus } from "../events";
+import { logFront } from "@my-tauri-plugins/plugin-logs";
 
 const TOAST_DURATION = 5000;
 
@@ -13,7 +13,7 @@ export function showToast(message: string, type: 'error' | 'success' | 'info' = 
   container.appendChild(toast);
 
   if (type === "error") {
-    bus.emit("log", `❌ ${message}`);
+    logFront(`❌ ${message}`);
   }
 
   // Анимация появления

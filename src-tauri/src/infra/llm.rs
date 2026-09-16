@@ -185,7 +185,7 @@ impl LlamaEngine {
 
         // ── Единая точка выхода с ошибкой: пишем в лог-файл + телеметрию ──
         let fail = |msg: String| -> Result<Self, String> {
-            crate::infra::startup_log::append("ERROR", &format!("LlamaEngine::new: {}", msg));
+            log::error!("LlamaEngine::new: {}", msg);
             Err(msg)
         };
 
@@ -214,10 +214,10 @@ impl LlamaEngine {
                         .file_name()
                         .map(|s| s.to_string_lossy().to_string())
                         .unwrap_or_else(|| model_path.clone());
-                    crate::infra::startup_log::append("WARN", &format!(
+                    log::warn!(
                         "LlamaEngine::new: mmproj «{}» подменён на братскую LLM «{}»",
                         model_path, llm
-                    ));
+                    );
                     log_cb(format!(
                         "⚠️ «{}» — это mmproj (мультимодальный проектор), а не языковая модель. Используется братская LLM «{}».",
                         fname, llm
@@ -390,7 +390,7 @@ impl LlamaEngine {
                                 need_mb, components, free_vram_mb, total_vram_mb, was_ngl, gpu_layers
                             );
                             log_cb(format!("⚠️ {}", note));
-                            crate::infra::startup_log::append("WARN", &note);
+                            log::warn!("{}", note);
                             vram_notice = Some(format!("⚠️ Не хватает видеопамяти.\n\n{}", note));
                         } else {
                             log_cb(format!(
@@ -770,7 +770,7 @@ impl LlamaEngine {
                 need_mb as i64, free_ram_mb as i64
             );
             log_cb(warn.clone());
-            crate::infra::startup_log::append("WARN", &warn);
+            log::warn!("{}", warn);
         }
 
         let mut gguf_params = Vec::new();
@@ -918,18 +918,18 @@ impl LlamaEngine {
         format!("{}{}.{}", reason, mem, log_tail)
     }
 
-    /// Ошибка генерации гарантированно уходит в лог-файл и телеметрию.
+    /// Ошибка генерации гарантированно уходит в единый лог (log::Log) и телеметрию.
     fn report_generation_error(&self, ctx_label: &str, report: &crate::infra::mem_profiler::MemReport, message: &str) {
-        crate::infra::startup_log::append("ERROR", &format!("LLM генерация [{}]: {}", ctx_label, message));
-        crate::infra::telemetry::track_event(
+        log::error!("LLM генерация [{}]: {}", ctx_label, message);
+        tauri_plugin_logs::track_event(
             "llm_error",
-            json!({
+            Some(json!({
                 "ctx": ctx_label,
                 "model": extract_model_filename(&self.model_path),
                 "mode": self.engine_mode.borrow().clone(),
                 "samples": report.samples,
                 "error": message,
-            }),
+            })),
         );
     }
 
@@ -1069,15 +1069,15 @@ impl LlamaEngine {
         };
 
         // ── Телеметрия: старт генерации ──
-        crate::infra::telemetry::track_event(
+        tauri_plugin_logs::track_event(
             "llm_started",
-            json!({
+            Some(json!({
                 "ctx": ctx_label,
                 "model": extract_model_filename(&self.model_path),
                 "mode": self.engine_mode.borrow().clone(),
                 "ctx_limit": self.global_ctx_limit,
                 "max_tokens": max_tokens,
-            }),
+            })),
         );
 
         // ── Замер пиков памяти (RAM + VRAM) на время генерации ──
@@ -1317,9 +1317,9 @@ impl LlamaEngine {
         log_cb(crate::infra::peak_line(ctx_label, &report, self.vram_before, total_mb, &extra));
 
         // ── Телеметрия: итоги генерации ──
-        crate::infra::telemetry::track_event(
+        tauri_plugin_logs::track_event(
             "llm_finished",
-            json!({
+            Some(json!({
                 "ctx": ctx_label,
                 "model": extract_model_filename(&self.model_path),
                 "mode": self.engine_mode.borrow().clone(),
@@ -1332,7 +1332,7 @@ impl LlamaEngine {
                 "rss_app_mb": report.rss_app_peak / (1024 * 1024),
                 "vram_mb": report.vram_used_peak / (1024 * 1024),
                 "vram_ok": report.vram_ok,
-            }),
+            })),
         );
 
         Ok(GenerationResult {
@@ -1426,10 +1426,7 @@ impl LlamaEngine {
         if let Some(mut child) = old {
             let pid = child.id();
             crate::infra::process_util::unregister_engine_pid(pid);
-            crate::infra::startup_log::append(
-                "INFO",
-                &format!("🔻 Перезапуск llama-server (pid {}) на -ngl {}", pid, new_ngl),
-            );
+            log::info!("🔻 Перезапуск llama-server (pid {}) на -ngl {}", pid, new_ngl);
             crate::infra::process_util::kill_process_tree(&mut child);
             let _ = child.wait();
         }
@@ -1590,10 +1587,7 @@ impl LlamaEngine {
                 next_ngl,
                 step
             ));
-            crate::infra::startup_log::append(
-                "WARN",
-                &format!("CUDA OOM → автоперезапуск с -ngl {} (шаг {}/2)", next_ngl, step),
-            );
+            log::warn!("CUDA OOM → автоперезапуск с -ngl {} (шаг {}/2)", next_ngl, step);
             if let Err(resp_err) = self.respawn_with_ngl(next_ngl) {
                 return Err(format!(
                     "{}\n\nНе удалось перезапустить движок для авто-повтора: {}",
@@ -1651,10 +1645,7 @@ impl Drop for LlamaEngine {
         if let Some(mut child) = self.child.lock().unwrap().take() {
             let pid = child.id();
             crate::infra::process_util::unregister_engine_pid(pid);
-            crate::infra::startup_log::append(
-                "INFO",
-                &format!("🔻 Остановка llama-server (pid {})", pid),
-            );
+            log::info!("🔻 Остановка llama-server (pid {})", pid);
             // kill_process_tree убивает всё дерево (на Windows `child.kill()`
             // оставил бы потомков «висящими» в памяти).
             crate::infra::process_util::kill_process_tree(&mut child);

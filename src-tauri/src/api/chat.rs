@@ -8,30 +8,10 @@ use crate::infra::{self, ChatMessage, ChatAttachment, ModelParams, SubCall, LlmM
 use crate::api::AppState;
 
 // ─── Лог-файл ───
-// В release логи пишутся в king_orch.log РЯДОМ С EXE (infra::startup_log) —
-// чтобы юзер мог прислать лог, даже если приложение падает на старте.
-// В dev-комплекте (в рабочем каталоге есть папка test/) startup_log сам
-// дублирует ВСЕ записи (включая ERROR) в test/last_logs.txt — см.
-// infra::startup_log::init_dev_log(). Проверка runtime (а не cfg(debug_assertions)):
-// релизные сборки запускаются из каталога проекта, где test/ лежит рядом,
-// и логи нужны для диагностики даже без debug-профиля.
-
-pub fn init_log_file() {
-    if !infra::startup_log::is_initialized() {
-        if let Ok(exe) = std::env::current_exe() {
-            if let Some(exe_dir) = exe.parent() {
-                infra::startup_log::init(exe_dir);
-            }
-        }
-    }
-    // Dev-зеркало (test/last_logs.txt) инициализируется внутри startup_log;
-    // проверка «каталог test/ существует в CWD» живёт там же.
-    infra::startup_log::init_dev_log();
-}
-
-fn append_log(msg: &str) {
-    infra::startup_log::append("LLM", msg);
-}
+// Единый log::Log из tauri-plugin-logs (core rules §2.5): king_orch.log РЯДОМ
+// С EXE (даже если приложение падает на старте), dev-зеркало test/last_logs.txt
+// и событие «logs:message» для вкладки «Логи». Записи уровня ERROR/паника
+// дополнительно уходят в облако, если юзер не отключил настройку.
 
 /// Отмены пользователем (Stop) — не сбои: они не попадают в телеметрию.
 fn is_user_cancel(msg: &str) -> bool {
@@ -218,7 +198,7 @@ pub async fn chat_request(
         let msg = "Движок llama.cpp не установлен (нет llama-server.exe).\n\
              Откройте Настройки → «Движок запуска нейромоделей» и нажмите «Установить движок»."
             .to_string();
-        infra::startup_log::append("WARN", &msg);
+        log::warn!("{}", msg);
         return Err(msg);
     }
 
@@ -235,14 +215,11 @@ pub async fn chat_request(
             match infra::ensure_mmproj_for_model(&app, &model_path).await {
                 Ok(Some(p)) => Some(p),
                 Ok(None) => {
-                    infra::startup_log::append(
-                        "WARN",
-                        "mmproj для модели не найден в каталоге — мультимодальный режим недоступен",
-                    );
+                    log::warn!("mmproj для модели не найден в каталоге — мультимодальный режим недоступен");
                     None
                 }
                 Err(e) => {
-                    infra::startup_log::append("WARN", &format!("Не удалось докачать mmproj: {}", e));
+                    log::warn!("Не удалось докачать mmproj: {}", e);
                     None
                 }
             }
@@ -255,8 +232,7 @@ pub async fn chat_request(
 
     let app_log = app.clone();
     let log_cb = move |msg: String| {
-        append_log(&msg);
-        let _ = app_log.emit("log", &msg);
+        log::info!("[LLM] {}", msg);
         if let Some((agent_name, thought, time_sec)) = parse_thought_from_log(&msg) {
             let _ = app_log.emit(
                 "agent_thought",
@@ -402,22 +378,19 @@ pub async fn chat_request(
     let result = match run_result {
         Err(join_err) => {
             let m = format!("chat_request (spawn_blocking): {}", join_err);
-            infra::startup_log::append("ERROR", &m);
+            log::error!("{}", m);
             return Err(m);
         }
         Ok(Err(e)) => {
             if !is_user_cancel(&e) {
-                infra::startup_log::append("ERROR", &format!("chat_request (run_chat): {}", e));
+                log::error!("chat_request (run_chat): {}", e);
             }
             return Err(e);
         }
         Ok(Ok(r)) => r,
     };
     if result.messages.is_empty() {
-        infra::startup_log::append(
-            "WARN",
-            "chat_request: run_chat вернул Ok, но messages[] пуст (фронтенд получит пустой ответ)",
-        );
+        log::warn!("chat_request: run_chat вернул Ok, но messages[] пуст (фронтенд получит пустой ответ)");
     }
 
     log_cb_for_result(format!("DEBUG chat_request: result.messages.len={}, types_authors={:?}", result.messages.len(), result.messages.iter().map(|m| (m.msg_type.clone(), m.author.clone())).collect::<Vec<_>>()));

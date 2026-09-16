@@ -16,6 +16,6 @@
     "process:default",
     "shell:default",
     "shell:allow-open",
-    "aptabase:allow-track-event"
+    "logs:default"
   ]
 }

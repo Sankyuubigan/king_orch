@@ -8,12 +8,12 @@
 pub fn detect_and_set_proxy() {
     match detect_system_proxy() {
         Some(proxy) => {
-            crate::infra::startup_log::append("INFO", &format!("Системный прокси обнаружен: {}", proxy));
+            log::info!("Системный прокси обнаружен: {}", proxy);
             std::env::set_var("HTTPS_PROXY", &proxy);
             std::env::set_var("HTTP_PROXY", &proxy);
         }
         None => {
-            crate::infra::startup_log::append("INFO", "Системный прокси не обнаружен (прямое соединение)");
+            log::info!("Системный прокси не обнаружен (прямое соединение)");
         }
     }
 }

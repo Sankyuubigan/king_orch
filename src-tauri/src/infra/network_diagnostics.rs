@@ -1,7 +1,7 @@
 //! Диагностика сети при старте приложения.
 //!
 //! Проверяет: DNS-резолв, TCP-соединение, системный прокси.
-//! Результаты пишутся в startup_log для отладки проблем с доступностью GitHub.
+//! Результаты пишутся в единый лог (log::Log) для отладки проблем с доступностью GitHub.
 
 use std::time::{Duration, Instant};
 
@@ -69,12 +69,9 @@ fn log_system_proxy() {
                 let bypass_str = bypass.unwrap_or_else(|| "(нет)".to_string());
                 let auto_str = auto_url.unwrap_or_else(|| "(нет)".to_string());
 
-                crate::infra::startup_log::append(
-                    "NET",
-                    &format!(
-                        "Proxy: {} | Bypass: {} | AutoConfig: {} | AutoDetect: {}",
-                        proxy_str, bypass_str, auto_str, config.fAutoDetect
-                    ),
+                log::info!(
+                    "[NET] Proxy: {} | Bypass: {} | AutoConfig: {} | AutoDetect: {}",
+                    proxy_str, bypass_str, auto_str, config.fAutoDetect
                 );
 
                 if !config.lpszProxy.is_null() {
@@ -87,7 +84,7 @@ fn log_system_proxy() {
                     GlobalFree(config.lpszAutoConfigUrl as *mut c_void);
                 }
             } else {
-                crate::infra::startup_log::append("NET", "WinHttpGetIEProxyConfigForCurrentUser: FAILED");
+                log::info!("[NET] WinHttpGetIEProxyConfigForCurrentUser: FAILED");
             }
         }
     }
@@ -96,7 +93,7 @@ fn log_system_proxy() {
         let proxy = std::env::var("HTTPS_PROXY")
             .or_else(|_| std::env::var("HTTP_PROXY"))
             .unwrap_or_else(|_| "(нет)".to_string());
-        crate::infra::startup_log::append("NET", &format!("Proxy (env): {}", proxy));
+        log::info!("[NET] Proxy (env): {}", proxy);
     }
 }
 
@@ -108,17 +105,11 @@ fn check_dns(host: &str) {
         Ok(addrs) => {
             let ips: Vec<String> = addrs.map(|a| a.ip().to_string()).collect();
             let elapsed = start.elapsed();
-            crate::infra::startup_log::append(
-                "NET",
-                &format!("DNS {} → {} ({:?})", host, ips.join(", "), elapsed),
-            );
+            log::info!("[NET] DNS {} → {} ({:?})", host, ips.join(", "), elapsed);
         }
         Err(e) => {
             let elapsed = start.elapsed();
-            crate::infra::startup_log::append(
-                "NET",
-                &format!("DNS {} → FAILED: {} ({:?})", host, e, elapsed),
-            );
+            log::info!("[NET] DNS {} → FAILED: {} ({:?})", host, e, elapsed);
         }
     }
 }
@@ -140,17 +131,11 @@ fn check_tcp(host: &str, port: u16) {
     ) {
         Ok(_stream) => {
             let elapsed = start.elapsed();
-            crate::infra::startup_log::append(
-                "NET",
-                &format!("TCP {}:{} → OK ({:?})", host, port, elapsed),
-            );
+            log::info!("[NET] TCP {}:{} → OK ({:?})", host, port, elapsed);
         }
         Err(e) => {
             let elapsed = start.elapsed();
-            crate::infra::startup_log::append(
-                "NET",
-                &format!("TCP {}:{} → FAILED: {} ({:?})", host, port, e, elapsed),
-            );
+            log::info!("[NET] TCP {}:{} → FAILED: {} ({:?})", host, port, e, elapsed);
         }
     }
 }

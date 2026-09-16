@@ -46,6 +46,13 @@
 > - Кнопка "Проверить обновления" — **ТОЛЬКО проверяет**. Установка — отдельная кнопка "Обновить" по клику пользователя. Запрещено auto-install.
 > - Запрещено использовать `confirm()` для диалогов обновления.
 
+> ### 4. Логирование — единый стандарт `tauri-plugin-logs`
+> Вкладка «Логи» вынесена в переиспользуемый плагин (см. `tauri-build-toolkit/templates/LOGS_SETUP.md` и `global_ai_docs/core/rules.md` §2.5/§2.5.1/§2.5.2). Правила для King Orch:
+> - **Единственный логгер** — плагин `tauri-plugin-logs` (`tauri_plugin_logs::init()` в setup, ранний краш-лог `early_init`/`early_log`). Собственные логгеры/старт-аппенды (типа старого `startup_log`) ЗАПРЕЩЕНЫ.
+> - Backend пишет через `log::info!/warn!/error!/debug!` и `tauri_plugin_logs::track_event(name, Some(json!(...)))` для аналитики. Ручной `emit("log")`/`append` для логов — запрещён (остаются только `agent_thought`/`agent_tool_call`, это не логи).
+> - Фронтенд: `logFront(msg)` из `@my-tauri-plugins/plugin-logs` (вместо `bus.emit("log", ...)`); галочка «анонимные отчёты» в настройках — через адаптер `src/telemetry.ts` → `setReportingEnabled`; `<logs-panel>` — виджет вкладки «Логи».
+> - Файл лога: `king_orch.log` рядом с exe (`current_exe().parent()`), dev-зеркало `test/last_logs.txt` (только если рядом есть `test/`). Обе точки записи обнуляются (truncate) на старте сессии — как требует `global_ai_docs/core/rules.md` §2.5.1; история хранится только за текущую сессию.
+
 ## 1. Архитектура
 
 ### Стек

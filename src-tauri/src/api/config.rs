@@ -85,10 +85,9 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
         "allow_error_reports" => {
             if let Some(v) = value.as_bool() {
                 cfg.allow_error_reports = v;
-                // Отключение действует мгновенно (panic-хук и события больше
-                // не отправляются); включение — со следующего запуска, т.к.
-                // плагин при старте мог не быть зарегистрирован.
-                crate::infra::telemetry::set_enabled(v);
+                // Мгновенный переключатель облачной отправки в плагине логов
+                // (panic-хук и события больше не отправляются сразу же).
+                tauri_plugin_logs::set_reporting_enabled(v);
             }
         }
         "chat_font_scale" => {
@@ -124,10 +123,7 @@ pub fn set_last_model(app: AppHandle, path: String) {
     // 🛡 Проектор mmproj нельзя выбирать активной моделью (см. is_mmproj_file).
     // Пропускаем игнор в лог, конфиг не трогаем.
     if infra::is_mmproj_file(&path) {
-        infra::startup_log::append("WARN", &format!(
-            "set_last_model: отклонён выбор mmproj «{}»",
-            path
-        ));
+        log::warn!("set_last_model: отклонён выбор mmproj «{}»", path);
         return;
     }
     cfg.last_model = Some(path);

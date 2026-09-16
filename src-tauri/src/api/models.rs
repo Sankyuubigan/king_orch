@@ -210,7 +210,7 @@ pub fn add_model(
     let mut warning = None;
     if let Err(msg) = infra::llm_gguf::validate_gguf(&path) {
         let w = format!("Файл модели повреждён.\n{}", msg);
-        infra::startup_log::append("WARN", &format!("add_model: {}", w));
+        log::warn!("add_model: {}", w);
         warning = Some(w);
     }
 

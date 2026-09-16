@@ -14,27 +14,24 @@ use std::sync::Arc;
 #[tokio::main]
 async fn main() {
     // ── Логирование с первой миллисекунды запуска ──
-    // Лог пишется РЯДОМ С EXE (king_orch.log), чтобы юзер мог прислать его,
-    // даже если приложение не открывается или падает на старте.
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    infra::startup_log::init(&exe_dir);
-    infra::startup_log::install_panic_hook();
+    // Единый log::Log из tauri-plugin-logs (core rules §2.5): файл king_orch.log
+    // РЯДОМ С EXE (юзер может прислать его, даже если приложение не открывается
+    // или падает на старте), dev-зеркало test/last_logs.txt и вкладка «Логи».
+    // Ранний pre-Tauri период пишется через early_* (краш-лог живёт сразу).
+    tauri_plugin_logs::early_init("king_orch.log");
 
-    infra::startup_log::append(
+    tauri_plugin_logs::early_log(
         "INFO",
         &format!("=== King Orch {}: запуск ===", env!("CARGO_PKG_VERSION")),
     );
-    infra::startup_log::append(
+    tauri_plugin_logs::early_log(
         "INFO",
         &format!(
             "exe: {}",
             std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default()
         ),
     );
-    infra::startup_log::append(
+    tauri_plugin_logs::early_log(
         "INFO",
         &format!(
             "OS: {} | arch: {} | CPU: {}",
@@ -50,7 +47,7 @@ async fn main() {
     // ── Диагностика сети: DNS, TCP, proxy ──
     infra::network_diagnostics::run_diagnostics();
     let gpu = infra::gpu_detector::detect_gpu();
-    infra::startup_log::append(
+    tauri_plugin_logs::early_log(
         "INFO",
         &format!(
             "GPU: {} | CUDA драйвер: {}.{} | compute: {}.{} | нужен вариант: {}",
@@ -62,7 +59,7 @@ async fn main() {
             infra::llamacpp_installer::select_variant(),
         ),
     );
-    infra::startup_log::append("INFO", "Tauri: создание приложения…");
+    tauri_plugin_logs::early_log("INFO", "Tauri: создание приложения…");
 
     // ── WebView2: программный рендер UI (без GPU-процесса) ──
     // Окно в фоне под нагрузкой GPU (llama.cpp + другие программы) может
@@ -75,11 +72,12 @@ async fn main() {
     // tauri.conf.json (и в dev-override, подключаемом через build.bat), а не через env.
 
     // ── Телеметрия: решение принимаем ДО создания Tauri-приложения ──
-    // Читаем настройку «Отправлять анонимные отчёты об ошибках» (по умолчанию
-    // включена). Если юзер её снял — плагин Aptabase вообще не регистрируется,
-    // поэтому отправка данных физически невозможна.
+    // Настройка «Отправлять анонимные отчёты об ошибках» (по умолчанию
+    // включена). Плагин логов регистрируется ВСЕГДА (вкладка «Логи» нужна в
+    // любом случае), а облачная отправка управляется флагом set_reporting_enabled:
+    // если юзер снял галочку — отправка в Aptabase физически блокируется.
     let telemetry_enabled = infra::config::load_config_early().allow_error_reports;
-    infra::startup_log::append(
+    tauri_plugin_logs::early_log(
         "INFO",
         if telemetry_enabled {
             "Телеметрия: включена (анонимные отчёты об ошибках)"
@@ -88,26 +86,19 @@ async fn main() {
         },
     );
 
-    let builder = tauri::Builder::default()
+    tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_about_updates::init());
+        .plugin(tauri_plugin_about_updates::init())
+        .plugin(tauri_plugin_logs::init())
 
-    // Плагин телеметрии подключаем ТОЛЬКО при разрешении пользователя.
-    let builder = if telemetry_enabled {
-        builder.plugin(infra::telemetry::install_plugin())
-    } else {
-        builder
-    };
-
-    builder
         .manage(AppState {
             cancel_flag: Arc::new(AtomicBool::new(false)),
         })
         .setup(move |app| {
-            infra::startup_log::append("INFO", "setup(): начало");
+            log::info!("setup(): начало");
             let app_handle = app.handle();
 
             // 🔐 Форвардинг запросов разрешений в UI (плашка с 3 кнопками).
@@ -116,15 +107,15 @@ async fn main() {
             // 🔔 Форвардинг уведомлений о VRAM в UI (non-blocking, одна кнопка ОК).
             api::vram::init_vram_forwarding(&app_handle);
 
-            // Телеметрия: инициализация только если юзер не против.
-            if telemetry_enabled {
-                infra::telemetry::init(&app_handle);
-                infra::telemetry::track_event("app_started", serde_json::Value::Null);
+            // Облачная отправка: блокируем, если юзер снял галочку. Плагин логов
+            // поднял своё reporting-состояние из tauri.conf.json при регистрации.
+            if !telemetry_enabled {
+                tauri_plugin_logs::set_reporting_enabled(false);
             }
+            tauri_plugin_logs::track_event("app_started", None);
 
             let _ = infra::session_manager::sessions_dir(&app_handle);
-            api::chat::init_log_file();
-            infra::startup_log::append("INFO", "setup(): сессии и чат-лог готовы");
+            log::info!("setup(): сессии и чат-лог готовы");
 
             // ── 🛡 Авто-чистка «отравленных» конфигов ──
             // Легаси-версии могли добавить mmproj (мультимодальный ПРОЕКТОР) в
@@ -148,10 +139,10 @@ async fn main() {
                     }
                     infra::save_config(&app_handle, &cfg);
                     for m in &removed {
-                        infra::startup_log::append("WARN", &format!(
+                        log::warn!(
                             "setup(): удалён mmproj из списка моделей: {} (файл не тронут)",
                             m
-                        ));
+                        );
                     }
                 }
             }
@@ -162,16 +153,16 @@ async fn main() {
             // поэтому на старте нужен только сам движок в папке <exe>/llamacpp.
             let engine_dir = api::llamacpp::get_engine_dir(&app_handle);
             if infra::llamacpp_installer::has_any_installed(&engine_dir) {
-                infra::startup_log::append("INFO", "setup(): движок llama.cpp найден");
+                log::info!("setup(): движок llama.cpp найден");
             } else {
-                infra::startup_log::append("INFO", "setup(): движок llama.cpp НЕ установлен (инференс будет недоступен до установки)");
+                log::info!("setup(): движок llama.cpp НЕ установлен (инференс будет недоступен до установки)");
             }
             let app_for_update = app_handle.clone();
             tauri::async_runtime::spawn(async move {
                 let _ = api::llamacpp::check_engine_update(app_for_update).await;
             });
 
-            infra::startup_log::append("INFO", "setup(): OK");
+            log::info!("setup(): OK");
 
             // ── Диагностика + страховка WebView2 окна ──
             // Логируем события окна (фокус/закрытие) в локальный лог и
@@ -190,13 +181,13 @@ async fn main() {
                         match event {
                             tauri::WindowEvent::Focused(focused) => {
                                 let f = *focused;
-                                infra::startup_log::append("WV", &format!("Focused({})", f));
+                                log::info!("[WV] Focused({})", f);
                                 if f {
                                     let _ = cb_win.eval("void document.documentElement.offsetHeight");
                                 }
                             }
                             tauri::WindowEvent::Destroyed => {
-                                infra::startup_log::append("WV", "Destroyed");
+                                log::info!("[WV] Destroyed");
                             }
                             _ => {}
                         }
@@ -256,8 +247,6 @@ async fn main() {
             api::llamacpp::install_engine_update,
             api::llamacpp::remove_engine,
             api::llamacpp::set_engine_dir,
-            api::telemetry::track_error,
-            api::log_frontend_event,
             api::translate::translate_message,
             api::updater::check_github_release_update,
             api::updater::install_update_from_github,
@@ -274,5 +263,5 @@ async fn main() {
             }
         });
 
-    infra::startup_log::append("INFO", "Приложение закрыто");
+    log::info!("Приложение закрыто");
 }

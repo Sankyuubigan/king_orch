@@ -29,10 +29,7 @@ pub fn unregister_engine_pid(pid: u32) {
 pub fn kill_active_engines() {
     let pids: Vec<u32> = ACTIVE_ENGINE_PIDS.lock().unwrap().clone();
     for pid in pids {
-        crate::infra::startup_log::append(
-            "INFO",
-            &format!("🔻 Принудительная остановка llama-server (pid {}) при выходе из приложения", pid),
-        );
+        log::info!("🔻 Принудительная остановка llama-server (pid {}) при выходе из приложения", pid);
         kill_pid_tree(pid);
     }
     ACTIVE_ENGINE_PIDS.lock().unwrap().clear();

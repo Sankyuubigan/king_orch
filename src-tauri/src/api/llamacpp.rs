@@ -71,10 +71,7 @@ fn preferred_variant(app: &AppHandle) -> String {
 fn ensure_migrated(app: &AppHandle) {
     let dir = engine_dir(app);
     if let Ok(Some(variant)) = llamacpp_installer::migrate_legacy_layout(&dir) {
-        crate::infra::startup_log::append(
-            "INFO",
-            &format!("Миграция движка в новый формат завершена: backends/{}", variant),
-        );
+        log::info!("Миграция движка в новый формат завершена: backends/{}", variant);
     }
 }
 
@@ -143,9 +140,8 @@ pub fn get_engine_status(app: AppHandle) -> EngineStatus {
 
 #[tauri::command]
 pub async fn install_llamacpp(app: AppHandle) -> Result<EngineStatus, String> {
-    let app_log = app.clone();
     let log_cb = move |msg: String| {
-        let _ = app_log.emit("log", &msg);
+        log::info!("[ENGINE] {}", msg);
     };
     let app_prog = app.clone();
     let progress_cb = move |downloaded: u64, total: u64| {
@@ -199,9 +195,8 @@ pub async fn set_engine_variant(app: AppHandle, variant: String) -> Result<Engin
         // Устанавливаем выбранный бекенд (с прогрессом в те же события)
         install_llamacpp(app.clone()).await?;
     } else {
-        let app_log = app.clone();
         let log_cb = move |msg: String| {
-            let _ = app_log.emit("log", &msg);
+            log::info!("[ENGINE] {}", msg);
         };
         log_cb(format!(
             "⚙️ Выбран бекенд: {} (уже установлен — переключение мгновенное).",
@@ -216,9 +211,8 @@ pub async fn set_engine_variant(app: AppHandle, variant: String) -> Result<Engin
 pub async fn check_engine_update(app: AppHandle) -> Result<Option<String>, String> {
     let dir = engine_dir(&app);
     let variant = llamacpp_installer::resolve_variant(Some(&preferred_variant(&app)));
-    let app_log = app.clone();
     let log_cb = move |msg: String| {
-        let _ = app_log.emit("log", &msg);
+        log::info!("[ENGINE] {}", msg);
     };
     llamacpp_installer::check_update(&dir, &variant, &log_cb).await
 }
@@ -233,9 +227,8 @@ pub async fn install_engine_update(app: AppHandle) -> Result<EngineStatus, Strin
 pub fn remove_engine(app: AppHandle) -> Result<EngineStatus, String> {
     let dir = engine_dir(&app);
     let variant = llamacpp_installer::resolve_variant(Some(&preferred_variant(&app)));
-    let app_log = app.clone();
     let log_cb = move |msg: String| {
-        let _ = app_log.emit("log", &msg);
+        log::info!("[ENGINE] {}", msg);
     };
     llamacpp_installer::remove(&dir, &variant, &log_cb)?;
     Ok(get_engine_status(app))

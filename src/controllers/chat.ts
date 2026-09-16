@@ -8,6 +8,7 @@ import type { Role, MessageMenuCallbacks } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, CatalogEntry } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { renderMarkdown, stripStreamArtifacts, extractChannelThought, formatSpeed } from "../utils";
+import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError } from "../telemetry";
 import mermaid from "mermaid";
 
@@ -48,7 +49,6 @@ export interface ChatElements {
   subchatHistory: HTMLDivElement;
   subchatTitle: HTMLSpanElement;
   btnBackChat: HTMLButtonElement;
-  logView: HTMLTextAreaElement;
   maxGenSlider: HTMLInputElement;
   chkKvQuantK: HTMLInputElement;
   chkKvQuantV: HTMLInputElement;
@@ -107,13 +107,6 @@ export class ChatController {
     const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
     if (atBottom) {
       el.scrollTop = el.scrollHeight;
-    }
-  }
-
-  logToGUI(msg: string) {
-    if (this.el.logView) {
-      this.el.logView.value += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
-      this.scrollToBottomIfNearEnd(this.el.logView);
     }
   }
 
@@ -335,7 +328,7 @@ export class ChatController {
     const modelPath = this.el.modelSelect.value;
     if (!modelPath) { showToast("Выберите модель!", "error"); return; }
 
-    this.logToGUI(`Нажата кнопка 'Отправить и запустить' для сообщения: ${uid}`);
+    logFront(`[chat] Нажата кнопка 'Отправить и запустить' для сообщения: ${uid}`);
 
     store.chatHistory = store.chatHistory.slice(0, idx + 1);
     store.msgUidList = store.msgUidList.slice(0, idx + 1);
@@ -885,7 +878,6 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
   private bindTauriEvents() {
     listen("progress", (e) => { this.el.progressBar.style.width = `${e.payload}%`; });
     listen("status", (e) => { this.el.statusLabel.innerText = e.payload as string; });
-    listen("log", (e) => { this.logToGUI(e.payload as string); });
 
     listen("tool_permission_request", (e) => { showPermissionRequest(e.payload as any); });
 
@@ -898,7 +890,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
         const mbD = (downloaded / 1024 / 1024).toFixed(1);
         const mbT = (total / 1024 / 1024).toFixed(1);
         const speed = formatSpeed(speed_bps);
-        this.logToGUI(`📥 Скачивание: ${mbD} MB / ${mbT} MB (${pct}%)${speed ? ` · ${speed}` : ""}`);
+        logFront(`📥 Скачивание: ${mbD} MB / ${mbT} MB (${pct}%)${speed ? ` · ${speed}` : ""}`);
       }
     });
 

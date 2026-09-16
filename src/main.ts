@@ -4,12 +4,12 @@
  * Импорты идут через двери (index.ts) — модули не лезут в кишки друг друга.
  */
 import { initConfirmDialog, initPermissionDialog, initVramDialog, showToast } from "./ui";
-// Регистрирует Web Component <about-updates-panel> из переиспользуемого плагина.
+// Регистрирует Web Component <about-updates-panel> и <logs-panel> из переиспользуемых плагинов.
 import "@my-tauri-plugins/plugin-about-updates";
+import "@my-tauri-plugins/plugin-logs";
 import { ChatController, SessionController, SettingsController, GraphController, AgentTestController, CodingTestController, UpdatePopupController } from "./controllers";
 import { bus } from "./events";
-import { invoke } from "@tauri-apps/api/core";
-import { save } from "@tauri-apps/plugin-dialog";
+import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { initTelemetry, trackError } from "./telemetry";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
@@ -31,10 +31,7 @@ async function initApp() {
         for (const entry of list.getEntries()) {
           const blocked = Math.round(entry.duration);
           if (blocked >= 1000) {
-            void invoke("log_frontend_event", {
-              level: "FE-STALL",
-              msg: `main thread blocked ${blocked}ms (${entry.name})`,
-            });
+            logFront(`[FE-STALL] main thread blocked ${blocked}ms (${entry.name})`);
           }
         }
       });
@@ -118,7 +115,6 @@ async function initApp() {
     subchatHistory: $<HTMLDivElement>("subchat-history"),
     subchatTitle: $<HTMLSpanElement>("subchat-title"),
     btnBackChat: $<HTMLButtonElement>("btn-back-chat"),
-    logView: $<HTMLTextAreaElement>("log-view"),
     maxGenSlider: $<HTMLInputElement>("max-gen-slider"),
     chkKvQuantK: $<HTMLInputElement>("chk-kv-quant-k"),
     chkKvQuantV: $<HTMLInputElement>("chk-kv-quant-v"),
@@ -207,9 +203,6 @@ async function initApp() {
   const viewSettings = $<HTMLDivElement>("view-settings");
   const viewLogs = $<HTMLDivElement>("view-logs");
   const viewSubchat = $<HTMLDivElement>("view-subchat");
-  const btnClearLogs = $<HTMLButtonElement>("btn-clear-logs");
-  const btnSaveLogs = $<HTMLButtonElement>("btn-save-logs");
-  const logView = $<HTMLTextAreaElement>("log-view");
 
   // Суб-вкладки студии агентов
   const subtabGraph = $<HTMLButtonElement>("subtab-graph");
@@ -262,25 +255,6 @@ async function initApp() {
   tabAgentStudio?.addEventListener("click", () => switchTab('agent-studio'));
   tabSettings?.addEventListener("click", () => switchTab('settings'));
   tabLogs?.addEventListener("click", () => switchTab('logs'));
-  btnClearLogs?.addEventListener("click", () => { logView.value = ""; });
-  btnSaveLogs?.addEventListener("click", async () => {
-    const text = logView.value;
-    if (!text.trim()) { showToast("Логи пусты", "info"); return; }
-    try {
-      const now = new Date();
-      const ts = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')}_${String(now.getHours()).padStart(2,'0')}${String(now.getMinutes()).padStart(2,'0')}${String(now.getSeconds()).padStart(2,'0')}`;
-      const savePath = await save({
-        defaultPath: `logs_${ts}.txt`,
-        filters: [{ name: "Text", extensions: ["txt"] }],
-      });
-      if (!savePath) return;
-      await invoke("write_text_file", { path: savePath, content: text });
-      showToast(`Логи сохранены: ${savePath}`, "success");
-    } catch (e) {
-      showToast(`Ошибка сохранения: ${e}`, "error");
-      void trackError("logs.save", e);
-    }
-  });
 
   subtabGraph?.addEventListener("click", () => switchSubTab('graph'));
   subtabAiTest?.addEventListener("click", () => {
@@ -294,7 +268,6 @@ async function initApp() {
 
   // ─── Мосты шины событий ───
   bus.on("tab:switch", (tab: string) => switchTab(tab as 'chat' | 'agent-studio' | 'settings' | 'logs'));
-  bus.on("log", (msg: string) => chatCtrl.logToGUI(msg));
   bus.on("advanced:visibility", (visible: boolean) => updateAgentStudioVisibility(visible));
 
   // ─── Старт ───

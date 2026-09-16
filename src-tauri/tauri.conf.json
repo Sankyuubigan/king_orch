@@ -1,6 +1,6 @@
 {
   "productName": "King Orch",
-  "version": "26.9.80",
+  "version": "26.9.84",
   "identifier": "com.kingorch.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -47,6 +47,16 @@
     }
   },
   "plugins": {
+    "logs": {
+      "log_file_name": "king_orch.log",
+      "last_logs": true,
+      "reporting": {
+        "enabled": true,
+        "project": "king-orch",
+        "app_key": "A-EU-5188621951",
+        "events": true
+      }
+    },
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZCMEZGRUE5MUIxQjVGQzUKUldURlh4c2JxZjRQYS9Bc1hUckFGUmoxTnRoNGY1ZytROTRRbTF4T09aUnZCcDlBTzNRTkQydWoK",
       "endpoints": [
