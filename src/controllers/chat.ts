@@ -586,7 +586,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
 
   setProcessingState(state: boolean) {
     store.isProcessing = state;
-    this.el.modelSelect.disabled = this.el.agentSelect.disabled = this.el.chatInput.disabled = this.el.btnSend.disabled = state;
+    this.el.modelSelect.disabled = this.el.agentSelect.disabled = this.el.btnSend.disabled = state;
     this.el.btnStop.disabled = !state;
     if (state) { 
         this.el.chatFeedback.style.display = "block"; 
@@ -713,7 +713,6 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
   }
 
   private triggerDraftSave() {
-    if (store.isProcessing) return;
     if (!store.currentSessionId && this.el.chatInput.value.trim() !== "") {
       store.currentSessionId = Date.now().toString(); store.chatHistory = [];
       this.persistSession().then(() => bus.emit("session:changed"));
@@ -862,7 +861,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
         this.triggerDraftSave(); 
         this.triggerTokenCount();
     });
-    this.el.chatInput.addEventListener("blur", () => { if (store.currentSessionId && !store.isProcessing) { clearTimeout(store.draftTimeout); this.persistSession(); } });
+    this.el.chatInput.addEventListener("blur", () => { if (store.currentSessionId) { clearTimeout(store.draftTimeout); this.persistSession(); } });
     this.el.btnAttach?.addEventListener("click", () => { if (!this.el.btnAttach.disabled) this.el.fileInput.click(); });
     this.el.fileInput?.addEventListener("change", (e) => this.handleFileSelect((e.target as HTMLInputElement).files));
     this.el.modelSelect?.addEventListener("change", () => { this.updateAttachButtonState(); this.triggerTokenCount(); if (store.currentSessionId) this.persistSession(); });
