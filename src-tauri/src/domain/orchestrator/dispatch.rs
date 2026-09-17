@@ -408,7 +408,7 @@ where
         raw_response: &str,
         combined: &str,
         parse_target: &str,
-        response: &str,
+        _response: &str,
     ) -> Result<DispatchCtl, String> {
         let mut key_val = arguments.get("key");
         let mut val_val = arguments.get("value");
@@ -457,7 +457,11 @@ where
                 if !think_contents.is_empty() {
                     think_contents.join("\n\n")
                 } else if thought.is_empty() {
-                    response.to_string()
+                    // Конверт сигнала больше не несёт поле thought (двухфазный режим:
+                    // размышления агента уже сохранены как отдельное thought-сообщение
+                    // в Phase 1). Не подставляем сюда сырой JSON-конверт — иначе он
+                    // попадёт в сообщение агента в GUI.
+                    String::new()
                 } else {
                     thought.to_string()
                 }

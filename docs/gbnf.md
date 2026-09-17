@@ -19,12 +19,12 @@
 > - Программно сгенерированных грамматик в `signals.rs` (`build_signal_envelope_grammar()`, `build_value_grammar()`)
 > - Гибридных GBNF-обёрток в `get_hybrid_grammar()`
 
-> **Применение к сигналам `emit_signal`:** для сигнальных агентов оркестратор автоматически
-> ставит `json_schema` из контракта (`signals/root.schema.json`) через
-> `build_signal_envelope_schema()` — свободный текст живёт в поле `thought`, а структура
-> сигнала (напр. `e1`) защищена `enum`/`required`. Это гарантирует, что модель не
-> исказит имена/значения полей. Правила и разбор бага «тихо упал»:
-> [docs/SIGNAL_CONTRACTS.md](./SIGNAL_CONTRACTS.md).
+> **Применение к сигналам `emit_signal`:** в двухфазном режиме свободные рассуждения
+> собираются в **Phase 1** (без грамматики), а **Phase 2** ставит строгий JSON-конверт
+> `{ "tool": "emit_signal", "arguments": {...} }` из контракта (`signals/root.schema.json`)
+> через `build_signal_envelope_schema()`. Структура сигнала (напр. `e1`) защищена
+> `enum`/`required` — модель не исказит имена/значения полей. Поля `thought` в конверте
+> НЕТ. Правила и разбор бага «тихо упал»: [docs/SIGNAL_CONTRACTS.md](./SIGNAL_CONTRACTS.md).
 
 
 # Методы снижения тупости моделей от грамматики:

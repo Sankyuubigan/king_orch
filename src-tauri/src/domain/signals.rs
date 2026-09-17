@@ -55,7 +55,6 @@ pub fn build_signal_envelope_schema(contract: &SignalContract) -> Value {
     serde_json::json!({
         "type": "object",
         "properties": {
-            "thought": { "type": "string" },
             "tool": { "type": "string", "const": "emit_signal" },
             "arguments": {
                 "type": "object",
@@ -80,7 +79,7 @@ pub fn build_signal_envelope_schema(contract: &SignalContract) -> Value {
 /// Формат как в docs/gbnf.md строка 33:
 /// ```text
 /// root ::= think-block envelope-json (Method 3 из docs/gbnf.md)
-/// thought-content ::= [^<]*
+/// think-block ::= "<think>" [^<]* "</think>" | ""
 /// ```
 pub fn build_signal_envelope_grammar(contract: &SignalContract) -> String {
     let schema = &contract.value_schema;
@@ -110,8 +109,7 @@ pub fn build_signal_envelope_grammar(contract: &SignalContract) -> String {
         "root ::= think-block envelope-json\n\
          think-block ::= \"<think>\" [^<]* \"</think>\" | \"\"\n\
          \n\
-         envelope-json ::= \"{{\" sp thought-field \",\" sp tool-field \",\" sp arguments-field sp \"}}\"\n\
-         thought-field ::= \"\\\"thought\\\"\" sp \":\" sp json-string\n\
+         envelope-json ::= \"{{\" sp tool-field \",\" sp arguments-field sp \"}}\"\n\
          tool-field ::= \"\\\"tool\\\"\" sp \":\" sp \"\\\"emit_signal\\\"\"\n\
          arguments-field ::= \"\\\"arguments\\\"\" sp \":\" sp arguments-json\n\
          arguments-json ::= \"{{\" sp key-field \",\" sp \"\\\"value\\\"\" sp \":\" sp value-field sp \"}}\"\n\
@@ -126,9 +124,10 @@ pub fn build_signal_envelope_grammar(contract: &SignalContract) -> String {
     )
 }
 
-/// Phase 2: JSON-only grammar для fallback (без think-block).
+/// Phase 2: JSON-only grammar (без think-block).
 /// Модель генерирует ТОЛЬКО JSON envelope — никакого think.
-/// Используется когда Phase 1 (hybrid grammar) не дала JSON.
+/// Основная грамматика Phase 2 двухфазного режима: размышления уже собраны в Phase 1
+/// (без грамматики), здесь нужен только строгий конверт сигнала.
 pub fn build_signal_envelope_json_only_grammar(contract: &SignalContract) -> String {
     let schema = &contract.value_schema;
 
@@ -148,8 +147,7 @@ pub fn build_signal_envelope_json_only_grammar(contract: &SignalContract) -> Str
     format!(
         "root ::= envelope-json\n\
          \n\
-         envelope-json ::= \"{{\" sp thought-field \",\" sp tool-field \",\" sp arguments-field sp \"}}\"\n\
-         thought-field ::= \"\\\"thought\\\"\" sp \":\" sp json-string\n\
+         envelope-json ::= \"{{\" sp tool-field \",\" sp arguments-field sp \"}}\"\n\
          tool-field ::= \"\\\"tool\\\"\" sp \":\" sp \"\\\"emit_signal\\\"\"\n\
          arguments-field ::= \"\\\"arguments\\\"\" sp \":\" sp arguments-json\n\
          arguments-json ::= \"{{\" sp key-field \",\" sp \"\\\"value\\\"\" sp \":\" sp value-field sp \"}}\"\n\
@@ -551,8 +549,10 @@ mod tests {
             }),
         };
         let schema = build_signal_envelope_schema(&c);
-        // Допускается свободный текст в thought + защищённый value с обязательными полями.
+        // Конверт больше не несёт поле thought (размышления — в Phase 1);
+        // value защищён обязательными полями контракта.
         assert_eq!(schema["properties"]["tool"]["const"], serde_json::json!("emit_signal"));
+        assert!(schema["properties"].get("thought").is_none(), "поле thought убрано из конверта");
         assert_eq!(
             schema["properties"]["arguments"]["properties"]["value"]["required"],
             serde_json::json!(["e1", "e2"])
@@ -579,9 +579,12 @@ mod tests {
             }),
         };
         let grammar = build_signal_envelope_grammar(&c);
-        // Грамматика ОБЯЗАНА содержать think-теги как в docs/gbnf.md (строка 33)
-        assert!(grammar.contains("\"azaar\\n\""), "грамматика должна содержать \"azaar\\n\"");
-        assert!(grammar.contains("thought-content"), "грамматика должна содержать правило thought-content");
+        // Грамматика ОБЯЗАНА содержать think-блок (Method 3 из docs/gbnf.md).
+        assert!(grammar.contains("<think>"), "грамматика должна содержать <think>");
+        assert!(grammar.contains("</think>"), "грамматика должна содержать </think>");
+        assert!(grammar.contains("think-block"), "грамматика должна содержать правило think-block");
+        // Конверт больше не несёт поле thought (размышления — Phase 1).
+        assert!(!grammar.contains("thought-field"), "поле thought убрано из конверта");
         // Грамматика ОБЯЗАНА содержать ключи сигнала
         assert!(grammar.contains("e1"), "грамматика должна содержать e1");
         assert!(grammar.contains("e2"), "грамматика должна содержать e2");
@@ -601,8 +604,8 @@ mod tests {
             let key = format!("e{}", i);
             assert!(grammar.contains(&key), "грамматика должна содержать {}", key);
         }
-        // think-теги как в docs/gbnf.md обязательны
-        assert!(grammar.contains("\"azaar\\n\""), "должен быть \"azaar\\n\"");
+        // think-блок (Method 3) обязателен
+        assert!(grammar.contains("<think>") && grammar.contains("</think>"), "должен быть think-блок");
     }
 
     /// Регрессия: грамматика для boolean-полей (eX) ОБЯЗАНА
@@ -649,15 +652,16 @@ mod tests {
             }),
         };
         let grammar = build_signal_envelope_grammar(&c);
-        // Токенный синтаксис как в docs/gbnf.md: "azaar\n" + [^<]*
-        assert!(grammar.contains("\"azaar\\n\""), "должен быть строковый литерал \"azaar\\n\", grammar:\n{}", grammar);
-        assert!(grammar.contains("thought-content"), "должно быть правило thought-content, grammar:\n{}", grammar);
+        // Гибридный think-блок (Method 3 из docs/gbnf.md): <think> ... </think>
+        assert!(grammar.contains("<think>"), "должен быть <think>, grammar:\n{}", grammar);
+        assert!(grammar.contains("</think>"), "должен быть </think>, grammar:\n{}", grammar);
+        assert!(grammar.contains("think-block"), "должно быть правило think-block, grammar:\n{}", grammar);
         // Не должно быть токенного синтаксиса (не работает с gemma-4)
         assert!(!grammar.contains("<thingk>"), "не должно быть токена <thingk>");
         assert!(!grammar.contains("<end_of_think>"), "не должно быть токена <end_of_think>");
     }
 
-    /// Строковый литерал "azaar\n" как в docs/gbnf.md — проверяем что \n в строковом литерале
+    /// think-блок (Method 3) как в docs/gbnf.md — проверяем его присутствие
     #[test]
     fn hypothesis_string_literal_without_newline() {
         let c = SignalContract {
@@ -672,8 +676,8 @@ mod tests {
             }),
         };
         let grammar = build_signal_envelope_grammar(&c);
-        // Должен быть строковый литерал "azaar\n" как в docs/gbnf.md
-        assert!(grammar.contains("\"azaar\\n\""), "должен быть строковый литерал \"azaar\\n\", grammar:\n{}", grammar);
+        // Должен быть think-блок как в docs/gbnf.md (Method 3)
+        assert!(grammar.contains("<think>") && grammar.contains("</think>"), "должен быть think-блок, grammar:\n{}", grammar);
         // Корень правила должен начинаться с root ::=
         let root_line = grammar.lines().next().unwrap_or("");
         assert!(root_line.starts_with("root ::="), "корень должен быть root ::=");
@@ -695,14 +699,14 @@ mod tests {
         };
         let grammar = build_signal_envelope_grammar(&c);
 
-        // Проверяем наличие ключевых частей конверта
-        assert!(grammar.contains("thought"), "должно быть поле thought");
+        // Конверт без свободного thought: только tool + arguments (размышления — Phase 1).
+        assert!(!grammar.contains("thought-field"), "поле thought убрано из конверта");
         assert!(grammar.contains("emit_signal"), "должно быть emit_signal");
         assert!(grammar.contains("arguments"), "должно быть arguments");
         assert!(grammar.contains("key"), "должно быть поле key");
         assert!(grammar.contains("validator_report"), "должен быть ключ validator_report");
         assert!(grammar.contains("e1"), "должен быть e1");
-        assert!(grammar.contains("thought-content"), "должно быть правило thought-content");
+        assert!(grammar.contains("think-block"), "должно быть правило think-block");
         assert!(grammar.contains("envelope-json"), "должно быть правило envelope-json");
     }
 

@@ -422,10 +422,25 @@ where
                         ctx.messages.push(msg);
                     }
                 }
+                // Не врём юзеру: «Прервано пользователем» показываем ТОЛЬКО когда
+                // он реально нажал «Стоп» (флаг сбрасывается в начале каждого
+                // запуска в api/chat.rs). При любой другой причине сбоя показываем
+                // настоящую ошибку, а не выдуманную отмену.
+                let was_cancelled = cancel_flag.load(Ordering::SeqCst)
+                    || e.contains("Прервано пользователем");
+                let content = if was_cancelled {
+                    "⚠️ Прервано пользователем.".to_string()
+                } else {
+                    let reason = e.trim_start_matches(|c: char| {
+                        c == '⚠' || c == '\u{fe0f}' || c.is_whitespace()
+                    });
+                    let reason = if reason.is_empty() { "Ошибка выполнения workflow." } else { reason };
+                    format!("⚠️ {}", reason)
+                };
                 ctx.messages.push(ChatMessage {
                     id: Some(format!("msg_{}", ctx.messages.len())),
                     msg_type: "message".to_string(),
-                    content: "⚠️ Прервано пользователем.".to_string(),
+                    content,
                     sub_calls: None,
                     author: Some("system".to_string()),
                     model: None,
@@ -969,6 +984,27 @@ let start_time = Instant::now();
             log_cb(format!("⚠️ [{}] Phase 1: пустые размышления — Phase 2 сразу без думателя", agent.name));
         }
 
+        // ── Финализация хвоста запроса Phase 2 ──
+        // Мысль фазы 1 осталась последним assistant-сообщением. llama-server с
+        // --prefill-assistant (по умолчанию) воспринимает её как «недописанный
+        // ответ» и продолжает её, из-за чего envelope-json грамматика не
+        // применяется с первого токена (баг: первый фрагмент "<", а не "{").
+        // Закрываем запрос user-ролью → движок начинает свежий ответ под
+        // грамматикой. (В докачке хвост и так user — хинт «продолжи с места
+        // обрыва», поэтому guard по последней роли.)
+        if two_phase_thinking && phase2_disable_reasoning
+            && ctx.llm_messages.last().map_or(false, |m| m.role == "assistant")
+        {
+            ctx.llm_messages.push(LlmMessage {
+                role: "user".to_string(),
+                content: "Размышления завершены. Теперь сформулируй финальный ответ.".to_string(),
+            });
+            log_cb(format!(
+                "🎯 [{}] Phase 2: хвост запроса завершён user-ролью (фикс prefill-assistant)",
+                agent.name
+            ));
+        }
+
         // Phase 2 грамматика для signal-агентов: envelope-json БЕЗ think-block
         // (размышления уже были в Phase 1). Per-agent GBNF и freeform не трогаем:
         // restore_grammar() в цикле восстановит их для первого вызова Phase 2.
@@ -1440,7 +1476,7 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
     // Если Phase 1 (hybrid grammar think + JSON) не дала JSON envelope,
     // делаем второй вызов с JSON-only grammar. Модель видит тот же контекст
     // (system + user + assistant с think-block из Phase 1), grammar
-    // принуждает к JSON сразу — без user-сообщения.
+    // принуждает к JSON сразу.
     if !ctx.signal_saved && signal_contract.is_some() {
         let contract = signal_contract.as_ref().unwrap();
         log_cb(format!("🔄 [{}] Phase 2: JSON-only fallback (grammar: envelope-json)...", agent.name));
@@ -1450,6 +1486,21 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
         ctx.continuation_mark = None;
         ctx.consecutive_incomplete = 0;
         ctx.thinking_no_answer = 0;
+
+        // Хвост запроса не должен быть assistant: llama-server с
+        // --prefill-assistant (по умолчанию) продолжает последнее
+        // assistant-сообщение вместо свежего ответа под grammar (первый
+        // фрагмент "<", а не "{"). Закрываем запрос user-ролью.
+        if ctx.llm_messages.last().map_or(false, |m| m.role == "assistant") {
+            ctx.llm_messages.push(LlmMessage {
+                role: "user".to_string(),
+                content: "Размышления завершены. Теперь сформулируй финальный ответ.".to_string(),
+            });
+            log_cb(format!(
+                "🎯 [{}] Phase 2 fallback: хвост запроса завершён user-ролью (фикс prefill-assistant)",
+                agent.name
+            ));
+        }
 
         // Устанавливаем JSON-only grammar
         let json_only_grammar = build_signal_envelope_json_only_grammar(contract);

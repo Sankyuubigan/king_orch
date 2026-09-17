@@ -69,6 +69,9 @@ pub struct LlamaEngine {
     log_cb: Arc<dyn Fn(String) + Send + Sync>,
     client: Client,
     server_log: PathBuf,
+    /// Форматированный счётчик уже обработанных строк llama_server.log
+    /// (дигностика: привязка LCP/граф-строк сервера к запросу клиента).
+    server_log_line_count: std::sync::Mutex<usize>,
     port: u16,
     api_key: String,
     child: std::sync::Mutex<Option<Child>>,
@@ -683,6 +686,7 @@ impl LlamaEngine {
             log_cb: log_cb.clone(),
             client,
             server_log,
+            server_log_line_count: std::sync::Mutex::new(0),
             port,
             api_key,
             child: std::sync::Mutex::new(Some(child)),
@@ -1038,6 +1042,23 @@ impl LlamaEngine {
             }
         }
 
+        // ── Диагностика причин бага грамматики: слепок того, что уйдёт на сервер ──
+        // Показывает состав сообщений (роли/длины), cache_prompt, disable_reasoning
+        // — вычисляется до move messages_val в request.
+        log_cb(format!(
+            "🔬 Запрос: {} сообщений (последний user=#{}) | roles_len=[{}] | cache_prompt=true n_predict={} disable_reasoning={} | вложений={}",
+            messages_val.len(),
+            last_user_idx.map(|i| i.to_string()).unwrap_or_else(|| "—".to_string()),
+            messages_val.iter().map(|m| {
+                let role = m.get("role").and_then(|r| r.as_str()).unwrap_or("?");
+                let len = m.get("content").and_then(|c| c.as_str()).map(str::len).unwrap_or(0);
+                format!("{}:{}", role, len)
+            }).collect::<Vec<_>>().join(", "),
+            max_tokens,
+            disable_reasoning,
+            attachments.as_ref().map(|a| a.len()).unwrap_or(0),
+        ));
+
         let request = ChatCompletionsRequest {
             messages: messages_val,
             n_predict: max_tokens,
@@ -1067,6 +1088,21 @@ impl LlamaEngine {
             },
             tool_choice,
         };
+
+        // ── Диагностика: превью точного тела запроса ──
+        // Голова (system/сообщения) + хвост (грамматика, kwargs) — доказательство,
+        // что грамматика реально была отправлена на сервер.
+        let req_summary = serde_json::to_string(&request).unwrap_or_default();
+        if !req_summary.is_empty() {
+            let head: String = req_summary.chars().take(300).collect();
+            let tail: String = req_summary.chars().rev().take(400).collect::<String>().chars().rev().collect();
+            log_cb(format!(
+                "🔬 Тело запроса ({} байт): head=[{}] ... tail=[{}]",
+                req_summary.len(),
+                head.replace('\n', "\\n").replace('\r', ""),
+                tail.replace('\n', "\\n").replace('\r', ""),
+            ));
+        }
 
         // ── Телеметрия: старт генерации ──
         tauri_plugin_logs::track_event(
@@ -1211,6 +1247,10 @@ impl LlamaEngine {
                 if !delta.is_empty() {
                     if first_token_at.is_none() {
                         first_token_at = Some(Instant::now());
+                        // Диагностика: первый сырой фрагмент ответа движка. Под
+                        // envelope-json первый токен обязан быть "{", а не "<".
+                        let preview: String = delta.chars().take(120).collect();
+                        log_cb(format!("🔬 [{}] Первый фрагмент ответа движка ({} симв.): {}", ctx_label, delta.chars().count(), preview.replace('\n', "\\n")));
                     }
                     generated_bytes.extend_from_slice(delta.as_bytes());
                     let current_text = String::from_utf8_lossy(&generated_bytes).into_owned();
@@ -1316,6 +1356,10 @@ impl LlamaEngine {
         );
         log_cb(crate::infra::peak_line(ctx_label, &report, self.vram_before, total_mb, &extra));
 
+        // ── Диагностика: LCP/слот-строки llama_server.log для ЭТОГО запроса ──
+        // Привязывает f_sim_best/f_keep/graphs_reused к текущей генерации.
+        self.dump_new_server_log_lines(&log_cb);
+
         // ── Телеметрия: итоги генерации ──
         tauri_plugin_logs::track_event(
             "llm_finished",
@@ -1349,6 +1393,45 @@ impl LlamaEngine {
                 elapsed_sec: gen_elapsed,
             },
         })
+    }
+
+    /// Диагностика: дамп НОВЫХ строк llama_server.log с последнего вызова.
+    /// Фильтрует только релевантные: выбор слота по LCP (f_sim_best/f_keep),
+    /// launch_slot_, print_timing (prompt eval / graphs reused), release.
+    /// Так LCP-цифры сервера привязываются к конкретному запросу клиента.
+    /// Смещение — число ПОЛНЫХ строк (без недописанного хвоста): частичную
+    /// строку подхватим при следующем вызове.
+    fn dump_new_server_log_lines(&self, log_cb: &impl Fn(String)) {
+        let content = match std::fs::read_to_string(&self.server_log) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+        let complete = content.matches('\n').count();
+        let mut offset = self.server_log_line_count.lock().unwrap();
+        let selected: Vec<&str> = content.lines()
+            .skip(*offset)
+            .take(complete.saturating_sub(*offset))
+            .filter(|l| {
+                l.contains("get_availabl")
+                    || l.contains("launch_slot_")
+                    || (l.contains("print_timing") && l.contains("prompt eval"))
+                    || l.contains("graphs reused")
+                    || (l.contains("release") && l.contains("stop processing"))
+            })
+            .collect();
+        *offset = complete;
+        drop(offset);
+        if selected.is_empty() {
+            return;
+        }
+        let shown = selected.iter().rev().take(25).collect::<Vec<_>>();
+        log_cb(format!(
+            "🔬 llama-server (последние {} из {} строк, всего новых {}): {}",
+            shown.len(),
+            selected.len(),
+            complete,
+            shown.iter().rev().map(|l| l.trim()).collect::<Vec<_>>().join(" \\n ")
+        ));
     }
 
     pub fn is_multimodal(&self) -> bool {
