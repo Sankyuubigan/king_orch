@@ -181,7 +181,6 @@ async fn main() {
                         match event {
                             tauri::WindowEvent::Focused(focused) => {
                                 let f = *focused;
-                                log::info!("[WV] Focused({})", f);
                                 if f {
                                     let _ = cb_win.eval("void document.documentElement.offsetHeight");
                                 }

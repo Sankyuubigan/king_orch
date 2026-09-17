@@ -871,50 +871,102 @@ let start_time = Instant::now();
             agent.name, max_gen_tokens));
 
         let ctx_label_p1 = format!("{}:{}#phase1", mem_mode, agent.name);
-        match engine.generate_chat(
-            &ctx.llm_messages,
-            max_gen_tokens,
-            model_params, format_type,
-            false,  // disable_reasoning = false — модель думает
-            cancel_flag.clone(),
-            &ctx_label_p1,
-            None,
-            |p, _| { status_cb(format!("{} думает (Фаза 1)...", agent.name),
-                20 + (p * 0.1) as u8); },
-            log_cb.clone(),
-        ) {
-            Ok(gen) => {
-                let thinking_text = gen.text.clone();
-                log_cb(format!("<<< [{}] Phase 1: {} символов, стоп: {}",
-                    agent.name, thinking_text.len(), gen.stop_reason));
-                // Phase 2 в любом случае отвечает без думателя: размышления уже
-                // собраны, модель должна выдать итоговый результат.
-                phase2_disable_reasoning = true;
-                if !thinking_text.trim().is_empty() {
-                    ctx.llm_messages.push(LlmMessage {
-                        role: "assistant".to_string(),
-                        content: thinking_text.clone(),
-                    });
-                    // Сохраняем размышления в сессию как thought (раскрытие в GUI).
-                    ctx.messages.push(ChatMessage {
-                        id: Some(format!("msg_{}", *ctx.msg_counter)),
-                        msg_type: "thought".to_string(),
-                        content: safe_truncate(&thinking_text, THOUGHT_STORE_MAX_CHARS),
-                        sub_calls: None,
-                        author: Some(agent.id.clone()),
-                        model: Some(extract_model_filename(&engine.model_path)),
-                        time_sec: None,
-                        attachments: None,
-                    });
-                    *ctx.msg_counter += 1;
-                } else {
-                    log_cb(format!("⚠️ [{}] Phase 1: пустые размышления — Phase 2 сразу без думателя", agent.name));
+        // Докачка обрыва Фазы 1 (аналог основного цикла): если модель упёрлась в
+        // лимит токенов (MAX_TOKENS), размышления продолжаются РОВНО с места обрыва,
+        // а не режутся — иначе Фаза 2 дописывает JSON на глаз (баг e6=true у валидатора).
+        let mut phase1_full = String::new();
+        let mut phase1_raw = String::new();
+        let mut phase1_mark: Option<usize> = None;
+        let mut phase1_cont = 0usize;
+        let mut phase1_stalled = 0usize;
+        let mut phase1_last_len = 0isize;
+        let mut thinking_text = String::new();
+        loop {
+            match engine.generate_chat(
+                &ctx.llm_messages,
+                max_gen_tokens,
+                model_params, format_type,
+                false,  // disable_reasoning = false — модель думает
+                cancel_flag.clone(),
+                &ctx_label_p1,
+                None,
+                |p, _| { status_cb(format!("{} думает (Фаза 1)...", agent.name),
+                    20 + (p * 0.1) as u8); },
+                log_cb.clone(),
+            ) {
+                Ok(gen) => {
+                    let chunk = gen.text.clone();
+                    log_cb(format!("<<< [{}] Phase 1: чанк {} символов, стоп: {}",
+                        agent.name, chunk.len(), gen.stop_reason));
+                    thinking_text = if phase1_full.is_empty() {
+                        chunk.clone()
+                    } else {
+                        // В докачке каждый чанк — продолжение с места обрыва.
+                        format!("{}\n{}", phase1_full, chunk)
+                    };
+                    phase1_full = thinking_text.clone();
+                    // Phase 2 в любом случае отвечает без думателя: размышления уже
+                    // собраны, модель должна выдать итоговый результат.
+                    phase2_disable_reasoning = true;
+                    // Естественный конец (EOS и пр.) или пустой чанк — размышления полные.
+                    if gen.stop_reason != "MAX_TOKENS" || chunk.trim().is_empty() {
+                        break;
+                    }
+                    // Обрыв по лимиту: докачиваем с места обрыва.
+                    let grew = thinking_text.chars().count() as isize - phase1_last_len;
+                    phase1_last_len = thinking_text.chars().count() as isize;
+                    if phase1_cont > 0 && grew < MIN_THINKING_GROWTH_CHARS {
+                        phase1_stalled += 1;
+                        log_cb(format!(
+                            "⚠️ [{}] Phase 1 докачка #{}: размышления не растут (+{} симв.) — застой {}/{}",
+                            agent.name, phase1_cont, grew, phase1_stalled, MAX_STALLED_CONTINUATIONS
+                        ));
+                        if phase1_stalled >= MAX_STALLED_CONTINUATIONS {
+                            log_cb(format!("🛑 [{}] Phase 1: докачка забуксовала — используем накопленные размышления.", agent.name));
+                            break;
+                        }
+                    }
+                    let parse_target = clean_thought_tags(&thinking_text);
+                    let exhausted = push_continuation_for_cutoff(
+                        &log_cb, &agent.id, engine, model_params, format_type, cancel_flag.clone(),
+                        &ctx_label_p1, stream_meta.clone(), &thinking_text, &parse_target, &chunk,
+                        &mut ctx.llm_messages, &mut phase1_raw, &mut phase1_mark, &mut phase1_cont,
+                    )?;
+                    if exhausted {
+                        log_cb(format!("⚠️ [{}] Phase 1 не смог завершить размышления после {} докачек — используем накопленные.", agent.name, MAX_CONTINUATIONS));
+                        break;
+                    }
+                }
+                Err(e) => {
+                    log_cb(format!("⚠️ [{}] Phase 1 ошибка: {} — стандартный режим (думатель по грамматике)",
+                        agent.name, e));
+                    break;
                 }
             }
-            Err(e) => {
-                log_cb(format!("⚠️ [{}] Phase 1 ошибка: {} — стандартный режим (думатель по грамматике)",
-                    agent.name, e));
+        }
+        if !thinking_text.trim().is_empty() {
+            // При докачке чанки уже лежат в llm_messages (assistant + подсказка),
+            // цельный текст не дублируем — важен только для сессии и следующей Фазы 1.
+            if phase1_cont == 0 {
+                ctx.llm_messages.push(LlmMessage {
+                    role: "assistant".to_string(),
+                    content: thinking_text.clone(),
+                });
             }
+            // Сохраняем размышления в сессию как thought (раскрытие в GUI).
+            ctx.messages.push(ChatMessage {
+                id: Some(format!("msg_{}", *ctx.msg_counter)),
+                msg_type: "thought".to_string(),
+                content: safe_truncate(&thinking_text, THOUGHT_STORE_MAX_CHARS),
+                sub_calls: None,
+                author: Some(agent.id.clone()),
+                model: Some(extract_model_filename(&engine.model_path)),
+                time_sec: None,
+                attachments: None,
+            });
+            *ctx.msg_counter += 1;
+        } else {
+            log_cb(format!("⚠️ [{}] Phase 1: пустые размышления — Phase 2 сразу без думателя", agent.name));
         }
 
         // Phase 2 грамматика для signal-агентов: envelope-json БЕЗ think-block

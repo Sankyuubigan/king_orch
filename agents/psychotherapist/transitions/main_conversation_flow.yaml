@@ -63,7 +63,6 @@ nodes:
   ui_pos:
     y: 152
     x: 1345
-  two_phase_thinking: true
 
 - id: call_grounder
   type: llm_worker
