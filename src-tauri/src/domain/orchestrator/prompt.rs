@@ -130,6 +130,7 @@ mod tests {
             model: None,
             time_sec: None,
             attachments: None,
+            phase: None,
         }
     }
 

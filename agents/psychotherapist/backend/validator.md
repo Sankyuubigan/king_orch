@@ -1,7 +1,7 @@
 ---
 name: Валидатор данных
 visible: true
-single_report: true
+replace_report: true
 tools: ["emit_signal"]
 ---
 

@@ -242,6 +242,7 @@ where
                 model: Some(extract_model_filename(&self.engine.model_path)),
                 time_sec: None,
                 attachments: None,
+                phase: None,
             });
             *self.msg_counter += 1;
         }
@@ -342,8 +343,9 @@ where
                     model: Some(extract_model_filename(&(*engine).model_path)),
                     time_sec: None,
                     attachments: None,
+                    phase: Some(2),
                 };
-                push_report(&mut **messages, err_msg, subagent.single_report);
+                push_report(&mut **messages, err_msg, subagent.replace_report, Some(2));
                 **msg_counter += 1;
                 *final_response = sub_result;
                 return Ok(DispatchCtl::Break);
@@ -358,12 +360,13 @@ where
                 model: Some(extract_model_filename(&(*engine).model_path)),
                 time_sec: None,
                 attachments: None,
+                phase: Some(2),
             };
-            push_report(&mut **messages, msg, subagent.single_report);
+            push_report(&mut **messages, msg, subagent.replace_report, Some(2));
             **msg_counter += 1;
             // Сигнал сабагента сохраняется ПОСЛЕ thought.
             if let Some(signal) = sub_pending_signal.take() {
-                push_report(&mut **messages, signal, false);
+                push_report(&mut **messages, signal, false, None);
                 **msg_counter += 1;
             }
 
@@ -445,6 +448,7 @@ where
                 model: None,
                 time_sec: None,
                 attachments: None,
+                phase: Some(2),
             };
             self.pending_signal = Some(signal_msg);
             *self.msg_counter += 1;

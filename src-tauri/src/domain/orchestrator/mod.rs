@@ -446,6 +446,7 @@ where
                     model: None,
                     time_sec: None,
                     attachments: None,
+                    phase: None,
                 });
             }
         }
@@ -500,6 +501,7 @@ where
                 model: Some(extract_model_filename(&engine.model_path)),
                 time_sec: None,
                 attachments: None,
+                phase: Some(2),
             });
             Ok(ChatRunResult {
                 text: final_res,
@@ -978,6 +980,7 @@ let start_time = Instant::now();
                 model: Some(extract_model_filename(&engine.model_path)),
                 time_sec: None,
                 attachments: None,
+                phase: Some(1),
             });
             *ctx.msg_counter += 1;
         } else {
@@ -1345,6 +1348,7 @@ let start_time = Instant::now();
                     model: Some(extract_model_filename(&engine.model_path)),
                     time_sec: None,
                     attachments: None,
+                    phase: Some(1),
                 });
                 *ctx.msg_counter += 1;
             }
@@ -1361,6 +1365,7 @@ let start_time = Instant::now();
                         model: Some(extract_model_filename(&engine.model_path)),
                         time_sec: None,
                         attachments: None,
+                        phase: Some(1),
                     });
                     *ctx.msg_counter += 1;
                 }
@@ -1574,6 +1579,7 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
                     model: None,
                     time_sec: None,
                     attachments: None,
+                    phase: Some(2),
                 };
                 ctx.messages.push(signal_msg);
                 *ctx.msg_counter += 1;
@@ -1623,7 +1629,7 @@ mod tests {
             mcp_servers: Vec::new(),
             subagents: Vec::new(),
             folder: None,
-            single_report: false,
+            replace_report: false,
             tools: Vec::new(),
             current_date: false,
         }

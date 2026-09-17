@@ -139,7 +139,7 @@
 | `workflow_engine/context.rs` | Контекст выполнения: проход `{{ template }}` переменных, хранение outputs узлов |
 | `workflow_engine/fact_extractor.rs` | **Built-in** fact-экстрактор (не требует отдельного .md файла). Факты инжектятся runtime из YAML |
 | `parsers.rs` | Распаковка JSON от LLM, очистка think-тегов |
-| `agent_manager.rs` | Парсинг .md файлов агентов, обработка INCLUDE, загрузка entry points (`load_entry_points`) через `visible` поле. Парсит `single_report` (только 1 отчёт агента в сессии) в `AgentProfile` |
+| `agent_manager.rs` | Парсинг .md файлов агентов, обработка INCLUDE, загрузка entry points (`load_entry_points`) через `visible` поле. Парсит `replace_report` (только последний отчёт агента в сессии, legacy `single_report` тоже распознаётся) в `AgentProfile` |
 
 ### Подслой 5.3: Инфраструктура (`src-tauri/src/infra/`)
 
@@ -147,7 +147,7 @@
 
 | Файл | Зона ответственности |
 |------|---------------------|
-| `llm.rs` | Управление движком llama.cpp как ОТДЕЛЬНЫМ ПРОЦЕССОМ (`llama-server.exe`, HTTP-инференс; приложение НЕ линкует llama.cpp нативно). Запуск/зачистка, `/health`/`/tokenize`/`/v1/chat/completions`, токенизация, генерация, сэмплирование, чтение GGUF, структура `ChatMessage` с полями `type`/`author`. Хелпер `push_report()` — дедупликация отчётов агента при `single_report`. Детально: `global_ai_docs/desktop_rust_tauri/llama_cpp_engine.md` |
+| `llm.rs` | Управление движком llama.cpp как ОТДЕЛЬНЫМ ПРОЦЕССОМ (`llama-server.exe`, HTTP-инференс; приложение НЕ линкует llama.cpp нативно). Запуск/зачистка, `/health`/`/tokenize`/`/v1/chat/completions`, токенизация, генерация, сэмплирование, чтение GGUF, структура `ChatMessage` с полями `type`/`author`/`phase` (`1` — размышления, `2` — ответ). Хелпер `push_report()` — дедупликация отчётов агента при `replace_report` (не вычищает размышления фазы 1 текущего отчёта). Детально: `global_ai_docs/desktop_rust_tauri/llama_cpp_engine.md` |
 | `config.rs` | Структуры AppConfig/ModelParams, чтение/запись конфига, каталог моделей |
 | `session_manager.rs` | Чтение/запись JSON-файлов сессий (единый массив `messages[]`) |
 | `mcp_client.rs` | JSON-RPC клиент для MCP-серверов через stdin/stdout |

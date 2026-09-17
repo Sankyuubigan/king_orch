@@ -43,6 +43,7 @@ pub(crate) fn write_todos(messages: &mut Vec<ChatMessage>, agent_id: &str, todos
         model: None,
         time_sec: None,
         attachments: None,
+        phase: None,
     });
 }
 

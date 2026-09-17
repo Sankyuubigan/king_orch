@@ -15,7 +15,8 @@ export interface GraphNodeDef {
   conditions?: Array<{ field: string; equals: any }>;
   logic?: string;
   input_object?: string;
-  inject_reports?: string[];
+  inject_thoughts?: string[];
+  inject_response?: string[];
   output_type?: string;
   ui_pos?: { x: number; y: number };
   signal_name?: string;

@@ -43,7 +43,7 @@ tools:
 
 Весь этот шаг ты пишешь ВНУТРИ блока `<think>...</think>`. Юзер его НЕ видит.
 
-Прочитай отчёт Валидатора в инжекте (`inject_reports`). Найди там `validator_report` с полями `eX`. Для каждого поля где значение `false` — подбери ТОЧНЫЙ вопрос из `questions_by_elements.md`.
+Прочитай отчёт Валидатора в инжекте (`inject_response`). Найди там `validator_report` с полями `eX`. Для каждого поля где значение `false` — подбери ТОЧНЫЙ вопрос из `questions_by_elements.md`.
 
 ```
 <think>

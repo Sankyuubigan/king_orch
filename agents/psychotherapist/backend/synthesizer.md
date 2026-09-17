@@ -1,7 +1,7 @@
 ---
 name: Объединение мишеней
 visible: true
-single_report: true
+replace_report: true
 tools: ["emit_signal"]
 ---
 

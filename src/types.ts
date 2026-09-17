@@ -7,6 +7,7 @@ export interface ChatMessage {
     model?: string;
     time_sec?: number;
     attachments?: Attachment[];
+    phase?: 1 | 2;
 }
 
 export interface SubCall {

@@ -203,23 +203,47 @@ pub struct ChatMessage {
     /// берёт только content). Текущий ход передаёт их отдельным аргументом.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<ChatAttachment>>,
+    /// Фаза двухфазного вызова агента: `1` — свободные размышления (think),
+    /// `2` — финальный ответ/сигнал. Отсутствие поля = однофазный/legacy режим.
+    /// Нужна для раздельной инжекции `inject_thoughts` (фаза 1) и `inject_response`
+    /// (фаза 2), а также чтобы `replace_report` не стирал размышления фазы 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<u8>,
+}
+
+/// Возвращает фазу сообщения (1 = размышления, 2 = ответ, None = legacy).
+pub fn message_phase(msg: &ChatMessage) -> Option<u8> {
+    msg.phase
+        .or_else(|| if msg.msg_type == "signal" { Some(2) } else { None })
 }
 
 /// Добавляет отчёт агента в массив сообщений сессии.
-/// Если `single_report == true`, предварительно удаляет все прошлые сообщения
-/// того же автора — чтобы в сессии хранился только один (последний) отчёт агента
-/// и не раздувался контекст.
-pub fn push_report(messages: &mut Vec<ChatMessage>, msg: ChatMessage, single_report: bool) {
-    if single_report {
+/// Если `replace_report == true`, предварительно удаляет прошлые отчёты того же автора
+/// (обе фазы прошлого вызова), оставляя только текущий полный отчёт и сигналы.
+/// Сообщения фазы 1 текущего отчёта НЕ удаляются при сохранении фазы 2 —
+/// иначе двухфазный разбор (размышления агента) пропадал бы из сессии.
+///
+/// `phase` — фаза сохраняемого сообщения (`Some(1)` = размышления, `Some(2)` = ответ).
+/// Фаза 1 сохраняется с заменой прошлых отчётов, фаза 2 — только хвост собственной фазы.
+pub fn push_report(messages: &mut Vec<ChatMessage>, msg: ChatMessage, replace_report: bool, phase: Option<u8>) {
+    if replace_report {
         if let Some(author) = msg.author.clone() {
             messages.retain(|m| {
                 // Сигналы — инфраструктурные маркеры, а не отчёты агента.
-                // Их нельзя сворачивать single_report, иначе маршрутизаторы
+                // Их нельзя сворачивать replace_report, иначе маршрутизаторы
                 // (signal_router) теряют эмитнутые сигналы.
                 if m.msg_type == "signal" {
                     return true;
                 }
-                m.author.as_deref() != Some(author.as_str())
+                if m.author.as_deref() != Some(author.as_str()) {
+                    return true;
+                }
+                // Сохраняя фазу 2, не вычищаем размышления (фаза 1) ТЕКУЩЕГО отчёта.
+                // Иначе двухфазный агент теряет свой разбор из сессии.
+                if phase == Some(2) && message_phase(m) == Some(1) {
+                    return true;
+                }
+                false
             });
         }
     }
@@ -416,6 +440,7 @@ mod tests {
             model: None,
             time_sec: None,
             attachments: None,
+            phase: None,
         }
     }
 

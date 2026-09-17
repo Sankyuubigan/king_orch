@@ -201,7 +201,9 @@ pub struct NodeDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub statuses: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inject_reports: Option<Vec<String>>,
+    pub inject_thoughts: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inject_response: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub problems: Option<String>,
     /// Текст, выводимый в чат пользователя как системное сообщение (независим от заметки `input`)
@@ -573,9 +575,9 @@ edges:
         // Ключевая проверка бага: реальный файл графа должен проходить
         // надёжный конвейер save_workflow (нативный serde_yaml + безопасные
         // разделители) и обратно парситься, ПРИЧЁМ структура
-        // (узлы, рёбра, вложенные поля ui_pos/inject_reports, тексты
+        // (узлы, рёбра, вложенные поля ui_pos/inject_thoughts, тексты
         // task/input) должна совпасть побайтово. Этот тест ловит
-        // «валидный, но сломанный» YAML (напр. inject_reports,
+        // «валидный, но сломанный» YAML (напр. inject_thoughts,
         // уехавший внутрь task, или ui_pos, потерявший отступ).
         let yaml_str = serde_yaml::to_string(&wf).expect("ser");
         let yaml_final = separate_top_level_fields(&yaml_str);
@@ -593,7 +595,8 @@ edges:
             assert_eq!(n1.task, n2.task, "task узла {}", n1.id);
             assert_eq!(n1.input, n2.input, "input узла {}", n1.id);
             assert_eq!(n1.output_type, n2.output_type, "output_type узла {}", n1.id);
-            assert_eq!(n1.inject_reports, n2.inject_reports, "inject_reports узла {}", n1.id);
+            assert_eq!(n1.inject_thoughts, n2.inject_thoughts, "inject_thoughts узла {}", n1.id);
+            assert_eq!(n1.inject_response, n2.inject_response, "inject_response узла {}", n1.id);
             // ui_pos должен парситься как карта, а не слететь внутрь task.
             assert_eq!(n1.ui_pos, n2.ui_pos, "ui_pos узла {}", n1.id);
             assert!(n2.ui_pos.as_ref().map_or(false, |m| m.len() == 2),

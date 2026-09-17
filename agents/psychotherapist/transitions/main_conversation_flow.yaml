@@ -29,9 +29,9 @@ nodes:
   type: llm_worker
   agent: data_collector
   output_type: message
-  inject_reports:
-  - decomposer
+  inject_response:
   - validator
+  - decomposer
   ui_pos:
     x: 3183
     y: -347
@@ -41,25 +41,27 @@ nodes:
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    y: 153
     x: -554
+    y: 153
 
 - id: call_decomposer
   type: llm_worker
   agent: decomposer
-  inject_reports:
-  - decomposer
+  output_type: message
+  inject_thoughts:
   - soma_translator
   ui_pos:
-    y: 382
-    x: 496
+    x: 618
+    y: 495
 
 - id: call_validator
   type: llm_worker
   agent: validator
-  inject_reports:
+  inject_response:
   - decomposer
-  - soma_translator
+  - shadow_worker
+  - grounder
+  - data_collector
   ui_pos:
     y: 152
     x: 1345
@@ -69,12 +71,15 @@ nodes:
   agent: grounder
   task: Проанализируй отчёты коллег и жалобу пользователя. Выдай несколько конкретных, приземлённых бытовых сценариев возможных МЕНТАЛЬНЫХ причин проблемы (6-й элемент невроза, а не соматика). Если данных не хватает — задай пользователю уточняющие вопросы.
   output_type: message
-  inject_reports:
-  - decomposer
+  inject_thoughts:
+  - soma_translator
+  inject_response:
   - validator
+  - decomposer
+  - data_collector
   ui_pos:
-    x: 2837
-    y: -442
+    x: 2841
+    y: -451
 
 - id: call_cluster_checker
   type: llm_worker
@@ -92,18 +97,20 @@ nodes:
   - key: Кластер
     to: call_decomposer
   ui_pos:
-    x: 219
-    y: 215
+    x: 223
+    y: 209
 
 - id: call_pattern_finder
   type: llm_worker
   agent: pattern_finder_by_elements
-  inject_reports:
-  - soma_translator
-  - validator
+  inject_response:
+  - decomposer
+  - shadow_worker
+  - grounder
+  - data_collector
   ui_pos:
-    x: 2503
-    y: 45
+    x: 2834
+    y: 44
 
 - id: call_healer
   type: llm_worker
@@ -113,9 +120,13 @@ nodes:
     Затем выполни ШАГ 2 — прочитай описание этого паттерна в базе знаний инструментом ReadSection.
     После этого переведи паттерн на контекст проблемы пользователя.
   output_type: message
-  inject_reports:
+  inject_response:
   - pattern_finder_by_elements
   - synthesizer
+  - decomposer
+  - shadow_worker
+  - grounder
+  - data_collector
   ui_pos:
     x: 3468
     y: -5
@@ -123,23 +134,28 @@ nodes:
 - id: combining_targets
   type: llm_worker
   agent: synthesizer
-  inject_reports:
+  inject_response:
   - pattern_finder_by_elements
   - validator
   ui_pos:
-    y: 132
-    x: 3050
+    x: 3203
+    y: 607
+  disabled: true
 
 - id: call_shadow_worker
   type: llm_worker
   agent: shadow_worker
   output_type: message
-  inject_reports:
-  - decomposer
+  inject_thoughts:
+  - soma_translator
+  inject_response:
   - validator
+  - decomposer
+  - data_collector
+  - grounder
   ui_pos:
-    y: -440
-    x: 2261
+    x: 2259
+    y: -456
 
 - id: note_1782221436115
   type: note
@@ -152,15 +168,15 @@ nodes:
   type: note
   input: проверка данных. развилка на доработку данных или отправку на лечение
   ui_pos:
-    x: 908
     y: 161
+    x: 908
 
 - id: note_1784427848563
   type: note
   input: вычисление типа
   ui_pos:
-    x: 2085
     y: 41
+    x: 2085
 
 - id: check_critical_elements
   type: condition_router
@@ -206,8 +222,8 @@ nodes:
   - key: НУЖНА РУКОСТЬ
     to: note_1785123862689
   ui_pos:
-    y: -39
     x: -298
+    y: -39
 
 - id: note_1785123862689
   type: note
@@ -233,28 +249,29 @@ nodes:
 
     В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
-    x: -1323
     y: 748
+    x: -1323
 
 - id: check_cluster_signal2
   type: signal_router
   signal_name: cluster_checker
   cases_priority:
   - key: Конкретная проблема
-    to: call_healer
+    to: ''
   - key: Кластер
     to: combining_targets
   ui_pos:
-    x: 2784
-    y: -83
+    x: 2843
+    y: 389
+  disabled: true
 
 - id: call_request_helper
   type: llm_worker
   agent: request_helper
   output_type: message
   ui_pos:
-    y: 864
     x: -808
+    y: 864
 
 - id: check_elements1
   type: condition_router
@@ -287,8 +304,8 @@ nodes:
     equals: true
   logic: all
   ui_pos:
-    y: -302
     x: 2517
+    y: -302
 
 edges:
 
@@ -304,11 +321,8 @@ edges:
 - from: note_1784427848563
   to: call_pattern_finder
 
-- from: combining_targets
+- from: call_pattern_finder
   to: call_healer
-
-- from: call_decomposer
-  to: note_1782220193985
 
 - from: call_validator
   to: check_critical_elements
@@ -318,9 +332,6 @@ edges:
 
 - from: call_soma_translator
   to: check_need_handedness
-
-- from: call_pattern_finder
-  to: check_cluster_signal2
 
 - from: note_1785141025138
   to: call_request_helper

@@ -20,7 +20,7 @@ pub struct AgentProfile {
     #[serde(default)]
     pub folder: Option<String>,
     #[serde(default)]
-    pub single_report: bool,
+    pub replace_report: bool,
     #[serde(default)]
     pub tools: Vec<String>,
     #[serde(default)]
@@ -100,7 +100,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             let mut name = String::new();
             let mut description = String::new();
             let mut visible = false;
-            let mut single_report = false;
+            let mut replace_report = false;
             let mut current_date = false;
             let mut mcp_servers = Vec::new();
             let mut tools = Vec::new();
@@ -111,7 +111,8 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 if line.starts_with("name:") { name = line["name:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string(); }
                 else if line.starts_with("description:") { description = line["description:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string(); }
                 else if line.starts_with("visible:") { visible = line["visible:".len()..].trim().parse().unwrap_or(false); }
-                else if line.starts_with("single_report:") { single_report = line["single_report:".len()..].trim().parse().unwrap_or(false); }
+                else if line.starts_with("replace_report:") { replace_report = line["replace_report:".len()..].trim().parse().unwrap_or(false); }
+                else if line.starts_with("single_report:") { replace_report = line["single_report:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("current_date:") { current_date = line["current_date:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("mcp_servers:") {
                     if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["mcp_servers:".len()..].trim()) { mcp_servers = parsed; }
@@ -146,7 +147,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 }
                 i += 1;
             }
-            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, single_report, tools, current_date }); }
+            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date }); }
         }
     }
     None

@@ -2,7 +2,7 @@
 name: Декомпозиция проблемы
 destiny: Разделить кластер-запрос юзера на составляющие для выявления приоритетной проблемы
 visible: true
-single_report: true
+replace_report: true
 ---
 
 **Роль:**

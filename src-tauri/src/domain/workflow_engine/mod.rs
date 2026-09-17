@@ -147,6 +147,7 @@ where
             model: None,
             time_sec: None,
             attachments: None,
+            phase: None,
         });
         let directive = crate::domain::orchestrator::prompt::language_directive(&lang_messages);
 

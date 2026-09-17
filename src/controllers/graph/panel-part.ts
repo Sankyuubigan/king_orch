@@ -51,8 +51,12 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
       </select>
     </div>`;
     html += `<div class="graph-detail-section">
-      <div class="detail-label">Прикрепить отчеты (ID агентов)</div>
-      <input type="text" id="ge-inject-reports" class="ge-input" placeholder="через запятую: soma_translator, curator" value="${this.esc((data.inject_reports || []).join(', '))}" />
+      <div class="detail-label">Инжект мысли (фаза 1, ID агентов)</div>
+      <input type="text" id="ge-inject-thoughts" class="ge-input" placeholder="через запятую: soma_translator" value="${this.esc((data.inject_thoughts || []).join(', '))}" />
+    </div>`;
+    html += `<div class="graph-detail-section">
+      <div class="detail-label">Инжект ответы (фаза 2, ID агентов)</div>
+      <input type="text" id="ge-inject-response" class="ge-input" placeholder="через запятую: validator, synthesizer" value="${this.esc((data.inject_response || []).join(', '))}" />
     </div>`;
   }
 
@@ -213,12 +217,22 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
     });
   }
 
-  const injectInput = document.getElementById("ge-inject-reports") as HTMLInputElement;
-  if (injectInput) {
-    injectInput.addEventListener("change", () => {
+  const thoughtsInput = document.getElementById("ge-inject-thoughts") as HTMLInputElement;
+  if (thoughtsInput) {
+    thoughtsInput.addEventListener("change", () => {
       this.saveCheckpoint();
-      const val = injectInput.value.trim();
-      data.inject_reports = val ? val.split(',').map((s: string) => s.trim()) : undefined;
+      const val = thoughtsInput.value.trim();
+      data.inject_thoughts = val ? val.split(',').map((s: string) => s.trim()) : undefined;
+      this.updateNodeHtml(nodeId);
+    });
+  }
+
+  const responseInput = document.getElementById("ge-inject-response") as HTMLInputElement;
+  if (responseInput) {
+    responseInput.addEventListener("change", () => {
+      this.saveCheckpoint();
+      const val = responseInput.value.trim();
+      data.inject_response = val ? val.split(',').map((s: string) => s.trim()) : undefined;
       this.updateNodeHtml(nodeId);
     });
   }

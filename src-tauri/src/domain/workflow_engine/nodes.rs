@@ -1,7 +1,7 @@
 use crate::domain::workflow_engine::context::WorkflowContext;
 use crate::domain::workflow_engine::parser::{ConditionRule, EdgeDef, NodeDef, NodeType, WorkflowConfig, WorkflowDef};
 use crate::domain::workflow_engine::WorkflowRunner;
-use crate::infra::{ChatMessage, SubCall, push_report, extract_model_filename};
+use crate::infra::{ChatMessage, SubCall, push_report, message_phase, extract_model_filename};
 
 /// Результат выполнения узла
 #[derive(Debug, Clone)]
@@ -202,24 +202,42 @@ where
                 task
             };
 
-            // ── inject_reports: Отчёты коллег в system prompt ──
-            // Приоритет: signal (структурированные JSON-данные) > thought (свободный текст).
-            // Если агент выпускает и signal, и thought — предпочтение у signal.
+            // ── inject_thoughts / inject_response: отчёты коллег в system prompt ──
+            // inject_thoughts  → размышления (фаза 1) перечисленных агентов.
+            // inject_response  → финальные ответы (фаза 2): сигнал, если есть,
+            //                    иначе последний thought/message фазы 2.
             let mut injected_reports = String::new();
-            if let Some(ref reports_to_inject) = node.inject_reports {
-                if !reports_to_inject.is_empty() {
-                    injected_reports.push_str("### [ОТЧЕТЫ КОЛЛЕГ ДЛЯ АНАЛИЗА]\n");
-                    for aid in reports_to_inject {
+
+            if let Some(ref aids) = node.inject_thoughts {
+                if !aids.is_empty() {
+                    injected_reports.push_str("### [РАЗМЫШЛЕНИЯ КОЛЛЕГ (ФАЗА 1)]\n");
+                    for aid in aids {
+                        let report = context.messages.iter().rev()
+                            .find(|m| m.author.as_deref() == Some(aid.as_str())
+                                && crate::infra::llm_types::message_phase(m) == Some(1))
+                            .map(|m| m.content.clone())
+                            .unwrap_or_else(|| "[Размышления не найдены]".to_string());
+                        injected_reports.push_str(&format!("--- Мысли от {} ---\n{}\n\n", aid, report));
+                    }
+                }
+            }
+
+            if let Some(ref aids) = node.inject_response {
+                if !aids.is_empty() {
+                    injected_reports.push_str("### [ОТВЕТЫ КОЛЛЕГ (ФАЗА 2)]\n");
+                    for aid in aids {
                         let report = context.messages.iter().rev()
                             .find(|m| m.author.as_deref() == Some(aid.as_str()) && m.msg_type == "signal")
                             .map(|m| m.content.clone())
                             .or_else(|| {
                                 context.messages.iter().rev()
-                                    .find(|m| m.author.as_deref() == Some(aid.as_str()) && m.msg_type == "thought")
+                                    .find(|m| m.author.as_deref() == Some(aid.as_str())
+                                        && message_phase(m) != Some(1)
+                                        && (m.msg_type == "message" || m.msg_type == "thought"))
                                     .map(|m| m.content.clone())
                             })
-                            .unwrap_or_else(|| "[Отчет не найден]".to_string());
-                        injected_reports.push_str(&format!("--- Отчет от {} ---\n{}\n\n", aid, report));
+                            .unwrap_or_else(|| "[Ответ не найден]".to_string());
+                        injected_reports.push_str(&format!("--- Ответ от {} ---\n{}\n\n", aid, report));
                     }
                 }
             }
@@ -266,8 +284,9 @@ where
             model: Some(extract_model_filename(&runner.engine.model_path)),
             time_sec: None,
             attachments: None,
+            phase: Some(2),
         };
-        push_report(&mut context.messages, msg, agent.single_report);
+        push_report(&mut context.messages, msg, agent.replace_report, Some(2));
         *runner.msg_counter += 1;
         // Сигнал сохраняется ПОСЛЕ thought для корректного порядка [thought, signal].
         if let Some(signal) = pending_signal.take() {
@@ -279,7 +298,7 @@ where
                     }
                 }
             }
-            push_report(&mut context.messages, signal, false);
+            push_report(&mut context.messages, signal, false, None);
         }
         context.output_emitted = node.output_type.as_deref() == Some("message");
 
@@ -440,6 +459,7 @@ where
                         model: None,
                         time_sec: None,
                         attachments: None,
+                        phase: None,
                     };
                     context.messages.push(msg);
                     *runner.msg_counter += 1;
@@ -861,6 +881,7 @@ where
                         model: None,
                         time_sec: None,
                         attachments: None,
+                        phase: None,
                     };
                     context.messages.push(msg);
                     *runner.msg_counter += 1;
@@ -1180,6 +1201,7 @@ mod tests {
             model: None,
             time_sec: None,
             attachments: None,
+            phase: Some(2),
         }
     }
 
