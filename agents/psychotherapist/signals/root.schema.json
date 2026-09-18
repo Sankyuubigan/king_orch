@@ -22,11 +22,11 @@
         "required": ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9"]
       }
     },
-    "cluster_checker": {
-      "key": "cluster_checker",
+    "focus_keeper": {
+      "key": "focus_keeper",
       "value": {
         "type": "string",
-        "enum": ["Конкретная проблема", "Кластер"]
+        "enum": ["Конкретная проблема", "Кластер", "НУЖЕН ВЫБОР МИШЕНИ"]
       }
     },
     "soma_translator": {

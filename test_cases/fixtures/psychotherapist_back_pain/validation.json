@@ -6,7 +6,7 @@
   "target_path": ".agents_workspace/_placeholder.md",
   "levels": {
     "structure": {
-      "required_agents": ["data_collector", "soma_translator", "decomposer", "validator"],
+      "required_agents": ["soma_translator", "focus_keeper", "validator", "grounder"],
       "forbidden_paths": []
     },
     "file_change": {

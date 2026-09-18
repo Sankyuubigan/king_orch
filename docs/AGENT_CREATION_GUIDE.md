@@ -447,7 +447,7 @@ agents/psychotherapist/
 │   ├── synthesizer.md
 │   ├── neuro_reprogrammer.md
 │   ├── pattern_finder_by_floors.md
-│   └── cluster_checker.md
+│   └── focus_keeper.md
 ├── transitions/                    # Workflow-графы маршрутизации
 │   ├── main_conversation_flow.yaml # Entry-граф (visible: true)
 │   └── facts.yaml                  # Факты + критерии + extractor_prompt

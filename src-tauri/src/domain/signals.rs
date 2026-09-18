@@ -392,7 +392,7 @@ mod tests {
         let text = std::fs::read_to_string(schema_path()).expect("root.schema.json прочитать");
         let root: Value = serde_json::from_str(&text).expect("root.schema.json — валидный JSON");
         let agents = root.get("agents").expect("ключ agents");
-        for id in ["validator", "cluster_checker", "soma_translator", "synthesizer"] {
+        for id in ["validator", "focus_keeper", "soma_translator", "synthesizer"] {
             let a = agents.get(id).unwrap_or_else(|| panic!("агент {id} в контракте"));
             assert!(a.get("key").is_some(), "{id}: key");
             assert!(a.get("value").is_some(), "{id}: value");

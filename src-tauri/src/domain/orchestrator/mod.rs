@@ -209,6 +209,45 @@ fn push_continuation_for_cutoff(
     Ok(false)
 }
 
+/// Завершающий user-ход, закрывающий Фазу 1 (размышления) перед Phase 2.
+const PHASE1_DONE_PROMPT: &str = "Размышления завершены. Теперь сформулируй финальный ответ.";
+
+/// Закрывает Фазу 1 перед Phase 2.
+///
+/// Завершающий кусок размышлений (`pending_tail`) не попадает в историю через
+/// `push_continuation_for_cutoff` — тот кладёт только оборванные куски. Добавляем
+/// его симметрично, чтобы Phase 2 видела мысль целиком, а не обрезанное начало.
+///
+/// Если были докачки (`had_continuations`), завершающий ход ставим всегда: иначе
+/// последней репликой остаётся подсказка «продолжи с места обрыва», и Phase 2
+/// строит итоговый JSON «на глаз» по неполным размышлениям.
+///
+/// Возвращает `true`, если завершающий ход добавлен (для лога).
+fn finalize_phase1_context(
+    messages: &mut Vec<LlmMessage>,
+    pending_tail: Option<String>,
+    had_continuations: bool,
+) -> bool {
+    if let Some(tail) = pending_tail {
+        if !tail.trim().is_empty() {
+            messages.push(LlmMessage {
+                role: "assistant".to_string(),
+                content: tail,
+            });
+        }
+    }
+    let last_is_assistant = messages.last().map_or(false, |m| m.role == "assistant");
+    if last_is_assistant || had_continuations {
+        messages.push(LlmMessage {
+            role: "user".to_string(),
+            content: PHASE1_DONE_PROMPT.to_string(),
+        });
+        true
+    } else {
+        false
+    }
+}
+
 /// Режим графа: системный промпт самого «тяжёлого» агента графа (worst-case).
 /// Пиковая VRAM определяется одним LLM-вызовом (движок работает последовательно),
 /// поэтому берём агента с самым длинным системным промптом. Sub-workflow узлы
@@ -898,6 +937,10 @@ let start_time = Instant::now();
         let mut phase1_stalled = 0usize;
         let mut phase1_last_len = 0isize;
         let mut thinking_text = String::new();
+        // Завершающий кусок размышлений (тот, после которого движок сам остановился).
+        // Оборванные куски в историю кладёт push_continuation_for_cutoff, а этот —
+        // помещаем после цикла, чтобы Phase 2 видела размышления целиком.
+        let mut phase1_pending: Option<String> = None;
         loop {
             match engine.generate_chat(
                 &ctx.llm_messages,
@@ -913,6 +956,9 @@ let start_time = Instant::now();
             ) {
                 Ok(gen) => {
                     let chunk = gen.text.clone();
+                    // До успешной докачки хвост ещё не в истории — кандидат на
+                    // добавление после цикла; при успешной докачке сбрасываем.
+                    phase1_pending = Some(chunk.clone());
                     log_cb(format!("<<< [{}] Phase 1: чанк {} символов, стоп: {}",
                         agent.name, chunk.len(), gen.stop_reason));
                     thinking_text = if phase1_full.is_empty() {
@@ -953,6 +999,8 @@ let start_time = Instant::now();
                         log_cb(format!("⚠️ [{}] Phase 1 не смог завершить размышления после {} докачек — используем накопленные.", agent.name, MAX_CONTINUATIONS));
                         break;
                     }
+                    // Кусок успешно уложен в историю докачки — хвост больше не висит.
+                    phase1_pending = None;
                 }
                 Err(e) => {
                     log_cb(format!("⚠️ [{}] Phase 1 ошибка: {} — стандартный режим (думатель по грамматике)",
@@ -987,25 +1035,18 @@ let start_time = Instant::now();
             log_cb(format!("⚠️ [{}] Phase 1: пустые размышления — Phase 2 сразу без думателя", agent.name));
         }
 
-        // ── Финализация хвоста запроса Phase 2 ──
-        // Мысль фазы 1 осталась последним assistant-сообщением. llama-server с
-        // --prefill-assistant (по умолчанию) воспринимает её как «недописанный
-        // ответ» и продолжает её, из-за чего envelope-json грамматика не
-        // применяется с первого токена (баг: первый фрагмент "<", а не "{").
-        // Закрываем запрос user-ролью → движок начинает свежий ответ под
-        // грамматикой. (В докачке хвост и так user — хинт «продолжи с места
-        // обрыва», поэтому guard по последней роли.)
-        if two_phase_thinking && phase2_disable_reasoning
-            && ctx.llm_messages.last().map_or(false, |m| m.role == "assistant")
-        {
-            ctx.llm_messages.push(LlmMessage {
-                role: "user".to_string(),
-                content: "Размышления завершены. Теперь сформулируй финальный ответ.".to_string(),
-            });
-            log_cb(format!(
-                "🎯 [{}] Phase 2: хвост запроса завершён user-ролью (фикс prefill-assistant)",
-                agent.name
-            ));
+        // ── Финализация Фазы 1 → Phase 2 ──
+        // Завершающий кусок размышлений и завершающий ход «теперь отвечай»:
+        // см. `finalize_phase1_context`. При докачках хвост берём из pending,
+        // при обычной выдаче мысль уже лежит в истории как assistant.
+        if two_phase_thinking && phase2_disable_reasoning {
+            let tail = if phase1_cont > 0 { phase1_pending.take() } else { None };
+            if finalize_phase1_context(&mut ctx.llm_messages, tail, phase1_cont > 0) {
+                log_cb(format!(
+                    "🎯 [{}] Phase 2: Фаза 1 закрыта, завершающий ход добавлен (хвост размышлений + «отвечай»)",
+                    agent.name
+                ));
+            }
         }
 
         // Phase 2 грамматика для signal-агентов: envelope-json БЕЗ think-block
@@ -1649,6 +1690,69 @@ mod tests {
         assert!(!starts_with_ellipsis(""));
     }
 
+    fn msg(role: &str, content: &str) -> LlmMessage {
+        LlmMessage { role: role.to_string(), content: content.to_string() }
+    }
+
+    #[test]
+    fn finalize_phase1_appends_tail_and_closing_turn_after_continuations() {
+        // Докачки были: в истории — оборванный кусок + подсказка «продолжай»,
+        // завершающий кусок лежит в pending_tail и в историю ещё не попал.
+        let mut messages = vec![
+            msg("system", "sys"),
+            msg("assistant", "оборванный кусок размышлений"),
+            msg("user", "продолжи ровно с места обрыва"),
+        ];
+        let added = finalize_phase1_context(
+            &mut messages,
+            Some("завершающий кусок размышлений".to_string()),
+            true,
+        );
+
+        assert!(added, "после докачек завершающий ход обязателен");
+        assert_eq!(messages.len(), 5);
+        assert_eq!(messages[3].role, "assistant");
+        assert_eq!(messages[3].content, "завершающий кусок размышлений");
+        assert_eq!(messages[4].role, "user");
+        assert_eq!(messages[4].content, PHASE1_DONE_PROMPT);
+    }
+
+    #[test]
+    fn finalize_phase1_closes_phase_even_with_empty_tail() {
+        // Докачки были, но финальный чанк пуст: история заканчивается подсказкой
+        // «продолжай». Всё равно закрываем фазу ходом «отвечай».
+        let mut messages = vec![
+            msg("assistant", "оборванный кусок"),
+            msg("user", "продолжи ровно с места обрыва"),
+        ];
+        let added = finalize_phase1_context(&mut messages, Some("   ".to_string()), true);
+
+        assert!(added);
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages.last().unwrap().content, PHASE1_DONE_PROMPT);
+    }
+
+    #[test]
+    fn finalize_phase1_closes_trailing_assistant_without_continuations() {
+        // Обычная выдача: вся мысль уже в истории как assistant, докачек не было.
+        let mut messages = vec![msg("system", "sys"), msg("assistant", "мысль целиком")];
+        let added = finalize_phase1_context(&mut messages, None, false);
+
+        assert!(added, "хвост-ассистент нужно закрыть user-ходом (prefill-guard)");
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages.last().unwrap().content, PHASE1_DONE_PROMPT);
+    }
+
+    #[test]
+    fn finalize_phase1_noop_when_nothing_to_close() {
+        // Мысли нет, pending пуст, последняя реплика не assistant — трогать нечего.
+        let mut messages = vec![msg("system", "sys"), msg("user", "вопрос")];
+        let added = finalize_phase1_context(&mut messages, None, false);
+
+        assert!(!added);
+        assert_eq!(messages.len(), 2);
+    }
+
     #[test]
     fn estimate_chars_per_token_picks_by_cyrillic_share() {
         assert_eq!(estimate_chars_per_token("привет мир", "", ""), 2);
@@ -2179,15 +2283,16 @@ mod tests {
         assert!(failures.is_empty(), "has_problem != true для: {:?}", failures);
     }
 
-    /// Сквозной тест в режиме графа агента «Психотерапевт»: прогоняем жалобу на десну и
-    /// проверяем, что пайплайн БОЛЬШЕ НЕ доходит до узла call_grounder (он удалён из пайплайна
-    /// и заархивирован). Маршрутизация теперь идёт через decomposer/validator/provocateur, а
-    /// «сценарий» собирается провокатором через элемент 6 (событие/триггер).
-    /// Запуск: TEST_MODEL_PATH=... test.bat "psychotherapist_graph_skips_grounder -- --ignored"
+    /// Сквозной тест в режиме графа агента «Психотерапевт»: прогоняем соматическую жалобу и
+    /// проверяем, что пайплайн отрабатывает без ошибок и приземляется на один из
+    /// фронтенд-агентов (терминальных узлов графа) — grounder/shadow_worker/neuro_healer/
+    /// data_collector/request_helper. Конкретную ветку (grounder vs shadow_worker) НЕ фиксируем:
+    /// маршрут зависит от validator_report и модели, а не от кода.
+    /// Запуск: TEST_MODEL_PATH=... test.bat "psychotherapist_graph_completes_on_somatic_complaint -- --ignored"
     ///   либо TEST_MODELS="p1,p2,..." для прогона всех моделей за один раз.
     #[test]
     #[ignore]
-    fn psychotherapist_graph_skips_grounder() {
+    fn psychotherapist_graph_completes_on_somatic_complaint() {
         use std::sync::{Arc, Mutex, atomic::AtomicBool};
         use crate::infra::{LlamaEngine, ModelParams, SubCall};
         use crate::domain::workflow_engine::{run_workflow, WorkflowRunner};
@@ -2289,12 +2394,30 @@ mod tests {
                         .map(|m| m.author.clone().unwrap_or_default())
                         .collect();
                     println!("=== АВТОРЫ СООБЩЕНИЙ: {:?} ===", authors);
-                    let reached = ctx.messages.iter().any(|m| m.author.as_deref() == Some("grounder"));
-                    if reached {
-                        println!("❌ {} — дошёл до grounder (узел удалён из пайплайна)", model_path);
-                        failures.push(model_path.clone());
+                    let frontend_agents = [
+                        "grounder",
+                        "shadow_worker",
+                        "neuro_healer",
+                        "data_collector",
+                        "request_helper",
+                    ];
+                    let landed = ctx.messages.iter().any(|m| {
+                        m.author
+                            .as_deref()
+                            .map(|a| frontend_agents.contains(&a))
+                            .unwrap_or(false)
+                    });
+                    if landed {
+                        println!(
+                            "✅ {} — прогон завершился на фронтенд-агенте (терминальном узле)",
+                            model_path
+                        );
                     } else {
-                        println!("✅ {} — grounder не задействован (маршрут через decomposer/validator/provocateur)", model_path);
+                        println!(
+                            "❌ {} — прогон не приземлился ни на один фронтенд-агент",
+                            model_path
+                        );
+                        failures.push(model_path.clone());
                     }
                 }
                 Err((e, _)) => {
@@ -2303,6 +2426,10 @@ mod tests {
                 }
             }
         }
-        assert!(failures.is_empty(), "следующие модели всё же дошли до grounder: {:?}", failures);
+        assert!(
+            failures.is_empty(),
+            "следующие модели не приземлились на фронтенд-агент: {:?}",
+            failures
+        );
     }
 }

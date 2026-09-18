@@ -88,16 +88,19 @@ test.bat "test_coding_team_bugfix_e2e -- --ignored"
 ### psychotherapist_back_pain
 - **Пайплайн:** Психотерапевт
 - **Задача:** Запрос "болит поясница" — проверка пайплайна психосоматики
-- **Ожидаемый результат:** Терминальный узел `data_collector` выдаёт ответ в чат
-- **Валидация:** L1 (структура — вызваны `data_collector`, `soma_translator`, `decomposer`, `validator`) + проверка что последний ответ от `data_collector`
+- **Ожидаемый результат:** Терминальный узел `grounder` выдаёт ответ в чат (декомпозиция не нужна — жалоба конкретная, декомпозер НЕ вызывается)
+- **Валидация:** L1 (структура — вызваны `soma_translator`, `focus_keeper`, `validator`, `grounder`)
 - **Запуск:** `test.bat "test_psychotherapist_back_pain_e2e -- --ignored"`
-- **Описание пайплайна:**
+- **Описание пайплайна (актуальный граф `main_conversation_flow.yaml`):**
   1. `extract_facts` — экстрактор фактов определяет `has_problem: true`, `has_somatic: true`
   2. `call_soma_translator` — расшифровка боли по НГМ
-  3. `call_decomposer` — декомпозиция проблемы
-  4. `call_validator` — валидация данных по 9 элементам
-  5. `checking_insufficient_data` → `call_collector` — сбор недостающих данных
-  6. `data_collector` — терминальный узел, отвечает пользователю
+  3. `call_focus_keeper` — страж направления: декомпозиции нет, жалоба конкретная → сигнал «Конкретная проблема»
+  4. `check_focus_keeper_signal` — «Конкретная проблема» → `call_validator`
+  5. `call_validator` — валидация данных по 9 элементам
+  6. `check_critical_elements` / `check_elements1` / `check_elements2` — развилки доработки данных
+  7. `call_grounder` — терминальный узел, отвечает пользователю
+
+> Примечание: `decomposer` вызывается только по сигналу фокус-кипера «Кластер» (или «НУЖЕН ВЫБОР МИШЕНИ» ведёт на переспрос мишени и не запускает work-агентов). Для конкретной жалобы back_pain декомпозиция не требуется.
 
 ---
 
