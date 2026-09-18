@@ -229,6 +229,12 @@ pub fn run_pipeline_test(
     let mut all_sub_calls: Vec<SubCall> = Vec::new();
     let mut msg_counter: u32 = 0;
 
+    let (write_root, write_outside) = workflow
+        .config
+        .as_ref()
+        .map(|c| c.write_scope(project_root))
+        .unwrap_or((project_root.to_path_buf(), crate::infra::WriteOutside::Prompt));
+
     let mut runner = WorkflowRunner {
         engine,
         agents: &agents,
@@ -250,6 +256,8 @@ pub fn run_pipeline_test(
         prompt_log: None,
         session_id: format!("pipeline_test_{}", test.id),
         workspace_root: project_root.to_path_buf(),
+        write_root,
+        write_outside,
     };
 
     let mut ctx = WorkflowContext::new(test.task_prompt.clone(), vec![], vec![]);
@@ -575,7 +583,7 @@ mod tests {
 
         let t = tests.iter().find(|t| t.id == "coding_team_bugfix1")
             .expect("coding_team_bugfix1 не найден");
-        assert_eq!(t.validation.workflow_name, "Кодер");
+        assert_eq!(t.validation.workflow_name, "Аналитик кода");
         assert!(t.source_file_content.contains("range(len(data) - 1)"));
         assert!(!t.task_prompt.is_empty());
     }

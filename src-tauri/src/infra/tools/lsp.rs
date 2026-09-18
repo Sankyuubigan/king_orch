@@ -162,6 +162,8 @@ mod tests {
     fn ctx_for(root: &Path) -> ToolCtx<'_> {
         ToolCtx {
             workspace_root: root,
+            write_root: root,
+            write_outside: crate::infra::WriteOutside::Prompt,
             session_id: "test",
             approver: crate::infra::permissions::test_approver(),
             agent_id: "test_agent",

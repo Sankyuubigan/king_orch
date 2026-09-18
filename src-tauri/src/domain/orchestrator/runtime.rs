@@ -263,7 +263,7 @@ pub fn resolve_runtime_and_args<L: Fn(String) + Clone + Send + Sync>(
 }
 
 fn ensure_mcp_deps<L: Fn(String) + Clone + Send + Sync>(
-    mcp_name: &str, bins_dir: &Path, log_cb: &L,
+    mcp_name: &str, bins_dir: &Path, workspace_root: &Path, log_cb: &L,
 ) -> Vec<(&'static str, String)> {
     if mcp_name == "browser" {
         let mut envs: Vec<(&'static str, String)> = Vec::new();
@@ -303,13 +303,12 @@ fn ensure_mcp_deps<L: Fn(String) + Clone + Send + Sync>(
             return vec![("KING_ORCH_BINS_DIR", bins_str.to_string())];
         }
     }
-    // deno_runner: передаём корень проекта для вычисления sandbox-директории
+    // deno_runner: передаём корень проекта для вычисления sandbox-директории.
+    // Корень = рабочая директория сессии (chat workdir), а НЕ корень приложения:
+    // иначе песочница Deno расходится с write_root кодовых тулов.
     if mcp_name == "deno_runner" {
-        // bins_dir = project_root/src-tauri/bin → project_root = bins_dir.parent().parent()
-        if let Some(project_root) = bins_dir.parent().and_then(|p| p.parent()) {
-            if let Some(root_str) = project_root.to_str() {
-                return vec![("KING_ORCH_PROJECT_ROOT", root_str.to_string())];
-            }
+        if let Some(root_str) = workspace_root.to_str() {
+            return vec![("KING_ORCH_PROJECT_ROOT", root_str.to_string())];
         }
     }
     vec![]
@@ -319,6 +318,8 @@ pub fn load_mcp_servers<L: Fn(String) + Clone + Send + Sync + 'static>(
     log_cb: &L,
     mcp_servers_dir: &Path,
     bins_dir: &Path,
+    // Рабочая директория сессии — корень проекта для deno_runner sandbox.
+    workspace_root: &Path,
     mcp_names: &[String],
     mcp_pool: &McpPool,
     all_tools: &mut Vec<(String, String, serde_json::Value)>,
@@ -341,7 +342,7 @@ pub fn load_mcp_servers<L: Fn(String) + Clone + Send + Sync + 'static>(
             Ok(script_path) => {
                 let (runtime_path, runtime_args) = resolve_runtime_and_args(log_cb.clone(), &script_path, bins_dir);
                 let args_refs: Vec<&str> = runtime_args.iter().map(|s| s.as_str()).collect();
-                let envs = ensure_mcp_deps(mcp_name, bins_dir, log_cb);
+                let envs = ensure_mcp_deps(mcp_name, bins_dir, workspace_root, log_cb);
                 let env_refs: Vec<(&str, &str)> = envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
                 match McpClient::spawn_stub_with_env(&runtime_path.to_string_lossy(), &args_refs, &env_refs, log_cb.clone()) {
                     Ok(mut client) => {

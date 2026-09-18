@@ -18,13 +18,22 @@ test_cases/fixtures/coding_team_bugfix1/
 
 ```json
 {
-  "workflow": "coding_team",
-  "test_id": "coding_team_bugfix1",
+  "workflow_name": "Аналитик кода",
   "model_path": "D:\\nn\\models\\llm\\uncen\\qwen3.8-9b\\Qwen3.8-9B-heretic-uncensored.i1-IQ4_NL.gguf",
-  "expected_agents": ["primary_coder", "bug_analyst", "task_planner", "qa_diagnost"],
-  "validate_l3_stdout_contains": ["PASS"],
-  "validate_l3_no_stderr_contains": ["ERROR", "Traceback"],
-  "timeout_sec": 300
+  "timeout_sec": 600,
+  "source_file": "buggy.py",
+  "target_path": ".agents_workspace/test_task/buggy.py",
+  "levels": {
+    "structure": {
+      "required_agents": ["bug_analyst", "task_planner"],
+      "forbidden_paths": ["primary_coder"]
+    },
+    "file_change": { "must_contain": [], "must_not_contain": [] },
+    "functional": {
+      "run_cmd": "echo PASS",
+      "expected_stdout_contains": "PASS"
+    }
+  }
 }
 ```
 
@@ -80,9 +89,9 @@ test.bat "test_coding_team_bugfix_e2e -- --ignored"
 ## Существующие тесты
 
 ### coding_team_bugfix1
-- **Пайплайн:** Кодер
-- **Задача:** Исправить баг в Python-функции `sum_list` (пропускает последний элемент)
-- **Валидация:** L1 (структура) + L2 (файл исправлен) + L3 (код работает)
+- **Пайплайн:** Аналитик кода (бывший «Кодер» до разделения пайплайнов)
+- **Задача:** Найти первопричину бага в Python-функции `sum_list` (пропускает последний элемент) и составить план
+- **Валидация:** L1 (структура — `bug_analyst` + `task_planner`, запрещён `primary_coder`) + L2/L3 (код проекта НЕ изменён аналитиком)
 - **Запуск:** `test.bat "test_coding_team_bugfix_e2e -- --ignored"`
 
 ### psychotherapist_back_pain

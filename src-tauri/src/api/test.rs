@@ -178,6 +178,8 @@ pub async fn run_iterative_test(
             None,
             format!("test_case_{}", i),
             agents_dir.parent().unwrap_or(&agents_dir).to_path_buf(),
+            agents_dir.parent().unwrap_or(&agents_dir).to_path_buf(), // write_root
+            crate::infra::WriteOutside::Prompt,
             &mut None,
             false, // two_phase_thinking
         ) {

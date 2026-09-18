@@ -8,7 +8,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::{Tool, ToolCtx, ToolError, is_within_root, resolve_path, truncate};
+use super::{Tool, ToolCtx, ToolError, authorize_write, resolve_path, truncate};
 
 fn arg_str(args: &Value, key: &str) -> Result<String, ToolError> {
     args.get(key)
@@ -42,25 +42,6 @@ fn read_file_with_lines(path: &Path, offset: usize, limit: usize) -> Result<Stri
         out = format!("[файл пуст или нет строк в диапазоне: {} строк(и)]", total);
     }
     Ok(out)
-}
-
-/// Разрешить путь для записи и проверить право через approver.
-/// Возвращает путь на диске (можно писать) или Forbidden-ошибку.
-fn authorize_write(path: &Path, ctx: &ToolCtx) -> Result<(), ToolError> {
-    let abs = resolve_path(ctx.workspace_root, &path.to_string_lossy());
-    if is_within_root(ctx.workspace_root, &abs) {
-        return Ok(()); // внутри корня — авто (с логами в диспетчере)
-    }
-    let parent_ok = abs
-        .parent()
-        .map(|p| is_within_root(ctx.workspace_root, p))
-        .unwrap_or(false);
-    if parent_ok {
-        return Ok(());
-    }
-    // Вне корня — плашка пользователю.
-    ctx.approver
-        .check_write(&abs, ctx.session_id, ctx.agent_id, "write")
 }
 
 fn write_diff_summary(path: &Path, old: &str, new: &str) -> String {
@@ -183,7 +164,7 @@ impl Tool for WriteFile {
         let path_str = arg_str(args, "path")?;
         let content = arg_str(args, "content")?;
         let abs = resolve_path(ctx.workspace_root, &path_str);
-        authorize_write(&abs, ctx)?;
+        authorize_write(&abs, ctx, "write_file")?;
         let old = fs::read_to_string(&abs).unwrap_or_default();
         if let Some(parent) = abs.parent() {
             fs::create_dir_all(parent)
@@ -230,7 +211,7 @@ impl Tool for EditFile {
         if old.is_empty() {
             return Err(ToolError::Usage("old_string не может быть пустым — использовать write_file для создания файла".to_string()));
         }
-        authorize_write(&path, ctx)?;
+        authorize_write(&path, ctx, "edit_file")?;
         let content = fs::read_to_string(&path)
             .map_err(|e| ToolError::NotFound(format!("{}: {}", path.display(), e)))?;
         if !content.contains(&old) {
@@ -279,6 +260,8 @@ mod tests {
     fn ctx_for(root: &Path) -> ToolCtx<'_> {
         ToolCtx {
             workspace_root: root,
+            write_root: root,
+            write_outside: crate::infra::WriteOutside::Prompt,
             session_id: "test",
             approver: crate::infra::permissions::test_approver(),
             agent_id: "test_agent",

@@ -417,6 +417,23 @@ where
         });
     log_cb(format!("📂 Корень инструментов кодера: {}", tools_root.display()));
 
+    // 🔐 Политика записи per-workflow: «Кодер» (по умолчанию) пишет в рабочую
+    // директорию (вне — плашка юзеру); «Аналитик кода» (`write_root: workspace`)
+    // пишет только в `.agents_workspace` (вне — жёсткий запрет). Чтение у обоих
+    // свободное — `workspace_root` остаётся базой для резолва путей.
+    let (write_root, write_outside) = match workflow_match.as_ref().and_then(|wf| wf.config.as_ref()) {
+        Some(cfg) => cfg.write_scope(&tools_root),
+        None => (tools_root.clone(), crate::infra::WriteOutside::Prompt),
+    };
+    log_cb(format!(
+        "🔐 Политика записи: авто-зона '{}', вне — {}",
+        write_root.display(),
+        match write_outside {
+            crate::infra::WriteOutside::Deny => "жёсткий запрет",
+            crate::infra::WriteOutside::Prompt => "плашка юзеру",
+        }
+    ));
+
     // 🔐 Корень проекта для инструментов кодинга (запись внутри — авто,
     // проверяется тулами через ctx.workspace_root). Сбрасываем гранты сессии.
     crate::infra::global_approver().reset_session(&session_id);
@@ -449,6 +466,8 @@ where
             prompt_log: prompt_log.clone(),
             session_id: session_id.clone(),
             workspace_root: tools_root.clone(),
+            write_root: write_root.clone(),
+            write_outside,
         };
         let mut fallback_error: Option<String> = None;
         match crate::domain::workflow_engine::run_workflow(
@@ -523,6 +542,8 @@ where
             prompt_log.clone(),
             session_id.clone(),
             tools_root.clone(),
+            write_root.clone(),
+            write_outside,
             &mut None,
             false, // two_phase_thinking — только для signal-агентов из workflow
         )?;
@@ -627,6 +648,11 @@ pub(crate) fn run_agent_node<L, S, C>(
     prompt_log: Option<std::path::PathBuf>,
     session_id: String,
     workspace_root: std::path::PathBuf,
+    // Авто-зона записи пайплайна (обычно == workspace_root; для «Аналитика кода» —
+    // <workspace_root>/.agents_workspace).
+    write_root: std::path::PathBuf,
+    // Поведение при записи вне write_root (Prompt | Deny).
+    write_outside: crate::infra::WriteOutside,
     out_pending_signal: &mut Option<ChatMessage>,
     two_phase_thinking: bool,
 ) -> Result<String, String>
@@ -672,7 +698,7 @@ where
     let _stream_guard = StreamGuard { meta: stream_meta.clone(), prev: prev_meta };
 
     let mut all_tools: Vec<(String, String, serde_json::Value)> = Vec::new();
-    runtime::load_mcp_servers(&log_cb, mcp_servers_dir, bins_dir, &agent.mcp_servers, &mcp_pool, &mut all_tools);
+    runtime::load_mcp_servers(&log_cb, mcp_servers_dir, bins_dir, &workspace_root, &agent.mcp_servers, &mcp_pool, &mut all_tools);
 
     // 🛠 Capability кодинга: `tools: ["code_read"]` — только чтение; `tools: ["code_write"]` —
     // чтение + мутаторы (внутри корня авто, вне — плашка). SSOT — infra::tools.
@@ -882,6 +908,8 @@ let start_time = Instant::now();
         grammars_dir,
         session_id: session_id.clone(),
         workspace_root: workspace_root.clone(),
+        write_root: write_root.clone(),
+        write_outside,
         approver: crate::infra::global_approver(),
         llm_messages,
         messages,
@@ -2386,6 +2414,8 @@ mod tests {
                 prompt_log: None,
                 session_id: "test-session".to_string(),
                 workspace_root: project_dir.clone(),
+                write_root: project_dir.clone(),
+                write_outside: crate::infra::WriteOutside::Prompt,
             };
 
             let mut ctx = WorkflowContext::new(user_text.to_string(), vec![], vec![]);

@@ -49,6 +49,11 @@ pub struct WorkflowRunner<'a, L, S, C> {
     pub session_id: String,
     /// Корень проекта (запись внутри — авто-разрешена без плашки).
     pub workspace_root: std::path::PathBuf,
+    /// Авто-зона записи пайплайна (обычно == workspace_root; для аналитического —
+    /// <workspace_root>/.agents_workspace).
+    pub write_root: std::path::PathBuf,
+    /// Поведение при записи вне write_root (Prompt | Deny).
+    pub write_outside: crate::infra::WriteOutside,
 }
 
 impl<'a, L, S, C> WorkflowRunner<'a, L, S, C>
@@ -127,6 +132,8 @@ where
             self.prompt_log.clone(),
             self.session_id.clone(),
             self.workspace_root.clone(),
+            self.write_root.clone(),
+            self.write_outside,
             out_pending_signal,
             two_phase_thinking,
         )

@@ -20,10 +20,40 @@ pub const TOOLSET_READ: &str = "code_read";
 /// Мета-имя в `agent.tools` — полный набор (чтение + запись).
 pub const TOOLSET_WRITE: &str = "code_write";
 
-/// Контекст исполнения тула: корень проекта + сессия + approver разрешений.
+/// Политика записи ВНЕ `write_root` (авто-зоны записи пайплайна).
+///
+/// Разделяет два режима пайплайнов:
+/// - `Prompt` — «Кодер»: запись в рабочую директорию чата авто, вне — плашка юзеру.
+/// - `Deny` — «Аналитик кода»: запись только в `.agents_workspace`, вне — жёсткий
+///   запрет без плашки (инвариант: аналитический пайплайн не меняет код проекта).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteOutside {
+    /// Спросить пользователя (плашка Запретить / Разрешить 1 раз / Разрешить в чате).
+    Prompt,
+    /// Жёстко запретить без плашки.
+    Deny,
+}
+
+impl WriteOutside {
+    /// Разбор значения из `WorkflowConfig.write_outside` (дефолт — `Prompt`).
+    pub fn parse(s: &str) -> WriteOutside {
+        match s.trim().to_lowercase().as_str() {
+            "deny" => WriteOutside::Deny,
+            _ => WriteOutside::Prompt,
+        }
+    }
+}
+
+/// Контекст исполнения тула: корень чтения + авто-зона записи + политика вне неё.
 /// Живёт в `RunContext` цикла агента и пробрасывается в каждый вызов.
 pub struct ToolCtx<'a> {
+    /// База для резолва относительных путей и чтения (рабочая директория чата).
     pub workspace_root: &'a Path,
+    /// Авто-зона записи пайплайна (обычно совпадает с `workspace_root`, для
+    /// аналитического пайплайна — `<workspace_root>/.agents_workspace`).
+    pub write_root: &'a Path,
+    /// Поведение при записи вне `write_root`.
+    pub write_outside: WriteOutside,
     pub session_id: &'a str,
     pub approver: &'a PermissionApprover,
     pub agent_id: &'a str,
@@ -157,6 +187,34 @@ pub fn is_within_root(root: &Path, path: &Path) -> bool {
     path_abs.starts_with(&root_abs)
 }
 
+/// Централизованная проверка права записи по абсолютному пути.
+///
+/// Внутри `ctx.write_root` — авто (логируется диспетчером); вне — поведение
+/// задаёт `ctx.write_outside`: `Deny` (жёсткий запрет, аналитический пайплайн)
+/// или `Prompt` (плашка юзеру, пайплайн-исполнитель).
+pub fn authorize_write(abs: &Path, ctx: &ToolCtx, tool: &str) -> Result<(), ToolError> {
+    if is_within_root(ctx.write_root, abs) {
+        return Ok(());
+    }
+    // Новый файл: сам путь может ещё не существовать — проверяем родителя.
+    if let Some(parent) = abs.parent() {
+        if is_within_root(ctx.write_root, parent) {
+            return Ok(());
+        }
+    }
+    match ctx.write_outside {
+        WriteOutside::Deny => Err(ToolError::Forbidden(format!(
+            "запись вне рабочей области '{}' запрещена политикой пайплайна (путь: {})",
+            ctx.write_root.display(),
+            abs.display()
+        ))),
+        WriteOutside::Prompt => {
+            ctx.approver
+                .check_write(abs, ctx.session_id, ctx.agent_id, tool)
+        }
+    }
+}
+
 /// canonicalize с очисткой Windows-префикса `\\?\` (иначе `starts_with` ломается).
 fn normalize_canonical(p: &Path) -> PathBuf {
     let c = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
@@ -182,6 +240,8 @@ mod tests {
     fn ctx() -> ToolCtx<'static> {
         ToolCtx {
             workspace_root: std::path::Path::new("."),
+            write_root: std::path::Path::new("."),
+            write_outside: WriteOutside::Prompt,
             session_id: "test",
             approver: crate::infra::permissions::test_approver(),
             agent_id: "test_agent",
@@ -289,5 +349,39 @@ mod tests {
     fn grant_check_unknown_tool_never_granted() {
         let all_tools = tool_schemas(true, &[]);
         assert!(!is_tool_granted(&all_tools, "totally_unknown"));
+    }
+
+    #[test]
+    fn write_outside_parse_defaults_to_prompt() {
+        assert_eq!(WriteOutside::parse("deny"), WriteOutside::Deny);
+        assert_eq!(WriteOutside::parse("DENY"), WriteOutside::Deny);
+        assert_eq!(WriteOutside::parse("prompt"), WriteOutside::Prompt);
+        assert_eq!(WriteOutside::parse(""), WriteOutside::Prompt);
+    }
+
+    #[test]
+    fn authorize_write_deny_blocks_outside_write_root() {
+        let ctx = ToolCtx {
+            workspace_root: Path::new("C:/proj"),
+            write_root: Path::new("C:/proj/.agents_workspace"),
+            write_outside: WriteOutside::Deny,
+            ..ctx()
+        };
+        // внутри авто-зоны — разрешено
+        assert!(authorize_write(Path::new("C:/proj/.agents_workspace/task.md"), &ctx, "write_file").is_ok());
+        // вне авто-зоны — жёсткий запрет (без плашки)
+        let err = authorize_write(Path::new("C:/proj/src/main.rs"), &ctx, "write_file").unwrap_err();
+        assert!(matches!(err, ToolError::Forbidden(_)));
+    }
+
+    #[test]
+    fn authorize_write_prompt_allows_inside_write_root() {
+        let ctx = ToolCtx {
+            workspace_root: Path::new("C:/proj"),
+            write_root: Path::new("C:/proj"),
+            write_outside: WriteOutside::Prompt,
+            ..ctx()
+        };
+        assert!(authorize_write(Path::new("C:/proj/src/main.rs"), &ctx, "write_file").is_ok());
     }
 }

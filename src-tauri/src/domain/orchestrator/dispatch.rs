@@ -52,6 +52,11 @@ where
     pub(crate) grammars_dir: &'a Path,
     pub(crate) session_id: String,
     pub(crate) workspace_root: PathBuf,
+    /// Авто-зона записи пайплайна (обычно == workspace_root; для аналитического —
+    /// <workspace_root>/.agents_workspace).
+    pub(crate) write_root: PathBuf,
+    /// Поведение при записи вне write_root (Prompt | Deny).
+    pub(crate) write_outside: crate::infra::WriteOutside,
     pub(crate) approver: Arc<crate::infra::PermissionApprover>,
     // ── мутабельные (владение / &mut-ссылки) ──
     pub(crate) llm_messages: Vec<LlmMessage>,
@@ -173,6 +178,8 @@ where
             } else {
                 let code_ctx = crate::infra::ToolCtx {
                     workspace_root: &self.workspace_root,
+                    write_root: &self.write_root,
+                    write_outside: self.write_outside,
                     session_id: &self.session_id,
                     approver: &self.approver,
                     agent_id: &self.agent.id,
@@ -297,6 +304,7 @@ where
             prompt_log, mcp_servers_dir, bins_dir, grammars_dir, mcp_clients: mcp_pool, model_params,
             format_type, cancel_flag, depth, has_tools_for_prompt, all_tools,
             continuation_raw, continuation_mark, session_id, workspace_root,
+            write_root, write_outside,
             agent_grammar, active_grammar, ..
         } = self;
 
@@ -322,6 +330,8 @@ where
                 prompt_log.clone(),
                 session_id.clone(),
                 workspace_root.clone(),
+                write_root.clone(),
+                *write_outside,
                 &mut sub_pending_signal,
                 false, // two_phase_thinking — только для signal-агентов из workflow
             )?;

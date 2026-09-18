@@ -1,21 +1,21 @@
 {
-  "workflow_name": "Кодер",
+  "workflow_name": "Аналитик кода",
   "model_path": "D:\\nn\\models\\llm\\uncen\\qwen3.8-9b\\Qwen3.8-9B-heretic-uncensored.i1-IQ4_NL.gguf",
   "timeout_sec": 600,
   "source_file": "buggy.py",
   "target_path": ".agents_workspace/test_task/buggy.py",
   "levels": {
     "structure": {
-      "required_agents": ["bug_analyst", "primary_coder"],
-      "forbidden_paths": ["honest_fail_bug"]
+      "required_agents": ["bug_analyst", "task_planner"],
+      "forbidden_paths": ["primary_coder"]
     },
     "file_change": {
-      "must_contain": ["range(len(data))"],
-      "must_not_contain": ["range(len(data) - 1)"]
+      "must_contain": ["range(len(data) - 1)"],
+      "must_not_contain": []
     },
     "functional": {
-      "run_cmd": "python .agents_workspace/test_task/buggy.py",
-      "expected_stdout_contains": "PASS"
+      "run_cmd": "findstr /C:\"range(len(data) - 1)\" .agents_workspace\\test_task\\buggy.py",
+      "expected_stdout_contains": "range(len(data) - 1)"
     }
   }
 }

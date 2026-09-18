@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::{Tool, ToolCtx, ToolError, is_within_root, resolve_path, truncate};
+use super::{Tool, ToolCtx, ToolError, authorize_write, resolve_path, truncate};
 
 /// Запрещённые операции в bash (правило 1.1: git-мутации без разрешения запрещены;
 /// разрушительные команды — запрещены всегда). Проверка по ключевым словам.
@@ -175,11 +175,8 @@ impl Tool for Bash {
             .and_then(|v| v.as_str())
             .map(|p| resolve_path(ctx.workspace_root, p))
             .unwrap_or_else(|| ctx.workspace_root.to_path_buf());
-        if !is_within_root(ctx.workspace_root, &cwd) {
-            // Вне корня — плашка.
-            ctx.approver
-                .check_write(&cwd, ctx.session_id, ctx.agent_id, "bash")?;
-        }
+        // cwd вне авто-зоны записи → Deny (аналитический пайплайн) или плашка.
+        authorize_write(&cwd, ctx, "bash")?;
 
         let program = if cfg!(target_os = "windows") {
             "cmd"
@@ -287,6 +284,8 @@ mod tests {
     fn ctx_for(root: &Path) -> ToolCtx<'_> {
         ToolCtx {
             workspace_root: root,
+            write_root: root,
+            write_outside: crate::infra::WriteOutside::Prompt,
             session_id: "test",
             approver: crate::infra::permissions::test_approver(),
             agent_id: "test_agent",
