@@ -29,6 +29,10 @@ pub struct ChatResponse {
     engine_tok_per_sec: f64,
     /// Причина CPU-режима (пусто, если GPU)
     engine_mode_detail: String,
+    /// Текст ошибки, если прогон завершился сбоем (см. has_error в ChatRunResult).
+    /// None — успешный прогон. Позволяет фронту отличать «ошибку» от «нормального
+    /// ответа», даже когда подробности уже показаны системным сообщением в чате.
+    has_error: Option<String>,
 }
 
 
@@ -412,6 +416,7 @@ pub async fn chat_request(
         engine_mode: result.engine_mode,
         engine_tok_per_sec: result.engine_tok_per_sec,
         engine_mode_detail: result.engine_mode_detail,
+        has_error: result.has_error,
     })
 }
 

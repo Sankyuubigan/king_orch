@@ -273,15 +273,38 @@ pub fn max_fitting_ngl(
 
 /// Численное ядро `max_fitting_ngl` (отдельно — для тестов без файла).
 pub fn max_fitting_ngl_estimate(est: &VramEstimate, budget_mb: f64, reserve_mb: f64) -> u32 {
+    max_fitting_ngl_safe_estimate(est, budget_mb, reserve_mb, 1.0)
+}
+
+/// Максимальное число слоёв с запасом безопасности `safety_factor` (>1): бюджет
+/// делится на (МБ на слой × фактор). Фактор покрывает пиковые compute-буферы и
+/// фрагментацию СВЕРХ `buffers_mb` — на реальной карте пик может превысить
+/// линейную оценку «веса + KV» (буферы промпт-процессинга под ubatch 512 на
+/// 12B-моделях далеко за 256 МБ). Используется в pre-flight запуска и авто-повторе.
+pub fn max_fitting_ngl_safe_estimate(est: &VramEstimate, budget_mb: f64, reserve_mb: f64, safety_factor: f64) -> u32 {
     if est.num_layers == 0 {
         return 0;
     }
     let usable = (budget_mb - reserve_mb).max(0.0);
-    let per_layer = (est.model_mb + est.kv_mb) / est.num_layers as f64;
+    let per_layer = ((est.model_mb + est.kv_mb) * safety_factor.max(1.0)) / est.num_layers as f64;
     if per_layer <= 0.0 {
         return est.num_layers;
     }
     (usable / per_layer).floor().min(est.num_layers as f64) as u32
+}
+
+/// Максимальное число слоёв с запасом безопасности (обёртка с чтением GGUF).
+pub fn max_fitting_ngl_safe(
+    model_path: &str,
+    ctx_size: u32,
+    kv_quant_keys: bool,
+    kv_quant_values: bool,
+    budget_mb: f64,
+    reserve_mb: f64,
+    safety_factor: f64,
+) -> u32 {
+    let est = estimate_vram(model_path, ctx_size, kv_quant_keys, kv_quant_values);
+    max_fitting_ngl_safe_estimate(&est, budget_mb, reserve_mb, safety_factor)
 }
 
 #[cfg(test)]
@@ -322,6 +345,11 @@ mod tests {
         // МБ на слой = (10000+2000)/20 = 600. Бюджет 10 500 − резерв 500 = 10 000 → 16 слоёв.
         let e = est(10_000.0, 2_000.0, 20);
         assert_eq!(max_fitting_ngl_estimate(&e, 10_500.0, 500.0), 16);
+        // Safety-фактор 1.25 урезает число слоёв (пиковые буферы сверх оценки).
+        // 600 МБ/слой × 1.25 = 750 → 10 000 / 750 = 13 слоёв.
+        assert_eq!(max_fitting_ngl_safe_estimate(&e, 10_500.0, 500.0, 1.25), 13);
+        // Фактор никогда не расширяет бюджет.
+        assert!(max_fitting_ngl_safe_estimate(&e, 10_500.0, 500.0, 1.25) <= max_fitting_ngl_estimate(&e, 10_500.0, 500.0));
         // Резерв больше бюджета → 0 (не влезает даже минимальный оффлоад).
         assert_eq!(max_fitting_ngl_estimate(&e, 400.0, 500.0), 0);
         // Бюджет больше полного оффлоада → кап на число слоёв.

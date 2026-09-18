@@ -373,13 +373,20 @@ impl LlamaEngine {
                         // Запас сверх оценки на фрагментацию/пиковые compute-тензоры
                         // + CUDA-контекст/драйвер (в breakdown llama это «unaccounted»,
                         // ~1.3 GiB на RTX; llama-fit-params по умолчанию резервирует 1024 MiB).
+                        // SAFETY_FACTOR митигейт incidents, когда линейная оценка
+                        // «веса + KV» занижает реальный пик (буферы промпт-процессинга
+                        // под ubatch 512 на 12B-моделях заведомо > 256 МБ; на карте
+                        // с двумя параллельными инференсами пик доходил до 98% VRAM
+                        // при расчётных ~60%, после чего драйвер сбрасывал GPU — TDR).
                         const VRAM_RESERVE_MB: f64 = 1024.0;
-                        let need_mb = est.total_mb + VRAM_RESERVE_MB;
+                        const VRAM_SAFETY_FACTOR: f64 = 1.25;
+                        let need_mb = est.total_mb * VRAM_SAFETY_FACTOR + VRAM_RESERVE_MB;
                         if need_mb > free_vram_mb {
-                            // Ступенчатый offload: максимальное число слоёв из бюджета.
-                            let new_ngl = crate::infra::vram_estimate::max_fitting_ngl(
+                            // Ступенчатый offload: максимальное число слоёв из бюджета
+                            // (с тем же фактором безопасности на МБ/слой).
+                            let new_ngl = crate::infra::vram_estimate::max_fitting_ngl_safe(
                                 &model_path, global_ctx_limit, kv_quant_keys, kv_quant_values,
-                                free_vram_mb, VRAM_RESERVE_MB,
+                                free_vram_mb, VRAM_RESERVE_MB, VRAM_SAFETY_FACTOR,
                             );
                             let was_ngl = gpu_layers;
                             gpu_layers = new_ngl.min(gpu_layers);
@@ -1486,13 +1493,14 @@ impl LlamaEngine {
         let device = nvml.device_by_index(0).ok()?;
         let mem = device.memory_info().ok()?;
         let free_mb = mem.free as f64 / (1024.0 * 1024.0);
-        Some(crate::infra::vram_estimate::max_fitting_ngl(
+        Some(crate::infra::vram_estimate::max_fitting_ngl_safe(
             &self.model_path,
             self.global_ctx_limit,
             ctx.kv_quant_keys,
             ctx.kv_quant_values,
             free_mb,
             256.0,
+            1.25,
         ))
     }
 
@@ -1653,8 +1661,27 @@ impl LlamaEngine {
                 Ok(r) => return Ok(r),
                 Err(e) => e,
             };
-            // OOM может быть в тексте ошибки и/или в хвосте лога движка.
-            let err_is_oom = is_cuda_oom_text(&err) || is_cuda_oom_text(&read_log_tail(&self.server_log));
+            // Пользователь нажал «Стоп»: движок/стрим могли оборваться ИЗ-ЗА остановки,
+            // а не из-за OOM — повторять запрос запрещено (иначе «Стоп» игнорируется).
+            if cancel_flag.load(Ordering::SeqCst) {
+                return Err(err);
+            }
+            // OOM-детект: (1) явные маркеры в тексте ошибки и/или в хвосте лога движка;
+            // (2) «молчаливая смерть» стрима — сервер убит БЕЗ печати OOM (драйвер
+            // сбросил GPU по TDR раньше, чем ggml написал диагноз), при этом пиковый
+            // расход VRAM во время генерации ≥ 85% карты (см. incident: на 98% VRAM в
+            // логе остался только print_timing, stderr оборвался на error decoding).
+            let silent_death = is_silent_generation_death(&err);
+            let log_tail_oom = is_cuda_oom_text(&read_log_tail(&self.server_log));
+            let vram_pressure = if silent_death {
+                match (vram_peak_mb_from_error(&err), current_vram_total_free_mb()) {
+                    (Some(peak_mb), Some((total_mb, _))) if total_mb > 0.0 => peak_mb >= total_mb * 0.85,
+                    _ => false,
+                }
+            } else {
+                false
+            };
+            let err_is_oom = is_cuda_oom_text(&err) || log_tail_oom || vram_pressure;
             if step >= 2 || !self.can_oom_retry() || !err_is_oom {
                 return Err(err);
             }
@@ -1925,6 +1952,44 @@ fn is_cuda_oom_text(text: &str) -> bool {
         || lower.contains("nomemory")
 }
 
+/// «Молчаливая смерть» llama-server при генерации: HTTP-поток оборвался БЕЗ явного
+/// OOM-текста (сброс соединения, разрыв тела ответа). Такое бывает, когда CUDA-ресурс
+/// завис и драйвер сбросил GPU (TDR) раньше, чем движок успел напечатать ggml-диагноз.
+fn is_silent_generation_death(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    lower.contains("error decoding response body")
+        || lower.contains("чтения потока генерации")
+        || lower.contains("connection reset")
+        || lower.contains("connection aborted")
+        || lower.contains("broken pipe")
+        || lower.contains("unexpected eof")
+        || lower.contains("stream closed")
+        || lower.contains("io error")
+}
+
+/// Пиковое потребление VRAM (МБ) из текста ошибки — строка «VRAM=NNNN МБ» из
+/// `err_details` (MemReport). None, если семплер не собрал данных.
+fn vram_peak_mb_from_error(text: &str) -> Option<f64> {
+    let marker = "VRAM=";
+    let idx = text.find(marker)?;
+    let digits: String = text[idx + marker.len()..]
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    digits.parse::<f64>().ok().filter(|v| *v > 0.0)
+}
+
+/// (total, free) VRAM в МБ по NVML. None — NVML недоступен.
+fn current_vram_total_free_mb() -> Option<(f64, f64)> {
+    let nvml = nvml_wrapper::Nvml::init().ok()?;
+    let device = nvml.device_by_index(0).ok()?;
+    let mem = device.memory_info().ok()?;
+    Some((
+        mem.total as f64 / (1024.0 * 1024.0),
+        mem.free as f64 / (1024.0 * 1024.0),
+    ))
+}
+
 /// Возвращает понятную формулировку ошибки, если llama-server реально упал
 /// от нехватки видеопамяти (CUDA OOM). Иначе возвращает исходный `reason`
 /// без изменений. Юзер видит ГЛАВНЫЙ совет, а не хвост ggml-лога.
@@ -2040,6 +2105,29 @@ mod tests {
         assert!(!is_cuda_oom_text("no kernel image is available for execution on the device"));
         assert!(!is_cuda_oom_text("driver version is insufficient"));
         assert!(!is_cuda_oom_text("invalid device function"));
+    }
+
+    #[test]
+    fn silent_death_detects_stream_breaks_but_not_plain_errors() {
+        assert!(is_silent_generation_death("Ошибка чтения потока генерации: error decoding response body"));
+        assert!(is_silent_generation_death("reqwest: error decoding response body"));
+        assert!(is_silent_generation_death("connection reset by peer"));
+        assert!(is_silent_generation_death("io error: broken pipe"));
+        // Обычные HTTP-ошибки со статусом — НЕ «молчаливая смерть» стрима.
+        assert!(!is_silent_generation_death("llama-server: HTTP 400 при генерации: bad request"));
+        assert!(!is_silent_generation_death("Ошибка отправки запроса генерации: timeout"));
+    }
+
+    #[test]
+    fn vram_peak_parsed_from_error_text() {
+        // Реальный формат err_details: «...VRAM=16081 МБ...».
+        let msg = "Ошибка чтения потока генерации: error decoding response body | пик памяти: llama-server RSS=9742 МБ, приложение RSS=80 МБ, VRAM=16081 МБ.";
+        assert_eq!(vram_peak_mb_from_error(msg), Some(16081.0));
+        // Без VRAM-строки (семплер не работал) — None.
+        assert_eq!(vram_peak_mb_from_error("llama-server: HTTP 500"), None);
+        assert_eq!(vram_peak_mb_from_error(""), None);
+        // VRAM=0 (в начале строки без данных) → None.
+        assert_eq!(vram_peak_mb_from_error("VRAM=0 МБ"), None);
     }
 
     #[test]

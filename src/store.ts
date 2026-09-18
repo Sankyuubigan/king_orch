@@ -13,6 +13,11 @@ class Store {
   activeThoughtsBlock: HTMLDivElement | null = null;
   realtimeSubcallKeys = new Set<string>();
 
+  // Watchdog обработки: когда началась активность и когда была последняя
+  // (progress/status/stream). Нужен, чтобы снять зависшее состояние обработки.
+  processingStartedAt = 0;
+  lastActivityAt = 0;
+
   // Трекинг сообщений
   uidCounter = 0;
   msgUidList: string[] = [];

@@ -19,5 +19,8 @@ pub struct ChatRunResult {
     pub engine_tok_per_sec: f64,
     /// Причина CPU-режима (пусто, если GPU)
     pub engine_mode_detail: String,
+    /// Текст ошибки, если прогон завершился сбоем, но был возвращён Ok
+    /// с системным сообщением (см. catch в run_chat). None — успешный прогон.
+    pub has_error: Option<String>,
 }
 

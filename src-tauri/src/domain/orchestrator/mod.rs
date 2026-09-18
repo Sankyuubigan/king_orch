@@ -450,6 +450,7 @@ where
             session_id: session_id.clone(),
             workspace_root: tools_root.clone(),
         };
+        let mut fallback_error: Option<String> = None;
         match crate::domain::workflow_engine::run_workflow(
             workflow, &mut ctx, &mut runner,
         ) {
@@ -476,10 +477,11 @@ where
                     let reason = if reason.is_empty() { "Ошибка выполнения workflow." } else { reason };
                     format!("⚠️ {}", reason)
                 };
+                fallback_error = Some(content.clone());
                 ctx.messages.push(ChatMessage {
                     id: Some(format!("msg_{}", ctx.messages.len())),
                     msg_type: "message".to_string(),
-                    content,
+                    content: content.clone(),
                     sub_calls: None,
                     author: Some("system".to_string()),
                     model: None,
@@ -496,6 +498,7 @@ where
             engine_mode: engine.engine_mode().to_string(),
             engine_tok_per_sec: engine.tok_per_sec(),
             engine_mode_detail: engine.engine_mode_detail().to_string(),
+            has_error: fallback_error,
         });
     }
 
@@ -549,6 +552,7 @@ where
                 engine_mode: engine.engine_mode().to_string(),
                 engine_tok_per_sec: engine.tok_per_sec(),
                 engine_mode_detail: engine.engine_mode_detail().to_string(),
+                has_error: None,
             })
     } else {
         Err(format!("Entry point '{}' не найден: нет ни workflow, ни .md агента с таким ID", agent_id))

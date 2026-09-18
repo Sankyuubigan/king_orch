@@ -14,6 +14,11 @@ import mermaid from "mermaid";
 
 mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
 
+/// Watchdog зависшей обработки: если движок молчит дольше лимита, а обработка
+/// формально идёт — снимаем состояние (кнопки/стоп возвращаются юзеру).
+const PROCESSING_IDLE_LIMIT_MS = 15 * 60 * 1000; // 15 минут тишины движка
+const PROCESSING_CHECK_MS = 30 * 1000;           // проверка раз в 30 сек
+
 /// Названия целевых языков для переводчика сообщений.
 /// `menu` — текст пункта контекстного меню, `footer` — подпись внутри сообщения.
 const TRANSLATOR_LANGS: Record<string, { menu: string; footer: string }> = {
@@ -77,6 +82,7 @@ export class ChatController {
   private modelAudioCapable: boolean = false;
   private countTimer: number | null = null;
   private lastPromptTokens: number = 0;
+  private processingWatchdog: number | null = null;
 
   constructor(el: ChatElements) {
     this.el = el;
@@ -365,6 +371,10 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
         sessionId: store.currentSessionId ?? ""
       });
 
+      if (response?.has_error) {
+        void trackError("chat.send.runFrom.outcome", response.has_error);
+      }
+
       const dur = ((performance.now() - startTime) / 1000);
       const newMessages = response.messages || [];
 
@@ -582,6 +592,9 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     this.el.modelSelect.disabled = this.el.agentSelect.disabled = this.el.btnSend.disabled = state;
     this.el.btnStop.disabled = !state;
     if (state) { 
+        store.processingStartedAt = Date.now();
+        store.lastActivityAt = Date.now();
+        this.armProcessingWatchdog();
         this.el.chatFeedback.style.display = "block"; 
         this.el.progressBar.style.width = "0%"; 
         this.el.statusLabel.innerText = "Подготовка..."; 
@@ -594,8 +607,43 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
         store.rtThoughtBuffer = "";
         store.rtThoughtAuthor = "";
     }
-    else { this.el.chatFeedback.style.display = "none"; }
+    else { 
+        // Полный сброс «рабочего» состояния: чат больше не в процессе обработки —
+        // скрываем панель прогресса и возвращаем статус/прогресс к дефолту, чтобы
+        // UI не оставался в застывшем виде («Загрузка модели...», прогресс 10%).
+        this.disarmProcessingWatchdog();
+        this.el.chatFeedback.style.display = "none"; 
+        this.el.progressBar.style.width = "0%"; 
+        this.el.statusLabel.innerText = "Обработка...";
+    }
     bus.emit("processing:changed", state);
+  }
+
+  /** Арм таймера-сторожа: периодически проверяет, движется ли обработка. */
+  private armProcessingWatchdog() {
+    this.disarmProcessingWatchdog();
+    this.processingWatchdog = window.setTimeout(() => this.onProcessingWatchdog(), PROCESSING_CHECK_MS);
+  }
+
+  private disarmProcessingWatchdog() {
+    if (this.processingWatchdog !== null) {
+      clearTimeout(this.processingWatchdog);
+      this.processingWatchdog = null;
+    }
+  }
+
+  /** Сторож зависшей обработки: если движок молчит дольше лимита — разблокируем UI. */
+  private onProcessingWatchdog() {
+    this.processingWatchdog = null;
+    if (!store.isProcessing) return;
+    if (Date.now() - store.lastActivityAt > PROCESSING_IDLE_LIMIT_MS) {
+      logFront(`[chat] Watchdog: движок молчит ${PROCESSING_IDLE_LIMIT_MS / 1000} сек — обработка остановлена`);
+      this.setProcessingState(false);
+      showToast("⏱ Движок молчал более 15 минут — обработка остановлена.", "error");
+      void trackError("chat.watchdog.timeout", new Error(`движок молчал ${Date.now() - store.lastActivityAt} мс`));
+    } else {
+      this.armProcessingWatchdog();
+    }
   }
 
   /** Сохранение текущей сессии с привязкой выбранных модели и агента. */
@@ -656,6 +704,9 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
           mmprojPath,
           sessionId: store.currentSessionId ?? ""
       });
+      if (response?.has_error) {
+        void trackError("chat.send.outcome", response.has_error);
+      }
       const dur = ((performance.now() - startTime) / 1000);
       const newMessages = response.messages || [];
       console.log("DBG chat_request -> newMessages.len=", newMessages.length, "newMessages=", JSON.stringify(newMessages.map((m: any) => ({ t: m.type, a: m.author }))), "response.text?", !!response.text);
@@ -876,8 +927,8 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
   private thoughtDedupSet = new Set<string>();
 
   private bindTauriEvents() {
-    listen("progress", (e) => { this.el.progressBar.style.width = `${e.payload}%`; });
-    listen("status", (e) => { this.el.statusLabel.innerText = e.payload as string; });
+    listen("progress", (e) => { store.lastActivityAt = Date.now(); this.el.progressBar.style.width = `${e.payload}%`; });
+    listen("status", (e) => { store.lastActivityAt = Date.now(); this.el.statusLabel.innerText = e.payload as string; });
 
     listen("tool_permission_request", (e) => { showPermissionRequest(e.payload as any); });
 
