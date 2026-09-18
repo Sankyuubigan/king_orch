@@ -5,8 +5,9 @@ import { store } from "../store";
 import { bus } from "../events";
 import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, showToast, showPermissionRequest, showVramRequest } from "../ui";
 import type { Role, MessageMenuCallbacks } from "../ui";
-import type { ThoughtMenuCallbacks, Attachment, CatalogEntry } from "../types";
+import type { ThoughtMenuCallbacks, Attachment } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
+import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
 import { renderMarkdown, stripStreamArtifacts, extractChannelThought, formatSpeed } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError } from "../telemetry";
@@ -83,6 +84,8 @@ export class ChatController {
   private countTimer: number | null = null;
   private lastPromptTokens: number = 0;
   private processingWatchdog: number | null = null;
+  /// Кэш каталога моделей плагина (для tokenizer_id в счётчике токенов).
+  private catalogCache: CatalogEntry[] | null = null;
 
   constructor(el: ChatElements) {
     this.el = el;
@@ -131,7 +134,10 @@ export class ChatController {
     if (!modelPath || !agentId) return;
 
     let tokenizerId = "Xenova/Meta-Llama-3-8B-Instruct";
-    const catalogModel = store.modelsCatalog.find((m: CatalogEntry) => modelPath.includes(m.name) || m.name === modelPath);
+    if (!this.catalogCache) {
+      try { this.catalogCache = await getModelsCatalog(); } catch (_) { this.catalogCache = []; }
+    }
+    const catalogModel = (this.catalogCache || []).find((m: CatalogEntry) => modelPath.includes(m.name) || m.name === modelPath);
     if (catalogModel && catalogModel.tokenizer_id) {
         tokenizerId = catalogModel.tokenizer_id;
     }
@@ -151,14 +157,7 @@ export class ChatController {
         const tokens = await countTokens(promptText, tokenizerId);
         this.lastPromptTokens = tokens;
 
-        const vram = await invoke<{ need_mb: number; vram_used_mb: number; vram_total_mb: number }>("get_prompt_memory", {
-            modelPath,
-            contextSize,
-            kvQuantKeys,
-            kvQuantValues,
-            promptTokens: tokens,
-            maxGen
-        });
+        const vram = await estimatePromptMemory(modelPath, contextSize, kvQuantKeys, kvQuantValues, tokens, maxGen);
 
         if (this.el.tokenCounter) {
             const isGraph = this.el.agentSelect.options[this.el.agentSelect.selectedIndex]?.text.startsWith("📁") ?? false;
@@ -479,7 +478,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
   private async refreshEngineBadgeInit() {
     let st: any;
     try {
-      st = await invoke("get_engine_status");
+      st = await getEngineStatus();
     } catch (_) {
       this.setEngineBadge("engine-none", "—", "Не удалось определить состояние движка");
       void trackError("chat.engineBadgeInit", _);
@@ -687,7 +686,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
       const allHistory = store.chatHistory.slice();
       let mmprojPath: string | null = null;
       if (attachments && attachments.length > 0) {
-        try { mmprojPath = await invoke("get_mmproj_path", { modelPath }); } catch (_) {}
+        try { mmprojPath = await getMmprojPath(modelPath); } catch (_) {}
       }
       const response: any = await invoke("chat_request", { 
           modelPath, 
@@ -806,7 +805,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     const modelPath = this.el.modelSelect?.value;
     if (!modelPath) { btn.disabled = true; this.modelAudioCapable = false; btn.classList.remove('btn-attach-active'); btn.classList.add('btn-attach-inactive'); btn.title = 'Сначала выберите модель'; return; }
     let mmprojPath: string | null = null;
-    try { mmprojPath = await invoke("get_mmproj_path", { modelPath }); } catch (_) {}
+    try { mmprojPath = await getMmprojPath(modelPath); } catch (_) {}
     if (!mmprojPath) {
       // Модель могла быть добавлена вручную без mmproj — докачиваем по каталогу.
       btn.disabled = true;
@@ -814,7 +813,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
       btn.classList.remove('btn-attach-active');
       btn.classList.add('btn-attach-inactive');
       btn.title = 'Скачивание mmproj для мультимодального режима…';
-      try { mmprojPath = await invoke("ensure_mmproj", { modelPath }); } catch (_) {}
+      try { mmprojPath = await ensureMmproj(modelPath); } catch (_) {}
     }
     if (mmprojPath) {
       // Аудио разрешаем только моделям с реальной audio-способностью
@@ -822,7 +821,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
       // ведёт к зависанию генерации (напр. Gemma-4 не поддерживает звук в llama.cpp).
       let audioCapable = false;
       try {
-        const caps = await invoke<{ vision: boolean; audio: boolean }>("get_model_capabilities", { modelPath });
+        const caps = await getModelCapabilities(modelPath);
         audioCapable = !!caps.audio;
       } catch (_) { audioCapable = false; }
       this.modelAudioCapable = audioCapable;

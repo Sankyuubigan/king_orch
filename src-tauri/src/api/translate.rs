@@ -19,10 +19,10 @@ pub fn translate_message(
     target_lang: String,
 ) -> Result<String, String> {
     let cfg = infra::load_config(&app);
-    let engine_dir = crate::api::llamacpp::get_engine_dir(&app);
+    let engine_dir = infra::get_engine_dir(&app);
     let ctx_limit = cfg.context_size;
     let max_tokens = cfg.max_gen_tokens as usize;
-    let params = crate::api::models::get_model_params(app, model_path.clone());
+    let params = tauri_plugin_llama_engine::commands::get_model_params(app.clone(), model_path.clone());
 
     let target_name = match target_lang.as_str() {
         "en" => "English",

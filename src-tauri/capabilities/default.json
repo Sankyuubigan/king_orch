@@ -16,6 +16,7 @@
     "process:default",
     "shell:default",
     "shell:allow-open",
-    "logs:default"
+    "logs:default",
+    "llama-engine:default"
   ]
 }

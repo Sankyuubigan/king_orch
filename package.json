@@ -13,6 +13,7 @@
   "dependencies": {
     "@huggingface/transformers": "^3.4.0",
     "@my-tauri-plugins/plugin-about-updates": "file:../my-tauri-plugins/tauri-plugin-about-updates",
+    "@my-tauri-plugins/plugin-llama-engine": "file:../my-tauri-plugins/tauri-plugin-llama-engine",
     "@my-tauri-plugins/plugin-logs": "file:../my-tauri-plugins/tauri-plugin-logs",
     "@tauri-apps/api": "2.10.1",
     "@tauri-apps/plugin-dialog": "2.7.0",

@@ -4,9 +4,10 @@
  * Импорты идут через двери (index.ts) — модули не лезут в кишки друг друга.
  */
 import { initConfirmDialog, initPermissionDialog, initVramDialog, showToast } from "./ui";
-// Регистрирует Web Component <about-updates-panel> и <logs-panel> из переиспользуемых плагинов.
+// Регистрирует Web Component <about-updates-panel>, <logs-panel> и <llama-*-panel> из переиспользуемых плагинов.
 import "@my-tauri-plugins/plugin-about-updates";
 import "@my-tauri-plugins/plugin-logs";
+import "@my-tauri-plugins/plugin-llama-engine";
 import { ChatController, SessionController, SettingsController, GraphController, AgentTestController, CodingTestController, UpdatePopupController } from "./controllers";
 import { bus } from "./events";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
@@ -64,41 +65,11 @@ async function initApp() {
     reppenSlider: $<HTMLInputElement>("reppen-slider"), reppenValue: $<HTMLElement>("reppen-value"),
     prespenSlider: $<HTMLInputElement>("prespen-slider"), prespenValue: $<HTMLElement>("prespen-value"),
     btnResetParams: $<HTMLButtonElement>("btn-reset-params"),
-    downloadModelSelect: $<HTMLSelectElement>("download-model-select"),
-    btnDownloadModel: $<HTMLButtonElement>("btn-download-model"),
-    downloadProgressContainer: $<HTMLDivElement>("download-progress-container"),
-    downloadProgressBar: $<HTMLDivElement>("download-progress-bar"),
-    downloadStatusLabel: $<HTMLDivElement>("download-status-label"),
-    btnAddModel: $<HTMLButtonElement>("btn-add-model"),
     chkShowAdvanced: $<HTMLInputElement>("chk-show-advanced"),
     chkShowFolderAgents: $<HTMLInputElement>("chk-show-folder-agents"),
     chkErrorReports: $<HTMLInputElement>("chk-error-reports"),
-    modelsList: $<HTMLDivElement>("models-list"),
-    btnAddModelLlm: $<HTMLButtonElement>("btn-add-model-llm"),
     translatorModelSelect: $<HTMLSelectElement>("translator-model-select"),
     translatorLangSelect: $<HTMLSelectElement>("translator-lang-select"),
-    btnAutoDownload: $<HTMLButtonElement>("btn-auto-download"),
-    autoDownloadModal: $<HTMLElement>("auto-download-modal"),
-    modalModelName: $<HTMLElement>("modal-model-name"),
-    modalSavePath: $<HTMLElement>("modal-save-path"),
-    modalFreeSpace: $<HTMLElement>("modal-free-space"),
-    btnModalCancel: $<HTMLButtonElement>("btn-modal-cancel"),
-    btnModalConfirm: $<HTMLButtonElement>("btn-modal-confirm"),
-    engineStatus: $<HTMLElement>("engine-status"),
-    engineGpu: $<HTMLElement>("engine-gpu"),
-    enginePath: $<HTMLElement>("engine-path"),
-    engineVariantSelect: $<HTMLSelectElement>("engine-variant-select"),
-    engineVariantHint: $<HTMLElement>("engine-variant-hint"),
-    btnApplyEngineVariant: $<HTMLButtonElement>("btn-apply-engine-variant"),
-    btnInstallEngine: $<HTMLButtonElement>("btn-install-engine"),
-    btnCheckEngineUpdate: $<HTMLButtonElement>("btn-check-engine-update"),
-    btnInstallEngineUpdate: $<HTMLButtonElement>("btn-install-engine-update"),
-    btnRemoveEngine: $<HTMLButtonElement>("btn-remove-engine"),
-    btnSetEngineDir: $<HTMLButtonElement>("btn-set-engine-dir"),
-    engineProgressContainer: $<HTMLDivElement>("engine-progress-container"),
-    engineProgressBar: $<HTMLDivElement>("engine-progress-bar"),
-    engineStatusLabel: $<HTMLDivElement>("engine-status-label"),
-    engineWarning: $<HTMLElement>("engine-warning"),
   });
 
   // ─── Контроллер чата (вкладка 💬) ───
@@ -272,6 +243,13 @@ async function initApp() {
 
   // ─── Старт ───
   settingsCtrl.loadConfig();
+
+  // ─── Синхронизация списка моделей после изменений в веб-компонентах плагина ───
+  // Модели добавляются/удаляются/скачиваются в <llama-*-panel>; обновляем
+  // хостовый конфиг и списки моделей (select/переводчик/параметры) из главного стейта.
+  document.addEventListener("llama:models-changed", () => {
+    settingsCtrl.loadConfig();
+  });
 
   // ─── Проверка обновления при старте (всплывающее окно справа по центру) ───
   const updatePopupCtrl = new UpdatePopupController({

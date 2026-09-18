@@ -98,7 +98,7 @@ pub async fn run_iterative_test(
         .unwrap_or_default();
     
     // Инициализация движка LLM (папка движка llama.cpp — рядом с exe)
-    let engine_dir = crate::api::llamacpp::get_engine_dir(&app);
+    let engine_dir = crate::infra::get_engine_dir(&app);
     let engine = infra::llm::LlamaEngine::new(
         &engine_dir,
         &model_path,
@@ -262,7 +262,7 @@ pub async fn run_pipeline_test_cmd(
     let mut test_def = domain::pipeline_test::load_single_test(&test_dir)?;
     test_def.validation.model_path = model_path.clone();
 
-    let engine_dir = crate::api::llamacpp::get_engine_dir(&app);
+    let engine_dir = crate::infra::get_engine_dir(&app);
     let config = infra::load_config(&app);
 
     let log_cb = {

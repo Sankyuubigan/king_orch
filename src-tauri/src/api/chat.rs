@@ -197,7 +197,7 @@ pub async fn chat_request(
     // ── Проверка установки движка llama.cpp (llama-server) ──
     // Новая архитектура: движок — ОТДЕЛЬНЫЙ процесс, инференс возможен ТОЛЬКО
     // через него (нет встроенного CPU-фолбэка). Если движка нет — понятная ошибка.
-    let engine_dir = crate::api::llamacpp::get_engine_dir(&app);
+    let engine_dir = infra::get_engine_dir(&app);
     if !infra::llamacpp_installer::has_any_installed(&engine_dir) {
         let msg = "Движок llama.cpp не установлен (нет llama-server.exe).\n\
              Откройте Настройки → «Движок запуска нейромоделей» и нажмите «Установить движок»."
@@ -476,52 +476,4 @@ pub fn get_prompt_preview(
 
     let pf = crate::infra::PromptFormat::detect_from_path(&model_path);
     Ok(pf.format_messages(&llm_messages))
-}
-
-/// Для Live-превью: прогноз потребления VRAM + факты текущей занятости GPU.
-/// Единый источник истины по оценке — `infra::vram_estimate` (та же формула,
-/// что в pre-flight запуска и в пик-линии после генерации).
-#[derive(serde::Serialize)]
-pub struct PromptMemoryInfo {
-    /// Оценка «модель + KV + буферы» на эффективный контекст, МБ.
-    pub need_mb: f64,
-    /// Занято VRAM сейчас (NVML, device 0, ВСЕ процессы), МБ.
-    pub vram_used_mb: f64,
-    /// Общий объём VRAM устройства (NVML, device 0), точные MiB.
-    pub vram_total_mb: f64,
-}
-
-/// Для Live-превью: прогноз потребления VRAM (модель + KV-кэш) для заданного
-/// размера контекста + факты NVML. `vram_used_mb`/`vram_total_mb` раны 0, если
-/// NVML недоступен — фронт покажет числитель без знаменателя.
-#[tauri::command]
-pub fn get_prompt_memory(
-    model_path: String,
-    context_size: u32,
-    kv_quant_keys: bool,
-    kv_quant_values: bool,
-    prompt_tokens: u32,
-    max_gen: u32,
-) -> Result<PromptMemoryInfo, String> {
-    // Движок выделяет KV-кэш не на весь лимит контекста, а на реально
-    // необходимый объём: (промпт + запас на генерацию + 128).min(лимит).
-    // Иначе оценка всегда завышена и не зависит от длины промпта.
-    const CTX_RESERVE: u32 = 128;
-    let effective_ctx = (prompt_tokens + max_gen + CTX_RESERVE).min(context_size);
-    let est = crate::infra::vram_estimate::estimate_vram(&model_path, effective_ctx, kv_quant_keys, kv_quant_values);
-    let (used_mb, total_mb) = match nvml_wrapper::Nvml::init() {
-        Ok(nvml) => match nvml.device_by_index(0).and_then(|d| d.memory_info()) {
-            Ok(mem) => (
-                mem.used as f64 / (1024.0 * 1024.0),
-                mem.total as f64 / (1024.0 * 1024.0),
-            ),
-            Err(_) => (0.0, 0.0),
-        },
-        Err(_) => (0.0, 0.0),
-    };
-    Ok(PromptMemoryInfo {
-        need_mb: est.total_mb,
-        vram_used_mb: used_mb,
-        vram_total_mb: total_mb,
-    })
 }

@@ -38,11 +38,6 @@ pub enum AgentEvent {
         tool: String,
         path: String,
     },
-    /// Неблокирующее уведомление об итоге pre-flight VRAM (факты, одна кнопка
-    /// «ОК»). Запуск модели НЕ блокируется и не запрашивает решение юзера.
-    VramNotice {
-        note: String,
-    },
 }
 
 type Listener = Arc<dyn Fn(&AgentEvent) + Send + Sync>;

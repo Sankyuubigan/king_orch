@@ -34,9 +34,6 @@ class Store {
   // Тестирование агентов
   testFileContent: any[] | null = null;
 
-  // Каталог моделей
-  modelsCatalog: any[] = [];
-
   // Параметры текущей модели (включая DRY/XTC)
   currentModelParams: ModelParams | null = null;
 

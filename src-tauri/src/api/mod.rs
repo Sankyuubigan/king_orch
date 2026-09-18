@@ -3,16 +3,13 @@
 
 pub mod config;
 pub mod sessions;
-pub mod models;
 pub mod agents;
 pub mod chat;
 pub mod graph;
 pub mod test;
 pub mod coding_test;
 pub mod file_utils;
-pub mod llamacpp;
 pub mod permissions;
-pub mod vram;
 pub mod translate;
 pub mod updater;
 

@@ -121,7 +121,7 @@
 | `models.rs` | `get_models_catalog`, `get_model_params`, `set_model_params`, `reset_model_params`, `add_model` | Параметры моделей и каталог |
 | `agents.rs` | `get_agents` | Загрузка списка entry points (.md + YAML) |
 | `graph.rs` | `get_workflow_graphs` | Чтение YAML workflow и возврат структуры графа для UI |
-| `chat.rs` | `chat_request`, `stop_processing`, `get_prompt_preview`, `get_prompt_memory` | Главный цикл чата + Live-превью токенов/VRAM |
+| `chat.rs` | `chat_request`, `stop_processing`, `get_prompt_preview` | Главный цикл чата + Live-превью токенов |
 
 ### Подслой 5.2: Домен (`src-tauri/src/domain/`)
 
@@ -220,7 +220,7 @@ User → Entry point (выбор в UI: .md с visible: true или YAML с visi
    - **`.md`-агент** (`agent_id` найден в `load_agents`): системный промпт этого агента + история non-thought сообщений + текущее сообщение.
    - **Режим графа** (`agent_id` — это workflow): т.к. промпт выбирает узел графа, берётся **самый «тяжёлый» агент** — среди узлов `llm_worker` текущего графа выбирается агент с самым длинным системным промптом (`build_worst_agent_prompt`). Пиковая VRAM определяется одним LLM-вызовом (движок работает последовательно), поэтому worst-case = самый большой одиночный промпт. Sub-workflow узлы **не** раскрываются — считается только текущий граф. Граф без `llm_worker` → пустой системный промпт (учтётся только история + сообщение).
 2. Фронт токенизирует строку (`countTokens`, HF-токенизатор).
-3. `get_prompt_memory(...)` → `infra::llm::estimate_vram_mb`: `размер файла модели + KV-кэш`, где `effective_ctx = (prompt_tokens + max_gen + 128).min(context_size)`.
+3. `estimate_prompt_memory(...)` (команда плагина `tauri-plugin-llama-engine`, `engine::vram_estimate`) → `размер файла модели + KV-кэш`, где `effective_ctx = (prompt_tokens + max_gen + 128).min(context_size)`.
 
 Прокси «по символам» для выбора худшего агента допустим для примерной оценки. В UI для графа в подсказке счётчика добавляется пометка «Оценка по самому тяжёлому агенту графа».
 

@@ -20,6 +20,9 @@ async fn main() {
     // Ранний pre-Tauri период пишется через early_* (краш-лог живёт сразу).
     tauri_plugin_logs::early_init("king_orch.log");
 
+    // Движковый плагин читает тот же app_config.json (APPDATA/<name>).
+    tauri_plugin_llama_engine::engine::config::set_app_data_dir_name("com.kingorch.app");
+
     tauri_plugin_logs::early_log(
         "INFO",
         &format!("=== King Orch {}: запуск ===", env!("CARGO_PKG_VERSION")),
@@ -93,6 +96,9 @@ async fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_about_updates::init())
         .plugin(tauri_plugin_logs::init())
+        // Движок llama.cpp — переиспользуемый плагин (SSOT). Регистрирует
+        // команды движка/моделей, owns процесс llama-server (kill на выходе).
+        .plugin(tauri_plugin_llama_engine::init())
 
         .manage(AppState {
             cancel_flag: Arc::new(AtomicBool::new(false)),
@@ -103,9 +109,6 @@ async fn main() {
 
             // 🔐 Форвардинг запросов разрешений в UI (плашка с 3 кнопками).
             api::permissions::init_permission_forwarding(&app_handle);
-
-            // 🔔 Форвардинг уведомлений о VRAM в UI (non-blocking, одна кнопка ОК).
-            api::vram::init_vram_forwarding(&app_handle);
 
             // Облачная отправка: блокируем, если юзер снял галочку. Плагин логов
             // поднял своё reporting-состояние из tauri.conf.json при регистрации.
@@ -151,7 +154,7 @@ async fn main() {
             // Приложение НЕ линкует llama.cpp нативно (нет PE-импортов и DLL
             // рядом с exe). Инференс идёт через llama-server.exe по HTTP,
             // поэтому на старте нужен только сам движок в папке <exe>/llamacpp.
-            let engine_dir = api::llamacpp::get_engine_dir(&app_handle);
+            let engine_dir = infra::get_engine_dir(&app_handle);
             if infra::llamacpp_installer::has_any_installed(&engine_dir) {
                 log::info!("setup(): движок llama.cpp найден");
             } else {
@@ -159,7 +162,7 @@ async fn main() {
             }
             let app_for_update = app_handle.clone();
             tauri::async_runtime::spawn(async move {
-                let _ = api::llamacpp::check_engine_update(app_for_update).await;
+                let _ = tauri_plugin_llama_engine::commands::check_engine_update(app_for_update).await;
             });
 
             log::info!("setup(): OK");
@@ -209,24 +212,10 @@ async fn main() {
             api::sessions::delete_session,
             api::sessions::rename_session,
             api::sessions::open_session_folder,
-            api::models::get_models_catalog,
-            api::models::get_model_params,
-            api::models::set_model_params,
-            api::models::reset_model_params,
-            api::models::add_model,
-            api::models::remove_model,
-            api::models::delete_model_file,
-            api::models::get_mmproj_path,
-            api::models::get_model_capabilities,
-            api::models::get_all_capabilities,
-            api::models::ensure_mmproj,
-            api::models::get_auto_download_info,
-            api::models::auto_download_default_model,
             api::chat::chat_request,
             api::chat::stop_processing,
             api::permissions::respond_permission,
             api::chat::get_prompt_preview,
-            api::chat::get_prompt_memory,
             api::graph::read_workflow_file,
             api::graph::save_workflow,
             api::test::run_iterative_test,
@@ -236,30 +225,22 @@ async fn main() {
             api::test::run_pipeline_test_cmd,
             api::coding_test::get_coding_bench_info,
             api::coding_test::run_coding_bench,
-            infra::downloader::download_model,
             api::file_utils::write_text_file,
             api::file_utils::read_text_file,
-            api::llamacpp::get_engine_status,
-            api::llamacpp::install_llamacpp,
-            api::llamacpp::set_engine_variant,
-            api::llamacpp::check_engine_update,
-            api::llamacpp::install_engine_update,
-            api::llamacpp::remove_engine,
-            api::llamacpp::set_engine_dir,
             api::translate::translate_message,
             api::updater::check_github_release_update,
             api::updater::install_update_from_github,
+            // Команды движка/моделей/параметров регистрирует плагин
+            // tauri-plugin-llama-engine (get_engine_status, install_llamacpp,
+            // add_model, get_model_params, download_model и т.д.).
         ])
         .build(tauri::generate_context!())
         .expect("ошибка создания приложения Tauri")
-        .run(|_app_handle, event| {
-            // Гарантированная зачистка движка llama.cpp (llama-server.exe) при
-            // выходе из приложения: на Windows дочерний процесс не убивается
-            // вместе с родителем и «висит» в памяти. Дополнительно к этому
-            // LlamaEngine назначается в Windows Job Object с KILL_ON_JOB_CLOSE.
-            if let tauri::RunEvent::ExitRequested { .. } = event {
-                crate::infra::process_util::kill_active_engines();
-            }
+        .run(|_app_handle, _event| {
+            // Гарантированное убийство движка llama.cpp (llama-server.exe) при
+            // выходе обрабатывает плагин tauri-plugin-llama-engine (on_event
+            // ExitRequested → kill_active_engines; дополнительно каждый движок
+            // назначен в Windows Job Object с KILL_ON_JOB_CLOSE).
         });
 
     log::info!("Приложение закрыто");

@@ -1,46 +1,42 @@
-//! 🚪 Инфраструктурный слой — публичный контракт
-//! Доменный и API слои импортируют инфраструктуру ТОЛЬКО через этот фасад
+//! 🚪 Инфраструктурный слой — публичный контракт.
+//! Доменный и API слои импортируют инфраструктуру ТОЛЬКО через этот фасад.
+//!
+//! ## Движок llama.cpp — переиспользуемый плагин (SSOT)
+//! Вся движковая логика вынесена в `tauri-plugin-llama-engine` и доступна здесь
+//! через glob: `crate::infra::llm::*`, `llamacpp_installer`, `process_util`,
+//! `vram_estimate`, каталог моделей и т.д. Хост оставляет за собой полный
+//! `AppConfig`, сессии, MCP, инструменты и пр.
 
 pub mod config;
 pub mod event_bus;
-pub mod detokenizer;
-pub mod llm;
-pub mod llm_types;
-pub mod llm_gguf;
-pub mod llm_multimodal;
 pub mod session_manager;
 pub mod mcp_client;
 pub mod plugins;
-pub mod downloader;
-pub mod mmproj;
 pub mod bin_downloader;
-pub mod gpu_detector;
-pub mod llamacpp_installer;
-pub mod mem_profiler;
 pub mod tools;
 pub mod permissions;
-pub mod vram;
-pub mod vram_estimate;
 pub mod lsp;
 pub mod updater_rollback;
-pub mod process_util;
 pub mod system_proxy;
-pub mod download_fallback;
 pub mod network_diagnostics;
 
+// Движок llama.cpp — переиспользуемый плагин (SSOT). Глоб-реэкспорт тенят
+// явные `pub use`/`pub mod` хоста ниже (explicit item > glob import).
+pub use tauri_plugin_llama_engine::engine::*;
+
+// Хелпер хоста (setup): папка движка `<exe>/llamacpp` (или из конфига).
+pub use tauri_plugin_llama_engine::get_engine_dir;
+
 // ─── Публичные типы ───
-pub use config::{AppConfig, CatalogEntry, ModelMeta, ModelParams, SamplingPresets};
-pub use llm::{ChatMessage, ChatAttachment, LlamaEngine, SubCall, ToolCallInfo, push_report, message_phase, LlmMessage, extract_model_filename, llm_history, PromptFormat, estimate_vram_mb, GrammarSpec, build_json_only_grammar, build_json_object_grammar_with_keys, get_hybrid_grammar};
+pub use config::{AppConfig, SamplingPresets};
 pub use session_manager::{ChatSession, SessionMeta};
 pub use mcp_client::{McpClient, McpPool, SharedMcpClient};
 
 // ─── Публичные функции ───
-pub use config::{load_config, load_config_early, save_config, load_catalog, load_sampling_presets, auto_detect_mmproj, find_catalog_entry_for_model, find_sibling_llm_for_mmproj, is_mmproj_file, find_agents_dir, find_mcp_servers_dir, find_coding_tests_dir};
-pub use mmproj::ensure_mmproj_for_model;
-pub use llm::{extract_f32_from_gguf, extract_u32_from_gguf, extract_gguf_arch, extract_u32_with_arch};
-pub use llm_gguf::{extract_i64_array_from_gguf, extract_i64_array_with_arch};
+pub use config::{
+    load_config, load_config_early, save_config, load_sampling_presets,
+    find_agents_dir, find_mcp_servers_dir, find_coding_tests_dir,
+};
 pub use session_manager::{get_session, get_sessions, save_session, delete_session, rename_session, open_session_folder};
-pub use mem_profiler::{MemSampler, MemGuard, peak_line, current_process_rss};
 pub use permissions::{PermissionApprover, GrantDecision, global_approver, test_approver};
-pub use vram::notify_vram;
 pub use tools::{Tool, ToolCtx, ToolError, tool_schemas, execute_tool, all_tools};

@@ -1,6 +1,6 @@
 {
   "productName": "King Orch",
-  "version": "26.9.99",
+  "version": "26.9.102",
   "identifier": "com.kingorch.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -42,11 +42,13 @@
       "mcp_servers/*": "mcp_servers/",
       "../agents/": "agents/",
       "../tasks_for_test_llm/": "tasks_for_test_llm/",
-      "../models_catalog.json": "models_catalog.json",
       "../sampling_presets.json": "sampling_presets.json"
     }
   },
   "plugins": {
+    "llama-engine": {
+      "data_dir_name": "com.kingorch.app"
+    },
     "logs": {
       "log_file_name": "king_orch.log",
       "last_logs": true,

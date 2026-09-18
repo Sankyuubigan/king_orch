@@ -31,7 +31,7 @@ pub async fn run_coding_bench(
     quick_per_suite: Option<usize>,
     vr_budget_mb: u64,
 ) -> Result<(), String> {
-    let engine_dir = crate::api::llamacpp::get_engine_dir(&app);
+    let engine_dir = crate::infra::get_engine_dir(&app);
     let tasks_dir = infra::find_coding_tests_dir(&app);
     let bins_dir = infra::bin_downloader::get_bins_dir(
         &app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
