@@ -1,25 +1,25 @@
-﻿pub(crate) mod consts;
+pub(crate) mod consts;
 pub(crate) mod dispatch;
 pub(crate) use dispatch::*;
+pub(crate) mod compaction;
+pub(crate) mod grammar;
+pub(crate) mod invocation;
+pub(crate) mod prompt_log;
+pub(crate) mod result;
+pub(crate) mod spill;
 pub mod stream;
 pub(crate) mod text;
-pub(crate) mod invocation;
-pub(crate) mod grammar;
-pub(crate) mod spill;
-pub(crate) mod compaction;
-pub(crate) mod prompt_log;
 pub(crate) mod todo;
-pub(crate) mod result;
+pub(crate) use compaction::*;
 pub(crate) use consts::*;
+pub(crate) use grammar::*;
+pub(crate) use invocation::*;
+pub(crate) use prompt_log::*;
+pub(crate) use result::*;
+pub(crate) use spill::*;
 pub use stream::*;
 pub(crate) use text::*;
-pub(crate) use invocation::*;
-pub(crate) use grammar::*;
-pub(crate) use spill::*;
-pub(crate) use compaction::*;
-pub(crate) use prompt_log::*;
 pub(crate) use todo::*;
-pub(crate) use result::*;
 
 pub mod prompt;
 mod runtime;
@@ -27,16 +27,23 @@ mod runtime;
 pub use runtime::builtin_tools;
 
 use crate::domain::agent_manager::{load_agents, AgentProfile};
-use crate::domain::signals::{SignalContract, extract_signal_value_from_text, load_signal_contract, build_signal_envelope_grammar, build_signal_envelope_json_only_grammar};
-use crate::domain::workflow_engine::{
-    find_workflow_by_stem, load_workflows, WorkflowContext, WorkflowRunner, NodeType, WorkflowDef,
-};
-use crate::infra::{ChatMessage, ChatAttachment, LlamaEngine, ModelParams, SubCall, LlmMessage, extract_model_filename, llm_history, GrammarSpec};
-use crate::infra::llm_types::GenerationResult;
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
-    has_incomplete_json_action, is_thinking_truncated, needs_cutoff_continuation,
-    parse_orchestrator_response, parse_tool_call, split_thinking_and_answer,
+    has_incomplete_json_action, is_thinking_truncated, looks_like_broken_tool_call,
+    needs_cutoff_continuation, parse_orchestrator_response, parse_tool_call,
+    split_thinking_and_answer,
+};
+use crate::domain::signals::{
+    build_signal_envelope_grammar, build_signal_envelope_json_only_grammar,
+    extract_signal_value_from_text, load_signal_contract, SignalContract,
+};
+use crate::domain::workflow_engine::{
+    find_workflow_by_stem, load_workflows, NodeType, WorkflowContext, WorkflowDef, WorkflowRunner,
+};
+use crate::infra::llm_types::GenerationResult;
+use crate::infra::{
+    extract_model_filename, llm_history, ChatAttachment, ChatMessage, FunctionDef, GrammarSpec,
+    LlamaEngine, LlmMessage, ModelParams, SubCall, ToolDefinition,
 };
 use prompt::build_system_prompt;
 use std::collections::HashMap;
@@ -136,7 +143,10 @@ fn push_continuation_for_cutoff(
                 COMPACT_MAX_TOKENS
             ));
 
-            let saved_kind = stream_meta.lock().map(|m| m.kind.clone()).unwrap_or_default();
+            let saved_kind = stream_meta
+                .lock()
+                .map(|m| m.kind.clone())
+                .unwrap_or_default();
             if let Ok(mut m) = stream_meta.lock() {
                 m.kind = String::new(); // внутренняя генерация — не стримим в UI
             }
@@ -145,11 +155,11 @@ fn push_continuation_for_cutoff(
                     LlmMessage {
                         role: "system".to_string(),
                         content: "Ты — инструмент сжатия внутренних размышлений агента. Сожми приложенные размышления до 10-14 коротких тезисов. Сохрани ВСЕ факты, термины, цифры и выводы. Пиши на языке исходного текста. Только тезисы, без вступлений.".to_string(),
-                    },
+                     ..Default::default()},
                     LlmMessage {
                         role: "user".to_string(),
                         content: thinking,
-                    },
+                     ..Default::default()},
                 ],
                 COMPACT_MAX_TOKENS,
                 model_params,
@@ -172,6 +182,7 @@ fn push_continuation_for_cutoff(
                     llm_messages.push(LlmMessage {
                         role: "assistant".to_string(),
                         content: summary_text,
+                        ..Default::default()
                     });
                     *continuation_mark = Some(llm_messages.len());
                     continuation_raw.clear();
@@ -197,10 +208,12 @@ fn push_continuation_for_cutoff(
     llm_messages.push(LlmMessage {
         role: "assistant".to_string(),
         content: raw_response.to_string(),
+        ..Default::default()
     });
     llm_messages.push(LlmMessage {
         role: "user".to_string(),
         content: hint.to_string(),
+        ..Default::default()
     });
     log_cb(format!(
         "⏩ [{}] докача размышлений после обрыва (продолжение #{})",
@@ -233,6 +246,7 @@ fn finalize_phase1_context(
             messages.push(LlmMessage {
                 role: "assistant".to_string(),
                 content: tail,
+                ..Default::default()
             });
         }
     }
@@ -241,6 +255,7 @@ fn finalize_phase1_context(
         messages.push(LlmMessage {
             role: "user".to_string(),
             content: PHASE1_DONE_PROMPT.to_string(),
+            ..Default::default()
         });
         true
     } else {
@@ -262,7 +277,9 @@ pub fn build_worst_agent_prompt(
     wf: &WorkflowDef,
     history: &[ChatMessage],
 ) -> (String, bool) {
-    let worst = wf.nodes.iter()
+    let worst = wf
+        .nodes
+        .iter()
         .filter(|n| n.node_type == NodeType::LlmWorker)
         .filter_map(|n| n.agent.as_deref())
         .filter_map(|aid| agents.iter().find(|a| a.id == aid))
@@ -270,7 +287,8 @@ pub fn build_worst_agent_prompt(
             let mut tools = runtime::builtin_tools();
             tools.extend(runtime::agent_code_tool_schemas(agent));
             let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
-            let mut sp = build_system_prompt(agent, history, has_tools, &tools, 2048, false);
+            let mut sp =
+                build_system_prompt(agent, history, has_tools, &tools, 2048, false, false, false);
             sp.push_str("\n\n");
             sp.push_str(prompt::CRITICAL_LIMIT_BLOCK);
             (sp, has_tools)
@@ -281,8 +299,14 @@ pub fn build_worst_agent_prompt(
     worst.unwrap_or_else(|| (String::new(), false))
 }
 
-fn estimate_chars_per_token(worst_system_prompt: &str, history_text: &str, user_text: &str) -> usize {
-    let total = worst_system_prompt.chars().count() + history_text.chars().count() + user_text.chars().count();
+fn estimate_chars_per_token(
+    worst_system_prompt: &str,
+    history_text: &str,
+    user_text: &str,
+) -> usize {
+    let total = worst_system_prompt.chars().count()
+        + history_text.chars().count()
+        + user_text.chars().count();
     if total == 0 {
         return 3;
     }
@@ -301,13 +325,28 @@ fn estimate_chars_per_token(worst_system_prompt: &str, history_text: &str, user_
 
 #[allow(clippy::too_many_arguments)]
 pub fn run_chat<L, S, C, ST>(
-    log_cb: L, status_cb: S, subcall_cb: C, stream_cb: ST,
-    agents_dir: std::path::PathBuf, mcp_servers_dir: std::path::PathBuf, bins_dir: std::path::PathBuf,
+    log_cb: L,
+    status_cb: S,
+    subcall_cb: C,
+    stream_cb: ST,
+    agents_dir: std::path::PathBuf,
+    mcp_servers_dir: std::path::PathBuf,
+    bins_dir: std::path::PathBuf,
     engine_dir: std::path::PathBuf,
-    model_path: String, agent_id: String, user_text: String, history: Vec<ChatMessage>,
+    model_path: String,
+    agent_id: String,
+    user_text: String,
+    history: Vec<ChatMessage>,
     attachments: Vec<ChatAttachment>,
-    context_size: u32, max_gen_tokens: u32, kv_quant_keys: bool, kv_quant_values: bool, reasoning_budget: u32,     model_params: ModelParams, format_type: String,
-    mmproj_path: Option<String>,     cancel_flag: Arc<AtomicBool>,
+    context_size: u32,
+    max_gen_tokens: u32,
+    kv_quant_keys: bool,
+    kv_quant_values: bool,
+    reasoning_budget: u32,
+    model_params: ModelParams,
+    format_type: String,
+    mmproj_path: Option<String>,
+    cancel_flag: Arc<AtomicBool>,
     stream_meta: Arc<Mutex<StreamMeta>>,
     prompt_log: Option<std::path::PathBuf>,
     session_id: String,
@@ -323,12 +362,15 @@ where
     status_cb("Загрузка модели в память...".to_string(), 10);
     let agents = load_agents(&agents_dir)?;
     let max_gen_usize = max_gen_tokens as usize;
-    let recent_history: Vec<ChatMessage> = history.iter()
+    let recent_history: Vec<ChatMessage> = history
+        .iter()
         .filter(|m| m.msg_type != "thought")
         .cloned()
         .collect();
     let mut recent_history = recent_history;
-    if recent_history.len() > 8 { recent_history = recent_history[recent_history.len() - 8..].to_vec(); }
+    if recent_history.len() > 8 {
+        recent_history = recent_history[recent_history.len() - 8..].to_vec();
+    }
 
     let workflows = load_workflows(&agents_dir).unwrap_or_default();
     let workflow_match = find_workflow_by_stem(&workflows, &agent_id).filter(|wf| wf.visible);
@@ -341,23 +383,50 @@ where
     // остаётся за циклом обрезки истории в run_agent_node (по точным /tokenize).
     let (worst_system_prompt, worst_has_tools) = match &workflow_match {
         Some(wf) => build_worst_agent_prompt(&agents, wf, &history),
-        None => agents.iter().find(|a| a.id == agent_id)
+        None => agents
+            .iter()
+            .find(|a| a.id == agent_id)
             .map(|agent| {
                 let mut tools = runtime::builtin_tools();
                 tools.extend(runtime::agent_code_tool_schemas(agent));
                 let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
-                (build_system_prompt(agent, &history, has_tools, &tools, max_gen_usize, false), has_tools)
+                (
+                    build_system_prompt(
+                        agent,
+                        &history,
+                        has_tools,
+                        &tools,
+                        max_gen_usize,
+                        false,
+                        false,
+                        false,
+                    ),
+                    has_tools,
+                )
             })
             .unwrap_or_else(|| (String::new(), false)),
     };
-    let history_text: String = llm_history(&history).iter().map(|m| m.content.as_str()).collect();
+    let history_text: String = llm_history(&history)
+        .iter()
+        .map(|m| m.content.as_str())
+        .collect();
     let history_chars = history_text.chars().count();
-    let total_chars = worst_system_prompt.chars().count() + history_chars + user_text.chars().count();
+    let total_chars =
+        worst_system_prompt.chars().count() + history_chars + user_text.chars().count();
     let image_tokens = attachments.len() as u32 * 2048;
     let chars_per_token = estimate_chars_per_token(&worst_system_prompt, &history_text, &user_text);
-    let tool_budget = if worst_has_tools { TOOL_WORKING_BUDGET } else { 0 };
-    let estimated_tokens = (total_chars / chars_per_token) as u32 + image_tokens + TOKEN_ESTIMATE_RESERVE + tool_budget;
-    let engine_ctx_limit = (estimated_tokens + max_gen_tokens + 128).min(context_size).max(2048);
+    let tool_budget = if worst_has_tools {
+        TOOL_WORKING_BUDGET
+    } else {
+        0
+    };
+    let estimated_tokens = (total_chars / chars_per_token) as u32
+        + image_tokens
+        + TOKEN_ESTIMATE_RESERVE
+        + tool_budget;
+    let engine_ctx_limit = (estimated_tokens + max_gen_tokens + 128)
+        .min(context_size)
+        .max(2048);
     log_cb(format!(
         "📐 Стартовый контекст движка: {} токенов (worst-case промпт ~{} символов{}, история ~{} симв., изображения ~{} токенов, резерв JSON {}, бюджет инструментов {}, max_gen {})",
         engine_ctx_limit, worst_system_prompt.chars().count(),
@@ -366,9 +435,28 @@ where
     ));
 
     let engine = if mmproj_path.is_some() {
-        LlamaEngine::new_with_mmproj(&engine_dir, &model_path, mmproj_path.as_deref(), engine_ctx_limit, kv_quant_keys, kv_quant_values, reasoning_budget, log_cb.clone(), stream_cb)?
+        LlamaEngine::new_with_mmproj(
+            &engine_dir,
+            &model_path,
+            mmproj_path.as_deref(),
+            engine_ctx_limit,
+            kv_quant_keys,
+            kv_quant_values,
+            reasoning_budget,
+            log_cb.clone(),
+            stream_cb,
+        )?
     } else {
-        LlamaEngine::new(&engine_dir, &model_path, engine_ctx_limit, kv_quant_keys, kv_quant_values, reasoning_budget, log_cb.clone(), stream_cb)?
+        LlamaEngine::new(
+            &engine_dir,
+            &model_path,
+            engine_ctx_limit,
+            kv_quant_keys,
+            kv_quant_values,
+            reasoning_budget,
+            log_cb.clone(),
+            stream_cb,
+        )?
     };
     let mut messages_store = history.clone();
     for (i, msg) in messages_store.iter_mut().enumerate() {
@@ -379,7 +467,8 @@ where
     let mut msg_counter = messages_store.len() as u32;
 
     let actual_user_text = if user_text.is_empty() {
-        history.iter()
+        history
+            .iter()
             .rev()
             .find(|m| m.author.as_deref() == Some("user") && m.msg_type == "message")
             .map(|m| m.content.clone())
@@ -392,7 +481,10 @@ where
 
     // Per-agent GBNF-грамматики лежат рядом с агентами: agents/<папка>/grammars/
     let grammars_dir = resolve_grammars_dir(&agents_dir, workflow_match.as_deref());
-    log_cb(format!("🎯 Директория грамматик: {}", grammars_dir.display()));
+    log_cb(format!(
+        "🎯 Директория грамматик: {}",
+        grammars_dir.display()
+    ));
 
     // Загружаем пресеты параметров LLM из sampling_presets.json (рядом с agents/)
     let project_dir = agents_dir.parent().unwrap_or(&agents_dir);
@@ -415,16 +507,20 @@ where
             let _ = std::fs::create_dir_all(&sandbox);
             sandbox
         });
-    log_cb(format!("📂 Корень инструментов кодера: {}", tools_root.display()));
+    log_cb(format!(
+        "📂 Корень инструментов кодера: {}",
+        tools_root.display()
+    ));
 
     // 🔐 Политика записи per-workflow: «Кодер» (по умолчанию) пишет в рабочую
     // директорию (вне — плашка юзеру); «Аналитик кода» (`write_root: workspace`)
     // пишет только в `.agents_workspace` (вне — жёсткий запрет). Чтение у обоих
     // свободное — `workspace_root` остаётся базой для резолва путей.
-    let (write_root, write_outside) = match workflow_match.as_ref().and_then(|wf| wf.config.as_ref()) {
-        Some(cfg) => cfg.write_scope(&tools_root),
-        None => (tools_root.clone(), crate::infra::WriteOutside::Prompt),
-    };
+    let (write_root, write_outside) =
+        match workflow_match.as_ref().and_then(|wf| wf.config.as_ref()) {
+            Some(cfg) => cfg.write_scope(&tools_root),
+            None => (tools_root.clone(), crate::infra::WriteOutside::Prompt),
+        };
     log_cb(format!(
         "🔐 Политика записи: авто-зона '{}', вне — {}",
         write_root.display(),
@@ -439,7 +535,10 @@ where
     crate::infra::global_approver().reset_session(&session_id);
 
     if let Some(workflow) = workflow_match {
-        log_cb(format!("▶ Запуск workflow '{}' (entry: {})", workflow.name, agent_id));
+        log_cb(format!(
+            "▶ Запуск workflow '{}' (entry: {})",
+            workflow.name, agent_id
+        ));
         let mut ctx = WorkflowContext::new(
             actual_user_text.clone(),
             messages_store.clone(),
@@ -470,10 +569,8 @@ where
             write_outside,
         };
         let mut fallback_error: Option<String> = None;
-        match crate::domain::workflow_engine::run_workflow(
-            workflow, &mut ctx, &mut runner,
-        ) {
-            Ok(_) => {},
+        match crate::domain::workflow_engine::run_workflow(workflow, &mut ctx, &mut runner) {
+            Ok(_) => {}
             Err((e, partial_msgs)) => {
                 log_cb(format!("⚠️ Workflow прерван: {}", e));
                 for msg in partial_msgs {
@@ -485,15 +582,19 @@ where
                 // он реально нажал «Стоп» (флаг сбрасывается в начале каждого
                 // запуска в api/chat.rs). При любой другой причине сбоя показываем
                 // настоящую ошибку, а не выдуманную отмену.
-                let was_cancelled = cancel_flag.load(Ordering::SeqCst)
-                    || e.contains("Прервано пользователем");
+                let was_cancelled =
+                    cancel_flag.load(Ordering::SeqCst) || e.contains("Прервано пользователем");
                 let content = if was_cancelled {
                     "⚠️ Прервано пользователем.".to_string()
                 } else {
                     let reason = e.trim_start_matches(|c: char| {
                         c == '⚠' || c == '\u{fe0f}' || c.is_whitespace()
                     });
-                    let reason = if reason.is_empty() { "Ошибка выполнения workflow." } else { reason };
+                    let reason = if reason.is_empty() {
+                        "Ошибка выполнения workflow."
+                    } else {
+                        reason
+                    };
                     format!("⚠️ {}", reason)
                 };
                 fallback_error = Some(content.clone());
@@ -523,22 +624,44 @@ where
 
     if let Some(primary_agent) = agents.iter().find(|a| a.id == agent_id) {
         log_cb(format!("▶ Запуск агента: {}", primary_agent.name));
-        log_cb(format!("DEBUG run_chat: history.len={}, msg_0_author={:?}", history.len(), history.first().map(|m| m.author.clone())));
-
-        let mcp_pool: crate::infra::mcp_client::McpPool = std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::HashMap::<String, crate::infra::mcp_client::SharedMcpClient>::new(),
+        log_cb(format!(
+            "DEBUG run_chat: history.len={}, msg_0_author={:?}",
+            history.len(),
+            history.first().map(|m| m.author.clone())
         ));
 
+        let mcp_pool: crate::infra::mcp_client::McpPool =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+                String,
+                crate::infra::mcp_client::SharedMcpClient,
+            >::new()));
+
         let final_res = run_agent_node(
-            log_cb.clone(), status_cb, subcall_cb,
-            &engine, primary_agent, &agents, user_text, recent_history,
+            log_cb.clone(),
+            status_cb,
+            subcall_cb,
+            &engine,
+            primary_agent,
+            &agents,
+            user_text,
+            recent_history,
             &attachments,
-            max_gen_usize, &model_params, &format_type,
-            cancel_flag, 0, &mut all_sub_calls, None, &mcp_servers_dir, &bins_dir,
-            &grammars_dir, mcp_pool,
-            &mut messages_store, &mut msg_counter,
+            max_gen_usize,
+            &model_params,
+            &format_type,
+            cancel_flag,
+            0,
+            &mut all_sub_calls,
+            None,
+            &mcp_servers_dir,
+            &bins_dir,
+            &grammars_dir,
+            mcp_pool,
+            &mut messages_store,
+            &mut msg_counter,
             String::new(),
-            stream_meta.clone(), true,
+            stream_meta.clone(),
+            true,
             prompt_log.clone(),
             session_id.clone(),
             tools_root.clone(),
@@ -550,33 +673,43 @@ where
 
         // Fail-fast: если primary-агент вернул ошибку — не сохраняем её как ответ
         if is_agent_error(&final_res) {
-            log_cb(format!("❌ Основной агент '{}' вернул ошибку: {}", primary_agent.id, final_res));
+            log_cb(format!(
+                "❌ Основной агент '{}' вернул ошибку: {}",
+                primary_agent.id, final_res
+            ));
             return Err(final_res);
         }
 
-        let sub_calls_opt = if all_sub_calls.is_empty() { None } else { Some(all_sub_calls.clone()) };
-            messages_store.push(ChatMessage {
-                id: Some(format!("msg_{}", msg_counter)),
-                msg_type: "message".to_string(),
-                content: final_res.clone(),
-                sub_calls: sub_calls_opt,
-                author: Some(primary_agent.id.clone()),
-                model: Some(extract_model_filename(&engine.model_path)),
-                time_sec: None,
-                attachments: None,
-                phase: Some(2),
-            });
-            Ok(ChatRunResult {
-                text: final_res,
-                sub_calls: all_sub_calls,
-                messages: messages_store,
-                engine_mode: engine.engine_mode().to_string(),
-                engine_tok_per_sec: engine.tok_per_sec(),
-                engine_mode_detail: engine.engine_mode_detail().to_string(),
-                has_error: None,
-            })
+        let sub_calls_opt = if all_sub_calls.is_empty() {
+            None
+        } else {
+            Some(all_sub_calls.clone())
+        };
+        messages_store.push(ChatMessage {
+            id: Some(format!("msg_{}", msg_counter)),
+            msg_type: "message".to_string(),
+            content: final_res.clone(),
+            sub_calls: sub_calls_opt,
+            author: Some(primary_agent.id.clone()),
+            model: Some(extract_model_filename(&engine.model_path)),
+            time_sec: None,
+            attachments: None,
+            phase: Some(2),
+        });
+        Ok(ChatRunResult {
+            text: final_res,
+            sub_calls: all_sub_calls,
+            messages: messages_store,
+            engine_mode: engine.engine_mode().to_string(),
+            engine_tok_per_sec: engine.tok_per_sec(),
+            engine_mode_detail: engine.engine_mode_detail().to_string(),
+            has_error: None,
+        })
     } else {
-        Err(format!("Entry point '{}' не найден: нет ни workflow, ни .md агента с таким ID", agent_id))
+        Err(format!(
+            "Entry point '{}' не найден: нет ни workflow, ни .md агента с таким ID",
+            agent_id
+        ))
     }
 }
 
@@ -588,13 +721,16 @@ fn has_json_thought_without_action(text: &str) -> bool {
         } else {
             text[cs..].find('{').and_then(|brace_start| {
                 text[cs + brace_start..].rfind('}').map(|brace_end| {
-                    text[cs + brace_start..cs + brace_start + brace_end + 1].trim().to_string()
+                    text[cs + brace_start..cs + brace_start + brace_end + 1]
+                        .trim()
+                        .to_string()
                 })
             })
         }
     } else if text.contains('{') {
         text.find('{').and_then(|start| {
-            text.rfind('}').map(|end| text[start..=end].trim().to_string())
+            text.rfind('}')
+                .map(|end| text[start..=end].trim().to_string())
         })
     } else {
         None
@@ -609,9 +745,18 @@ fn has_json_thought_without_action(text: &str) -> bool {
             let has_tool = val.get("tool").is_some();
             return has_thought && !has_target && !has_tool;
         }
-        let has_thought_re = regex::Regex::new(r#""thought"\s*:"#).ok().map(|re| re.is_match(&json)).unwrap_or(false);
-        let has_target_re = regex::Regex::new(r#""target"\s*:"#).ok().map(|re| re.is_match(&json)).unwrap_or(false);
-        let has_tool_re = regex::Regex::new(r#""tool"\s*:"#).ok().map(|re| re.is_match(&json)).unwrap_or(false);
+        let has_thought_re = regex::Regex::new(r#""thought"\s*:"#)
+            .ok()
+            .map(|re| re.is_match(&json))
+            .unwrap_or(false);
+        let has_target_re = regex::Regex::new(r#""target"\s*:"#)
+            .ok()
+            .map(|re| re.is_match(&json))
+            .unwrap_or(false);
+        let has_tool_re = regex::Regex::new(r#""tool"\s*:"#)
+            .ok()
+            .map(|re| re.is_match(&json))
+            .unwrap_or(false);
         return has_thought_re && !has_target_re && !has_tool_re;
     }
     false
@@ -631,17 +776,28 @@ pub(crate) fn spill_root_dir() -> std::path::PathBuf {
 }
 
 pub(crate) fn run_agent_node<L, S, C>(
-    log_cb: L, status_cb: S, subcall_cb: C,
-    engine: &LlamaEngine, agent: &AgentProfile, agents: &[AgentProfile],
-    user_text: String, _history: Vec<ChatMessage>,
+    log_cb: L,
+    status_cb: S,
+    subcall_cb: C,
+    engine: &LlamaEngine,
+    agent: &AgentProfile,
+    agents: &[AgentProfile],
+    user_text: String,
+    _history: Vec<ChatMessage>,
     attachments: &[ChatAttachment],
-    max_gen_tokens: usize, model_params: &ModelParams, format_type: &str,
-    cancel_flag: Arc<AtomicBool>, depth: usize,
-    all_sub_calls: &mut Vec<SubCall>, caller_name: Option<String>,
-    mcp_servers_dir: &Path, bins_dir: &Path,
+    max_gen_tokens: usize,
+    model_params: &ModelParams,
+    format_type: &str,
+    cancel_flag: Arc<AtomicBool>,
+    depth: usize,
+    all_sub_calls: &mut Vec<SubCall>,
+    caller_name: Option<String>,
+    mcp_servers_dir: &Path,
+    bins_dir: &Path,
     grammars_dir: &Path,
     mcp_pool: crate::infra::mcp_client::McpPool,
-    messages: &mut Vec<ChatMessage>, msg_counter: &mut u32,
+    messages: &mut Vec<ChatMessage>,
+    msg_counter: &mut u32,
     injected_reports: String,
     stream_meta: Arc<Mutex<StreamMeta>>,
     allow_stream: bool,
@@ -661,23 +817,39 @@ where
     S: Fn(String, u8) + Clone + Send + Sync + 'static,
     C: Fn(&SubCall) + Clone + Send + Sync + 'static,
 {
-    if depth > 5 { return Err("Превышена максимальная глубина вложенности сабагентов".into()); }
-    log_cb(format!("▶ Запуск агента: {} (глубина: {})", agent.name, depth));
+    if depth > 5 {
+        return Err("Превышена максимальная глубина вложенности сабагентов".into());
+    }
+    log_cb(format!(
+        "▶ Запуск агента: {} (глубина: {})",
+        agent.name, depth
+    ));
 
     // ── Определяем signal_contract РАНЬШЕ — нужен для корректного промпта (Method 3). ──
     let signal_contract: Option<SignalContract> = {
-        let signals_dir = agent.folder.as_ref()
+        let signals_dir = agent
+            .folder
+            .as_ref()
             .and_then(|f| {
-                grammars_dir.parent()
+                grammars_dir
+                    .parent()
                     .and_then(|p| p.parent())
                     .map(|base| base.join(f).join("signals"))
             })
-            .unwrap_or_else(|| grammars_dir.parent().unwrap_or(grammars_dir).join("signals"));
+            .unwrap_or_else(|| {
+                grammars_dir
+                    .parent()
+                    .unwrap_or(grammars_dir)
+                    .join("signals")
+            });
         load_signal_contract(&signals_dir, &agent.id)
     };
     let uses_method_3 = signal_contract.is_some();
     if uses_method_3 {
-        log_cb(format!("📋 Агент '{}': обнаружен signal-контракт (Method 3) — промпт будет адаптирован", agent.id));
+        log_cb(format!(
+            "📋 Агент '{}': обнаружен signal-контракт (Method 3) — промпт будет адаптирован",
+            agent.id
+        ));
     }
 
     // 4.2: публикуем событие старта в in-process шину (статус агента для UI/логов).
@@ -695,10 +867,21 @@ where
         m.thinking_done = !allow_stream;
         m.buffer.clear();
     }
-    let _stream_guard = StreamGuard { meta: stream_meta.clone(), prev: prev_meta };
+    let _stream_guard = StreamGuard {
+        meta: stream_meta.clone(),
+        prev: prev_meta,
+    };
 
     let mut all_tools: Vec<(String, String, serde_json::Value)> = Vec::new();
-    runtime::load_mcp_servers(&log_cb, mcp_servers_dir, bins_dir, &workspace_root, &agent.mcp_servers, &mcp_pool, &mut all_tools);
+    runtime::load_mcp_servers(
+        &log_cb,
+        mcp_servers_dir,
+        bins_dir,
+        &workspace_root,
+        &agent.mcp_servers,
+        &mcp_pool,
+        &mut all_tools,
+    );
 
     // 🛠 Capability кодинга: `tools: ["code_read"]` — только чтение; `tools: ["code_write"]` —
     // чтение + мутаторы (внутри корня авто, вне — плашка). SSOT — infra::tools.
@@ -720,7 +903,85 @@ where
     }
 
     let has_tools_for_prompt = has_real_tools;
-    let mut system_prompt = build_system_prompt(agent, messages, has_tools_for_prompt, &all_tools, max_gen_tokens, uses_method_3);
+
+    // ── Нативный OpenAI tools[] (папки coder/research) vs legacy .md ──
+    // coder/research-агенты с реальными тулами переходят на нативный tool-calling:
+    // тул-схемы инжектятся чат-шаблоном (--jinja), модель САМА выбирает инструмент
+    // (tool_choice="auto" — жёсткое "required" баговано на Qwen3, #27767/#27217).
+    // Гибриды (qa_diagnost/arch_reviewer) ведут ЦИКЛ на native tools, а финальный
+    // вердикт выдают отдельным grammar-пассом (строгий JSON) — см. ниже.
+    let folder = agent.folder.as_deref().unwrap_or("");
+    let is_native = folder == "coder" || folder == "research";
+    let native_tools: Option<Vec<ToolDefinition>> = if is_native && has_real_tools {
+        // Конвертер: {"name","description","inputSchema"} → OpenAI {"type":"function",
+        // "function":{name,description,parameters}}. emit_signal ИСКЛЮЧАЕТСЯ — native-агенты
+        // работают без legacy-конверта сигналов (read_spill остаётся: дочитка spill-файлов).
+        let mut defs = Vec::new();
+        for (_owner, name, schema) in &all_tools {
+            if name == "emit_signal" {
+                continue;
+            }
+            let description = schema
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("")
+                .to_string();
+            let parameters = schema
+                .get("inputSchema")
+                .or_else(|| schema.get("parameters"))
+                .cloned()
+                .unwrap_or_else(
+                    || serde_json::json!({"type": "object", "properties": {}, "required": []}),
+                );
+            defs.push(ToolDefinition {
+                r#type: "function".to_string(),
+                function: FunctionDef {
+                    name: name.clone(),
+                    description,
+                    parameters,
+                },
+            });
+        }
+        if defs.is_empty() {
+            None
+        } else {
+            Some(defs)
+        }
+    } else {
+        None
+    };
+    if native_tools.is_some() {
+        log_cb(format!("🧩 Агент '{}': нативный tool-calling (OpenAI tools[]), {} инструментов, tool_choice=auto", agent.id, native_tools.as_ref().unwrap().len()));
+    }
+    // Кэш ДО перемещения native_tools в ctx: нужен в closures цикла (enforce_tool_choice).
+    let has_native_tools = native_tools.is_some();
+
+    // ── Per-agent грамматика: agents/<...>/grammars/<agent_id>.gbnf ──
+    // Вычисляем РАНО: is_hybrid нужен build_system_prompt ниже. Гибрид = native-агент
+    // (coder/research) с per-agent GBNF: цикл живёт на native tools, строгий JSON — ТОЛЬКО
+    // в финальном вердиктном grammar-пассе (в цикле grammar + tools[] конфликтуют).
+    let agent_grammar = if signal_contract.is_none() {
+        load_agent_grammar(grammars_dir, &agent.id)
+    } else {
+        None
+    };
+    let is_hybrid = is_native && agent_grammar.is_some();
+    let hybrid_gbnf: Option<String> = if is_hybrid {
+        agent_grammar.clone()
+    } else {
+        None
+    };
+
+    let mut system_prompt = build_system_prompt(
+        agent,
+        messages,
+        has_tools_for_prompt,
+        &all_tools,
+        max_gen_tokens,
+        uses_method_3,
+        is_native,
+        is_hybrid,
+    );
     // 4.5: плагин-слой — точка расширения системного промпта (pass-through, если плагинов нет).
     crate::infra::plugins::global_plugins().on_system_prompt(&agent.id, &mut system_prompt);
 
@@ -728,16 +989,19 @@ where
         system_prompt.push_str("\n\n");
         system_prompt.push_str(&injected_reports);
     }
-    
+
     // Глобальное правило для всех мыслящих моделей, чтобы не пробивали лимит 2048 токенов
     system_prompt.push_str("\n\n[КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ]\n");
     system_prompt.push_str(prompt::CRITICAL_LIMIT_BLOCK);
 
-    let mut llm_messages: Vec<LlmMessage> = vec![LlmMessage { role: "system".to_string(), content: system_prompt.clone() }];
+    let mut llm_messages: Vec<LlmMessage> = vec![LlmMessage {
+        role: "system".to_string(),
+        content: system_prompt.clone(),
+        ..Default::default()
+    }];
 
     // История для LLM — единое правило (llm_history): не-thought сообщения, только content.
     for msg in llm_history(messages) {
-        
         let actual_author = msg.author.as_deref().unwrap_or("user");
         let role;
         let mut content = msg.content.clone();
@@ -746,21 +1010,36 @@ where
             role = "user";
         } else if actual_author == "system" {
             role = "system";
-        } else if actual_author == agent.id || actual_author == agent.name || actual_author == "assistant" {
+        } else if actual_author == agent.id
+            || actual_author == agent.name
+            || actual_author == "assistant"
+        {
             role = "assistant";
         } else {
             role = "user";
-            content = format!("[Контекст из чата. Предыдущий ответ от агента '{}']:\n{}", actual_author, content);
+            content = format!(
+                "[Контекст из чата. Предыдущий ответ от агента '{}']:\n{}",
+                actual_author, content
+            );
         }
 
-        llm_messages.push(LlmMessage { role: role.to_string(), content });
+        llm_messages.push(LlmMessage {
+            role: role.to_string(),
+            content,
+            ..Default::default()
+        });
     }
 
-    let user_text_dup = llm_messages.last()
+    let user_text_dup = llm_messages
+        .last()
         .map(|m| m.role == "user" && m.content == user_text)
         .unwrap_or(false);
     if !user_text_dup && !user_text.is_empty() {
-        llm_messages.push(LlmMessage { role: "user".to_string(), content: user_text.clone() });
+        llm_messages.push(LlmMessage {
+            role: "user".to_string(),
+            content: user_text.clone(),
+            ..Default::default()
+        });
     }
 
     // Единый pipeline компакции (по паттернам DeepSeek `compaction.md`): бюджет в
@@ -782,7 +1061,11 @@ where
         // зависимости от token_count-замыкания, чтобы не борrowать его).
         let probe_tokens = engine
             .get_tokens_count(
-                &[LlmMessage { role: "user".to_string(), content: text.to_string() }],
+                &[LlmMessage {
+                    role: "user".to_string(),
+                    content: text.to_string(),
+                    ..Default::default()
+                }],
                 format_type,
             )
             .unwrap_or_else(|_| text.chars().count() / 2);
@@ -793,8 +1076,8 @@ where
             LlmMessage {
                 role: "system".to_string(),
                 content: "Сожми историю переписки в краткий саммари. Сохрани ключевые факты, решения, результаты инструментов, открытые задачи и важные инструкции пользователя. Без лишних слов, структурированно.".to_string(),
-            },
-            LlmMessage { role: "user".to_string(), content: text.to_string() },
+             ..Default::default()},
+            LlmMessage { role: "user".to_string(), content: text.to_string() , ..Default::default()},
         ];
         engine
             .run_chat_completions(
@@ -807,6 +1090,7 @@ where
                 false,
                 cancel_flag.clone(),
                 "compact:summarize",
+                None,
                 None,
                 |_, _| {},
                 log_cb.clone(),
@@ -839,46 +1123,73 @@ where
     // (SSOT) — его копия в сессии раздувала бы JSON на 5-11KB за каждый вызов.
     let invocation_dump = build_invocation_dump(&user_text, &injected_reports);
 
-let start_time = Instant::now();
+    let start_time = Instant::now();
     // Метка режима для лога пиков памяти: llm_worker графа зовёт run_agent_node
     // с caller_name == "workflow_engine", всё остальное — legacy (.md) режим.
-    let mem_mode = if caller_name.as_deref() == Some("workflow_engine") { "graph" } else { "legacy" };
-
-    // ── Per-agent грамматика: agents/<...>/grammars/<agent_id>.gbnf ──
-    // Задаётся для ПЕРВОГО вызова LLM агента (consume-and-clear в движке),
-    // докачки/компакты/результаты инструментов идут уже с базовой грамматикой.
-    // Сигнальные агенты (есть контракт в signals/root.schema.json) ОБЯЗАНЫ
-    // генерировать ответ под Method 3 гибридной GBNF-грамматикой (docs/gbnf.md):
-    // think-block + JSON. disable_reasoning НЕ включается для Method 3 —
-    // модель думает в <think>...</think>, а грамматика направляет к JSON после них.
-    // signal_contract определён ранее (перед публикацией старта).
-    let agent_grammar = if signal_contract.is_none() {
-        load_agent_grammar(grammars_dir, &agent.id)
+    let mem_mode = if caller_name.as_deref() == Some("workflow_engine") {
+        "graph"
     } else {
-        None
+        "legacy"
     };
+
+    // ── Применение per-agent GBNF к ПЕРВОМУ вызову LLM (consume-and-clear в движке):
+    // докачки/компакты/результаты инструментов идут уже с базовой грамматикой.
+    // Сигнальные агенты (signals/root.schema.json) отвечают под Method 3 гибридной GBNF
+    // (docs/gbnf.md): think-block + JSON, disable_reasoning для Method 3 не включается.
+    // agent_grammar / is_hybrid / hybrid_gbnf вычислены ВЫШЕ (перед build_system_prompt).
     if let Some(gbnf) = &agent_grammar {
-        engine.set_grammar(Some(GrammarSpec { gbnf: Some(gbnf.clone()), json_schema: None }));
-        log_cb(format!("🎯 Агент '{}': применена per-agent GBNF-грамматика {} символов", agent.id, gbnf.len()));
+        if is_hybrid {
+            engine.set_grammar(None);
+            log_cb(format!("🎯 Агент '{}': ГИБРИД — per-agent GBNF отложена до вердиктного пасса ({} символов), цикл на native tools без грамматики", agent.id, gbnf.len()));
+        } else {
+            engine.set_grammar(Some(GrammarSpec {
+                gbnf: Some(gbnf.clone()),
+                json_schema: None,
+                ..Default::default()
+            }));
+            log_cb(format!(
+                "🎯 Агент '{}': применена per-agent GBNF-грамматика {} символов",
+                agent.id,
+                gbnf.len()
+            ));
+        }
     } else if let Some(contract) = &signal_contract {
         // Сигнальные агенты: Method 3 из docs/gbnf.md — гибридная GBNФ.
         // think-block ( düşünce <think>...</think>) + envelope-json. Модель думает
         // свободно, грамматика направляет к JSON после </think>.
         // disable_reasoning НЕ включается — см. has_agent_grammar ниже.
         let grammar = build_signal_envelope_grammar(contract);
-        engine.set_grammar(Some(GrammarSpec { gbnf: Some(grammar), json_schema: None }));
+        engine.set_grammar(Some(GrammarSpec {
+            gbnf: Some(grammar),
+            json_schema: None,
+        }));
         log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены)", agent.id));
     } else {
         engine.set_grammar(None);
-        log_cb(format!("⚠️ Грамматика не найдена для агента '{}' (искал в {})", agent.id, grammars_dir.display()));
+        log_cb(format!(
+            "⚠️ Грамматика не найдена для агента '{}' (искал в {})",
+            agent.id,
+            grammars_dir.display()
+        ));
     }
 
     // Активная грамматика для восстановления после generate_chat() (consume-and-clear).
-    let active_grammar = if let Some(gbnf) = &agent_grammar {
-        Some(GrammarSpec { gbnf: Some(gbnf.clone()), json_schema: None })
+    // Для гибридов = None: цикл живёт на native tools БЕЗ грамматики (иначе
+    // restore_grammar() применял бы strict-GBNF на каждой итерации и блокировал
+    // tool_calls); их GBNF применяется только в вердиктном пассе (см. ниже).
+    let active_grammar = if is_hybrid {
+        None
+    } else if let Some(gbnf) = &agent_grammar {
+        Some(GrammarSpec {
+            gbnf: Some(gbnf.clone()),
+            json_schema: None,
+        })
     } else if let Some(contract) = &signal_contract {
         let grammar = build_signal_envelope_grammar(contract);
-        Some(GrammarSpec { gbnf: Some(grammar), json_schema: None })
+        Some(GrammarSpec {
+            gbnf: Some(grammar),
+            json_schema: None,
+        })
     } else {
         None
     };
@@ -936,6 +1247,10 @@ let start_time = Instant::now();
         thought_logged: false,
         agent_grammar: agent_grammar.clone(),
         active_grammar,
+        native_tools,
+        native_used: false,
+        native_final_retries: 0,
+        hybrid_gbnf,
     };
 
     // ── Two-Phase Thinking: Phase 1 (свободные размышления) ──
@@ -948,15 +1263,17 @@ let start_time = Instant::now();
     // Размышления Phase 1 — внутренний контекст агента для ЕГО Phase 2:
     // в сессию кладутся как thought (юзер раскрывает в GUI), но НЕ попадают
     // в контекст других агентов (llm_history() фильтрует type != "message").
-    let two_phase_thinking = two_phase_thinking
-        || crate::infra::load_config_early().two_phase_default;
+    let two_phase_thinking =
+        two_phase_thinking || crate::infra::load_config_early().two_phase_default;
     // true, если Phase 1 прошла → Phase 2 отвечает БЕЗ думателя (enable_thinking=false)
     // для ЛЮБОЙ грамматики, включая freeform-агентов.
     let mut phase2_disable_reasoning = false;
     if two_phase_thinking {
         engine.set_grammar(None);
-        log_cb(format!("🧠 [{}] Phase 1: свободные размышления (лимит: {} токенов)...",
-            agent.name, max_gen_tokens));
+        log_cb(format!(
+            "🧠 [{}] Phase 1: свободные размышления (лимит: {} токенов)...",
+            agent.name, max_gen_tokens
+        ));
 
         let ctx_label_p1 = format!("{}:{}#phase1", mem_mode, agent.name);
         // Докачка обрыва Фазы 1 (аналог основного цикла): если модель упёрлась в
@@ -977,13 +1294,18 @@ let start_time = Instant::now();
             match engine.generate_chat(
                 &ctx.llm_messages,
                 max_gen_tokens,
-                model_params, format_type,
-                false,  // disable_reasoning = false — модель думает
+                model_params,
+                format_type,
+                false, // disable_reasoning = false — модель думает
                 cancel_flag.clone(),
                 &ctx_label_p1,
                 None,
-                |p, _| { status_cb(format!("{} думает (Фаза 1)...", agent.name),
-                    20 + (p * 0.1) as u8); },
+                |p, _| {
+                    status_cb(
+                        format!("{} думает (Фаза 1)...", agent.name),
+                        20 + (p * 0.1) as u8,
+                    );
+                },
                 log_cb.clone(),
             ) {
                 Ok(gen) => {
@@ -991,8 +1313,12 @@ let start_time = Instant::now();
                     // До успешной докачки хвост ещё не в истории — кандидат на
                     // добавление после цикла; при успешной докачке сбрасываем.
                     phase1_pending = Some(chunk.clone());
-                    log_cb(format!("<<< [{}] Phase 1: чанк {} символов, стоп: {}",
-                        agent.name, chunk.len(), gen.stop_reason));
+                    log_cb(format!(
+                        "<<< [{}] Phase 1: чанк {} символов, стоп: {}",
+                        agent.name,
+                        chunk.len(),
+                        gen.stop_reason
+                    ));
                     thinking_text = if phase1_full.is_empty() {
                         chunk.clone()
                     } else {
@@ -1023,9 +1349,21 @@ let start_time = Instant::now();
                     }
                     let parse_target = clean_thought_tags(&thinking_text);
                     let exhausted = push_continuation_for_cutoff(
-                        &log_cb, &agent.id, engine, model_params, format_type, cancel_flag.clone(),
-                        &ctx_label_p1, stream_meta.clone(), &thinking_text, &parse_target, &chunk,
-                        &mut ctx.llm_messages, &mut phase1_raw, &mut phase1_mark, &mut phase1_cont,
+                        &log_cb,
+                        &agent.id,
+                        engine,
+                        model_params,
+                        format_type,
+                        cancel_flag.clone(),
+                        &ctx_label_p1,
+                        stream_meta.clone(),
+                        &thinking_text,
+                        &parse_target,
+                        &chunk,
+                        &mut ctx.llm_messages,
+                        &mut phase1_raw,
+                        &mut phase1_mark,
+                        &mut phase1_cont,
                     )?;
                     if exhausted {
                         log_cb(format!("⚠️ [{}] Phase 1 не смог завершить размышления после {} докачек — используем накопленные.", agent.name, MAX_CONTINUATIONS));
@@ -1035,8 +1373,10 @@ let start_time = Instant::now();
                     phase1_pending = None;
                 }
                 Err(e) => {
-                    log_cb(format!("⚠️ [{}] Phase 1 ошибка: {} — стандартный режим (думатель по грамматике)",
-                        agent.name, e));
+                    log_cb(format!(
+                        "⚠️ [{}] Phase 1 ошибка: {} — стандартный режим (думатель по грамматике)",
+                        agent.name, e
+                    ));
                     break;
                 }
             }
@@ -1048,6 +1388,7 @@ let start_time = Instant::now();
                 ctx.llm_messages.push(LlmMessage {
                     role: "assistant".to_string(),
                     content: thinking_text.clone(),
+                    ..Default::default()
                 });
             }
             // Сохраняем размышления в сессию как thought (раскрытие в GUI).
@@ -1064,7 +1405,10 @@ let start_time = Instant::now();
             });
             *ctx.msg_counter += 1;
         } else {
-            log_cb(format!("⚠️ [{}] Phase 1: пустые размышления — Phase 2 сразу без думателя", agent.name));
+            log_cb(format!(
+                "⚠️ [{}] Phase 1: пустые размышления — Phase 2 сразу без думателя",
+                agent.name
+            ));
         }
 
         // ── Финализация Фазы 1 → Phase 2 ──
@@ -1072,7 +1416,11 @@ let start_time = Instant::now();
         // см. `finalize_phase1_context`. При докачках хвост берём из pending,
         // при обычной выдаче мысль уже лежит в истории как assistant.
         if two_phase_thinking && phase2_disable_reasoning {
-            let tail = if phase1_cont > 0 { phase1_pending.take() } else { None };
+            let tail = if phase1_cont > 0 {
+                phase1_pending.take()
+            } else {
+                None
+            };
             if finalize_phase1_context(&mut ctx.llm_messages, tail, phase1_cont > 0) {
                 log_cb(format!(
                     "🎯 [{}] Phase 2: Фаза 1 закрыта, завершающий ход добавлен (хвост размышлений + «отвечай»)",
@@ -1088,45 +1436,74 @@ let start_time = Instant::now();
             if let Some(contract) = &signal_contract {
                 let grammar = build_signal_envelope_json_only_grammar(contract);
                 engine.set_grammar(Some(GrammarSpec {
-                    gbnf: Some(grammar.clone()), json_schema: None
+                    gbnf: Some(grammar.clone()),
+                    json_schema: None,
                 }));
                 ctx.active_grammar = Some(GrammarSpec {
-                    gbnf: Some(grammar), json_schema: None
+                    gbnf: Some(grammar),
+                    json_schema: None,
                 });
-                log_cb(format!("🎯 [{}] Phase 2: JSON-грамматика ({} символов)",
-                    agent.name, ctx.active_grammar.as_ref().unwrap().gbnf.as_ref().unwrap().len()));
+                log_cb(format!(
+                    "🎯 [{}] Phase 2: JSON-грамматика ({} символов)",
+                    agent.name,
+                    ctx.active_grammar
+                        .as_ref()
+                        .unwrap()
+                        .gbnf
+                        .as_ref()
+                        .unwrap()
+                        .len()
+                ));
             }
         }
     }
 
     for iter in 1..=30 {
-        if cancel_flag.load(Ordering::SeqCst) { return Err("Прервано пользователем".to_string()); }
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Err("Прервано пользователем".to_string());
+        }
 
         // Восстанавливаем активную грамматику перед каждым generate_chat().
         // take_pending_grammar() consume-and-clear сбрасывает грамматику после
         // каждого вызова; единая точка восстановления вместо ручных вызовов
         // в каждой ветке continue (устраняет баги пропуска restore).
         ctx.restore_grammar();
+        // Нативные инструменты (OpenAI tools[]) — тоже consume-and-clear
+        // (take_pending_tools); восстанавливаются на КАЖДОЙ итерации native-агентов.
+        ctx.restore_tools();
 
         let mut ideal_ctx;
         loop {
-            let current_tokens = engine.get_tokens_count(&ctx.llm_messages, format_type).unwrap_or(0);
-            ideal_ctx = (current_tokens as u32 + max_gen_tokens as u32 + 128).min(engine.global_ctx_limit);
+            let current_tokens = engine
+                .get_tokens_count(&ctx.llm_messages, format_type)
+                .unwrap_or(0);
+            ideal_ctx =
+                (current_tokens as u32 + max_gen_tokens as u32 + 128).min(engine.global_ctx_limit);
 
-            if current_tokens + max_gen_tokens <= ideal_ctx as usize || ctx.llm_messages.len() <= 2 {
-                log_cb(format!("📊 Память: выделен KV-кэш на {} токенов (Промпт: {}, Резерв: {})", ideal_ctx, current_tokens, max_gen_tokens));
+            if current_tokens + max_gen_tokens <= ideal_ctx as usize || ctx.llm_messages.len() <= 2
+            {
+                log_cb(format!(
+                    "📊 Память: выделен KV-кэш на {} токенов (Промпт: {}, Резерв: {})",
+                    ideal_ctx, current_tokens, max_gen_tokens
+                ));
                 break;
             }
             if ctx.llm_messages.len() > 2 {
                 // Не дропать узел [СЖАТАЯ ИСТОРИЯ] — сохраняем сжатую историю.
                 let mut idx = 1;
-                if ctx.llm_messages.get(1).map_or(false, |m| m.content.contains("[СЖАТАЯ ИСТОРИЯ]")) {
+                if ctx
+                    .llm_messages
+                    .get(1)
+                    .map_or(false, |m| m.content.contains("[СЖАТАЯ ИСТОРИЯ]"))
+                {
                     idx = 2;
                 }
                 // Не рвать пару: если удаляемый — результат инструмента без вызова
                 // рядом, сместить на соседнего ассистента (или наоборот).
                 if idx < ctx.llm_messages.len()
-                    && ctx.llm_messages[idx].content.contains("[РЕЗУЛЬТАТ ИНСТРУМЕНТА")
+                    && ctx.llm_messages[idx]
+                        .content
+                        .contains("[РЕЗУЛЬТАТ ИНСТРУМЕНТА")
                     && idx + 1 < ctx.llm_messages.len()
                     && ctx.llm_messages[idx + 1].role == "assistant"
                 {
@@ -1152,14 +1529,23 @@ let start_time = Instant::now();
 
         // ── Снимок точного входа модели (правило «модель видит только записанное») ──
         if let Some(ref pl) = prompt_log {
-            let logged_tokens = engine.get_tokens_count(&ctx.llm_messages, format_type).unwrap_or(0);
+            let logged_tokens = engine
+                .get_tokens_count(&ctx.llm_messages, format_type)
+                .unwrap_or(0);
             write_prompt_log(pl, &agent.name, iter, logged_tokens, &ctx.llm_messages);
         }
 
         let gen_start = Instant::now();
-        log_cb(format!(">>> [{}] LLM вызов #{}, msgs={}, max_gen={}, глубина={}", agent.name, iter, ctx.llm_messages.len(), max_gen_tokens, depth));
+        log_cb(format!(
+            ">>> [{}] LLM вызов #{}, msgs={}, max_gen={}, глубина={}",
+            agent.name,
+            iter,
+            ctx.llm_messages.len(),
+            max_gen_tokens,
+            depth
+        ));
         let ctx_label = format!("{}:{}#{}", mem_mode, agent.name, iter);
-// Обёртка генерации с детектом переполнения контекста и повтором (item 4).
+        // Обёртка генерации с детектом переполнения контекста и повтором (item 4).
         // Method 3 агенты (signal_contract): disable_reasoning = false — модель думает в  thinking.
         // Per-agent GBNF агенты (без signal_contract): disable_reasoning = true.
         // Двухфазный режим: Phase 2 ОТВЕЧАЕТ без думателя для ЛЮБОЙ грамматики
@@ -1169,23 +1555,52 @@ let start_time = Instant::now();
         let uses_method_3 = signal_contract.is_some();
         let has_agent_grammar = agent_grammar.is_some() && !uses_method_3;
         let force_no_thinking = std::cell::Cell::new(phase2_disable_reasoning);
-        let enforce_tool_choice = if has_tools_for_prompt { Some("required") } else { None };
+        let enforce_tool_choice = if has_native_tools {
+            // Native (coder/research): "auto" — модель сама решает вызвать тул.
+            // "required" багован на Qwen3 (#27767/#27217, падает/молчит); принуждение
+            // реализовано app-level GUARD'ом в финальных путях (см. ниже).
+            Some("auto")
+        } else if has_tools_for_prompt {
+            Some("required")
+        } else {
+            None
+        };
         let attempt_generate = |msgs: &[LlmMessage]| -> Result<GenerationResult, String> {
             let disable_reasoning = force_no_thinking.get() || has_agent_grammar;
             if !attachments.is_empty() && engine.is_multimodal() {
                 engine.generate_chat_multimodal(
-                    msgs, &attachments, max_gen_tokens, model_params, format_type, cancel_flag.clone(),
+                    msgs,
+                    &attachments,
+                    max_gen_tokens,
+                    model_params,
+                    format_type,
+                    cancel_flag.clone(),
                     &ctx_label,
                     enforce_tool_choice,
-                    |p, _| { status_cb(format!("{} обрабатывает медиа (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
+                    |p, _| {
+                        status_cb(
+                            format!("{} обрабатывает медиа (Шаг {})...", agent.name, iter),
+                            20 + (p * 0.1) as u8,
+                        );
+                    },
                     log_cb.clone(),
                 )
             } else {
                 engine.generate_chat(
-                    msgs, max_gen_tokens, model_params, format_type, disable_reasoning, cancel_flag.clone(),
+                    msgs,
+                    max_gen_tokens,
+                    model_params,
+                    format_type,
+                    disable_reasoning,
+                    cancel_flag.clone(),
                     &ctx_label,
                     enforce_tool_choice,
-                    |p, _| { status_cb(format!("{} думает (Шаг {})...", agent.name, iter), 20 + (p * 0.1) as u8); },
+                    |p, _| {
+                        status_cb(
+                            format!("{} думает (Шаг {})...", agent.name, iter),
+                            20 + (p * 0.1) as u8,
+                        );
+                    },
                     log_cb.clone(),
                 )
             }
@@ -1199,11 +1614,16 @@ let start_time = Instant::now();
                             "⚠️ Переполнение контекста при генерации ({}). Усечение крупнейшего сообщения и повтор.",
                             e
                         ));
-                        let budget = engine.global_ctx_limit.saturating_sub(max_gen_tokens as u32) as usize;
+                        let budget = engine
+                            .global_ctx_limit
+                            .saturating_sub(max_gen_tokens as u32)
+                            as usize;
                         let tc = |msgs: &[LlmMessage]| -> usize {
                             engine
                                 .get_tokens_count(msgs, format_type)
-                                .unwrap_or_else(|_| msgs.iter().map(|m| m.content.chars().count() / 2).sum())
+                                .unwrap_or_else(|_| {
+                                    msgs.iter().map(|m| m.content.chars().count() / 2).sum()
+                                })
                         };
                         if truncate_largest(&mut ctx.llm_messages, budget, tc, |m| log_cb(m)) {
                             continue;
@@ -1217,7 +1637,35 @@ let start_time = Instant::now();
         let reasoning = gen.reasoning.clone();
         let stop_reason = gen.stop_reason.clone();
 
-        log_cb(format!("<<< [{}] LLM за {:.1}с, ответ {} символов", agent.name, gen_start.elapsed().as_secs_f32(), raw_response.len()));
+        log_cb(format!(
+            "<<< [{}] LLM за {:.1}с, ответ {} символов",
+            agent.name,
+            gen_start.elapsed().as_secs_f32(),
+            raw_response.len()
+        ));
+
+        // ── Нативный OpenAI tools[]: модель вернула ПРЯМЫЕ tool_calls (без
+        // legacy-JSON-конверта). Исполняем все вызовы за один ход (execute_native_tool_calls,
+        // OpenAI-формат истории: assistant c tool_calls + role "tool") и переходим к
+        // следующей итерации цикла. GUARD «финал без тулов» сработает ТОЛЬКО на
+        // текстовых финалах (см. ниже) — ретраит, пока количество попыток < 2.
+        if !gen.tool_calls.is_empty() {
+            log_cb(format!(
+                "🧩 [{}] Native tools[]: {} вызов(ов), стоп: {}",
+                agent.name,
+                gen.tool_calls.len(),
+                stop_reason
+            ));
+            match ctx.execute_native_tool_calls(
+                &gen.tool_calls,
+                gen_start,
+                &clean_thought_tags(&raw_response),
+            )? {
+                DispatchCtl::Continue => continue,
+                DispatchCtl::Break => break,
+                DispatchCtl::Return(v) => return Ok(v),
+            }
+        }
 
         let response = clean_thought_tags(&raw_response);
         ctx.action_found = false;
@@ -1267,9 +1715,21 @@ let start_time = Instant::now();
                     let grew = thinking_len - ctx.last_thinking_len;
                     let raw_before = ctx.continuation_raw.len();
                     let exhausted = push_continuation_for_cutoff(
-                        &log_cb, &agent.id, engine, model_params, format_type, cancel_flag.clone(),
-                        &ctx_label, stream_meta.clone(), &combined, &parse_target, &raw_response,
-                        &mut ctx.llm_messages, &mut ctx.continuation_raw, &mut ctx.continuation_mark, &mut ctx.continuation_count,
+                        &log_cb,
+                        &agent.id,
+                        engine,
+                        model_params,
+                        format_type,
+                        cancel_flag.clone(),
+                        &ctx_label,
+                        stream_meta.clone(),
+                        &combined,
+                        &parse_target,
+                        &raw_response,
+                        &mut ctx.llm_messages,
+                        &mut ctx.continuation_raw,
+                        &mut ctx.continuation_mark,
+                        &mut ctx.continuation_count,
                     )?;
                     if exhausted {
                         ctx.final_response = format!("{} Агент '{}' не смог завершить размышления после {} докачек (модель упирается в лимит токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id, MAX_CONTINUATIONS);
@@ -1320,7 +1780,7 @@ let start_time = Instant::now();
                             stop_reason,
                             ctx.thinking_no_answer
                         ));
-                        ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
+                        ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() , ..Default::default()});
                     }
                     continue;
                 }
@@ -1334,10 +1794,18 @@ let start_time = Instant::now();
                 } else {
                     "Ты прервал генерацию. ЗАПРЕЩЕНО начинать с размышлений в тегах (<think, 思考, thinking, <|channel>thought) — они запрещены. Сразу пиши финальный ответ ОБЫЧНЫМ ТЕКСТОМ без JSON."
                 };
-                ctx.llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+                ctx.llm_messages.push(LlmMessage {
+                    role: "assistant".to_string(),
+                    content: raw_response.clone(),
+                    ..Default::default()
+                });
                 ctx.continuation_raw.clear();
                 ctx.continuation_mark = None;
-                ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: hint.to_string() });
+                ctx.llm_messages.push(LlmMessage {
+                    role: "user".to_string(),
+                    content: hint.to_string(),
+                    ..Default::default()
+                });
                 continue;
             }
         }
@@ -1349,14 +1817,31 @@ let start_time = Instant::now();
         }
 
         let resp_trim = parse_target.trim();
-        let is_final_text = resp_trim.ends_with('.') || resp_trim.ends_with('!') || resp_trim.ends_with('?') || resp_trim.ends_with('"') || resp_trim.ends_with('\'') || resp_trim.ends_with('`');
+        let is_final_text = resp_trim.ends_with('.')
+            || resp_trim.ends_with('!')
+            || resp_trim.ends_with('?')
+            || resp_trim.ends_with('"')
+            || resp_trim.ends_with('\'')
+            || resp_trim.ends_with('`');
 
         if stop_reason == "MAX_TOKENS" && !is_valid_json && !is_final_text {
             // Обрыв по лимиту: докачиваем с места обрыва вместо перегенерации
             if push_continuation_for_cutoff(
-                &log_cb, &agent.id, engine, model_params, format_type, cancel_flag.clone(),
-                &ctx_label, stream_meta.clone(), &combined, &parse_target, &raw_response,
-                &mut ctx.llm_messages, &mut ctx.continuation_raw, &mut ctx.continuation_mark, &mut ctx.continuation_count,
+                &log_cb,
+                &agent.id,
+                engine,
+                model_params,
+                format_type,
+                cancel_flag.clone(),
+                &ctx_label,
+                stream_meta.clone(),
+                &combined,
+                &parse_target,
+                &raw_response,
+                &mut ctx.llm_messages,
+                &mut ctx.continuation_raw,
+                &mut ctx.continuation_mark,
+                &mut ctx.continuation_count,
             )? {
                 ctx.final_response = format!("{} Агент '{}' не смог завершить ответ после {} докачек (модель упирается в лимит токенов). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id, MAX_CONTINUATIONS);
                 break;
@@ -1365,13 +1850,53 @@ let start_time = Instant::now();
         }
 
         if let Some((tool_name, arguments, thought)) = parse_tool_call(&parse_target) {
-            match ctx.execute_tool_call(&tool_name, &arguments, &thought, gen_start, &raw_response, &combined, is_continuation, &parse_target, &response)? {
+            match ctx.execute_tool_call(
+                &tool_name,
+                &arguments,
+                &thought,
+                gen_start,
+                &raw_response,
+                &combined,
+                is_continuation,
+                &parse_target,
+                &response,
+            )? {
                 DispatchCtl::Continue => continue,
                 DispatchCtl::Break => break,
                 DispatchCtl::Return(v) => return Ok(v),
             }
         } else if ctx.has_tools_for_prompt {
             log_cb(format!("⚠️ parse_tool_call: не удалось распознать tool call в ответе агента '{}' (первые 200 симв.): {}", agent.name, safe_truncate(&parse_target, 200)));
+            // Feedback-loop: модель явно пыталась вызвать инструмент (виден
+            // конверт name/tool + arguments), но JSON сломан (неэкранированные
+            // кавычки в content и т.п.). Возвращаем конкретную ошибку модели
+            // вместо «параметр path обязателен» — она перепишет конверт в том же
+            // ходе (паттерн «ошибка как tool-результат», deepseek-harness). Валидные
+            // конверты сюда не попадают (их подхватил parse_tool_call выше).
+            if looks_like_broken_tool_call(&parse_target) {
+                ctx.consecutive_failed_tools += 1;
+                if ctx.consecutive_failed_tools >= 3 {
+                    ctx.final_response = format!("{} Агент '{}' трижды выдал сломанный JSON-конверт инструмента. Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
+                    break;
+                }
+                ctx.llm_messages.push(LlmMessage {
+                    role: "assistant".to_string(),
+                    content: if is_continuation {
+                        combined.to_string()
+                    } else {
+                        raw_response.to_string()
+                    },
+                    ..Default::default()
+                });
+                ctx.continuation_raw.clear();
+                ctx.continuation_mark = None;
+                ctx.llm_messages.push(LlmMessage {
+                    role: "user".to_string(),
+                    content: "⚠️ Твой JSON-конверт инструмента сломан: аргументы не распарсились (скорее всего неэкранированные кавычки или переносы строк внутри \"content\"). Перепиши вызов заново: ВАЖНО, чтобы аргументы были ВАЛИДНЫМ JSON — экранируй кавычки как \\\", а переносы строк как \\n.".to_string(),
+                    ..Default::default()
+                });
+                continue;
+            }
         }
 
         if let Some(parsed) = parse_orchestrator_response(&parse_target) {
@@ -1379,6 +1904,10 @@ let start_time = Instant::now();
             ctx.consecutive_incomplete = 0;
 
             if parsed.target == "reply" || parsed.target == "user" {
+                // GUARD native: JSON-конверт «reply» без единого тула — ретрай с требованием вызвать тул.
+                if ctx.retry_native_final_without_tools(&raw_response) {
+                    continue;
+                }
                 if parsed.content.is_empty() {
                     ctx.final_response = if is_continuation {
                         extract_answer_from_combined(&combined, &response)
@@ -1398,7 +1927,14 @@ let start_time = Instant::now();
             }
 
             // ── Блок сабагента / невалидного target (вынесен в dispatch::handle_subagent_call) ──
-            match ctx.handle_subagent_call(&parsed, gen_start, &raw_response, &combined, is_continuation, max_gen_tokens)? {
+            match ctx.handle_subagent_call(
+                &parsed,
+                gen_start,
+                &raw_response,
+                &combined,
+                is_continuation,
+                max_gen_tokens,
+            )? {
                 DispatchCtl::Continue => continue,
                 DispatchCtl::Break => break,
                 DispatchCtl::Return(v) => return Ok(v),
@@ -1407,11 +1943,21 @@ let start_time = Instant::now();
 
         if !ctx.thought_logged && !response.is_empty() {
             // В режиме докачки мысли ищем в накопленном сыром тексте
-            let thought_source = if is_continuation { &combined } else { &raw_response };
+            let thought_source = if is_continuation {
+                &combined
+            } else {
+                &raw_response
+            };
             let extracted = extract_think_content(thought_source);
             for t in &extracted {
                 let stored = safe_truncate(t, THOUGHT_STORE_MAX_CHARS);
-                log_cb(format!("💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), stored));
+                log_cb(format!(
+                    "💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}",
+                    agent.name,
+                    depth,
+                    gen_start.elapsed().as_secs_f32(),
+                    stored
+                ));
                 ctx.messages.push(ChatMessage {
                     id: Some(format!("msg_{}", ctx.msg_counter)),
                     msg_type: "thought".to_string(),
@@ -1428,7 +1974,13 @@ let start_time = Instant::now();
             if extracted.is_empty() && !thought_source.contains("<think") {
                 if let Some(t) = extract_thought_from_partial_json(thought_source) {
                     let stored = safe_truncate(&t, THOUGHT_STORE_MAX_CHARS);
-                    log_cb(format!("💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}", agent.name, depth, gen_start.elapsed().as_secs_f32(), stored));
+                    log_cb(format!(
+                        "💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}",
+                        agent.name,
+                        depth,
+                        gen_start.elapsed().as_secs_f32(),
+                        stored
+                    ));
                     ctx.messages.push(ChatMessage {
                         id: Some(format!("msg_{}", ctx.msg_counter)),
                         msg_type: "thought".to_string(),
@@ -1473,7 +2025,7 @@ let start_time = Instant::now();
                         stop_reason,
                         ctx.thinking_no_answer
                     ));
-                    ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() });
+                    ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты потратил весь лимит токенов на внутренние размышления и не дал видимого ответа. На этот раз отвечай СРАЗУ, БЕЗ внутренних размышлений: только итоговый результат.".to_string() , ..Default::default()});
                 }
                 continue;
             }
@@ -1487,24 +2039,46 @@ let start_time = Instant::now();
             } else {
                 "Ты прервал генерацию. Продолжи ответ ОБЫЧНЫМ ТЕКСТОМ."
             };
-            ctx.llm_messages.push(LlmMessage { role: "assistant".to_string(), content: if is_continuation { combined.clone() } else { raw_response.clone() } });
+            ctx.llm_messages.push(LlmMessage {
+                role: "assistant".to_string(),
+                content: if is_continuation {
+                    combined.clone()
+                } else {
+                    raw_response.clone()
+                },
+                ..Default::default()
+            });
             ctx.continuation_raw.clear();
             ctx.continuation_mark = None;
-            ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: hint.to_string() });
+            ctx.llm_messages.push(LlmMessage {
+                role: "user".to_string(),
+                content: hint.to_string(),
+                ..Default::default()
+            });
             continue;
         }
 
         if !ctx.action_found && ctx.has_tools_for_prompt {
-            if has_incomplete_json_action(&parse_target) || has_json_thought_without_action(&parse_target) {
+            if has_incomplete_json_action(&parse_target)
+                || has_json_thought_without_action(&parse_target)
+            {
                 ctx.consecutive_incomplete += 1;
                 if ctx.consecutive_incomplete >= 5 {
                     ctx.final_response = format!("{} Агент '{}' не смог завершить действие (5 попыток). Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
                     break;
                 }
-                ctx.llm_messages.push(LlmMessage { role: "assistant".to_string(), content: if is_continuation { combined.clone() } else { raw_response.clone() } });
+                ctx.llm_messages.push(LlmMessage {
+                    role: "assistant".to_string(),
+                    content: if is_continuation {
+                        combined.clone()
+                    } else {
+                        raw_response.clone()
+                    },
+                    ..Default::default()
+                });
                 ctx.continuation_raw.clear();
                 ctx.continuation_mark = None;
-                ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты начал размышлять в JSON, но не указал действие. Пиши кратко и СРАЗУ укажи \"target\" или \"tool\".".to_string() });
+                ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content: "Ты начал размышлять в JSON, но не указал действие. Пиши кратко и СРАЗУ укажи \"target\" или \"tool\".".to_string() , ..Default::default()});
                 continue;
             }
         }
@@ -1516,14 +2090,21 @@ let start_time = Instant::now();
         // Проверяем именно то, что станет финальным ответом (после вырезки
         // думателя), т.к. сырой текст может начинаться с маркеров размышлений.
         let (_, split_answer) = split_thinking_and_answer(&combined);
-        if !ctx.action_found && starts_with_ellipsis(&split_answer)
-            && ctx.continuation_restarts < MAX_CONTINUATION_RESTARTS && !response.trim().is_empty() {
+        if !ctx.action_found
+            && starts_with_ellipsis(&split_answer)
+            && ctx.continuation_restarts < MAX_CONTINUATION_RESTARTS
+            && !response.trim().is_empty()
+        {
             ctx.continuation_restarts += 1;
             log_cb(format!(
                 "⚠️ [{}] ответ начался с обрыва размышлений («...») — перезапуск ответа с начала (#{}/{}), хвост сохранён в истории",
                 agent.name, ctx.continuation_restarts, MAX_CONTINUATION_RESTARTS
             ));
-            ctx.llm_messages.push(LlmMessage { role: "assistant".to_string(), content: raw_response.clone() });
+            ctx.llm_messages.push(LlmMessage {
+                role: "assistant".to_string(),
+                content: raw_response.clone(),
+                ..Default::default()
+            });
             // Ответ будет писаться заново — состояние «докачки» сбрасываем,
             // чтобы следующий вызов не склеивал старый оборванный combined.
             ctx.continuation_raw.clear();
@@ -1531,12 +2112,22 @@ let start_time = Instant::now();
             ctx.llm_messages.push(LlmMessage { role: "user".to_string(), content:
                 "⚠️ Твой финальный ответ начался с многоточия — это продолжение оборванных размышлений, а не самостоятельный ответ. Напиши финальный ответ ЗАНОВО с самого начала: вступление и ВСЕ пункты по порядку. Твой текст после многоточия уже сохранён в истории — не повторяй и не продолжай его, не начинай с «...». Начни с полного первого пункта."
                 .to_string()
-            });
+            , ..Default::default()});
             continue;
         }
 
         let preview = safe_truncate(&response, 300).replace('\n', " ");
-log_cb(format!("✅ Агент {} завершил ответом ({} символов): {}", agent.name, response.len(), preview));
+        // GUARD нативного tool-calling: финал обычным текстом без ЕДИНОГО тула —
+        // ретрай с требованием использовать инструмент (макс. NATIVE_FINAL_RETRIES_MAX).
+        if ctx.retry_native_final_without_tools(&raw_response) {
+            continue;
+        }
+        log_cb(format!(
+            "✅ Агент {} завершил ответом ({} символов): {}",
+            agent.name,
+            response.len(),
+            preview
+        ));
         ctx.final_response = if is_continuation {
             extract_answer_from_combined(&combined, &response)
         } else {
@@ -1550,6 +2141,90 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
         break;
     }
 
+    // ── Hybrid-вердикт: финальный строгий grammar-пасс (qa_diagnost/arch_reviewer) ──
+    // Цикл вёл native tools[] БЕЗ грамматики (grammar + tools[] = конфликт).
+    // Финальный вердикт агент выдаёт строгим JSON по своей роли: отдельный вызов
+    // с per-agent GBNF (hybrid_gbnf), tools отключены, disable_reasoning=true.
+    // Если цикл так и не вызвал инструменты — GUARD уже отработал свои ретраи.
+    if let Some(hybrid_gbnf) = ctx.hybrid_gbnf.clone() {
+        log_cb(format!(
+            "📜 [{}] Hybrid: финальный вердиктный grammar-пасс ({} символов GBNF)...",
+            agent.name,
+            hybrid_gbnf.len()
+        ));
+        ctx.continuation_raw.clear();
+        ctx.continuation_mark = None;
+        // prefill-assistant (по умолчанию) продолжает последний assistant-ход вместо
+        // свежего ответа под grammar — закрываем запрос user-ролью.
+        if ctx
+            .llm_messages
+            .last()
+            .map_or(false, |m| m.role == "assistant")
+        {
+            ctx.llm_messages.push(LlmMessage {
+                role: "user".to_string(),
+                content: "Сформулируй финальный вердикт в строгом JSON по своей роли (schema из системного промпта): только JSON-объект, без пояснений.".to_string(),
+             ..Default::default()});
+        }
+        engine.set_grammar(Some(GrammarSpec {
+            gbnf: Some(hybrid_gbnf),
+            json_schema: None,
+        }));
+        engine.set_tools(None);
+        let ctx_label_h = format!("{}:{}#hybrid-verdict", mem_mode, agent.name);
+        match engine.generate_chat(
+            &ctx.llm_messages,
+            max_gen_tokens,
+            model_params,
+            format_type,
+            true, // disable_reasoning=true: strict-GBNF, думатель не нужен
+            cancel_flag.clone(),
+            &ctx_label_h,
+            None,
+            |p, _| {
+                status_cb(
+                    format!("{} формулирует вердикт...", agent.name),
+                    80 + (p * 0.15) as u8,
+                );
+            },
+            log_cb.clone(),
+        ) {
+            Ok(gen) => {
+                let verdict_raw = gen.text.trim().to_string();
+                log_cb(format!(
+                    "<<< [{}] Hybrid-вердикт: {} символов, стоп: {}",
+                    agent.name,
+                    verdict_raw.len(),
+                    gen.stop_reason
+                ));
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&verdict_raw) {
+                    if v.get("pass").is_some() || v.get("bug_captured").is_some() {
+                        ctx.final_response = verdict_raw;
+                        log_cb(format!(
+                            "✅ [{}] Вердиктный JSON принят: {}",
+                            agent.name,
+                            safe_truncate(&ctx.final_response, 300)
+                        ));
+                    } else {
+                        log_cb(format!("⚠️ [{}] Вердикт: JSON без pass/bug_captured — финальный текст остаётся.", agent.name));
+                    }
+                } else {
+                    log_cb(format!(
+                        "⚠️ [{}] Вердикт: JSON не распарслен — финальный текст остаётся.",
+                        agent.name
+                    ));
+                }
+            }
+            Err(e) => {
+                log_cb(format!(
+                    "⚠️ [{}] Hybrid-вердикт: ошибка генерации: {}",
+                    agent.name, e
+                ));
+            }
+        }
+        ctx.restore_grammar();
+    }
+
     // ── Phase 2: JSON-only fallback для signal-агентов ──
     // Если Phase 1 (hybrid grammar think + JSON) не дала JSON envelope,
     // делаем второй вызов с JSON-only grammar. Модель видит тот же контекст
@@ -1557,7 +2232,10 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
     // принуждает к JSON сразу.
     if !ctx.signal_saved && signal_contract.is_some() {
         let contract = signal_contract.as_ref().unwrap();
-        log_cb(format!("🔄 [{}] Phase 2: JSON-only fallback (grammar: envelope-json)...", agent.name));
+        log_cb(format!(
+            "🔄 [{}] Phase 2: JSON-only fallback (grammar: envelope-json)...",
+            agent.name
+        ));
 
         // Сбрасываем стейт для нового вызова
         ctx.continuation_raw.clear();
@@ -1569,10 +2247,15 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
         // --prefill-assistant (по умолчанию) продолжает последнее
         // assistant-сообщение вместо свежего ответа под grammar (первый
         // фрагмент "<", а не "{"). Закрываем запрос user-ролью.
-        if ctx.llm_messages.last().map_or(false, |m| m.role == "assistant") {
+        if ctx
+            .llm_messages
+            .last()
+            .map_or(false, |m| m.role == "assistant")
+        {
             ctx.llm_messages.push(LlmMessage {
                 role: "user".to_string(),
                 content: "Размышления завершены. Теперь сформулируй финальный ответ.".to_string(),
+                ..Default::default()
             });
             log_cb(format!(
                 "🎯 [{}] Phase 2 fallback: хвост запроса завершён user-ролью (фикс prefill-assistant)",
@@ -1582,7 +2265,10 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
 
         // Устанавливаем JSON-only grammar
         let json_only_grammar = build_signal_envelope_json_only_grammar(contract);
-        engine.set_grammar(Some(GrammarSpec { gbnf: Some(json_only_grammar), json_schema: None }));
+        engine.set_grammar(Some(GrammarSpec {
+            gbnf: Some(json_only_grammar),
+            json_schema: None,
+        }));
 
         // Вызываем LLM — тот же контекст, другая grammar
         let ctx_label_2 = format!("{}:{}#phase2", mem_mode, agent.name);
@@ -1595,31 +2281,59 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
             cancel_flag.clone(),
             &ctx_label_2,
             None,
-            |p, _| { status_cb(format!("{} Phase 2 (JSON)...", agent.name), 80 + (p * 0.15) as u8); },
+            |p, _| {
+                status_cb(
+                    format!("{} Phase 2 (JSON)...", agent.name),
+                    80 + (p * 0.15) as u8,
+                );
+            },
             log_cb.clone(),
         ) {
             Ok(gen) => {
                 let phase2_response = gen.text.clone();
-                log_cb(format!("<<< [{}] Phase 2: {} символов, стоп: {}", agent.name, phase2_response.len(), gen.stop_reason));
+                log_cb(format!(
+                    "<<< [{}] Phase 2: {} символов, стоп: {}",
+                    agent.name,
+                    phase2_response.len(),
+                    gen.stop_reason
+                ));
 
                 // Добавляем ответ Phase 2 в историю для парсинга
-                ctx.llm_messages.push(LlmMessage { role: "assistant".to_string(), content: phase2_response.clone() });
+                ctx.llm_messages.push(LlmMessage {
+                    role: "assistant".to_string(),
+                    content: phase2_response.clone(),
+                    ..Default::default()
+                });
 
                 // Пытаемся распарсить tool call
                 if let Some((tool_name, arguments, thought)) = parse_tool_call(&phase2_response) {
                     if tool_name == "emit_signal" {
                         // Обрабатываем emit_signal через общую функцию
                         let gen_start_2 = Instant::now();
-                        let _ = ctx.handle_emit_signal(&arguments, &thought, gen_start_2, &phase2_response, &phase2_response, &phase2_response, &phase2_response);
+                        let _ = ctx.handle_emit_signal(
+                            &arguments,
+                            &thought,
+                            gen_start_2,
+                            &phase2_response,
+                            &phase2_response,
+                            &phase2_response,
+                            &phase2_response,
+                        );
                     }
                 }
 
                 if !ctx.signal_saved {
-                    log_cb(format!("⚠️ [{}] Phase 2: JSON не сгенерирован или невалиден", agent.name));
+                    log_cb(format!(
+                        "⚠️ [{}] Phase 2: JSON не сгенерирован или невалиден",
+                        agent.name
+                    ));
                 }
             }
             Err(e) => {
-                log_cb(format!("⚠️ [{}] Phase 2: ошибка генерации: {}", agent.name, e));
+                log_cb(format!(
+                    "⚠️ [{}] Phase 2: ошибка генерации: {}",
+                    agent.name, e
+                ));
             }
         }
 
@@ -1634,7 +2348,9 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
     // и исключает пере-вывод значения отдельным вызовом (который терял контекст).
     if !ctx.signal_saved {
         if let Some(contract) = &signal_contract {
-            let user_text: String = ctx.messages.iter()
+            let user_text: String = ctx
+                .messages
+                .iter()
                 .filter(|m| m.msg_type == "message" && m.author.as_deref() == Some("user"))
                 .map(|m| m.content.clone())
                 .collect::<Vec<_>>()
@@ -1657,7 +2373,10 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
                 ctx.messages.push(signal_msg);
                 *ctx.msg_counter += 1;
                 ctx.signal_saved = true;
-                log_cb(format!("📡 Сигнал '{}' извлечён из текста ответа (fallback): {}", contract.key, value));
+                log_cb(format!(
+                    "📡 Сигнал '{}' извлечён из текста ответа (fallback): {}",
+                    contract.key, value
+                ));
             } else {
                 log_cb(format!("⚠️ Fallback не смог извлечь сигнал '{}' из текста ответа агента '{}' (тип контракта: проверь supporting enum/bool extraction)", contract.key, agent.id));
             }
@@ -1665,13 +2384,23 @@ log_cb(format!("✅ Агент {} завершил ответом ({} симво
     }
 
     if ctx.depth > 0 {
-        let subcall = SubCall { agent_name: ctx.agent.name.clone(), prompt: invocation_dump.clone(), response: ctx.final_response.clone(), time_sec: start_time.elapsed().as_secs_f32(), tool_calls: ctx.tool_calls };
+        let subcall = SubCall {
+            agent_name: ctx.agent.name.clone(),
+            prompt: invocation_dump.clone(),
+            response: ctx.final_response.clone(),
+            time_sec: start_time.elapsed().as_secs_f32(),
+            tool_calls: ctx.tool_calls,
+        };
         (ctx.subcall_cb)(&subcall);
         ctx.all_sub_calls.push(subcall);
     }
 
     // 4.2: публикуем событие завершения в шину (успех/ошибка + длительность).
-    let err = if ctx.final_response.starts_with("⚠️") { Some(ctx.final_response.clone()) } else { None };
+    let err = if ctx.final_response.starts_with("⚠️") {
+        Some(ctx.final_response.clone())
+    } else {
+        None
+    };
     crate::infra::event_bus::global_bus().publish(crate::infra::event_bus::AgentEvent::Finished {
         agent: ctx.agent.id.clone(),
         namespace: caller_name.as_deref().unwrap_or("main").to_string(),
@@ -1714,16 +2443,24 @@ mod tests {
 
     #[test]
     fn starts_with_ellipsis_detects_continuation_artifact() {
-        assert!(starts_with_ellipsis("...принятие решений, требующих участия других"));
+        assert!(starts_with_ellipsis(
+            "...принятие решений, требующих участия других"
+        ));
         assert!(starts_with_ellipsis("…продолжение мыслей после обрыва"));
         assert!(starts_with_ellipsis("   ... ответ с ведущими пробелами"));
         assert!(!starts_with_ellipsis("Начни ответ с первого пункта"));
-        assert!(!starts_with_ellipsis("Согласно данным, у вас есть симптомы"));
+        assert!(!starts_with_ellipsis(
+            "Согласно данным, у вас есть симптомы"
+        ));
         assert!(!starts_with_ellipsis(""));
     }
 
     fn msg(role: &str, content: &str) -> LlmMessage {
-        LlmMessage { role: role.to_string(), content: content.to_string() }
+        LlmMessage {
+            role: role.to_string(),
+            content: content.to_string(),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -1770,7 +2507,10 @@ mod tests {
         let mut messages = vec![msg("system", "sys"), msg("assistant", "мысль целиком")];
         let added = finalize_phase1_context(&mut messages, None, false);
 
-        assert!(added, "хвост-ассистент нужно закрыть user-ходом (prefill-guard)");
+        assert!(
+            added,
+            "хвост-ассистент нужно закрыть user-ходом (prefill-guard)"
+        );
         assert_eq!(messages.len(), 3);
         assert_eq!(messages.last().unwrap().content, PHASE1_DONE_PROMPT);
     }
@@ -1830,13 +2570,34 @@ mod tests {
 
     #[test]
     fn compact_llm_messages_prunes_big_results_and_fits_budget() {
-        let char_tokens = |msgs: &[LlmMessage]| msgs.iter().map(|m| m.content.chars().count()).sum();
+        let char_tokens =
+            |msgs: &[LlmMessage]| msgs.iter().map(|m| m.content.chars().count()).sum();
         let mut msgs = vec![
-            LlmMessage { role: "system".to_string(), content: "SYS".to_string() },
-            LlmMessage { role: "user".to_string(), content: "[РЕЗУЛЬТАТ ИНСТРУМЕНТА big_tool]:\n".to_string() + &"x".repeat(5000) },
-            LlmMessage { role: "assistant".to_string(), content: "A".repeat(4000) },
-            LlmMessage { role: "user".to_string(), content: "B".repeat(4000) },
-            LlmMessage { role: "assistant".to_string(), content: "C".repeat(4000) },
+            LlmMessage {
+                role: "system".to_string(),
+                content: "SYS".to_string(),
+                ..Default::default()
+            },
+            LlmMessage {
+                role: "user".to_string(),
+                content: "[РЕЗУЛЬТАТ ИНСТРУМЕНТА big_tool]:\n".to_string() + &"x".repeat(5000),
+                ..Default::default()
+            },
+            LlmMessage {
+                role: "assistant".to_string(),
+                content: "A".repeat(4000),
+                ..Default::default()
+            },
+            LlmMessage {
+                role: "user".to_string(),
+                content: "B".repeat(4000),
+                ..Default::default()
+            },
+            LlmMessage {
+                role: "assistant".to_string(),
+                content: "C".repeat(4000),
+                ..Default::default()
+            },
         ];
         // бюджет в «токенах» (в тесте 1 символ = 1 токен) чуть больше суммы после
         // сворачивания крупного результата, чтобы сработал слой 1, но не удаление.
@@ -1846,16 +2607,31 @@ mod tests {
         // system-промпт сохранён целиком
         assert_eq!(msgs[0].content, "SYS");
         // крупный результат инструмента свёрнут head/tail (слой 1 сработал)
-        assert!(msgs.iter().any(|m| m.content.contains("свёрнуто") && m.content.contains("[РЕЗУЛЬТАТ ИНСТРУМЕНТА")));
+        assert!(msgs.iter().any(
+            |m| m.content.contains("свёрнуто") && m.content.contains("[РЕЗУЛЬТАТ ИНСТРУМЕНТА")
+        ));
     }
 
     #[test]
     fn compact_llm_messages_keeps_small_conversations_untouched() {
-        let char_tokens = |msgs: &[LlmMessage]| msgs.iter().map(|m| m.content.chars().count()).sum();
+        let char_tokens =
+            |msgs: &[LlmMessage]| msgs.iter().map(|m| m.content.chars().count()).sum();
         let mut msgs = vec![
-            LlmMessage { role: "system".to_string(), content: "SYS".to_string() },
-            LlmMessage { role: "user".to_string(), content: "привет".to_string() },
-            LlmMessage { role: "assistant".to_string(), content: "здравствуй".to_string() },
+            LlmMessage {
+                role: "system".to_string(),
+                content: "SYS".to_string(),
+                ..Default::default()
+            },
+            LlmMessage {
+                role: "user".to_string(),
+                content: "привет".to_string(),
+                ..Default::default()
+            },
+            LlmMessage {
+                role: "assistant".to_string(),
+                content: "здравствуй".to_string(),
+                ..Default::default()
+            },
         ];
         compact_llm_messages(&mut msgs, 6000, 4, char_tokens, |_| None, |_| {});
         assert_eq!(msgs.len(), 3, "маленький диалог не трогаем");
@@ -1870,7 +2646,10 @@ mod tests {
             &mut msgs,
             "coder_x",
         );
-        assert!(r.contains("Добавлена задача"), "добавление должно подтвердиться");
+        assert!(
+            r.contains("Добавлена задача"),
+            "добавление должно подтвердиться"
+        );
 
         let l = run_todo_tool(
             "todo_write",
@@ -1910,7 +2689,10 @@ mod tests {
             &mut msgs,
             "research_x",
         );
-        assert!(read_todos(&msgs, "research_x").is_empty(), "после clear список пуст");
+        assert!(
+            read_todos(&msgs, "research_x").is_empty(),
+            "после clear список пуст"
+        );
     }
 
     #[test]
@@ -1925,8 +2707,14 @@ mod tests {
         );
 
         let (prompt, has_tools) = build_worst_agent_prompt(&agents, &wf, &[]);
-        assert!(prompt.contains("очень длинный системный промпт"), "должен выбраться самый длинный агент");
-        assert!(!prompt.contains("коротко"), "короткий агент не должен попасть в результат");
+        assert!(
+            prompt.contains("очень длинный системный промпт"),
+            "должен выбраться самый длинный агент"
+        );
+        assert!(
+            !prompt.contains("коротко"),
+            "короткий агент не должен попасть в результат"
+        );
         assert!(!has_tools, "у тестовых агентов нет инструментов");
     }
 
@@ -1944,9 +2732,7 @@ mod tests {
     #[test]
     fn worst_agent_prompt_empty_when_no_workers() {
         let agents: Vec<AgentProfile> = vec![];
-        let wf = parse_wf(
-            "name: test\nnodes:\n  - id: r\n    type: return\nedges: []\n",
-        );
+        let wf = parse_wf("name: test\nnodes:\n  - id: r\n    type: return\nedges: []\n");
 
         let (prompt, has_tools) = build_worst_agent_prompt(&agents, &wf, &[]);
         assert_eq!(prompt, "");
@@ -1958,8 +2744,11 @@ mod tests {
         let mut agent = make_agent("search", "ты поисковик");
         agent.mcp_servers = vec!["web_search".to_string()];
         let tools = runtime::builtin_tools();
-        let sp = build_system_prompt(&agent, &[], true, &tools, 2048, false);
-        assert!(sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"), "legacy-ветка: агент с mcp_servers обязан получать список инструментов");
+        let sp = build_system_prompt(&agent, &[], true, &tools, 2048, false, false, false);
+        assert!(
+            sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"),
+            "legacy-ветка: агент с mcp_servers обязан получать список инструментов"
+        );
         assert!(sp.contains("emit_signal"));
         assert!(sp.contains("[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]"));
     }
@@ -1967,7 +2756,7 @@ mod tests {
     #[test]
     fn legacy_agent_without_tools_has_no_tools_section() {
         let agent = make_agent("plain", "просто агент");
-        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false);
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false, false, false);
         assert!(!sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"));
         assert!(!sp.contains("[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]"));
     }
@@ -1976,29 +2765,54 @@ mod tests {
     fn method3_agent_with_tools_skips_legacy_sections() {
         let mut agent = make_agent("validator", "валидатор данных");
         agent.tools = vec!["emit_signal".to_string()];
-        let tools = vec![("emit_signal".to_string(), "emit_signal".to_string(), serde_json::json!({"description": "Save signal"}))];
-        let sp = build_system_prompt(&agent, &[], true, &tools, 2048, true);
-        assert!(!sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"), "Method 3-агент НЕ должен получать [ДОСТУПНЫЕ ИНСТРУМЕНТЫ]");
-        assert!(!sp.contains("[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]"), "Method 3-агент НЕ должен получать [ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]");
+        let tools = vec![(
+            "emit_signal".to_string(),
+            "emit_signal".to_string(),
+            serde_json::json!({"description": "Save signal"}),
+        )];
+        let sp = build_system_prompt(&agent, &[], true, &tools, 2048, true, false, false);
+        assert!(
+            !sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"),
+            "Method 3-агент НЕ должен получать [ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"
+        );
+        assert!(
+            !sp.contains("[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]"),
+            "Method 3-агент НЕ должен получать [ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]"
+        );
     }
 
     #[test]
     fn agent_with_current_date_flag_gets_date_block() {
         let mut agent = make_agent("dated", "поисковый агент");
         agent.current_date = true;
-        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false);
-        assert!(sp.contains("[ТЕКУЩАЯ ДАТА]"), "агент с current_date: true обязан получать блок даты");
-        assert!(sp.starts_with("[ТЕКУЩАЯ ДАТА]"), "блок даты должен быть в начале промпта");
-        assert!(sp.contains("Сегодня"), "блок обязан содержать слово «Сегодня»");
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false, false, false);
+        assert!(
+            sp.contains("[ТЕКУЩАЯ ДАТА]"),
+            "агент с current_date: true обязан получать блок даты"
+        );
+        assert!(
+            sp.starts_with("[ТЕКУЩАЯ ДАТА]"),
+            "блок даты должен быть в начале промпта"
+        );
+        assert!(
+            sp.contains("Сегодня"),
+            "блок обязан содержать слово «Сегодня»"
+        );
         assert!(sp.contains("ЕДИНСТВЕННЫЙ источник истины"));
-        assert!(sp.contains("поисковый агент"), "тело агента сохраняется после блока даты");
+        assert!(
+            sp.contains("поисковый агент"),
+            "тело агента сохраняется после блока даты"
+        );
     }
 
     #[test]
     fn agent_without_current_date_flag_has_no_date_block() {
         let agent = make_agent("plain", "обычный агент");
-        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false);
-        assert!(!sp.contains("[ТЕКУЩАЯ ДАТА]"), "агент без флага не должен получать блок даты");
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false, false, false);
+        assert!(
+            !sp.contains("[ТЕКУЩАЯ ДАТА]"),
+            "агент без флага не должен получать блок даты"
+        );
     }
 
     #[test]
@@ -2043,10 +2857,17 @@ mod tests {
         let src = fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
         let mut out: Vec<String> = Vec::new();
         for line in src.lines() {
-            if let Some(name) = line.trim().strip_prefix("name:").and_then(|s| s.trim().strip_prefix('"')) {
+            if let Some(name) = line
+                .trim()
+                .strip_prefix("name:")
+                .and_then(|s| s.trim().strip_prefix('"'))
+            {
                 if let Some(end) = name.find('"') {
                     let t = name[..end].to_string();
-                    if t.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_') {
+                    if t.chars()
+                        .next()
+                        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+                    {
                         out.push(t);
                     }
                 }
@@ -2072,7 +2893,10 @@ mod tests {
             "docs_researcher обязан иметь mcp-сервер docs_fetcher, есть: {:?}",
             agent.mcp_servers
         );
-        assert!(agent.current_date, "docs_researcher должен иметь current_date: true (протокол актуальности)");
+        assert!(
+            agent.current_date,
+            "docs_researcher должен иметь current_date: true (протокол актуальности)"
+        );
 
         let df_tools = tools_in_server("docs_fetcher");
         for t in ["WebFetch", "FetchArticle", "FetchGithubReadme"] {
@@ -2085,9 +2909,15 @@ mod tests {
         let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
         all_tools.extend(tools_of_server_as_all_tools("web_search"));
         all_tools.extend(runtime::builtin_tools());
-        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048, false);
+        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048, false, false, false);
 
-        for t in ["WebFetch", "FetchArticle", "FetchGithubReadme", "WebSearch", "emit_signal"] {
+        for t in [
+            "WebFetch",
+            "FetchArticle",
+            "FetchGithubReadme",
+            "WebSearch",
+            "emit_signal",
+        ] {
             assert!(sp.contains(t), "промпт docs_researcher не содержит '{t}'");
         }
         assert!(sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"));
@@ -2108,8 +2938,11 @@ mod tests {
         let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
         all_tools.extend(tools_of_server_as_all_tools("web_search"));
         all_tools.extend(runtime::builtin_tools());
-        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048, false);
-        assert!(sp.contains("WebFetch"), "промпт web_researcher не содержит WebFetch");
+        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048, false, false, false);
+        assert!(
+            sp.contains("WebFetch"),
+            "промпт web_researcher не содержит WebFetch"
+        );
         assert!(sp.contains("WebSearch"));
     }
 
@@ -2120,12 +2953,14 @@ mod tests {
     #[test]
     #[ignore]
     fn docs_researcher_calls_tool_instead_of_guessing_version() {
-        let model_path = std::env::var("TEST_MODEL_PATH").expect("Set TEST_MODEL_PATH to a GGUF file path");
+        let model_path =
+            std::env::var("TEST_MODEL_PATH").expect("Set TEST_MODEL_PATH to a GGUF file path");
         let agent = real_agent("docs_researcher");
         let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
         all_tools.extend(tools_of_server_as_all_tools("web_search"));
         all_tools.extend(runtime::builtin_tools());
-        let mut system_prompt = build_system_prompt(&agent, &[], true, &all_tools, 2048, false);
+        let mut system_prompt =
+            build_system_prompt(&agent, &[], true, &all_tools, 2048, false, false, false);
         system_prompt.push_str("\n\n[КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ]\n");
         system_prompt.push_str(prompt::CRITICAL_LIMIT_BLOCK);
 
@@ -2142,24 +2977,61 @@ mod tests {
         } else {
             std::env::var("APPDATA")
                 .ok()
-                .map(|a| Path::new(&a).join("com.kingorch.app").join("app_config.json"))
+                .map(|a| {
+                    Path::new(&a)
+                        .join("com.kingorch.app")
+                        .join("app_config.json")
+                })
                 .and_then(|cfg| fs::read_to_string(cfg).ok())
                 .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-                .and_then(|v| v.get("llamacpp_dir").and_then(|d| d.as_str()).map(PathBuf::from))
+                .and_then(|v| {
+                    v.get("llamacpp_dir")
+                        .and_then(|d| d.as_str())
+                        .map(PathBuf::from)
+                })
                 .filter(|p| p.join("backends").exists())
                 .unwrap_or(engine_dir)
         };
-        let engine = LlamaEngine::new(&engine_dir, &model_path, 8192, false, false, 0, &|_| {}, |_| {}).unwrap();
+        let engine = LlamaEngine::new(
+            &engine_dir,
+            &model_path,
+            8192,
+            false,
+            false,
+            0,
+            &|_| {},
+            |_| {},
+        )
+        .unwrap();
         let mut params = ModelParams::default();
         params.temperature = 0.8;
 
         let msgs = vec![
-            LlmMessage { role: "system".to_string(), content: system_prompt },
-            LlmMessage { role: "user".to_string(), content: user_text.to_string() },
+            LlmMessage {
+                role: "system".to_string(),
+                content: system_prompt,
+                ..Default::default()
+            },
+            LlmMessage {
+                role: "user".to_string(),
+                content: user_text.to_string(),
+                ..Default::default()
+            },
         ];
         let cancel = Arc::new(AtomicBool::new(false));
         let gen = engine
-            .generate_chat(&msgs, 1024, &params, "Auto", false, cancel, "test:docs_researcher_tool", None, |_, _| {}, |_| {})
+            .generate_chat(
+                &msgs,
+                1024,
+                &params,
+                "Auto",
+                false,
+                cancel,
+                "test:docs_researcher_tool",
+                None,
+                |_, _| {},
+                |_| {},
+            )
             .unwrap();
         let response = gen.text;
         println!("=== RAW RESPONSE ===\n{}\n=== END ===", response);
@@ -2188,10 +3060,12 @@ mod tests {
     #[test]
     #[ignore]
     fn psychotherapist_fact_extractor_pure_somatic() {
-        use std::sync::{Arc, atomic::AtomicBool};
-        use crate::infra::{LlamaEngine, ModelParams, LlmMessage};
-        use crate::domain::workflow_engine::fact_extractor::{build_default_prompt, resolve_facts, resolve_phases};
+        use crate::domain::workflow_engine::fact_extractor::{
+            build_default_prompt, resolve_facts, resolve_phases,
+        };
         use crate::domain::workflow_engine::parser::WorkflowConfig;
+        use crate::infra::{LlamaEngine, LlmMessage, ModelParams};
+        use std::sync::{atomic::AtomicBool, Arc};
 
         let models_env = std::env::var("TEST_MODELS")
             .ok()
@@ -2205,7 +3079,10 @@ mod tests {
         assert!(!models.is_empty(), "ни одной модели не задано");
 
         let workflow_dir = workspace_root().join("agents/psychotherapist/transitions");
-        let config = WorkflowConfig { facts_file: Some("facts.yaml".into()), ..Default::default() };
+        let config = WorkflowConfig {
+            facts_file: Some("facts.yaml".into()),
+            ..Default::default()
+        };
         let facts = resolve_facts(&config, Some(&workflow_dir));
         let phases = resolve_phases(&config, Some(&workflow_dir));
         assert!(!facts.is_empty(), "facts.yaml не загрузился");
@@ -2227,14 +3104,31 @@ mod tests {
             } else {
                 std::env::var("APPDATA")
                     .ok()
-                    .map(|a| Path::new(&a).join("com.kingorch.app").join("app_config.json"))
+                    .map(|a| {
+                        Path::new(&a)
+                            .join("com.kingorch.app")
+                            .join("app_config.json")
+                    })
                     .and_then(|cfg| std::fs::read_to_string(cfg).ok())
                     .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-                    .and_then(|v| v.get("llamacpp_dir").and_then(|d| d.as_str()).map(PathBuf::from))
+                    .and_then(|v| {
+                        v.get("llamacpp_dir")
+                            .and_then(|d| d.as_str())
+                            .map(PathBuf::from)
+                    })
                     .filter(|p| p.join("backends").exists())
                     .unwrap_or(engine_dir)
             };
-            let engine = match LlamaEngine::new(&engine_dir, model_path, 8192, false, false, 0, &|_| {}, |_| {}) {
+            let engine = match LlamaEngine::new(
+                &engine_dir,
+                model_path,
+                8192,
+                false,
+                false,
+                0,
+                &|_| {},
+                |_| {},
+            ) {
                 Ok(e) => e,
                 Err(e) => {
                     println!("❌ {} — не удалось запустить движок: {}", model_path, e);
@@ -2245,8 +3139,16 @@ mod tests {
 
             let prompt = build_default_prompt(&facts, &phases, &[], user_msg, "[]", "");
             let msgs = vec![
-                LlmMessage { role: "system".to_string(), content: prompt },
-                LlmMessage { role: "user".to_string(), content: user_msg.to_string() },
+                LlmMessage {
+                    role: "system".to_string(),
+                    content: prompt,
+                    ..Default::default()
+                },
+                LlmMessage {
+                    role: "user".to_string(),
+                    content: user_msg.to_string(),
+                    ..Default::default()
+                },
             ];
             let cancel = Arc::new(AtomicBool::new(false));
             let gen = match engine.generate_chat(
@@ -2302,7 +3204,10 @@ mod tests {
             match hp {
                 Some(true) => println!("✅ {} → has_problem=true", model_path),
                 other => {
-                    println!("❌ {} → has_problem={:?} (ожидалось true)", model_path, other);
+                    println!(
+                        "❌ {} → has_problem={:?} (ожидалось true)",
+                        model_path, other
+                    );
                     failures.push(model_path.clone());
                 }
             }
@@ -2312,7 +3217,11 @@ mod tests {
             failures.len(),
             skipped.len()
         );
-        assert!(failures.is_empty(), "has_problem != true для: {:?}", failures);
+        assert!(
+            failures.is_empty(),
+            "has_problem != true для: {:?}",
+            failures
+        );
     }
 
     /// Сквозной тест в режиме графа агента «Психотерапевт»: прогоняем соматическую жалобу и
@@ -2325,12 +3234,12 @@ mod tests {
     #[test]
     #[ignore]
     fn psychotherapist_graph_completes_on_somatic_complaint() {
-        use std::sync::{Arc, Mutex, atomic::AtomicBool};
-        use crate::infra::{LlamaEngine, ModelParams, SubCall};
-        use crate::domain::workflow_engine::{run_workflow, WorkflowRunner};
         use crate::domain::workflow_engine::context::WorkflowContext;
         use crate::domain::workflow_engine::parser::load_workflows;
+        use crate::domain::workflow_engine::{run_workflow, WorkflowRunner};
         use crate::domain::StreamMeta;
+        use crate::infra::{LlamaEngine, ModelParams, SubCall};
+        use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
         let models_env = std::env::var("TEST_MODELS")
             .ok()
@@ -2344,7 +3253,8 @@ mod tests {
         assert!(!models.is_empty(), "ни одной модели не задано");
 
         let agents_dir = workspace_root().join("agents");
-        let agents = crate::domain::agent_manager::load_agents(&agents_dir).expect("агенты не загрузились");
+        let agents =
+            crate::domain::agent_manager::load_agents(&agents_dir).expect("агенты не загрузились");
         let workflows = load_workflows(&agents_dir).expect("workflows не загрузились");
         let workflow = workflows
             .iter()
@@ -2367,14 +3277,31 @@ mod tests {
             } else {
                 std::env::var("APPDATA")
                     .ok()
-                    .map(|a| Path::new(&a).join("com.kingorch.app").join("app_config.json"))
+                    .map(|a| {
+                        Path::new(&a)
+                            .join("com.kingorch.app")
+                            .join("app_config.json")
+                    })
                     .and_then(|cfg| std::fs::read_to_string(cfg).ok())
                     .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
-                    .and_then(|v| v.get("llamacpp_dir").and_then(|d| d.as_str()).map(PathBuf::from))
+                    .and_then(|v| {
+                        v.get("llamacpp_dir")
+                            .and_then(|d| d.as_str())
+                            .map(PathBuf::from)
+                    })
                     .filter(|p| p.join("backends").exists())
                     .unwrap_or(engine_dir)
             };
-            let engine = match LlamaEngine::new(&engine_dir, model_path, 8192, false, false, 0, &|_| {}, |_| {}) {
+            let engine = match LlamaEngine::new(
+                &engine_dir,
+                model_path,
+                8192,
+                false,
+                false,
+                0,
+                &|_| {},
+                |_| {},
+            ) {
                 Ok(e) => e,
                 Err(e) => {
                     println!("❌ {} — не удалось запустить движок: {}", model_path, e);
@@ -2385,7 +3312,10 @@ mod tests {
 
             let project_dir = workspace_root();
             let sampling_presets = crate::infra::load_sampling_presets(&project_dir);
-            let grammars_dir = crate::domain::orchestrator::grammar::resolve_grammars_dir(&agents_dir, Some(workflow));
+            let grammars_dir = crate::domain::orchestrator::grammar::resolve_grammars_dir(
+                &agents_dir,
+                Some(workflow),
+            );
             let mcp_servers_dir = project_dir.join("src-tauri").join("mcp_servers");
             let bins_dir = project_dir.join("src-tauri").join("bin");
             let model_params = ModelParams::default();

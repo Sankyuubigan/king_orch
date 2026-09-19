@@ -51,7 +51,11 @@ fn detect_system_proxy() -> Option<String> {
         }
         let slice = std::slice::from_raw_parts(ptr, len);
         let s = String::from_utf16_lossy(slice);
-        if s.is_empty() { None } else { Some(s) }
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
     }
 
     unsafe fn free_config(config: &mut WINHTTP_CURRENT_USER_IE_PROXY_CONFIG) {
@@ -109,7 +113,11 @@ fn parse_proxy_string(raw: &str) -> Option<String> {
     for part in raw.split(';') {
         let part = part.trim();
         if let Some(proxy_val) = part.strip_prefix("socks=") {
-            return Some(normalize_proxy_url(proxy_val));
+            let v = proxy_val.trim();
+            if v.starts_with("socks://") || v.starts_with("socks5://") {
+                return Some(v.to_string());
+            }
+            return Some(format!("socks5://{}", v));
         }
     }
     // Нет "https=" и "socks=" — пробуем "http="
@@ -151,7 +159,10 @@ mod tests {
 
     #[test]
     fn parse_proxy_https_only() {
-        assert_eq!(parse_proxy_string("https=proxy.example.com:8080"), Some("http://proxy.example.com:8080".into()));
+        assert_eq!(
+            parse_proxy_string("https=proxy.example.com:8080"),
+            Some("http://proxy.example.com:8080".into())
+        );
     }
 
     #[test]
@@ -172,7 +183,10 @@ mod tests {
 
     #[test]
     fn parse_proxy_plain() {
-        assert_eq!(parse_proxy_string("proxy:3128"), Some("http://proxy:3128".into()));
+        assert_eq!(
+            parse_proxy_string("proxy:3128"),
+            Some("http://proxy:3128".into())
+        );
     }
 
     #[test]

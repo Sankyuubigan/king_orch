@@ -22,7 +22,8 @@ pub fn translate_message(
     let engine_dir = infra::get_engine_dir(&app);
     let ctx_limit = cfg.context_size;
     let max_tokens = cfg.max_gen_tokens as usize;
-    let params = tauri_plugin_llama_engine::commands::get_model_params(app.clone(), model_path.clone());
+    let params =
+        tauri_plugin_llama_engine::commands::get_model_params(app.clone(), model_path.clone());
 
     let target_name = match target_lang.as_str() {
         "en" => "English",
@@ -47,11 +48,11 @@ pub fn translate_message(
                 "You are a professional translator. Translate the user's message into {target_name}. \
 Output only the translated text — no commentary, no explanations, no quotes around the result."
             ),
-        },
+         ..Default::default()},
         LlmMessage {
             role: "user".into(),
             content: text,
-        },
+         ..Default::default()},
     ];
 
     let cancel = Arc::new(AtomicBool::new(false));

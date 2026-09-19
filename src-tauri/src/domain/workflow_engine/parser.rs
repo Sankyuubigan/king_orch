@@ -145,7 +145,9 @@ pub struct ConditionRule {
 }
 
 /// Защитный десериалайзер: принимает и массив `[{key, to}, ...]` и мапу `{key: to}`
-fn deserialize_cases_priority<'de, D>(deserializer: D) -> Result<Option<Vec<PriorityCase>>, D::Error>
+fn deserialize_cases_priority<'de, D>(
+    deserializer: D,
+) -> Result<Option<Vec<PriorityCase>>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -213,7 +215,11 @@ pub struct NodeDef {
     pub true_to: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub false_to: Option<String>,
-    #[serde(default, skip_serializing_if = "is_cases_empty", deserialize_with = "deserialize_cases_priority")]
+    #[serde(
+        default,
+        skip_serializing_if = "is_cases_empty",
+        deserialize_with = "deserialize_cases_priority"
+    )]
     pub cases_priority: Option<Vec<PriorityCase>>,
     /// Условия для condition_router: `field` с точкой = доступ к сигналу
     /// (`signal.field`), без точки = существование отчёта агента (`agent_id`).
@@ -256,7 +262,9 @@ pub struct NodeDef {
     pub two_phase_thinking: bool,
 }
 
-fn is_false(b: &bool) -> bool { !b }
+fn is_false(b: &bool) -> bool {
+    !b
+}
 
 fn is_cases_empty(v: &Option<Vec<PriorityCase>>) -> bool {
     v.as_ref().map_or(true, |v| v.is_empty())
@@ -302,7 +310,11 @@ pub fn load_workflows(agents_dir: &Path) -> Result<Vec<WorkflowDef>, String> {
     for path in yaml_files {
         match parse_workflow_file(&path) {
             Ok(wf) => workflows.push(wf),
-            Err(e) => eprintln!("[workflow_engine] Ошибка загрузки {}: {}", path.display(), e),
+            Err(e) => eprintln!(
+                "[workflow_engine] Ошибка загрузки {}: {}",
+                path.display(),
+                e
+            ),
         }
     }
     Ok(workflows)
@@ -314,7 +326,10 @@ fn collect_yaml_files(dir: &Path, files: &mut Vec<PathBuf>) {
             let path = entry.path();
             if path.is_dir() {
                 collect_yaml_files(&path, files);
-            } else if path.extension().map_or(false, |e| e == "yaml" || e == "yml") {
+            } else if path
+                .extension()
+                .map_or(false, |e| e == "yaml" || e == "yml")
+            {
                 files.push(path);
             }
         }
@@ -428,11 +443,15 @@ edges:
         // Round-trip через надёжный конвейер save_workflow
         let serialized = serde_yaml::to_string(&wf).expect("ser");
         let out = separate_top_level_fields(&serialized);
-        let wf2: WorkflowDef = serde_yaml::from_str(&out)
-            .expect("❌ Сгенерированный YAML с cycle-полями невалиден!");
+        let wf2: WorkflowDef =
+            serde_yaml::from_str(&out).expect("❌ Сгенерированный YAML с cycle-полями невалиден!");
         assert_eq!(wf2.config.as_ref().and_then(|c| c.max_steps), Some(50));
         let draft2 = wf2.nodes.iter().find(|n| n.id == "draft").unwrap();
-        assert_eq!(draft2.max_visits, Some(3), "max_visits потерян после round-trip");
+        assert_eq!(
+            draft2.max_visits,
+            Some(3),
+            "max_visits потерян после round-trip"
+        );
 
         // Никакого null/[] мусора в выводе
         let null_count = out.matches(": null").count();
@@ -482,20 +501,36 @@ edges: []
     #[test]
     fn test_parse_analyst_and_coder_workflows() {
         let analyst = parse_workflow_file(Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"), "/../agents/coder/transitions/analyst-team.yaml"
-        ))).expect("Аналитик кода: парсинг не удался");
+            env!("CARGO_MANIFEST_DIR"),
+            "/../agents/coder/transitions/analyst-team.yaml"
+        )))
+        .expect("Аналитик кода: парсинг не удался");
         assert_eq!(analyst.name, "Аналитик кода");
         let cfg = analyst.config.as_ref().expect("analyst config");
-        assert_eq!(cfg.write_scope(Path::new("C:/proj")).0, PathBuf::from("C:/proj/.agents_workspace"));
-        assert_eq!(cfg.write_scope(Path::new("C:/proj")).1, crate::infra::WriteOutside::Deny);
+        assert_eq!(
+            cfg.write_scope(Path::new("C:/proj")).0,
+            PathBuf::from("C:/proj/.agents_workspace")
+        );
+        assert_eq!(
+            cfg.write_scope(Path::new("C:/proj")).1,
+            crate::infra::WriteOutside::Deny
+        );
 
         let coder = parse_workflow_file(Path::new(concat!(
-            env!("CARGO_MANIFEST_DIR"), "/../agents/coder/transitions/coding-team.yaml"
-        ))).expect("Кодер: парсинг не удался");
+            env!("CARGO_MANIFEST_DIR"),
+            "/../agents/coder/transitions/coding-team.yaml"
+        )))
+        .expect("Кодер: парсинг не удался");
         assert_eq!(coder.name, "Кодер");
         let ccfg = coder.config.as_ref().expect("coder config");
-        assert_eq!(ccfg.write_scope(Path::new("C:/proj")).0, PathBuf::from("C:/proj"));
-        assert_eq!(ccfg.write_scope(Path::new("C:/proj")).1, crate::infra::WriteOutside::Prompt);
+        assert_eq!(
+            ccfg.write_scope(Path::new("C:/proj")).0,
+            PathBuf::from("C:/proj")
+        );
+        assert_eq!(
+            ccfg.write_scope(Path::new("C:/proj")).1,
+            crate::infra::WriteOutside::Prompt
+        );
     }
 
     #[test]
@@ -516,7 +551,12 @@ edges: []
         let wf = parse_workflow_file(path).expect("Парсинг YAML не удался");
         assert_eq!(wf.name, "Поисковый специалист");
 
-        let get = |id: &str| wf.nodes.iter().find(|n| n.id == id).unwrap_or_else(|| panic!("узел {} не найден", id));
+        let get = |id: &str| {
+            wf.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("узел {} не найден", id))
+        };
 
         let call_web = get("call_web");
         assert_eq!(call_web.output_type.as_deref(), Some("thought"));
@@ -526,7 +566,10 @@ edges: []
 
         let check = get("check_eval");
         assert_eq!(check.node_type, NodeType::Switch);
-        assert_eq!(check.input_object.as_deref(), Some("{{ nodes.eval_answer.output.result }}"));
+        assert_eq!(
+            check.input_object.as_deref(),
+            Some("{{ nodes.eval_answer.output.result }}")
+        );
         let cases = check.cases_priority.as_ref().unwrap();
         assert_eq!(cases.len(), 1);
         assert_eq!(cases[0].key, "pass");
@@ -542,7 +585,10 @@ edges: []
 
         let check2 = get("check_eval2");
         assert_eq!(check2.node_type, NodeType::Switch);
-        assert_eq!(check2.input_object.as_deref(), Some("{{ nodes.eval_again.output.result }}"));
+        assert_eq!(
+            check2.input_object.as_deref(),
+            Some("{{ nodes.eval_again.output.result }}")
+        );
         let cases2 = check2.cases_priority.as_ref().unwrap();
         assert_eq!(cases2.len(), 1);
         assert_eq!(cases2[0].key, "pass");
@@ -556,9 +602,15 @@ edges: []
         let route = get("route");
         assert_eq!(route.node_type, NodeType::Switch);
         let route_cases = route.cases_priority.as_ref().unwrap();
-        assert!(route_cases.iter().any(|c| c.key == "has_known_source" && c.to == "call_quick"));
-        assert!(route_cases.iter().any(|c| c.key == "needs_docs" && c.to == "call_docs"));
-        assert!(route_cases.iter().any(|c| c.key == "needs_deep_research" && c.to == "decompose_topic"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "has_known_source" && c.to == "call_quick"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "needs_docs" && c.to == "call_docs"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "needs_deep_research" && c.to == "decompose_topic"));
         assert_eq!(route.default.as_deref(), Some("call_web"));
 
         // Deep-ветка инлайн (бывший deep_research.yaml): decompose → 3 подтемы → compile.
@@ -571,13 +623,23 @@ edges: []
             let sub = get(&format!("call_sub{}", i));
             assert_eq!(sub.agent.as_deref(), Some("web_researcher"));
             assert_eq!(sub.output_type.as_deref(), Some("thought"));
-            assert!(sub.task.as_deref().unwrap_or("").contains("nodes.decompose_topic.output.result"),
-                "задача call_sub{} должна ссылаться на список подтем", i);
+            assert!(
+                sub.task
+                    .as_deref()
+                    .unwrap_or("")
+                    .contains("nodes.decompose_topic.output.result"),
+                "задача call_sub{} должна ссылаться на список подтем",
+                i
+            );
         }
 
         let comp = get("compile_research");
         assert_eq!(comp.agent.as_deref(), Some("research_compiler"));
-        assert_eq!(comp.output_type.as_deref(), Some("thought"), "compile_research не терминальный — дальше оценщик");
+        assert_eq!(
+            comp.output_type.as_deref(),
+            Some("thought"),
+            "compile_research не терминальный — дальше оценщик"
+        );
         let comp_task = comp.task.as_deref().unwrap_or("");
         assert!(comp_task.contains("nodes.call_sub1.output.result"));
         assert!(comp_task.contains("nodes.call_sub3.output.result"));
@@ -604,12 +666,21 @@ edges: []
         let final_deep = get("final_deep");
         assert_eq!(final_deep.node_type, NodeType::SystemCondition);
         assert_eq!(final_deep.action.as_deref(), Some("aggregate_and_output"));
-        assert_eq!(final_deep.required.as_deref(), Some(&["research_compiler".to_string()][..]));
+        assert_eq!(
+            final_deep.required.as_deref(),
+            Some(&["research_compiler".to_string()][..])
+        );
 
         let final_deep_improved = get("final_deep_improved");
         assert_eq!(final_deep_improved.node_type, NodeType::SystemCondition);
-        assert_eq!(final_deep_improved.action.as_deref(), Some("aggregate_and_output"));
-        assert_eq!(final_deep_improved.required.as_deref(), Some(&["research_compiler".to_string()][..]));
+        assert_eq!(
+            final_deep_improved.action.as_deref(),
+            Some("aggregate_and_output")
+        );
+        assert_eq!(
+            final_deep_improved.required.as_deref(),
+            Some(&["research_compiler".to_string()][..])
+        );
 
         let honest_deep = get("honest_fail_deep");
         assert_eq!(honest_deep.agent.as_deref(), Some("research_compiler"));
@@ -618,7 +689,10 @@ edges: []
         let final_web = get("final_web");
         assert_eq!(final_web.node_type, NodeType::SystemCondition);
         assert_eq!(final_web.action.as_deref(), Some("aggregate_and_output"));
-        assert_eq!(final_web.required.as_deref(), Some(&["web_researcher".to_string()][..]));
+        assert_eq!(
+            final_web.required.as_deref(),
+            Some(&["web_researcher".to_string()][..])
+        );
 
         // Round-trip через конвейер save_workflow
         let yaml_str = serde_yaml::to_string(&wf).expect("ser");
@@ -647,13 +721,20 @@ edges: []
         let ef = wf.nodes.iter().find(|n| n.id == "extract_facts").unwrap();
         assert_eq!(ef.node_type, NodeType::LlmFactExtractor);
         assert!(ef.input.is_some());
-        assert!(ef.input.as_deref().unwrap_or("").contains("{{ user_message }}"));
+        assert!(ef
+            .input
+            .as_deref()
+            .unwrap_or("")
+            .contains("{{ user_message }}"));
 
         // Проверка конфига
         assert!(wf.config.is_some());
         let cfg = wf.config.as_ref().unwrap();
         assert_eq!(cfg.facts_file.as_deref(), Some("facts.yaml"));
-        assert!(cfg.facts.is_empty(), "facts больше не вливаются при парсинге");
+        assert!(
+            cfg.facts.is_empty(),
+            "facts больше не вливаются при парсинге"
+        );
 
         // Ключевая проверка бага: реальный файл графа должен проходить
         // надёжный конвейер save_workflow (нативный serde_yaml + безопасные
@@ -671,19 +752,33 @@ edges: []
 
         // Побайтовая сверка каждого узла.
         for n1 in &wf.nodes {
-            let n2 = wf2.nodes.iter().find(|n| n.id == n1.id)
+            let n2 = wf2
+                .nodes
+                .iter()
+                .find(|n| n.id == n1.id)
                 .unwrap_or_else(|| panic!("узел {} потерян после round-trip", n1.id));
             assert_eq!(n1.node_type, n2.node_type, "type узла {}", n1.id);
             assert_eq!(n1.agent, n2.agent, "agent узла {}", n1.id);
             assert_eq!(n1.task, n2.task, "task узла {}", n1.id);
             assert_eq!(n1.input, n2.input, "input узла {}", n1.id);
             assert_eq!(n1.output_type, n2.output_type, "output_type узла {}", n1.id);
-            assert_eq!(n1.inject_thoughts, n2.inject_thoughts, "inject_thoughts узла {}", n1.id);
-            assert_eq!(n1.inject_response, n2.inject_response, "inject_response узла {}", n1.id);
+            assert_eq!(
+                n1.inject_thoughts, n2.inject_thoughts,
+                "inject_thoughts узла {}",
+                n1.id
+            );
+            assert_eq!(
+                n1.inject_response, n2.inject_response,
+                "inject_response узла {}",
+                n1.id
+            );
             // ui_pos должен парситься как карта, а не слететь внутрь task.
             assert_eq!(n1.ui_pos, n2.ui_pos, "ui_pos узла {}", n1.id);
-            assert!(n2.ui_pos.as_ref().map_or(false, |m| m.len() == 2),
-                "ui_pos узла {} должен содержать ровно x и y", n1.id);
+            assert!(
+                n2.ui_pos.as_ref().map_or(false, |m| m.len() == 2),
+                "ui_pos узла {} должен содержать ровно x и y",
+                n1.id
+            );
         }
     }
     /// Тест круглого стола YAML: читаем → десериализуем → сериализуем → показываем разницу.
@@ -698,17 +793,15 @@ edges: []
         assert!(path.exists(), "Файл не найден: {:?}", path);
 
         // Читаем оригинальный YAML как строку
-        let original_yaml = std::fs::read_to_string(path)
-            .expect("Не удалось прочитать файл");
+        let original_yaml = std::fs::read_to_string(path).expect("Не удалось прочитать файл");
 
         // 1) Десериализуем напрямую через serde_yaml (БЕЗ parse_workflow_file,
         //    чтобы не было подмешивания external facts.yaml в config.facts)
-        let wf: WorkflowDef = serde_yaml::from_str(&original_yaml)
-            .expect("Ошибка парсинга YAML через serde_yaml");
+        let wf: WorkflowDef =
+            serde_yaml::from_str(&original_yaml).expect("Ошибка парсинга YAML через serde_yaml");
 
         // 2) Сериализуем обратно в YAML
-        let serialized = serde_yaml::to_string(&wf)
-            .expect("Ошибка сериализации YAML");
+        let serialized = serde_yaml::to_string(&wf).expect("Ошибка сериализации YAML");
 
         // 3) Надёжный конвейер save_workflow: только безопасные разделители.
         let out = separate_top_level_fields(&serialized);
@@ -721,18 +814,32 @@ edges: []
         eprintln!("======================================\n");
 
         // 5) Проверяем «свежий» парсинг out — не должны потеряться данные
-        let wf2: WorkflowDef = serde_yaml::from_str(&out)
-            .unwrap_or_else(|e| panic!("Свежий парсинг упал: {}", e));
+        let wf2: WorkflowDef =
+            serde_yaml::from_str(&out).unwrap_or_else(|e| panic!("Свежий парсинг упал: {}", e));
 
         // Сравниваем ключевые поля
         assert_eq!(wf.name, wf2.name, "name различается после round-trip");
-        assert_eq!(wf.visible, wf2.visible, "visible различается после round-trip");
-        assert_eq!(wf.nodes.len(), wf2.nodes.len(), "количество nodes различается");
-        assert_eq!(wf.edges.len(), wf2.edges.len(), "количество edges различается");
+        assert_eq!(
+            wf.visible, wf2.visible,
+            "visible различается после round-trip"
+        );
+        assert_eq!(
+            wf.nodes.len(),
+            wf2.nodes.len(),
+            "количество nodes различается"
+        );
+        assert_eq!(
+            wf.edges.len(),
+            wf2.edges.len(),
+            "количество edges различается"
+        );
 
         // Проверяем, что каждый узел сохранил id и type
         for n in &wf.nodes {
-            let n2 = wf2.nodes.iter().find(|x| x.id == n.id)
+            let n2 = wf2
+                .nodes
+                .iter()
+                .find(|x| x.id == n.id)
                 .unwrap_or_else(|| panic!("Узел {} пропал после round-trip", n.id));
             assert_eq!(n.node_type, n2.node_type, "type узла {} изменился", n.id);
             assert_eq!(n.agent, n2.agent, "agent узла {} изменился", n.id);
@@ -741,8 +848,16 @@ edges: []
             assert_eq!(n.action, n2.action, "action узла {} изменился", n.id);
             assert_eq!(n.workflow, n2.workflow, "workflow узла {} изменился", n.id);
             assert_eq!(n.default, n2.default, "default узла {} изменился", n.id);
-            assert_eq!(n.output_type, n2.output_type, "output_type узла {} изменился", n.id);
-            assert_eq!(n.cases_priority, n2.cases_priority, "cases_priority узла {} изменился", n.id);
+            assert_eq!(
+                n.output_type, n2.output_type,
+                "output_type узла {} изменился",
+                n.id
+            );
+            assert_eq!(
+                n.cases_priority, n2.cases_priority,
+                "cases_priority узла {} изменился",
+                n.id
+            );
         }
 
         // 6) Проверяем, что нет null/[]/~ мусора
@@ -809,8 +924,8 @@ nodes:
       y: 200
 edges: []
 "#;
-        let wf: WorkflowDef = serde_yaml::from_str(yaml)
-            .expect("Парсинг YAML с note нодой не удался");
+        let wf: WorkflowDef =
+            serde_yaml::from_str(yaml).expect("Парсинг YAML с note нодой не удался");
         assert_eq!(wf.nodes.len(), 1);
         let note = &wf.nodes[0];
         assert_eq!(note.id, "note_1");
@@ -826,8 +941,8 @@ edges: []
 
         eprintln!("=== Serialized note YAML ===\n{}", out);
 
-        let wf2: WorkflowDef = serde_yaml::from_str(&out)
-            .expect("Повторный парсинг note YAML не удался");
+        let wf2: WorkflowDef =
+            serde_yaml::from_str(&out).expect("Повторный парсинг note YAML не удался");
         let note2 = &wf2.nodes[0];
         assert_eq!(note2.input.as_deref(), Some("Важная заметка о соматике"));
 
@@ -1004,8 +1119,14 @@ edges: []
             node_type: NodeType::Switch,
             switch_field: Some("phase".to_string()),
             cases_priority: Some(vec![
-                PriorityCase { key: "phase_1".to_string(), to: "analyzer".to_string() },
-                PriorityCase { key: "phase_2".to_string(), to: "emitter".to_string() },
+                PriorityCase {
+                    key: "phase_1".to_string(),
+                    to: "analyzer".to_string(),
+                },
+                PriorityCase {
+                    key: "phase_2".to_string(),
+                    to: "emitter".to_string(),
+                },
             ]),
             default: Some("analyzer".to_string()),
             ..Default::default()
@@ -1084,9 +1205,24 @@ edges: []
             }),
             nodes,
             edges: vec![
-                EdgeDef { from: "extractor".to_string(), to: "router".to_string(), case: None, condition: None },
-                EdgeDef { from: "router".to_string(), to: "analyzer".to_string(), case: Some("phase_1".to_string()), condition: None },
-                EdgeDef { from: "router".to_string(), to: "emitter".to_string(), case: Some("phase_2".to_string()), condition: None },
+                EdgeDef {
+                    from: "extractor".to_string(),
+                    to: "router".to_string(),
+                    case: None,
+                    condition: None,
+                },
+                EdgeDef {
+                    from: "router".to_string(),
+                    to: "analyzer".to_string(),
+                    case: Some("phase_1".to_string()),
+                    condition: None,
+                },
+                EdgeDef {
+                    from: "router".to_string(),
+                    to: "emitter".to_string(),
+                    case: Some("phase_2".to_string()),
+                    condition: None,
+                },
             ],
         };
 
@@ -1121,62 +1257,113 @@ edges: []
 
         // Узлы «Кодера»
         let expected_nodes = [
-            "extract_facts", "route",
-            "call_ux_ui_designer", "call_design_coder",
+            "extract_facts",
+            "route",
+            "call_ux_ui_designer",
+            "call_design_coder",
             "call_primary_coder_direct",
             "call_apply_plan",
-            "call_qa_verify", "check_verify",
-            "final_success", "note_need_analyst",
+            "call_qa_verify",
+            "check_verify",
+            "final_success",
+            "note_need_analyst",
         ];
         for id in &expected_nodes {
             assert!(
                 wf.nodes.iter().any(|n| n.id == *id),
-                "узел '{}' не найден в workflow", id
+                "узел '{}' не найден в workflow",
+                id
             );
         }
         // «Кодер» не содержит аналитических веток
-        for forbidden in ["call_bug_analyst", "call_task_planner", "call_search_for_bug"] {
+        for forbidden in [
+            "call_bug_analyst",
+            "call_task_planner",
+            "call_search_for_bug",
+        ] {
             assert!(
                 !wf.nodes.iter().any(|n| n.id == forbidden),
-                "узел '{}' не должен быть в «Кодере»", forbidden
+                "узел '{}' не должен быть в «Кодере»",
+                forbidden
             );
         }
 
-        let get = |id: &str| wf.nodes.iter().find(|n| n.id == id)
-            .unwrap_or_else(|| panic!("узел {} не найден", id));
+        let get = |id: &str| {
+            wf.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("узел {} не найден", id))
+        };
 
         assert_eq!(get("extract_facts").node_type, NodeType::LlmFactExtractor);
         assert_eq!(get("route").node_type, NodeType::Switch);
         let route_cases = get("route").cases_priority.as_ref().unwrap();
-        assert!(route_cases.iter().any(|c| c.key == "is_bug" && c.to == "call_apply_plan"));
-        assert!(route_cases.iter().any(|c| c.key == "is_feature" && c.to == "call_apply_plan"));
-        assert!(route_cases.iter().any(|c| c.key == "has_approved_plan" && c.to == "call_apply_plan"));
-        assert!(route_cases.iter().any(|c| c.key == "is_design" && c.to == "call_ux_ui_designer"));
-        assert!(route_cases.iter().any(|c| c.key == "is_direct_code" && c.to == "call_primary_coder_direct"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "is_bug" && c.to == "call_apply_plan"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "is_feature" && c.to == "call_apply_plan"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "has_approved_plan" && c.to == "call_apply_plan"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "is_design" && c.to == "call_ux_ui_designer"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "is_direct_code" && c.to == "call_primary_coder_direct"));
         assert_eq!(get("route").default.as_deref(), Some("note_need_analyst"));
 
         assert_eq!(get("call_ux_ui_designer").node_type, NodeType::LlmWorker);
-        assert_eq!(get("call_ux_ui_designer").agent.as_deref(), Some("ux_ui_designer"));
+        assert_eq!(
+            get("call_ux_ui_designer").agent.as_deref(),
+            Some("ux_ui_designer")
+        );
         assert_eq!(get("call_design_coder").node_type, NodeType::LlmWorker);
-        assert_eq!(get("call_design_coder").agent.as_deref(), Some("primary_coder"));
-        assert_eq!(get("call_primary_coder_direct").agent.as_deref(), Some("primary_coder"));
+        assert_eq!(
+            get("call_design_coder").agent.as_deref(),
+            Some("primary_coder")
+        );
+        assert_eq!(
+            get("call_primary_coder_direct").agent.as_deref(),
+            Some("primary_coder")
+        );
 
         // Применение плана — честный ответ «нет плана», если его нет
         assert_eq!(get("call_apply_plan").node_type, NodeType::LlmWorker);
-        assert_eq!(get("call_apply_plan").agent.as_deref(), Some("primary_coder"));
-        assert_eq!(get("call_apply_plan").output_type.as_deref(), Some("thought"));
-        assert!(get("call_apply_plan").task.as_deref().unwrap_or_default().contains("Нет утверждённого плана"));
+        assert_eq!(
+            get("call_apply_plan").agent.as_deref(),
+            Some("primary_coder")
+        );
+        assert_eq!(
+            get("call_apply_plan").output_type.as_deref(),
+            Some("thought")
+        );
+        assert!(get("call_apply_plan")
+            .task
+            .as_deref()
+            .unwrap_or_default()
+            .contains("Нет утверждённого плана"));
 
         assert_eq!(get("call_qa_verify").node_type, NodeType::LlmWorker);
         assert_eq!(get("call_qa_verify").agent.as_deref(), Some("qa_diagnost"));
 
         assert_eq!(get("check_verify").node_type, NodeType::Switch);
         let verify_cases = get("check_verify").cases_priority.as_ref().unwrap();
-        assert!(verify_cases.iter().any(|c| c.key == "pass" && c.to == "final_success"));
-        assert_eq!(get("check_verify").default.as_deref(), Some("call_apply_plan"));
+        assert!(verify_cases
+            .iter()
+            .any(|c| c.key == "pass" && c.to == "final_success"));
+        assert_eq!(
+            get("check_verify").default.as_deref(),
+            Some("call_apply_plan")
+        );
 
         assert_eq!(get("final_success").node_type, NodeType::SystemCondition);
-        assert_eq!(get("final_success").action.as_deref(), Some("aggregate_and_output"));
+        assert_eq!(
+            get("final_success").action.as_deref(),
+            Some("aggregate_and_output")
+        );
 
         assert_eq!(get("note_need_analyst").node_type, NodeType::Note);
 
@@ -1205,85 +1392,160 @@ edges: []
         assert_eq!(cfg.write_outside.as_deref(), Some("deny"));
 
         let expected_nodes = [
-            "extract_facts", "route",
-            "call_code_explainer", "call_project_mapper",
-            "call_research_team", "final_research_output",
+            "extract_facts",
+            "route",
+            "call_code_explainer",
+            "call_project_mapper",
+            "call_research_team",
+            "final_research_output",
             "call_qa_diagnost_direct",
-            "call_bug_analyst", "route_search",
-            "call_search_for_bug", "call_qa_reproduce",
-            "check_qa_repro", "call_task_planner",
-            "call_arch_reviewer", "check_plan",
-            "final_plan", "honest_fail_bug", "note_use_coder",
+            "call_bug_analyst",
+            "route_search",
+            "call_search_for_bug",
+            "call_qa_reproduce",
+            "check_qa_repro",
+            "call_task_planner",
+            "call_arch_reviewer",
+            "check_plan",
+            "final_plan",
+            "honest_fail_bug",
+            "note_use_coder",
         ];
         for id in &expected_nodes {
             assert!(
                 wf.nodes.iter().any(|n| n.id == *id),
-                "узел '{}' не найден в workflow", id
+                "узел '{}' не найден в workflow",
+                id
             );
         }
         // «Аналитик» не применяет правки
-        for forbidden in ["call_primary_coder_direct", "call_design_coder", "call_apply_plan"] {
+        for forbidden in [
+            "call_primary_coder_direct",
+            "call_design_coder",
+            "call_apply_plan",
+        ] {
             assert!(
                 !wf.nodes.iter().any(|n| n.id == forbidden),
-                "узел '{}' не должен быть в «Аналитике кода»", forbidden
+                "узел '{}' не должен быть в «Аналитике кода»",
+                forbidden
             );
         }
 
-        let get = |id: &str| wf.nodes.iter().find(|n| n.id == id)
-            .unwrap_or_else(|| panic!("узел {} не найден", id));
+        let get = |id: &str| {
+            wf.nodes
+                .iter()
+                .find(|n| n.id == id)
+                .unwrap_or_else(|| panic!("узел {} не найден", id))
+        };
 
         assert_eq!(get("extract_facts").node_type, NodeType::LlmFactExtractor);
         assert_eq!(get("route").node_type, NodeType::Switch);
         let route_cases = get("route").cases_priority.as_ref().unwrap();
-        assert!(route_cases.iter().any(|c| c.key == "is_question" && c.to == "call_code_explainer"));
-        assert!(route_cases.iter().any(|c| c.key == "is_mapping" && c.to == "call_project_mapper"));
-        assert!(route_cases.iter().any(|c| c.key == "needs_search" && c.to == "call_research_team"));
-        assert!(route_cases.iter().any(|c| c.key == "is_testing" && c.to == "call_qa_diagnost_direct"));
-        assert!(route_cases.iter().any(|c| c.key == "is_bug" && c.to == "call_bug_analyst"));
-        assert!(route_cases.iter().any(|c| c.key == "is_feature" && c.to == "call_task_planner"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "is_question" && c.to == "call_code_explainer"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "is_mapping" && c.to == "call_project_mapper"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "needs_search" && c.to == "call_research_team"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "is_testing" && c.to == "call_qa_diagnost_direct"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "is_bug" && c.to == "call_bug_analyst"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "is_feature" && c.to == "call_task_planner"));
         // Прямое кодирование/дизайн — уводим на «Кодер»
-        assert!(route_cases.iter().any(|c| c.key == "is_direct_code" && c.to == "note_use_coder"));
-        assert!(route_cases.iter().any(|c| c.key == "is_design" && c.to == "note_use_coder"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "is_direct_code" && c.to == "note_use_coder"));
+        assert!(route_cases
+            .iter()
+            .any(|c| c.key == "is_design" && c.to == "note_use_coder"));
 
         assert_eq!(get("call_code_explainer").node_type, NodeType::LlmWorker);
-        assert_eq!(get("call_code_explainer").agent.as_deref(), Some("code_explainer"));
-        assert_eq!(get("call_code_explainer").output_type.as_deref(), Some("message"));
+        assert_eq!(
+            get("call_code_explainer").agent.as_deref(),
+            Some("code_explainer")
+        );
+        assert_eq!(
+            get("call_code_explainer").output_type.as_deref(),
+            Some("message")
+        );
 
         assert_eq!(get("call_project_mapper").node_type, NodeType::LlmWorker);
-        assert_eq!(get("call_project_mapper").agent.as_deref(), Some("project_mapper"));
+        assert_eq!(
+            get("call_project_mapper").agent.as_deref(),
+            Some("project_mapper")
+        );
 
         assert_eq!(get("call_bug_analyst").node_type, NodeType::LlmWorker);
-        assert_eq!(get("call_bug_analyst").agent.as_deref(), Some("bug_analyst"));
-        assert_eq!(get("call_bug_analyst").output_type.as_deref(), Some("thought"));
+        assert_eq!(
+            get("call_bug_analyst").agent.as_deref(),
+            Some("bug_analyst")
+        );
+        assert_eq!(
+            get("call_bug_analyst").output_type.as_deref(),
+            Some("thought")
+        );
 
         assert_eq!(get("route_search").node_type, NodeType::ConditionCheck);
         assert_eq!(get("route_search").field.as_deref(), Some("needs_docs"));
 
         assert_eq!(get("call_qa_reproduce").node_type, NodeType::LlmWorker);
-        assert_eq!(get("call_qa_reproduce").agent.as_deref(), Some("qa_diagnost"));
+        assert_eq!(
+            get("call_qa_reproduce").agent.as_deref(),
+            Some("qa_diagnost")
+        );
 
         assert_eq!(get("check_qa_repro").node_type, NodeType::Switch);
         let repro_cases = get("check_qa_repro").cases_priority.as_ref().unwrap();
-        assert!(repro_cases.iter().any(|c| c.key == "bug_captured" && c.to == "call_task_planner"));
-        assert_eq!(get("check_qa_repro").default.as_deref(), Some("honest_fail_bug"));
+        assert!(repro_cases
+            .iter()
+            .any(|c| c.key == "bug_captured" && c.to == "call_task_planner"));
+        assert_eq!(
+            get("check_qa_repro").default.as_deref(),
+            Some("honest_fail_bug")
+        );
 
         assert_eq!(get("call_task_planner").node_type, NodeType::LlmWorker);
-        assert_eq!(get("call_task_planner").agent.as_deref(), Some("task_planner"));
+        assert_eq!(
+            get("call_task_planner").agent.as_deref(),
+            Some("task_planner")
+        );
 
         assert_eq!(get("call_arch_reviewer").node_type, NodeType::LlmWorker);
-        assert_eq!(get("call_arch_reviewer").agent.as_deref(), Some("arch_reviewer"));
+        assert_eq!(
+            get("call_arch_reviewer").agent.as_deref(),
+            Some("arch_reviewer")
+        );
 
         assert_eq!(get("check_plan").node_type, NodeType::Switch);
         let plan_cases = get("check_plan").cases_priority.as_ref().unwrap();
-        assert!(plan_cases.iter().any(|c| c.key == "pass" && c.to == "final_plan"));
-        assert_eq!(get("check_plan").default.as_deref(), Some("call_task_planner"));
+        assert!(plan_cases
+            .iter()
+            .any(|c| c.key == "pass" && c.to == "final_plan"));
+        assert_eq!(
+            get("check_plan").default.as_deref(),
+            Some("call_task_planner")
+        );
 
         assert_eq!(get("final_plan").node_type, NodeType::SystemCondition);
-        assert_eq!(get("final_plan").action.as_deref(), Some("aggregate_and_output"));
+        assert_eq!(
+            get("final_plan").action.as_deref(),
+            Some("aggregate_and_output")
+        );
 
         assert_eq!(get("honest_fail_bug").node_type, NodeType::LlmWorker);
         assert_eq!(get("honest_fail_bug").agent.as_deref(), Some("bug_analyst"));
-        assert_eq!(get("honest_fail_bug").output_type.as_deref(), Some("message"));
+        assert_eq!(
+            get("honest_fail_bug").output_type.as_deref(),
+            Some("message")
+        );
 
         assert_eq!(get("note_use_coder").node_type, NodeType::Note);
 
@@ -1294,11 +1556,17 @@ edges: []
     fn assert_edges_reference_existing_nodes(wf: &WorkflowDef) {
         let node_ids: Vec<&str> = wf.nodes.iter().map(|n| n.id.as_str()).collect();
         for edge in &wf.edges {
-            assert!(node_ids.contains(&edge.from.as_str()),
-                "ребро from='{}' ссылается на несуществующий узел", edge.from);
+            assert!(
+                node_ids.contains(&edge.from.as_str()),
+                "ребро from='{}' ссылается на несуществующий узел",
+                edge.from
+            );
             if edge.to != "END" {
-                assert!(node_ids.contains(&edge.to.as_str()),
-                    "ребро to='{}' ссылается на несуществующий узел", edge.to);
+                assert!(
+                    node_ids.contains(&edge.to.as_str()),
+                    "ребро to='{}' ссылается на несуществующий узел",
+                    edge.to
+                );
             }
         }
     }
@@ -1312,12 +1580,22 @@ edges: []
         assert_eq!(wf2.edges.len(), wf.edges.len(), "число рёбер ({})", label);
 
         for n1 in &wf.nodes {
-            let n2 = wf2.nodes.iter().find(|n| n.id == n1.id)
-                .unwrap_or_else(|| panic!("узел {} потерян после round-trip ({})", n1.id, label));
-            assert_eq!(n1.node_type, n2.node_type, "type узла {} ({})", n1.id, label);
+            let n2 =
+                wf2.nodes.iter().find(|n| n.id == n1.id).unwrap_or_else(|| {
+                    panic!("узел {} потерян после round-trip ({})", n1.id, label)
+                });
+            assert_eq!(
+                n1.node_type, n2.node_type,
+                "type узла {} ({})",
+                n1.id, label
+            );
             assert_eq!(n1.agent, n2.agent, "agent узла {} ({})", n1.id, label);
             assert_eq!(n1.task, n2.task, "task узла {} ({})", n1.id, label);
-            assert_eq!(n1.output_type, n2.output_type, "output_type узла {} ({})", n1.id, label);
+            assert_eq!(
+                n1.output_type, n2.output_type,
+                "output_type узла {} ({})",
+                n1.id, label
+            );
         }
     }
 

@@ -1,4 +1,4 @@
-use crate::infra::{ChatMessage, llm_history};
+use crate::infra::{llm_history, ChatMessage};
 use std::collections::HashMap;
 
 /// Контекст выполнения workflow — передаётся между узлами
@@ -51,7 +51,8 @@ impl WorkflowContext {
 
         // {{ signals }} — JSON-объект из signal bus (ключ → значение)
         if result.contains("{{ signals }}") {
-            let signals_json = serde_json::to_string(&self.signals).unwrap_or_else(|_| "{}".to_string());
+            let signals_json =
+                serde_json::to_string(&self.signals).unwrap_or_else(|_| "{}".to_string());
             result = result.replace("{{ signals }}", &signals_json);
         }
 

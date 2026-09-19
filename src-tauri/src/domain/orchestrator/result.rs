@@ -1,10 +1,13 @@
-﻿use super::*;
-use std::path::Path;
+use super::*;
+use crate::domain::agent_manager::AgentProfile;
+use crate::infra::{
+    extract_model_filename, push_report, ChatAttachment, ChatMessage, GrammarSpec, LlamaEngine,
+    LlmMessage, ModelParams, SubCall, ToolCallInfo,
+};
+use serde_json::Value;
 use std::fs;
 use std::io::Write;
-use serde_json::Value;
-use crate::infra::{ChatMessage, LlmMessage, SubCall, ToolCallInfo, ModelParams, ChatAttachment, LlamaEngine, GrammarSpec, extract_model_filename, push_report};
-use crate::domain::agent_manager::AgentProfile;
+use std::path::Path;
 
 /// Результат чата: текст ответа + собранные sub-calls + обновлённый массив сообщений
 /// + диагностика движка (режим GPU/CPU и скорость) для UI-индикатора.
@@ -23,4 +26,3 @@ pub struct ChatRunResult {
     /// с системным сообщением (см. catch в run_chat). None — успешный прогон.
     pub has_error: Option<String>,
 }
-

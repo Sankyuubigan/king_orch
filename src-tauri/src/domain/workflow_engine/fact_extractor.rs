@@ -29,7 +29,14 @@ pub fn build_extractor_prompt(
         return result;
     }
 
-    build_default_prompt(&facts, &phases, &output_fields, user_message, signals, history)
+    build_default_prompt(
+        &facts,
+        &phases,
+        &output_fields,
+        user_message,
+        signals,
+        history,
+    )
 }
 
 /// Ожидаемые ключи выхода экстрактора: id boolean-фактов + строковые поля + фаза.
@@ -83,7 +90,10 @@ pub(crate) fn resolve_facts(config: &WorkflowConfig, workflow_dir: Option<&Path>
     vec![]
 }
 
-fn resolve_output_fields(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Vec<OutputFieldDef> {
+fn resolve_output_fields(
+    config: &WorkflowConfig,
+    workflow_dir: Option<&Path>,
+) -> Vec<OutputFieldDef> {
     if let Some(ref facts_file) = config.facts_file {
         if let Some(dir) = workflow_dir {
             let ext_path = dir.join(facts_file);
@@ -114,7 +124,10 @@ pub(crate) fn resolve_phases(config: &WorkflowConfig, workflow_dir: Option<&Path
     vec![]
 }
 
-fn resolve_extractor_prompt(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Option<String> {
+fn resolve_extractor_prompt(
+    config: &WorkflowConfig,
+    workflow_dir: Option<&Path>,
+) -> Option<String> {
     if config.extractor_prompt.is_some() {
         return config.extractor_prompt.clone();
     }
@@ -157,12 +170,19 @@ fn build_list(items: &[FactDef]) -> String {
         .join("\n")
 }
 
-pub(crate) fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output_fields: &[OutputFieldDef], user_message: &str, signals: &str, history: &str) -> String {
+pub(crate) fn build_default_prompt(
+    facts: &[FactDef],
+    phases: &[FactDef],
+    output_fields: &[OutputFieldDef],
+    user_message: &str,
+    signals: &str,
+    history: &str,
+) -> String {
     let facts_list = build_list(facts);
     let phases_list = build_list(phases);
 
-    let mut prompt = r#"Ты — системный анализатор. Прочитай переписку сессии и сигналы."#
-        .to_string();
+    let mut prompt =
+        r#"Ты — системный анализатор. Прочитай переписку сессии и сигналы."#.to_string();
 
     if !phases_list.is_empty() {
         prompt.push_str(&format!(
@@ -183,7 +203,10 @@ pub(crate) fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output
 
     let signals_trimmed = signals.trim();
     if !signals_trimmed.is_empty() && signals_trimmed != "[]" && signals_trimmed != "null" {
-        prompt.push_str(&format!("\n\nСигналы сессии (используй для выбора фазы):\n{}", signals));
+        prompt.push_str(&format!(
+            "\n\nСигналы сессии (используй для выбора фазы):\n{}",
+            signals
+        ));
     }
 
     prompt.push_str("\n\nФормат ответа (ТОЛЬКО JSON, без пояснений):\n{");
@@ -192,7 +215,11 @@ pub(crate) fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output
         keys.push(format!("\"{}\": boolean", f.id));
     }
     for f in output_fields {
-        let t = if f.field_type == "boolean" { "boolean" } else { "string" };
+        let t = if f.field_type == "boolean" {
+            "boolean"
+        } else {
+            "string"
+        };
         keys.push(format!("\"{}\": {}", f.id, t));
     }
     if !phases.is_empty() {
@@ -203,7 +230,10 @@ pub(crate) fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output
 
     // Переписка целиком — ОДИН блок, без дублей: текущее сообщение юзера уже
     // является последним в истории, поэтому отдельно его не дублируем.
-    let msg_block = if !history.trim().is_empty() && history.trim() != "[]" && history.trim() != "null" {
+    let msg_block = if !history.trim().is_empty()
+        && history.trim() != "[]"
+        && history.trim() != "null"
+    {
         format!(
             "### История переписки сессии (последнее сообщение — текущее; оценивай факты прежде всего по нему, но учитывай весь разговор, включая предложения агентов и реакцию юзера на них)\n{}",
             history
@@ -220,7 +250,7 @@ pub(crate) fn build_default_prompt(facts: &[FactDef], phases: &[FactDef], output
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::{LlamaEngine, ModelParams, LlmMessage};
+    use crate::infra::{LlamaEngine, LlmMessage, ModelParams};
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
 
@@ -241,7 +271,11 @@ mod tests {
         };
         let facts = resolve_facts(&config, Some(&workflow_dir));
         let phases = resolve_phases(&config, Some(&workflow_dir));
-        assert!(!facts.is_empty(), "facts.yaml не загрузился из {:?}", workflow_dir);
+        assert!(
+            !facts.is_empty(),
+            "facts.yaml не загрузился из {:?}",
+            workflow_dir
+        );
         let signals = "[]";
         let user_msg = "User: наблюдаю сниженное настроение и упадок сил, интерес к привычным занятиям пропал, ничего не радует. ощущение безысходности и подавленности без видимой внешней причины.
 Session signals: []";
@@ -258,16 +292,28 @@ Session signals: []";
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .map(|d| crate::infra::llamacpp_installer::default_dir(&d))
             .unwrap_or_else(std::path::PathBuf::new);
-        let engine = LlamaEngine::new(&engine_dir, &model_path, 8192, false, false, 0, &|_| {}, |_| {}).unwrap();
+        let engine = LlamaEngine::new(
+            &engine_dir,
+            &model_path,
+            8192,
+            false,
+            false,
+            0,
+            &|_| {},
+            |_| {},
+        )
+        .unwrap();
 
         let msgs = vec![
             LlmMessage {
                 role: "system".to_string(),
                 content: prompt,
+                ..Default::default()
             },
             LlmMessage {
                 role: "user".to_string(),
                 content: user_msg.to_string(),
+                ..Default::default()
             },
         ];
 
@@ -300,9 +346,8 @@ Session signals: []";
             s[start..end].to_string()
         };
 
-        let parsed: serde_json::Value = serde_json::from_str(&cleaned).unwrap_or_else(|e| {
-            panic!("Failed to parse JSON from response '{}': {}", cleaned, e)
-        });
+        let parsed: serde_json::Value = serde_json::from_str(&cleaned)
+            .unwrap_or_else(|e| panic!("Failed to parse JSON from response '{}': {}", cleaned, e));
 
         println!("=== PARSED JSON ===");
         println!("{:#}", parsed);
@@ -336,7 +381,11 @@ Session signals: []";
         };
         let facts = resolve_facts(&config, Some(&workflow_dir));
         let phases = resolve_phases(&config, Some(&workflow_dir));
-        assert!(!facts.is_empty(), "facts.yaml не загрузился из {:?}", workflow_dir);
+        assert!(
+            !facts.is_empty(),
+            "facts.yaml не загрузился из {:?}",
+            workflow_dir
+        );
         let signals = "[]";
 
         // Имитируем реальный вход узла extract_facts: текущее сообщение (User:) +
@@ -359,16 +408,28 @@ Session signals: []";
             .and_then(|p| p.parent().map(|d| d.to_path_buf()))
             .map(|d| crate::infra::llamacpp_installer::default_dir(&d))
             .unwrap_or_else(std::path::PathBuf::new);
-        let engine = LlamaEngine::new(&engine_dir, &model_path, 8192, false, false, 0, &|_| {}, |_| {}).unwrap();
+        let engine = LlamaEngine::new(
+            &engine_dir,
+            &model_path,
+            8192,
+            false,
+            false,
+            0,
+            &|_| {},
+            |_| {},
+        )
+        .unwrap();
 
         let msgs = vec![
             LlmMessage {
                 role: "system".to_string(),
                 content: prompt,
+                ..Default::default()
             },
             LlmMessage {
                 role: "user".to_string(),
                 content: user_msg.clone(),
+                ..Default::default()
             },
         ];
 
@@ -400,9 +461,8 @@ Session signals: []";
             s[start..end].to_string()
         };
 
-        let parsed: serde_json::Value = serde_json::from_str(&cleaned).unwrap_or_else(|e| {
-            panic!("Failed to parse JSON from response '{}': {}", cleaned, e)
-        });
+        let parsed: serde_json::Value = serde_json::from_str(&cleaned)
+            .unwrap_or_else(|e| panic!("Failed to parse JSON from response '{}': {}", cleaned, e));
 
         println!("=== PARSED JSON ===");
         println!("{:#}", parsed);

@@ -1,4 +1,4 @@
-﻿use super::*;
+use super::*;
 use crate::infra::LlmMessage;
 
 /// Единый pipeline компакции контекста перед генерацией. Работает ТОЛЬКО с
@@ -95,11 +95,13 @@ where
     let keep_recent = keep_recent.max(2);
     if n > keep_recent + 2 {
         let mut compress_end = n - keep_recent; // эксклюзивно
-        // Защита пары: если сохраняемый messages[compress_end] — результат
-        // инструмента, а его вызов (assistant, в dropped) удалён — дропаем и его,
-        // чтобы не оставлять висящий результат без пары.
+                                                // Защита пары: если сохраняемый messages[compress_end] — результат
+                                                // инструмента, а его вызов (assistant, в dropped) удалён — дропаем и его,
+                                                // чтобы не оставлять висящий результат без пары.
         if compress_end < n
-            && messages[compress_end].content.contains("[РЕЗУЛЬТАТ ИНСТРУМЕНТА")
+            && messages[compress_end]
+                .content
+                .contains("[РЕЗУЛЬТАТ ИНСТРУМЕНТА")
             && messages[compress_end - 1].role == "assistant"
         {
             compress_end += 1;
@@ -119,6 +121,7 @@ where
                         LlmMessage {
                             role: "system".to_string(),
                             content: format!("[СЖАТАЯ ИСТОРИЯ]: {}", summary),
+                            ..Default::default()
                         },
                     );
                     report.old_messages_dropped += range_count;
@@ -126,7 +129,10 @@ where
                     report.history_summarized = true;
                 }
                 None => {
-                    log_cb("⚠️ Саммаризация истории не удалась — переходим к усечению (head/tail).".into());
+                    log_cb(
+                        "⚠️ Саммаризация истории не удалась — переходим к усечению (head/tail)."
+                            .into(),
+                    );
                     truncate_range(messages, compress_end, &mut report);
                 }
             }
@@ -230,7 +236,10 @@ where
         let d2 = content.chars().count() - h2.chars().count() - t2.chars().count();
         messages[idx].content = format!("{} …[свёрнуто {} симв]… {}", h2, d2, t2);
     }
-    log_cb(format!("🗜️ Переполнение: усечено самое крупное сообщение на {} симв.", dropped));
+    log_cb(format!(
+        "🗜️ Переполнение: усечено самое крупное сообщение на {} симв.",
+        dropped
+    ));
     true
 }
 
@@ -261,9 +270,9 @@ mod tests {
 
     #[test]
     fn head_tail_keeps_both_ends() {
-        let s: String = std::iter::repeat('a').take(200).collect::<String>()
+        let s: String = std::iter::repeat('a').take(300).collect::<String>()
             + &"MIDDLE".repeat(60)
-            + &std::iter::repeat('z').take(200).collect::<String>();
+            + &std::iter::repeat('z').take(400).collect::<String>();
         let (h, t) = head_tail(&s, 400);
         assert!(h.starts_with('a'));
         assert!(t.ends_with('z'));
@@ -273,10 +282,26 @@ mod tests {
 
     #[test]
     fn prunes_big_results_and_fits_budget() {
-        let mut msgs = vec![LlmMessage { role: "system".to_string(), content: "sys".into() }];
-        msgs.push(LlmMessage { role: "user".to_string(), content: "привет".into() });
-        msgs.push(LlmMessage { role: "assistant".to_string(), content: "ок".into() });
-        msgs.push(LlmMessage { role: "user".to_string(), content: big_tool_result(2000) });
+        let mut msgs = vec![LlmMessage {
+            role: "system".to_string(),
+            content: "sys".into(),
+            ..Default::default()
+        }];
+        msgs.push(LlmMessage {
+            role: "user".to_string(),
+            content: "привет".into(),
+            ..Default::default()
+        });
+        msgs.push(LlmMessage {
+            role: "assistant".to_string(),
+            content: "ок".into(),
+            ..Default::default()
+        });
+        msgs.push(LlmMessage {
+            role: "user".to_string(),
+            content: big_tool_result(2000),
+            ..Default::default()
+        });
         let budget = char_tokens(&msgs) - 1000; // до pruning не влезаем
         let rep = compact_llm_messages(&mut msgs, budget, 4, char_tokens, |_| None, |_| {});
         assert_eq!(rep.tool_results_pruned, 1);
@@ -286,9 +311,21 @@ mod tests {
 
     #[test]
     fn keeps_small_conversations_untouched() {
-        let mut msgs = vec![LlmMessage { role: "system".to_string(), content: "sys".into() }];
-        msgs.push(LlmMessage { role: "user".to_string(), content: "привет".into() });
-        msgs.push(LlmMessage { role: "assistant".to_string(), content: "ок".into() });
+        let mut msgs = vec![LlmMessage {
+            role: "system".to_string(),
+            content: "sys".into(),
+            ..Default::default()
+        }];
+        msgs.push(LlmMessage {
+            role: "user".to_string(),
+            content: "привет".into(),
+            ..Default::default()
+        });
+        msgs.push(LlmMessage {
+            role: "assistant".to_string(),
+            content: "ок".into(),
+            ..Default::default()
+        });
         let rep = compact_llm_messages(&mut msgs, 100000, 4, char_tokens, |_| None, |_| {});
         assert_eq!(rep.tool_results_pruned, 0);
         assert!(!rep.history_compressed);
@@ -297,14 +334,30 @@ mod tests {
 
     #[test]
     fn summarizes_when_over_budget() {
-        let mut msgs = vec![LlmMessage { role: "system".to_string(), content: "sys".into() }];
+        let mut msgs = vec![LlmMessage {
+            role: "system".to_string(),
+            content: "sys".into(),
+            ..Default::default()
+        }];
         for i in 0..10 {
-            msgs.push(LlmMessage { role: "user".to_string(), content: format!("старое сообщение номер {}", i) });
+            msgs.push(LlmMessage {
+                role: "user".to_string(),
+                content: format!("старое сообщение номер {}", i),
+                ..Default::default()
+            });
         }
-        msgs.push(LlmMessage { role: "user".to_string(), content: "недавнее".into() });
-        msgs.push(LlmMessage { role: "assistant".to_string(), content: "ответ".into() });
+        msgs.push(LlmMessage {
+            role: "user".to_string(),
+            content: "недавнее".into(),
+            ..Default::default()
+        });
+        msgs.push(LlmMessage {
+            role: "assistant".to_string(),
+            content: "ответ".into(),
+            ..Default::default()
+        });
         // бюджет меньше реального, чтобы форсировать сжатие
-        let budget = 50;
+        let budget = 60;
         let rep = compact_llm_messages(
             &mut msgs,
             budget,
@@ -315,17 +368,36 @@ mod tests {
         );
         assert!(rep.history_summarized, "ожидаем LLM-саммари");
         assert!(msgs.iter().any(|m| m.content.contains("[СЖАТАЯ ИСТОРИЯ]")));
-        assert!(char_tokens(&msgs) <= budget + 1, "должны влезть после сжатия");
+        assert!(
+            char_tokens(&msgs) <= budget + 1,
+            "должны влезть после сжатия"
+        );
     }
 
     #[test]
     fn fallback_to_truncate_when_summarize_fails() {
-        let mut msgs = vec![LlmMessage { role: "system".to_string(), content: "sys".into() }];
+        let mut msgs = vec![LlmMessage {
+            role: "system".to_string(),
+            content: "sys".into(),
+            ..Default::default()
+        }];
         for i in 0..10 {
-            msgs.push(LlmMessage { role: "user".to_string(), content: format!("старое сообщение номер {}", i) });
+            msgs.push(LlmMessage {
+                role: "user".to_string(),
+                content: format!("старое сообщение номер {}: {}", i, "x".repeat(900)),
+                ..Default::default()
+            });
         }
-        msgs.push(LlmMessage { role: "user".to_string(), content: "недавнее".into() });
-        msgs.push(LlmMessage { role: "assistant".to_string(), content: "ответ".into() });
+        msgs.push(LlmMessage {
+            role: "user".to_string(),
+            content: "недавнее".into(),
+            ..Default::default()
+        });
+        msgs.push(LlmMessage {
+            role: "assistant".to_string(),
+            content: "ответ".into(),
+            ..Default::default()
+        });
         let budget = 50;
         let rep = compact_llm_messages(&mut msgs, budget, 2, char_tokens, |_| None, |_| {});
         assert!(!rep.history_summarized);

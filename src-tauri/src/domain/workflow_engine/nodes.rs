@@ -1,7 +1,9 @@
 use crate::domain::workflow_engine::context::WorkflowContext;
-use crate::domain::workflow_engine::parser::{ConditionRule, EdgeDef, NodeDef, NodeType, WorkflowConfig, WorkflowDef};
+use crate::domain::workflow_engine::parser::{
+    ConditionRule, EdgeDef, NodeDef, NodeType, WorkflowConfig, WorkflowDef,
+};
 use crate::domain::workflow_engine::WorkflowRunner;
-use crate::infra::{ChatMessage, SubCall, push_report, message_phase, extract_model_filename};
+use crate::infra::{extract_model_filename, message_phase, push_report, ChatMessage, SubCall};
 
 /// Результат выполнения узла
 #[derive(Debug, Clone)]
@@ -47,12 +49,14 @@ pub fn condition_rule_matches(
             serde_json::Value::Bool(expected) => {
                 current.as_bool().map(|v| v == *expected).unwrap_or(false)
             }
-            serde_json::Value::String(expected) => {
-                current.as_str().map(|v| v == expected.as_str()).unwrap_or(false)
-            }
-            serde_json::Value::Number(expected) => {
-                current.as_f64().map(|v| v == expected.as_f64().unwrap_or(0.0)).unwrap_or(false)
-            }
+            serde_json::Value::String(expected) => current
+                .as_str()
+                .map(|v| v == expected.as_str())
+                .unwrap_or(false),
+            serde_json::Value::Number(expected) => current
+                .as_f64()
+                .map(|v| v == expected.as_f64().unwrap_or(0.0))
+                .unwrap_or(false),
             _ => false,
         };
     }
@@ -95,24 +99,38 @@ where
             let signals = context.resolve_template("{{ signals }}");
             let history = context.resolve_template("{{ messages }}");
             let workflow_dir = std::path::Path::new(&workflow.parent_dir);
-            let prompt =
-                super::fact_extractor::build_extractor_prompt(&config, &current_msg, &signals, Some(workflow_dir), &history);
+            let prompt = super::fact_extractor::build_extractor_prompt(
+                &config,
+                &current_msg,
+                &signals,
+                Some(workflow_dir),
+                &history,
+            );
 
             // Строгая грамматика по контракту facts.yaml: точные ключи, без опций.
             let grammar = super::fact_extractor::build_facts_grammar(&config, Some(workflow_dir));
-            let expected_keys: Vec<String> = super::fact_extractor::expected_output_keys(&config, Some(workflow_dir))
-                .into_iter()
-                .filter(|k| k != "thought_process")
-                .collect();
+            let expected_keys: Vec<String> =
+                super::fact_extractor::expected_output_keys(&config, Some(workflow_dir))
+                    .into_iter()
+                    .filter(|k| k != "thought_process")
+                    .collect();
             // Только boolean-факты — к ним применяется coerce_bool; строковые
             // output_fields (rewritten_query и т.п.) должны остаться строками.
-            let bool_keys: Vec<String> = super::fact_extractor::resolve_facts(&config, Some(workflow_dir))
-                .iter()
-                .map(|f| f.id.clone())
-                .collect();
+            let bool_keys: Vec<String> =
+                super::fact_extractor::resolve_facts(&config, Some(workflow_dir))
+                    .iter()
+                    .map(|f| f.id.clone())
+                    .collect();
 
             let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
-            let (llm_text, llm_reasoning) = runner.call_llm_direct(&prompt, &current_msg, &resolved_params, &format!("graph:{}", node.id), Some(grammar.clone()), true)?;
+            let (llm_text, llm_reasoning) = runner.call_llm_direct(
+                &prompt,
+                &current_msg,
+                &resolved_params,
+                &format!("graph:{}", node.id),
+                Some(grammar.clone()),
+                true,
+            )?;
 
             // Reasoning-модели (--reasoning-format deepseek) могут выдать JSON целиком
             // в блоке размышлений (reasoning_content), оставив content пустым. Это —
@@ -133,7 +151,10 @@ where
 
             // ── Fallback: JSON неполный/с неверными ключами — повторить с уточнением ──
             if !facts_json_valid(&parsed, &expected_keys) {
-                (runner.log_cb)("[fact_extractor] JSON неполный/неверные ключи, повтор с уточнением...".to_string());
+                (runner.log_cb)(
+                    "[fact_extractor] JSON неполный/неверные ключи, повтор с уточнением..."
+                        .to_string(),
+                );
                 let expected_str = expected_keys
                     .iter()
                     .map(|k| format!("\"{}\"", k))
@@ -143,9 +164,17 @@ where
                     "{}\n\nВАЖНО: Ответь ТОЛЬКО JSON-объектом строго со всеми ключами: {}. Каждый факт — true/false.",
                     prompt, expected_str
                 );
-                let (retry_text, retry_reasoning) = runner.call_llm_direct(&retry_prompt, &current_msg, &resolved_params, &format!("graph:{}#retry", node.id), Some(grammar), true)?;
+                let (retry_text, retry_reasoning) = runner.call_llm_direct(
+                    &retry_prompt,
+                    &current_msg,
+                    &resolved_params,
+                    &format!("graph:{}#retry", node.id),
+                    Some(grammar),
+                    true,
+                )?;
                 parsed = parse_fact_json(&retry_text, &bool_keys);
-                if !facts_json_valid(&parsed, &expected_keys) && !retry_reasoning.trim().is_empty() {
+                if !facts_json_valid(&parsed, &expected_keys) && !retry_reasoning.trim().is_empty()
+                {
                     parsed = parse_fact_json(&retry_reasoning, &bool_keys);
                 }
                 (runner.log_cb)(format!(
@@ -179,7 +208,7 @@ where
             Ok(NodeResult {
                 output: parsed,
                 next_node: None,
-            next_nodes: vec![],
+                next_nodes: vec![],
             })
         }
 
@@ -212,12 +241,18 @@ where
                 if !aids.is_empty() {
                     injected_reports.push_str("### [РАЗМЫШЛЕНИЯ КОЛЛЕГ (ФАЗА 1)]\n");
                     for aid in aids {
-                        let report = context.messages.iter().rev()
-                            .find(|m| m.author.as_deref() == Some(aid.as_str())
-                                && crate::infra::llm_types::message_phase(m) == Some(1))
+                        let report = context
+                            .messages
+                            .iter()
+                            .rev()
+                            .find(|m| {
+                                m.author.as_deref() == Some(aid.as_str())
+                                    && crate::infra::llm_types::message_phase(m) == Some(1)
+                            })
                             .map(|m| m.content.clone())
                             .unwrap_or_else(|| "[Размышления не найдены]".to_string());
-                        injected_reports.push_str(&format!("--- Мысли от {} ---\n{}\n\n", aid, report));
+                        injected_reports
+                            .push_str(&format!("--- Мысли от {} ---\n{}\n\n", aid, report));
                     }
                 }
             }
@@ -226,18 +261,29 @@ where
                 if !aids.is_empty() {
                     injected_reports.push_str("### [ОТВЕТЫ КОЛЛЕГ (ФАЗА 2)]\n");
                     for aid in aids {
-                        let report = context.messages.iter().rev()
-                            .find(|m| m.author.as_deref() == Some(aid.as_str()) && m.msg_type == "signal")
+                        let report = context
+                            .messages
+                            .iter()
+                            .rev()
+                            .find(|m| {
+                                m.author.as_deref() == Some(aid.as_str()) && m.msg_type == "signal"
+                            })
                             .map(|m| m.content.clone())
                             .or_else(|| {
-                                context.messages.iter().rev()
-                                    .find(|m| m.author.as_deref() == Some(aid.as_str())
-                                        && message_phase(m) != Some(1)
-                                        && (m.msg_type == "message" || m.msg_type == "thought"))
+                                context
+                                    .messages
+                                    .iter()
+                                    .rev()
+                                    .find(|m| {
+                                        m.author.as_deref() == Some(aid.as_str())
+                                            && message_phase(m) != Some(1)
+                                            && (m.msg_type == "message" || m.msg_type == "thought")
+                                    })
                                     .map(|m| m.content.clone())
                             })
                             .unwrap_or_else(|| "[Ответ не найден]".to_string());
-                        injected_reports.push_str(&format!("--- Ответ от {} ---\n{}\n\n", aid, report));
+                        injected_reports
+                            .push_str(&format!("--- Ответ от {} ---\n{}\n\n", aid, report));
                     }
                 }
             }
@@ -254,7 +300,16 @@ where
             let allow_stream = node.output_type.as_deref() == Some("message");
             let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
             let mut pending_signal = None;
-            let result = runner.call_agent(agent, &task, &mut context.messages, &injected_reports, allow_stream, &resolved_params, &mut pending_signal, node.two_phase_thinking)?;
+            let result = runner.call_agent(
+                agent,
+                &task,
+                &mut context.messages,
+                &injected_reports,
+                allow_stream,
+                &resolved_params,
+                &mut pending_signal,
+                node.two_phase_thinking,
+            )?;
             let end_len = runner.all_sub_calls.len();
 
             // Fail-fast: ошибка агента останавливает workflow (иначе каскад ненужных
@@ -279,33 +334,33 @@ where
                 id: Some(format!("msg_{}", runner.msg_counter)),
                 msg_type: msg_type.to_string(),
                 content: result.clone(),
-            sub_calls: node_sub_calls,
-            author: Some(agent_id.to_string()),
-            model: Some(extract_model_filename(&runner.engine.model_path)),
-            time_sec: None,
-            attachments: None,
-            phase: Some(2),
-        };
-        push_report(&mut context.messages, msg, agent.replace_report, Some(2));
-        *runner.msg_counter += 1;
-        // Сигнал сохраняется ПОСЛЕ thought для корректного порядка [thought, signal].
-        if let Some(signal) = pending_signal.take() {
-            // Вставляем сигнал в signal bus — SSOT для SignalRouter/ConditionRouter
-            if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal.content) {
-                if let Some(obj) = val.as_object() {
-                    for (k, v) in obj {
-                        context.signals.insert(k.clone(), v.clone());
+                sub_calls: node_sub_calls,
+                author: Some(agent_id.to_string()),
+                model: Some(extract_model_filename(&runner.engine.model_path)),
+                time_sec: None,
+                attachments: None,
+                phase: Some(2),
+            };
+            push_report(&mut context.messages, msg, agent.replace_report, Some(2));
+            *runner.msg_counter += 1;
+            // Сигнал сохраняется ПОСЛЕ thought для корректного порядка [thought, signal].
+            if let Some(signal) = pending_signal.take() {
+                // Вставляем сигнал в signal bus — SSOT для SignalRouter/ConditionRouter
+                if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal.content) {
+                    if let Some(obj) = val.as_object() {
+                        for (k, v) in obj {
+                            context.signals.insert(k.clone(), v.clone());
+                        }
                     }
                 }
+                push_report(&mut context.messages, signal, false, None);
             }
-            push_report(&mut context.messages, signal, false, None);
-        }
-        context.output_emitted = node.output_type.as_deref() == Some("message");
+            context.output_emitted = node.output_type.as_deref() == Some("message");
 
-        Ok(NodeResult {
-            output: serde_json::json!({"result": result, "agent": agent_id}),
+            Ok(NodeResult {
+                output: serde_json::json!({"result": result, "agent": agent_id}),
                 next_node: None,
-            next_nodes: vec![],
+                next_nodes: vec![],
             })
         }
 
@@ -314,15 +369,17 @@ where
 
             match action {
                 "get_missing_reports" => {
-                    let required = node.required.as_ref().ok_or_else(|| {
-                        "get_missing_reports: нет required".to_string()
-                    })?;
+                    let required = node
+                        .required
+                        .as_ref()
+                        .ok_or_else(|| "get_missing_reports: нет required".to_string())?;
                     let missing: Vec<String> = required
                         .iter()
                         .filter(|agent_id| {
-                            !context.messages.iter().any(|m| {
-                                m.author.as_deref() == Some(agent_id.as_str())
-                            })
+                            !context
+                                .messages
+                                .iter()
+                                .any(|m| m.author.as_deref() == Some(agent_id.as_str()))
                         })
                         .cloned()
                         .collect();
@@ -343,9 +400,10 @@ where
                         .as_ref()
                         .ok_or_else(|| "has_reports: нет required".to_string())?;
                     let all_present = required.iter().all(|agent_id| {
-                        context.messages.iter().any(|m| {
-                            m.author.as_deref() == Some(agent_id.as_str())
-                        })
+                        context
+                            .messages
+                            .iter()
+                            .any(|m| m.author.as_deref() == Some(agent_id.as_str()))
                     });
                     Ok(NodeResult {
                         output: serde_json::json!({
@@ -357,9 +415,10 @@ where
                 }
 
                 "all_problems_analyzed" => {
-                    let has_report = context.messages.iter().any(|m| {
-                        m.author.as_deref() == Some("pattern_finder_by_double_bind")
-                    });
+                    let has_report = context
+                        .messages
+                        .iter()
+                        .any(|m| m.author.as_deref() == Some("pattern_finder_by_double_bind"));
                     Ok(NodeResult {
                         output: serde_json::json!({
                             "status": if has_report { "all_done" } else { "has_unanalyzed" },
@@ -370,24 +429,23 @@ where
                 }
 
                 "aggregate_reports" => {
-                    let required = node.required.as_ref().ok_or_else(|| {
-                        "aggregate_reports: нет required".to_string()
-                    })?;
+                    let required = node
+                        .required
+                        .as_ref()
+                        .ok_or_else(|| "aggregate_reports: нет required".to_string())?;
                     let mut reports = String::new();
                     for agent_id in required {
-                        if let Some(msg) = context.messages.iter().rev()
+                        if let Some(msg) = context
+                            .messages
+                            .iter()
+                            .rev()
                             .find(|m| m.author.as_deref() == Some(agent_id.as_str()))
                         {
-                            reports.push_str(&format!(
-                                "--- {} ---\n{}\n\n",
-                                agent_id,
-                                &msg.content
-                            ));
+                            reports
+                                .push_str(&format!("--- {} ---\n{}\n\n", agent_id, &msg.content));
                         } else {
-                            reports.push_str(&format!(
-                                "--- {} ---\n[отчёт не найден]\n\n",
-                                agent_id
-                            ));
+                            reports
+                                .push_str(&format!("--- {} ---\n[отчёт не найден]\n\n", agent_id));
                         }
                     }
                     Ok(NodeResult {
@@ -398,13 +456,15 @@ where
                 }
 
                 "check_protocol_state" => {
-                    let required = node.required.as_ref().ok_or_else(|| {
-                        "check_protocol_state: нет required".to_string()
-                    })?;
+                    let required = node
+                        .required
+                        .as_ref()
+                        .ok_or_else(|| "check_protocol_state: нет required".to_string())?;
                     let all_present = required.iter().all(|agent_id| {
-                        context.messages.iter().any(|m| {
-                            m.author.as_deref() == Some(agent_id.as_str())
-                        })
+                        context
+                            .messages
+                            .iter()
+                            .any(|m| m.author.as_deref() == Some(agent_id.as_str()))
                     });
 
                     if all_present {
@@ -417,9 +477,10 @@ where
                         let missing: Vec<String> = required
                             .iter()
                             .filter(|agent_id| {
-                                !context.messages.iter().any(|m| {
-                                    m.author.as_deref() == Some(agent_id.as_str())
-                                })
+                                !context
+                                    .messages
+                                    .iter()
+                                    .any(|m| m.author.as_deref() == Some(agent_id.as_str()))
                             })
                             .cloned()
                             .collect();
@@ -435,12 +496,16 @@ where
                 }
 
                 "aggregate_and_output" => {
-                    let required = node.required.as_ref().ok_or_else(|| {
-                        "aggregate_and_output: нет required".to_string()
-                    })?;
+                    let required = node
+                        .required
+                        .as_ref()
+                        .ok_or_else(|| "aggregate_and_output: нет required".to_string())?;
                     let mut reports = String::new();
                     for agent_id in required {
-                        if let Some(msg) = context.messages.iter().rev()
+                        if let Some(msg) = context
+                            .messages
+                            .iter()
+                            .rev()
                             .find(|m| m.author.as_deref() == Some(agent_id.as_str()))
                         {
                             if !reports.is_empty() {
@@ -472,10 +537,7 @@ where
                     })
                 }
 
-                _ => Err(format!(
-                    "Неизвестное действие system_condition: {}",
-                    action
-                )),
+                _ => Err(format!("Неизвестное действие system_condition: {}", action)),
             }
         }
 
@@ -486,9 +548,7 @@ where
                 .ok_or_else(|| "sub_workflow: не указан workflow".to_string())?;
 
             // Ищем загруженный workflow по file_stem (имя файла без .yaml)
-            let clean = wf_name
-                .trim_end_matches(".yaml")
-                .trim_end_matches(".yml");
+            let clean = wf_name.trim_end_matches(".yaml").trim_end_matches(".yml");
             let sub_wf = runner
                 .workflows
                 .iter()
@@ -502,10 +562,7 @@ where
                     )
                 })?;
 
-            (runner.log_cb)(format!(
-                "[sub_workflow] Запуск '{}'",
-                sub_wf.name
-            ));
+            (runner.log_cb)(format!("[sub_workflow] Запуск '{}'", sub_wf.name));
 
             let mut sub_ctx = WorkflowContext::new(
                 context.user_message.clone(),
@@ -532,17 +589,22 @@ where
             Ok(NodeResult {
                 output: serde_json::json!({"result": sub_result}),
                 next_node: None,
-            next_nodes: vec![],
+                next_nodes: vec![],
             })
         }
 
         NodeType::LlmFreeform => {
-            let user_text = context.resolve_template(node.input.as_deref().unwrap_or("{{ user_message }}"));
-            let result = runner.call_llm_freeform(&user_text, &context.history, &format!("graph:{}", node.id))?;
+            let user_text =
+                context.resolve_template(node.input.as_deref().unwrap_or("{{ user_message }}"));
+            let result = runner.call_llm_freeform(
+                &user_text,
+                &context.history,
+                &format!("graph:{}", node.id),
+            )?;
             Ok(NodeResult {
                 output: serde_json::json!({"result": result}),
                 next_node: None,
-            next_nodes: vec![],
+                next_nodes: vec![],
             })
         }
 
@@ -555,17 +617,29 @@ where
                         // Fallback 1: ищем JSON в markdown/тексте
                         extract_json(&resolved)
                             .and_then(|s| serde_json::from_str(&s).ok())
-                            .ok_or_else(|| serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::InvalidData, "no json")))
+                            .ok_or_else(|| {
+                                serde_json::Error::io(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    "no json",
+                                ))
+                            })
                     })
                     .or_else(|_| {
                         // Fallback 2: key-aware поиск — ищем JSON, содержащий ключи из cases_priority
                         // (маленькие модели иногда оборачивают JSON в markdown с несколькими блоками)
-                        let keys: Vec<String> = node.cases_priority.as_ref()
+                        let keys: Vec<String> = node
+                            .cases_priority
+                            .as_ref()
                             .map(|cp| cp.iter().map(|c| c.key.clone()).collect())
                             .unwrap_or_default();
                         extract_json_with_keys(&resolved, &keys)
                             .and_then(|s| serde_json::from_str(&s).ok())
-                            .ok_or_else(|| serde_json::Error::io(std::io::Error::new(std::io::ErrorKind::InvalidData, "no json with required keys")))
+                            .ok_or_else(|| {
+                                serde_json::Error::io(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    "no json with required keys",
+                                ))
+                            })
                     })
                     .unwrap_or(serde_json::Value::Null);
 
@@ -624,11 +698,11 @@ where
                         }
                         // Ни один приоритет не совпал
                         if let Some(ref default) = node.default {
-                        return Ok(NodeResult {
-                            output: serde_json::json!({"matched_case": "__default__", "target": default}),
-                            next_node: Some(default.clone()),
-                            next_nodes: vec![],
-                        });
+                            return Ok(NodeResult {
+                                output: serde_json::json!({"matched_case": "__default__", "target": default}),
+                                next_node: Some(default.clone()),
+                                next_nodes: vec![],
+                            });
                         }
                         return Ok(NodeResult {
                             output: serde_json::json!({"matched_case": "__none__", "target": null}),
@@ -666,7 +740,9 @@ where
                 })
                 .unwrap_or_else(|| input.trim_matches('"').to_string());
 
-            let target = node.cases_priority.as_ref()
+            let target = node
+                .cases_priority
+                .as_ref()
                 .and_then(|cp| cp.iter().find(|pc| pc.key == status).map(|pc| &pc.to))
                 .cloned()
                 .or_else(|| node.default.clone());
@@ -681,8 +757,8 @@ where
         NodeType::LlmSequentialSwitch => {
             let input_obj = node.input_object.as_deref().unwrap_or("{{ user_message }}");
             let resolved = context.resolve_template(input_obj);
-            let json_val: serde_json::Value = serde_json::from_str(&resolved)
-                .unwrap_or(serde_json::Value::Null);
+            let json_val: serde_json::Value =
+                serde_json::from_str(&resolved).unwrap_or(serde_json::Value::Null);
 
             let mut matched: Vec<String> = vec![];
 
@@ -740,7 +816,8 @@ where
                     signal.as_str().map(|s| s.to_string())
                 } else {
                     signal.get(field).and_then(|nested| {
-                        nested.as_str()
+                        nested
+                            .as_str()
                             .map(|s| s.to_string())
                             .or_else(|| nested.as_bool().map(|b| b.to_string()))
                     })
@@ -755,7 +832,9 @@ where
             ));
 
             // Поиск по cases_priority
-            let target = node.cases_priority.as_ref()
+            let target = node
+                .cases_priority
+                .as_ref()
                 .and_then(|cp| cp.iter().find(|pc| pc.key == matched).map(|pc| &pc.to))
                 .cloned()
                 .or_else(|| node.default.clone());
@@ -793,7 +872,7 @@ where
 
             let condition_met = match logic {
                 "all" => matched_count == total && total > 0,
-                _     => matched_count > 0, // "any" по умолчанию
+                _ => matched_count > 0, // "any" по умолчанию
             };
 
             let target = if condition_met {
@@ -804,7 +883,9 @@ where
 
             (runner.log_cb)(format!(
                 "[condition_router] logic='{}' matched={}/{} → {}",
-                logic, matched_count, total,
+                logic,
+                matched_count,
+                total,
                 target.as_deref().unwrap_or("-")
             ));
 
@@ -822,19 +903,27 @@ where
         }
 
         NodeType::ConditionCheck => {
-            let input_obj = node.input_object.as_deref().unwrap_or("{{ nodes.extract_facts.output }}");
+            let input_obj = node
+                .input_object
+                .as_deref()
+                .unwrap_or("{{ nodes.extract_facts.output }}");
             let resolved = context.resolve_template(input_obj);
-            let json_val: serde_json::Value = serde_json::from_str(&resolved)
-                .unwrap_or(serde_json::Value::Null);
+            let json_val: serde_json::Value =
+                serde_json::from_str(&resolved).unwrap_or(serde_json::Value::Null);
 
             let field = node.field.as_deref().unwrap_or("");
             // Fail-open: если шаблон не распарсился (пусто/не JSON) — не игнорируем
             // юзера, трактуем как "да" и логируем. Тихий false здесь = баг "игнорит запрос".
             let is_true = if json_val.is_null() {
-                (runner.log_cb)("[condition_check] вход не распарсился, fail-open -> true".to_string());
+                (runner.log_cb)(
+                    "[condition_check] вход не распарсился, fail-open -> true".to_string(),
+                );
                 true
             } else {
-                json_val.get(field).and_then(|v| v.as_bool()).unwrap_or(false)
+                json_val
+                    .get(field)
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false)
             };
 
             let branch_target = if is_true {
@@ -944,11 +1033,7 @@ pub fn find_next_node(
             return Some(target);
         }
         if let Some(ref condition) = edge.condition {
-            if let Some(status) = node_result
-                .output
-                .get("status")
-                .and_then(|v| v.as_str())
-            {
+            if let Some(status) = node_result.output.get("status").and_then(|v| v.as_str()) {
                 let mapped = match status {
                     "has_unanalyzed" | "missing" => "has_unanalyzed",
                     "all_done" | "present" => "all_done",
@@ -994,8 +1079,11 @@ fn extract_json(text: &str) -> Option<String> {
         text.to_string()
     };
 
-    text.find('{')
-        .and_then(|start| text[start..].rfind('}').map(|end| text[start..start + end + 1].to_string()))
+    text.find('{').and_then(|start| {
+        text[start..]
+            .rfind('}')
+            .map(|end| text[start..start + end + 1].to_string())
+    })
 }
 
 /// Проверяет, присутствует ли в сыром тексте пара `"key": true` (или `key: true`).
@@ -1054,11 +1142,24 @@ fn extract_json_with_keys(text: &str, required_keys: &[String]) -> Option<String
                     let mut in_string = false;
                     let mut escape = false;
                     for (j, &b) in text.as_bytes()[i..].iter().enumerate() {
-                        if escape { escape = false; continue; }
-                        if b == b'\\' && in_string { escape = true; continue; }
-                        if b == b'"' { in_string = !in_string; continue; }
-                        if in_string { continue; }
-                        if b == b'{' { depth += 1; }
+                        if escape {
+                            escape = false;
+                            continue;
+                        }
+                        if b == b'\\' && in_string {
+                            escape = true;
+                            continue;
+                        }
+                        if b == b'"' {
+                            in_string = !in_string;
+                            continue;
+                        }
+                        if in_string {
+                            continue;
+                        }
+                        if b == b'{' {
+                            depth += 1;
+                        }
                         if b == b'}' {
                             depth -= 1;
                             if depth == 0 {
@@ -1206,7 +1307,10 @@ mod tests {
         let s = r#"{"has_known_source":false,"needs_docs":false,"rewritten_query":"анекдоты про программистов"}"#;
         let bool_keys = vec!["has_known_source".to_string(), "needs_docs".to_string()];
         let v = parse_fact_json(s, &bool_keys);
-        assert_eq!(v.get("has_known_source").and_then(|x| x.as_bool()), Some(false));
+        assert_eq!(
+            v.get("has_known_source").and_then(|x| x.as_bool()),
+            Some(false)
+        );
         assert_eq!(
             v.get("rewritten_query").and_then(|x| x.as_str()),
             Some("анекдоты про программистов"),
@@ -1222,8 +1326,13 @@ mod tests {
         assert_eq!(v.get("has_somatic").and_then(|x| x.as_bool()), Some(false));
     }
 
-    fn signal_map(pairs: &[(&str, serde_json::Value)]) -> std::collections::HashMap<String, serde_json::Value> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    fn signal_map(
+        pairs: &[(&str, serde_json::Value)],
+    ) -> std::collections::HashMap<String, serde_json::Value> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     fn rule(field: &str, equals: serde_json::Value) -> ConditionRule {
@@ -1249,43 +1358,90 @@ mod tests {
 
     #[test]
     fn condition_router_dotted_signal_field_matches() {
-        let signals = signal_map(&[("validator_report", serde_json::json!({"e1": false, "e3": true}))]);
+        let signals = signal_map(&[(
+            "validator_report",
+            serde_json::json!({"e1": false, "e3": true}),
+        )]);
         let messages = vec![msg("validator")];
-        assert!(condition_rule_matches(&rule("validator_report.e1", serde_json::json!(false)), &signals, &messages));
-        assert!(condition_rule_matches(&rule("validator_report.e3", serde_json::json!(true)), &signals, &messages));
-        assert!(!condition_rule_matches(&rule("validator_report.e2", serde_json::json!(true)), &signals, &messages));
-        assert!(!condition_rule_matches(&rule("missing_signal.e1", serde_json::json!(false)), &signals, &messages));
+        assert!(condition_rule_matches(
+            &rule("validator_report.e1", serde_json::json!(false)),
+            &signals,
+            &messages
+        ));
+        assert!(condition_rule_matches(
+            &rule("validator_report.e3", serde_json::json!(true)),
+            &signals,
+            &messages
+        ));
+        assert!(!condition_rule_matches(
+            &rule("validator_report.e2", serde_json::json!(true)),
+            &signals,
+            &messages
+        ));
+        assert!(!condition_rule_matches(
+            &rule("missing_signal.e1", serde_json::json!(false)),
+            &signals,
+            &messages
+        ));
     }
 
     #[test]
     fn condition_router_dotted_nested_path() {
         let signals = signal_map(&[("s", serde_json::json!({"a": {"b": 42}}))]);
         let messages = vec![];
-        assert!(condition_rule_matches(&rule("s.a.b", serde_json::json!(42)), &signals, &messages));
-        assert!(!condition_rule_matches(&rule("s.a.c", serde_json::json!(42)), &signals, &messages));
+        assert!(condition_rule_matches(
+            &rule("s.a.b", serde_json::json!(42)),
+            &signals,
+            &messages
+        ));
+        assert!(!condition_rule_matches(
+            &rule("s.a.c", serde_json::json!(42)),
+            &signals,
+            &messages
+        ));
     }
 
     #[test]
     fn condition_router_agent_report_exists() {
         let signals = signal_map(&[]);
         let messages = vec![msg("soma_translator"), msg("validator")];
-        assert!(condition_rule_matches(&rule("soma_translator", serde_json::json!(true)), &signals, &messages));
-        assert!(!condition_rule_matches(&rule("decomposer", serde_json::json!(true)), &signals, &messages));
-        assert!(!condition_rule_matches(&rule("soma_translator", serde_json::json!(false)), &signals, &messages));
+        assert!(condition_rule_matches(
+            &rule("soma_translator", serde_json::json!(true)),
+            &signals,
+            &messages
+        ));
+        assert!(!condition_rule_matches(
+            &rule("decomposer", serde_json::json!(true)),
+            &signals,
+            &messages
+        ));
+        assert!(!condition_rule_matches(
+            &rule("soma_translator", serde_json::json!(false)),
+            &signals,
+            &messages
+        ));
     }
 
     #[test]
     fn condition_router_agent_report_missing_with_equals_false() {
         let signals = signal_map(&[]);
         let messages = vec![msg("validator")];
-        assert!(condition_rule_matches(&rule("soma_translator", serde_json::json!(false)), &signals, &messages));
+        assert!(condition_rule_matches(
+            &rule("soma_translator", serde_json::json!(false)),
+            &signals,
+            &messages
+        ));
     }
 
     #[test]
     fn condition_router_agent_report_with_non_bool_equals_is_no_match() {
         let signals = signal_map(&[]);
         let messages = vec![msg("soma_translator")];
-        assert!(!condition_rule_matches(&rule("soma_translator", serde_json::json!("present")), &signals, &messages));
+        assert!(!condition_rule_matches(
+            &rule("soma_translator", serde_json::json!("present")),
+            &signals,
+            &messages
+        ));
     }
 
     #[test]
@@ -1294,12 +1450,21 @@ mod tests {
         // но ключ со значением true присутствует в тексте.
         let text = r#"{"bug-captured": true, "logs": "❌ ASSERT: us-store.get('alice') should return None (session isolation violated)\nExpected: null\nGot: {\"id\": \"alice\", \"token\": \"eu-token-123\", \"region\": \"eu\"}\n\n---\n\n## Баг пойман с поличным ✅\n\n**Что произошло:**\n```\nRegion EU:  store_eu.set(\" }"#;
         assert!(raw_key_value_true(text, "bug-captured"));
-        assert!(raw_key_value_true(text, "bug_captured"), "разделитель-дефис/подчёркивание должен интерпретироваться одинаково");
+        assert!(
+            raw_key_value_true(text, "bug_captured"),
+            "разделитель-дефис/подчёркивание должен интерпретироваться одинаково"
+        );
     }
 
     #[test]
     fn raw_key_value_true_requires_true_value() {
-        assert!(!raw_key_value_true(r#"{"bug-captured": false, "logs": "x"}"#, "bug-captured"));
-        assert!(!raw_key_value_true(r#"{"bug-captured": "true"}"#, "bug-captured"), "строка 'true' не считается булевым true без кавычек после ':'");
+        assert!(!raw_key_value_true(
+            r#"{"bug-captured": false, "logs": "x"}"#,
+            "bug-captured"
+        ));
+        assert!(
+            !raw_key_value_true(r#"{"bug-captured": "true"}"#, "bug-captured"),
+            "строка 'true' не считается булевым true без кавычек после ':'"
+        );
     }
 }

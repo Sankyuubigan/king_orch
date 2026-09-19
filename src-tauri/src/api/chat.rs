@@ -1,11 +1,13 @@
 use serde::Serialize;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, State, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::domain;
-use crate::infra::{self, ChatMessage, ChatAttachment, ModelParams, SubCall, LlmMessage, llm_history};
 use crate::api::AppState;
+use crate::domain;
+use crate::infra::{
+    self, llm_history, ChatAttachment, ChatMessage, LlmMessage, ModelParams, SubCall,
+};
 
 // ─── Лог-файл ───
 // Единый log::Log из tauri-plugin-logs (core rules §2.5): king_orch.log РЯДОМ
@@ -35,8 +37,6 @@ pub struct ChatResponse {
     has_error: Option<String>,
 }
 
-
-
 fn parse_thought_from_log(msg: &str) -> Option<(String, String, f32)> {
     let rest = msg.strip_prefix("💭 Мысль ")?;
 
@@ -48,16 +48,27 @@ fn parse_thought_from_log(msg: &str) -> Option<(String, String, f32)> {
     let depth: usize = after_d[..d_end].parse().ok()?;
 
     // Only primary agents (depth=0) emit agent_thought events
-    if depth != 0 { return None; }
+    if depth != 0 {
+        return None;
+    }
 
-    let time_sec = rest.rfind("[⏱").and_then(|start| {
-        let after = &rest[start + 4..];
-        let end = after.find("с]")?;
-        after[..end].parse::<f32>().ok()
-    }).unwrap_or(0.0);
+    let time_sec = rest
+        .rfind("[⏱")
+        .and_then(|start| {
+            let after = &rest[start + 4..];
+            let end = after.find("с]")?;
+            after[..end].parse::<f32>().ok()
+        })
+        .unwrap_or(0.0);
     let colon_pos = rest.rfind("]: ").or_else(|| rest.rfind("): "));
-    let thought = colon_pos.map(|p| rest[p + 3..].to_string()).unwrap_or_default();
-    if thought.is_empty() { None } else { Some((agent_name, thought, time_sec)) }
+    let thought = colon_pos
+        .map(|p| rest[p + 3..].to_string())
+        .unwrap_or_default();
+    if thought.is_empty() {
+        None
+    } else {
+        Some((agent_name, thought, time_sec))
+    }
 }
 
 #[derive(Serialize, Clone)]
@@ -89,7 +100,12 @@ fn parse_tool_from_log(msg: &str) -> Option<ToolCallEvent> {
             Some((t, a)) => (t.to_string(), Some(a.to_string())),
             None => (after.to_string(), None),
         };
-        return Some(ToolCallEvent { author: agent_name, tool, args, result: None });
+        return Some(ToolCallEvent {
+            author: agent_name,
+            tool,
+            args,
+            result: None,
+        });
     }
 
     // Результат: "Инструмент 'Y' (агент 'X') вернул результат (N символов): out"
@@ -105,7 +121,12 @@ fn parse_tool_from_log(msg: &str) -> Option<ToolCallEvent> {
             .to_string();
         let tail = &rest[pos + " вернул результат (".len()..];
         let (_, output) = tail.split_once(" символов): ")?;
-        return Some(ToolCallEvent { author: agent_name, tool, args: None, result: Some(output.to_string()) });
+        return Some(ToolCallEvent {
+            author: agent_name,
+            tool,
+            args: None,
+            result: Some(output.to_string()),
+        });
     }
 
     None
@@ -113,7 +134,7 @@ fn parse_tool_from_log(msg: &str) -> Option<ToolCallEvent> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_tool_from_log, parse_thought_from_log};
+    use super::{parse_thought_from_log, parse_tool_from_log};
 
     #[test]
     fn parses_tool_call_start() {
@@ -151,8 +172,10 @@ mod tests {
 
     #[test]
     fn parses_thought_log() {
-        let (agent, thought, time) = parse_thought_from_log("💭 Мысль search-specialist [d=0] (инструмент WebSearch) [⏱2.6с]: Найду курс доллара")
-            .expect("должно распарсить мысль");
+        let (agent, thought, time) = parse_thought_from_log(
+            "💭 Мысль search-specialist [d=0] (инструмент WebSearch) [⏱2.6с]: Найду курс доллара",
+        )
+        .expect("должно распарсить мысль");
         assert_eq!(agent, "search-specialist");
         assert_eq!(thought, "Найду курс доллара");
         assert!((time - 2.6).abs() < 0.01);
@@ -160,7 +183,10 @@ mod tests {
 
     #[test]
     fn parses_thought_log_ignores_subagents() {
-        assert!(parse_thought_from_log("💭 Мысль worker [d=1] (инструмент WebSearch) [⏱1.0с]: что-то").is_none());
+        assert!(parse_thought_from_log(
+            "💭 Мысль worker [d=1] (инструмент WebSearch) [⏱1.0с]: что-то"
+        )
+        .is_none());
     }
 }
 
@@ -219,7 +245,9 @@ pub async fn chat_request(
             match infra::ensure_mmproj_for_model(&app, &model_path).await {
                 Ok(Some(p)) => Some(p),
                 Ok(None) => {
-                    log::warn!("mmproj для модели не найден в каталоге — мультимодальный режим недоступен");
+                    log::warn!(
+                        "mmproj для модели не найден в каталоге — мультимодальный режим недоступен"
+                    );
                     None
                 }
                 Err(e) => {
@@ -258,7 +286,7 @@ pub async fn chat_request(
     let subcall_cb = move |subcall: &SubCall| {
         let _ = app_subcall.emit("subcall_done", subcall.clone());
     };
-    
+
     let app_stream = app.clone();
     let stream_meta = Arc::new(Mutex::new(domain::StreamMeta::default()));
     let meta_for_cb = stream_meta.clone();
@@ -299,7 +327,9 @@ pub async fn chat_request(
     };
 
     let bins_dir = crate::infra::bin_downloader::get_bins_dir(
-        &app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
+        &app.path()
+            .app_data_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from(".")),
     );
     let log_cb_for_result = log_cb.clone();
     // Prompt-log: снимок точного входа модели (правило «модель видит только записанное»).
@@ -309,7 +339,8 @@ pub async fn chat_request(
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let prompt_log = app.path().app_data_dir().ok().map(|d| {
-        d.join("prompt_logs").join(format!("{}_{}.prompt_log.jsonl", agent_id, prompt_log_ts))
+        d.join("prompt_logs")
+            .join(format!("{}_{}.prompt_log.jsonl", agent_id, prompt_log_ts))
     });
 
     // ── Предварительный подсчёт памяти ДО запуска (цифра как внизу поля ввода) ──
@@ -319,11 +350,15 @@ pub async fn chat_request(
         .map(|m| m.len() as f64 / (1024.0 * 1024.0))
         .unwrap_or(0.0);
     let effective_ctx = (prompt_tokens + max_gen_tokens + 128).min(context_size);
-    let total_mb = infra::estimate_vram_mb(&model_path, effective_ctx, kv_quant_keys, kv_quant_values);
+    let total_mb =
+        infra::estimate_vram_mb(&model_path, effective_ctx, kv_quant_keys, kv_quant_values);
     let kv_mb = (total_mb - file_mb).max(0.0);
     log_cb(format!(
         "📐 Промпт: ~{} токенов, max_gen={}, ожидаемый финал: ~{}/{} (n_ctx)",
-        prompt_tokens, max_gen_tokens, prompt_tokens + max_gen_tokens, context_size
+        prompt_tokens,
+        max_gen_tokens,
+        prompt_tokens + max_gen_tokens,
+        context_size
     ));
     log_cb(format!(
         "💾 Ожидаемое потребление VRAM (GPU): Модель ~{:.1} МБ + Кэш ~{:.1} МБ = Итого ~{:.1} МБ",
@@ -394,10 +429,20 @@ pub async fn chat_request(
         Ok(Ok(r)) => r,
     };
     if result.messages.is_empty() {
-        log::warn!("chat_request: run_chat вернул Ok, но messages[] пуст (фронтенд получит пустой ответ)");
+        log::warn!(
+            "chat_request: run_chat вернул Ok, но messages[] пуст (фронтенд получит пустой ответ)"
+        );
     }
 
-    log_cb_for_result(format!("DEBUG chat_request: result.messages.len={}, types_authors={:?}", result.messages.len(), result.messages.iter().map(|m| (m.msg_type.clone(), m.author.clone())).collect::<Vec<_>>()));
+    log_cb_for_result(format!(
+        "DEBUG chat_request: result.messages.len={}, types_authors={:?}",
+        result.messages.len(),
+        result
+            .messages
+            .iter()
+            .map(|m| (m.msg_type.clone(), m.author.clone()))
+            .collect::<Vec<_>>()
+    ));
 
     // Событие для UI-индикатора «GPU/CPU» в шапке чата
     let _ = app.emit(
@@ -447,7 +492,9 @@ pub fn get_prompt_preview(
         Some(agent) => {
             let tools = crate::domain::builtin_tools();
             let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
-            crate::domain::build_system_prompt(agent, &history, has_tools, &tools, 2048, false)
+            crate::domain::build_system_prompt(
+                agent, &history, has_tools, &tools, 2048, false, false, false,
+            )
         }
         None => {
             let workflows = crate::domain::load_workflows(&agents_dir)?;
@@ -461,16 +508,18 @@ pub fn get_prompt_preview(
     let mut llm_messages: Vec<LlmMessage> = vec![LlmMessage {
         role: "system".to_string(),
         content: system_prompt,
+        ..Default::default()
     }];
-    
+
     for msg in llm_history(&history) {
         llm_messages.push(msg.to_llm_message());
     }
-    
+
     if !message.is_empty() {
         llm_messages.push(LlmMessage {
             role: "user".to_string(),
             content: message,
+            ..Default::default()
         });
     }
 

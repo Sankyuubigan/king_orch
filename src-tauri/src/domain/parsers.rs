@@ -193,41 +193,164 @@ pub struct ParsedOrchestratorResponse {
     pub thought: String,
 }
 
-fn parse_tool_call_from_json(json_str: &str) -> Option<(String, serde_json::Value, String)> {
-    let parsed = serde_json::from_str::<serde_json::Value>(json_str)
-        .or_else(|_| serde_json::from_str(&json_str.replace('\n', " ").replace('\r', "")));
-    if let Ok(val) = parsed {
-        if let Some(tool) = val.get("tool").and_then(|v| v.as_str()) {
-            if !is_valid_tool_name(tool) { return None; }
-            let args = val
-                .get("arguments")
-                .cloned()
-                .or_else(|| val.get("arg").cloned())
-                .unwrap_or_else(|| {
-                    if let Some(obj) = val.as_object() {
-                        let mut m = obj.clone();
-                        m.remove("tool");
-                        m.remove("thought");
-                        if m.is_empty() {
-                            serde_json::Value::Null
-                        } else {
-                            serde_json::Value::Object(m)
-                        }
-                    } else {
-                        serde_json::Value::Null
+/// Пытается распарсить JSON, предварительно экранируя ЖИВЫЕ control-символы
+/// (реальные `\n`/`\r`/`\t`, не пары `\\n`) — llama.cpp отдаёт content больших
+/// инструментов многострочным raw-текстом, и Rust-`serde_json` их отвергает.
+/// Экранирование ТОЛЬКО ВНУТРИ строковых литералов (string-aware): структурные
+/// переводы строк между токенами — валидный JSON-whitespace и трогать нельзя
+/// (глобальная замена превратила бы их в `\n`-литералы и сломала бы парс).
+/// Замена не на пробел, а на экранированную последовательность: контент
+/// сохраняется, а не сплющивается (паттерн hermes `json.loads(strict=False)`).
+fn parse_json_tolerant_block(json_str: &str) -> Option<serde_json::Value> {
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(json_str) {
+        return Some(v);
+    }
+    // Проходим байты, отслеживая in_str/esc (тот же паттерн, что в
+    // extract_json_block); внутри строки экранируем живые CR/LF/TAB.
+    // Уже-экранированные `\\n` (два символа) сканнер распознаёт и НЕ трогает.
+    let mut escaped = Vec::<u8>::with_capacity(json_str.len() + 32);
+    let bytes = json_str.as_bytes();
+    let mut in_str = false;
+    let mut esc = false;
+    for &b in bytes {
+        if in_str {
+            if esc {
+                escaped.push(b);
+                esc = false;
+            } else if b == b'\\' {
+                escaped.push(b);
+                esc = true;
+            } else {
+                match b {
+                    b'"' => {
+                        escaped.push(b);
+                        in_str = false;
                     }
-                });
+                    b'\n' => escaped.extend_from_slice(b"\\n"),
+                    b'\r' => escaped.extend_from_slice(b"\\r"),
+                    b'\t' => escaped.extend_from_slice(b"\\t"),
+                    _ => escaped.push(b),
+                }
+            }
+        } else {
+            escaped.push(b);
+            if b == b'"' {
+                in_str = true;
+            }
+        }
+    }
+    let escaped = String::from_utf8_lossy(&escaped);
+    if let Ok(v) = serde_json::from_str::<serde_json::Value>(&escaped) {
+        return Some(v);
+    }
+    None
+}
+
+/// Извлекает сбалансированный JSON-объект `arguments` из не-Fenced текста
+/// (fallback для сломанного serde-парса всего конверта): depth-aware сканнер
+/// со string/escape-состоянием, НЕ не-жадный regex `\{.*?\}` (который резал
+/// объект на первой `}` внутри content). Возвращает смапленный JSON-объект.
+fn extract_arguments_from_loose_text(text: &str) -> Option<serde_json::Value> {
+    let bytes = text.as_bytes();
+    let mut search = 0usize;
+    while let Some(rel) = bytes[search..].iter().position(|&b| b == b'{') {
+        let start = search + rel;
+        let mut depth = 0u32;
+        let mut in_str = false;
+        let mut esc = false;
+        let mut j = start;
+        let mut closed_at: Option<usize> = None;
+        while j < bytes.len() {
+            let b = bytes[j];
+            if in_str {
+                if esc {
+                    esc = false;
+                } else if b == b'\\' {
+                    esc = true;
+                } else if b == b'"' {
+                    in_str = false;
+                }
+            } else {
+                match b {
+                    b'"' => in_str = true,
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            closed_at = Some(j);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            j += 1;
+        }
+        match closed_at {
+            Some(end) => {
+                // От объекта arguments ожидаем наличие ключей path/… — простой
+                // пробой serde-парса, иначе (мусор из прозы) идём дальше.
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text[start..=end]) {
+                    return Some(v);
+                }
+                search = end + 1;
+            }
+            None => break,
+        }
+    }
+    None
+}
+
+fn parse_tool_call_from_json(json_str: &str) -> Option<(String, serde_json::Value, String)> {
+    let parsed = parse_json_tolerant_block(json_str);
+    if let Some(val) = parsed {
+        let has_legacy_tool_key = val.get("tool").is_some();
+        if let Some(tool) = val
+            .get("tool")
+            .or_else(|| val.get("name"))
+            .and_then(|v| v.as_str())
+        {
+            if !is_valid_tool_name(tool) { return None; }
+            let explicit_args = val.get("arguments").cloned().or_else(|| val.get("arg").cloned());
+            // Нативный OpenAI-конверт {"name": ..., "arguments": ...} обязан нести
+            // arguments/arg — иначе это не tool call, а посторонний JSON с ключом
+            // "name" (ложное срабатывание, например финальный отчёт агента).
+            if !has_legacy_tool_key && explicit_args.is_none() {
+                return None;
+            }
+            let args = explicit_args.unwrap_or_else(|| {
+                if let Some(obj) = val.as_object() {
+                    let mut m = obj.clone();
+                    m.remove("tool");
+                    m.remove("thought");
+                    if m.is_empty() {
+                        serde_json::Value::Null
+                    } else {
+                        serde_json::Value::Object(m)
+                    }
+                } else {
+                    serde_json::Value::Null
+                }
+            });
             let thought = val.get("thought").and_then(|v| v.as_str()).unwrap_or("").to_string();
             return Some((tool.to_string(), args, thought));
         }
     } else {
-        let tool_re = regex::Regex::new(r#"(?is)"tool"\s*:\s*"([^"]+)""#).ok()?;
+        // Fallback для сломанного serde-парса всего конверта: имя берём regex'ом,
+        // а arguments — depth-aware сканнером (не-жадный `\{.*?\}` резал объект на
+        // первой `}` внутри content, см. extract_arguments_from_loose_text).
+        let tool_re = regex::Regex::new(r#"(?is)"(?:tool|name)"\s*:\s*"([^"]+)""#).ok()?;
         if let Some(tool_cap) = tool_re.captures(json_str) {
             let tool = tool_cap.get(1)?.as_str().to_string();
             if !is_valid_tool_name(&tool) { return None; }
-            let args_re = regex::Regex::new(r#"(?is)"arguments"\s*:\s*(\{.*?\})"#).ok()?;
-            let args_str = args_re.captures(json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or("{}".to_string());
-            let args = serde_json::from_str(&args_str).unwrap_or(serde_json::Value::Null);
+            let args = extract_arguments_from_loose_text(json_str);
+            // Нативный OpenAI-конверт с "name" без распознанных arguments — не tool call.
+            let has_name = regex::Regex::new(r#"(?i)"name"\s*:"#).ok()?.is_match(json_str);
+            let has_tool_key = regex::Regex::new(r#"(?i)"tool"\s*:"#).ok()?.is_match(json_str);
+            if has_name && !has_tool_key && args.is_none() {
+                return None;
+            }
+            let args = args.unwrap_or(serde_json::Value::Null);
             let thought_re = regex::Regex::new(r#"(?is)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok()?;
             let thought_raw = thought_re.captures(json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
             return Some((tool, args, decode_json_escapes(&thought_raw)));
@@ -316,6 +439,29 @@ pub fn has_incomplete_json_action(text: &str) -> bool {
         }
     }
     false
+}
+
+/// Эвристика: текст похож на попытку tool-call конверта (есть `"name"`/`"tool"`
+/// + ключ аргументов), но JSON-блок не парсится — модель выдала сломанный
+/// конверт (неэкранированные кавычки в content, незакрытые скобки и т.п.).
+/// Валидные tool-call'ы сюда не попадают (их распознаёт `parse_tool_call` выше),
+/// как и посторонние JSON-отчёты (валидный JSON парсится). Охватывает и native
+/// (`arguments`), и legacy (плоские `path`/`content`/`command`) конверты.
+pub fn looks_like_broken_tool_call(text: &str) -> bool {
+    let t = text.to_lowercase();
+    // native-конверт: {"name": ..., "arguments": {...}} — arguments обязателен.
+    let native = t.contains("\"name\"")
+        && (t.contains("\"arguments\"") || t.contains("\"arg\""));
+    // legacy-конверт: {"tool": ..., path/content/command...} — плоские аргументы.
+    let legacy = t.contains("\"tool\"")
+        && (t.contains("\"arguments\"")
+            || t.contains("\"path\"")
+            || t.contains("\"content\"")
+            || t.contains("\"command\""));
+    if !(native || legacy) {
+        return false;
+    }
+    !is_valid_json_action(text)
 }
 
 fn decode_json_escapes(s: &str) -> String {
@@ -591,6 +737,92 @@ mod tests {
             .expect("конверт emit_signal распознаётся");
         assert_eq!(parsed.0, "emit_signal");
         assert_eq!(parsed.1["key"], "soma_translator");
+    }
+
+    #[test]
+    fn parse_tool_call_accepts_native_openai_name_envelope() {
+        // Нативный OpenAI-конверт (формат tools[] llama.cpp): модель зовёт тул
+        // через {"name": ..., "arguments": {...}} вместо легаси {"tool": ...}.
+        let parsed = parse_tool_call(
+            "```json\n{\"name\": \"read_file\", \"arguments\": {\"path\": \".agents_workspace/test_task/session_store.py\"}}\n```",
+        )
+        .expect("конверт с name распознаётся");
+        assert_eq!(parsed.0, "read_file");
+        assert_eq!(parsed.1["path"], ".agents_workspace/test_task/session_store.py");
+    }
+
+    #[test]
+    fn parse_tool_call_rejects_native_envelope_without_arguments() {
+        // {"name": ...} без arguments/arg — это не tool call, а посторонний JSON
+        // с ключом name (например, финальный отчёт) — ложное срабатывание нельзя.
+        assert!(parse_tool_call("{\"name\": \"read_file\"}").is_none());
+        assert!(parse_tool_call("```json\n{\"name\": \"Вердикт\", \"result\": \"ok\"}\n```").is_none());
+        assert!(parse_tool_call("{\"name\": \"emit_signal\"}").is_none());
+    }
+
+    #[test]
+    fn parse_tool_call_legacy_tool_key_still_works_without_arguments() {
+        // Легаси-конверт {"tool": ...} без аргументов остаётся распознаваемым
+        // (flattened emit_signal и пр.) — регрессии не должно быть.
+        let parsed = parse_tool_call("{\"tool\": \"emit_signal\"}").expect("легаси конверт работает");
+        assert_eq!(parsed.0, "emit_signal");
+    }
+
+    #[test]
+    fn parse_tool_call_accepts_literal_newlines_in_content() {
+        // qwen3.8 (llama.cpp) эмитит content МНОГОСТРОЧНЫМ raw-текстом: кавычки
+        // экранирует корректно (`\"\"\"`), но живые переводы строк внутри строки
+        // НЕ экранирует (Rust serde_json их отвергает). Пре-пасс должен заменить
+        // их на `\n`-последовательности, сохранив контент (не сплющивая в пробелы).
+        let content = "\\\"\\\"\\\"Хранилище сессий.\n\nclass SessionStore:\n    _sessions: dict = {}\n    def get(self):\n        return {}";
+        let raw = format!("```json\n{{\"name\": \"write_file\", \"arguments\": {{\"path\": \"a.py\", \"content\": \"{}\"}}}}\n```", content);
+        let parsed = parse_tool_call(&raw).expect("конверт с живыми переводами строк парсится");
+        assert_eq!(parsed.0, "write_file");
+        let c = parsed.1["content"].as_str().expect("content — строка");
+        assert!(c.contains("class SessionStore:"), "content сохраняет переводы строк: {}", c);
+        assert!(c.contains('\n'));
+    }
+
+    #[test]
+    fn parse_tool_call_accepts_braces_inside_content() {
+        // Фигурные скобки внутри content (f-строки Python `{eu.total()}`) не должны
+        // обрезать arguments — обработку ведёт depth-aware сканнер, не `{.*?}`.
+        let content = "assert eu.total() == 1, f\"eu видит {eu.total()}\"";
+        let raw = format!("```json\n{{\"name\": \"write_file\", \"arguments\": {{\"path\": \"a.py\", \"content\": \"{}\"}}}}\n```", content.replace('"', "\\\""));
+        let parsed = parse_tool_call(&raw).expect("конверт со скобками в content парсится");
+        assert_eq!(parsed.1["path"], "a.py");
+        assert!(parsed.1["content"].as_str().unwrap().contains("eu.total()"));
+    }
+
+    #[test]
+    fn parse_tool_call_null_args_is_not_valid_call() {
+        // Если аргументы распознать не удалось (сломанный JSON: незакрытая строка,
+        // битые кавычки внутри content) — НЕ вызывать тул с null-аргументами
+        // (это бы привело к «параметр path обязателен» ×3 → стоп). Парсер
+        // возвращает None, и оркестратор пойдёт по пути отложенной ошибки.
+        let raw = r#"{"name": "write_file", "arguments": {"path": "a.py", "content": "abc "def" ghi"}}"#;
+        assert!(parse_tool_call(raw).is_none());
+        let raw = r#"{"tool": "write_file", "path": "a.py", "content": "abc "def" ghi"}"#;
+        assert!(parse_tool_call(raw).is_none());
+        // Валидный конверт (даже с фигурными скобками и переносами в content)
+        // эвристика «сломанного конверта» не должна помечать.
+        let content = "f\"eu сумма {eu.total()}\"";
+        let raw = format!("```json\n{{\"name\": \"write_file\", \"arguments\": {{\"path\": \"a.py\", \"content\": \"{}\"}}}}\n```", content.replace('"', "\\\""));
+        assert!(!looks_like_broken_tool_call(&raw));
+    }
+
+    #[test]
+    fn looks_like_broken_tool_call_heuristic() {
+        // Неэкранированная кавычка внутри content ломает JSON: parse_tool_call
+        // даст None, но эвристика обязана опознать «попытку tool-call» — по ней
+        // оркестратор вернёт модели фидбек вместо «параметр path обязателен».
+        let broken = r#"{"name": "write_file", "arguments": {"path": "a.py", "content": "if x == "y": pass"}}"#;
+        assert!(looks_like_broken_tool_call(broken));
+        let broken_legacy = r#"{"tool": "write_file", "path": "a.py", "content": " если " тут"}"#;
+        assert!(looks_like_broken_tool_call(broken_legacy));
+        // Чистая проза и валидный конверт без arguments — НЕ «сломанный вызов».
+        assert!(!looks_like_broken_tool_call("Пробую вызвать write_file, но код не готов."));
+        assert!(!looks_like_broken_tool_call("{\"name\": \"write_file\", \"arguments\": {\"path\": \"b.py\", \"content\": \"print(1)\"}}"));
     }
 
     #[test]

@@ -10,8 +10,29 @@ pub const CRITICAL_LIMIT_BLOCK: &str = "Твой максимальный лим
 
 /// Блок текущей даты — инжектится в промпт агентов с флагом `current_date: true`.
 pub fn current_date_block() -> String {
-    const WEEKDAYS: [&str; 7] = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"];
-    const MONTHS: [&str; 12] = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
+    const WEEKDAYS: [&str; 7] = [
+        "понедельник",
+        "вторник",
+        "среда",
+        "четверг",
+        "пятница",
+        "суббота",
+        "воскресенье",
+    ];
+    const MONTHS: [&str; 12] = [
+        "января",
+        "февраля",
+        "марта",
+        "апреля",
+        "мая",
+        "июня",
+        "июля",
+        "августа",
+        "сентября",
+        "октября",
+        "ноября",
+        "декабря",
+    ];
     let now = chrono::Local::now();
     let weekday = WEEKDAYS[now.weekday().num_days_from_monday() as usize];
     let month = MONTHS[now.month0() as usize];
@@ -32,6 +53,8 @@ pub fn build_system_prompt(
     all_tools: &[(String, String, serde_json::Value)],
     max_gen_tokens: usize,
     uses_method_3: bool,
+    is_native: bool,
+    is_hybrid: bool,
 ) -> String {
     let mut sp = agent.system_prompt.clone();
 
@@ -39,40 +62,70 @@ pub fn build_system_prompt(
     if agent.current_date {
         sp = format!("{}\n\n{}", current_date_block(), sp);
     }
-    
+
     // ДОБАВЛЯЕМ ЛИМИТ ГЕНЕРАЦИИ ДЛЯ ЗАЩИТЫ ОТ ОБРЫВОВ
     sp.push_str(&format!("\n\n[ЛИМИТ ОТВЕТА]\nТвой жесткий лимит генерации — {} токенов. Строй свой ответ так, чтобы гарантированно успеть завершить мысль. Писать длинно НЕ обязательно. Если можешь ответить кратко — отвечай кратко.", max_gen_tokens));
-    
+
     sp.push_str("\n\n[ПРОТОКОЛ ЧЕСТНОСТИ]\n");
     sp.push_str(TRUTH_PROTOCOL);
     sp.push_str(&format!("\n\n{}", language_directive(messages)));
 
+    // Native (coder/research): тул-схемы инжектся чат-шаблоном (--jinja), а markdown-секции
+    // [ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]/[ДОСТУПНЫЕ ИНСТРУМЕНТЫ] противоречат нативному
+    // протоколу и дублируют схемы → для native-агентов НЕ добавляются.
+    if is_native {
+        sp.push_str("\n\n[NATIVE TOOL CALLING]\nТы вызываешь инструменты через родной протокол (function calling): когда нужен инструмент — объявляй вызов функции с аргументами строго по JSON-schema тула. Результаты инструментов приходят отдельными сообщениями. Только после фактических результатов инструментов дай финальный ответ ОБЫЧНЫМ ТЕКСТОМ — БЕЗ JSON-конвертов и фигурных разметок вызова инструментов.");
+        if is_hybrid {
+            sp.push_str("\nФинальный вердикт по задаче запрашивается отдельным шагом в строгом JSON по твоей роли — НЕ оформляй вердикт в этом ходе, сначала собери факты инструментами.");
+        }
+    }
+
     // Для Method 3-агентов грамматика сама принуждает JSON через emit_signal,
     // поэтому секции [ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ] и [ДОСТУПНЫЕ ИНСТРУМЕНТЫ]
     // не добавляются — они противоречат грамматике и тратят когнитивную энергию модели.
-    if has_tools && !uses_method_3 {
+    if has_tools && !uses_method_3 && !is_native {
         sp.push_str("\n\n[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]\nЕсли нужен инструмент — верни ОДИН JSON-блок (```json ... ```).\nВ JSON обязательно поле \"thought\".\n\n⚠️ ВАЖНО: Если задача ВЫПОЛНЕНА — пиши ОБЫЧНЫЙ ТЕКСТ без JSON!\n");
     }
 
-    if has_tools && !uses_method_3 {
+    if has_tools && !uses_method_3 && !is_native {
         let mut td = String::new();
         for (_, name, tool) in all_tools {
-            let desc = tool.get("description").and_then(|d| d.as_str()).unwrap_or("");
+            let desc = tool
+                .get("description")
+                .and_then(|d| d.as_str())
+                .unwrap_or("");
             td.push_str(&format!("- \"{}\": {}\n", name, desc));
             if let Some(input_schema) = tool.get("inputSchema") {
-                let type_name = input_schema.get("type").and_then(|t| t.as_str()).unwrap_or("object");
+                let type_name = input_schema
+                    .get("type")
+                    .and_then(|t| t.as_str())
+                    .unwrap_or("object");
                 td.push_str(&format!("  Тип: {}\n", type_name));
                 if let Some(props) = input_schema.get("properties").and_then(|p| p.as_object()) {
                     td.push_str("  Параметры (arguments):\n  {\n");
-                    let required = input_schema.get("required")
+                    let required = input_schema
+                        .get("required")
                         .and_then(|r| r.as_array())
                         .map(|arr| arr.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
                         .unwrap_or_default();
                     for (prop_name, prop_schema) in props {
-                        let prop_type = prop_schema.get("type").and_then(|t| t.as_str()).unwrap_or("any");
-                        let prop_desc = prop_schema.get("description").and_then(|d| d.as_str()).unwrap_or("");
-                        let is_required = if required.contains(&prop_name.as_str()) { " [ОБЯЗАТЕЛЬНО]" } else { "" };
-                        td.push_str(&format!("    \"{}\" (type: {}){} - {}\n", prop_name, prop_type, is_required, prop_desc));
+                        let prop_type = prop_schema
+                            .get("type")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("any");
+                        let prop_desc = prop_schema
+                            .get("description")
+                            .and_then(|d| d.as_str())
+                            .unwrap_or("");
+                        let is_required = if required.contains(&prop_name.as_str()) {
+                            " [ОБЯЗАТЕЛЬНО]"
+                        } else {
+                            ""
+                        };
+                        td.push_str(&format!(
+                            "    \"{}\" (type: {}){} - {}\n",
+                            prop_name, prop_type, is_required, prop_desc
+                        ));
                     }
                     td.push_str("  }\n");
                 }

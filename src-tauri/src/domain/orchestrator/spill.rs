@@ -1,15 +1,22 @@
-﻿use super::*;
-use std::path::Path;
+use super::*;
+use crate::domain::agent_manager::AgentProfile;
+use crate::infra::{
+    extract_model_filename, push_report, ChatAttachment, ChatMessage, GrammarSpec, LlamaEngine,
+    LlmMessage, ModelParams, SubCall, ToolCallInfo,
+};
+use serde_json::Value;
 use std::fs;
 use std::io::Write;
-use serde_json::Value;
-use crate::infra::{ChatMessage, LlmMessage, SubCall, ToolCallInfo, ModelParams, ChatAttachment, LlamaEngine, GrammarSpec, extract_model_filename, push_report};
-use crate::domain::agent_manager::AgentProfile;
+use std::path::Path;
 
 /// Если вывод инструмента большой — пишет полный текст в spill-файл и
 /// возвращает выжимку (head 2000 + tail 1000) с локатором для встроенного
 /// инструмента `read_spill`. Иначе возвращает текст как есть, без spill.
-pub(crate) fn spill_if_large(output: &str, agent_id: &str, idx: u32) -> (String, Option<std::path::PathBuf>) {
+pub(crate) fn spill_if_large(
+    output: &str,
+    agent_id: &str,
+    idx: u32,
+) -> (String, Option<std::path::PathBuf>) {
     if output.len() <= SPILL_THRESHOLD {
         return (output.to_string(), None);
     }
@@ -57,4 +64,3 @@ pub(crate) fn read_spill_file(path: &str) -> Result<String, String> {
         Ok(content)
     }
 }
-

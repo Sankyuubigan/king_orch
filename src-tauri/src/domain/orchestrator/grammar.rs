@@ -1,10 +1,13 @@
-﻿use super::*;
-use std::path::Path;
+use super::*;
+use crate::domain::agent_manager::AgentProfile;
+use crate::infra::{
+    extract_model_filename, push_report, ChatAttachment, ChatMessage, GrammarSpec, LlamaEngine,
+    LlmMessage, ModelParams, SubCall, ToolCallInfo,
+};
+use serde_json::Value;
 use std::fs;
 use std::io::Write;
-use serde_json::Value;
-use crate::infra::{ChatMessage, LlmMessage, SubCall, ToolCallInfo, ModelParams, ChatAttachment, LlamaEngine, GrammarSpec, extract_model_filename, push_report};
-use crate::domain::agent_manager::AgentProfile;
+use std::path::Path;
 
 /// Загружает per-agent GBNF-грамматику из `grammars_dir/<agent_id>.gbnf`.
 /// Если файла нет — агент работает без per-agent грамматики (только база движка).
@@ -24,7 +27,10 @@ pub(crate) fn load_agent_grammar(grammars_dir: &Path, agent_id: &str) -> Option<
 /// Структура: `agents/<набор агентов>/grammars/*.gbnf` (напр. `agents/psychotherapist/grammars/`).
 /// Приоритет: 1) рядом с workflow (`workflow.parent_dir` = `.../transitions` → `.../grammars`);
 /// 2) первая найденная подпапка `<agents_dir>/<папка>/grammars`; 3) fallback `<agents_dir>/grammars`.
-pub fn resolve_grammars_dir(agents_dir: &Path, workflow: Option<&WorkflowDef>) -> std::path::PathBuf {
+pub fn resolve_grammars_dir(
+    agents_dir: &Path,
+    workflow: Option<&WorkflowDef>,
+) -> std::path::PathBuf {
     if let Some(wf) = workflow {
         let candidate = Path::new(&wf.parent_dir)
             .parent()
@@ -46,4 +52,3 @@ pub fn resolve_grammars_dir(agents_dir: &Path, workflow: Option<&WorkflowDef>) -
     }
     agents_dir.join("grammars")
 }
-

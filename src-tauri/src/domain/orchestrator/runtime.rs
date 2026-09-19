@@ -1,7 +1,7 @@
+use crate::infra::bin_downloader;
+use crate::infra::mcp_client::{McpClient, McpPool, SharedMcpClient};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use crate::infra::mcp_client::{McpClient, McpPool, SharedMcpClient};
-use crate::infra::bin_downloader;
 
 /// Встроенные инструменты (единый источник — SSOT). Подмешиваются в промпт
 /// каждого агента при РЕАЛЬНОМ вызове и в worst-case оценку контекста.
@@ -46,36 +46,39 @@ pub fn todo_tool_schemas() -> Vec<(String, String, serde_json::Value)> {
 }
 
 pub fn builtin_tools() -> Vec<(String, String, serde_json::Value)> {
-    vec![(
-        "_builtin".to_string(),
-        "emit_signal".to_string(),
-        serde_json::json!({
-            "name": "emit_signal",
-            "description": "Сохранить сигнал/маркер в сессию. Другие агенты, экстрактор и phase_router увидят его. Принимает key (имя сигнала) и value (произвольный JSON-объект с данными).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "key": {"type": "string", "description": "Имя сигнала, например 'validator_report' или 'phase'"},
-                    "value": {"type": "object", "description": "Произвольный JSON с данными сигнала"}
-                },
-                "required": ["key", "value"]
-            }
-        }),
-    ), (
-        "_builtin".to_string(),
-        "read_spill".to_string(),
-        serde_json::json!({
-            "name": "read_spill",
-            "description": "Дочитать полный результат большого инструмента, сохранённый в файл spills (локатор приходит в сообщении '[РЕЗУЛЬТАТ ИНСТРУМЕНТА сохранён в файл spills]'). Принимает path (путь к spill-файлу). Возвращает полное содержимое (обрезанное до 16К символов).",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "path": {"type": "string", "description": "Путь к spill-файлу (например spills/spill_agent_0.txt)"}
-                },
-                "required": ["path"]
-            }
-        }),
-    )]
+    vec![
+        (
+            "_builtin".to_string(),
+            "emit_signal".to_string(),
+            serde_json::json!({
+                "name": "emit_signal",
+                "description": "Сохранить сигнал/маркер в сессию. Другие агенты, экстрактор и phase_router увидят его. Принимает key (имя сигнала) и value (произвольный JSON-объект с данными).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "key": {"type": "string", "description": "Имя сигнала, например 'validator_report' или 'phase'"},
+                        "value": {"type": "object", "description": "Произвольный JSON с данными сигнала"}
+                    },
+                    "required": ["key", "value"]
+                }
+            }),
+        ),
+        (
+            "_builtin".to_string(),
+            "read_spill".to_string(),
+            serde_json::json!({
+                "name": "read_spill",
+                "description": "Дочитать полный результат большого инструмента, сохранённый в файл spills (локатор приходит в сообщении '[РЕЗУЛЬТАТ ИНСТРУМЕНТА сохранён в файл spills]'). Принимает path (путь к spill-файлу). Возвращает полное содержимое (обрезанное до 16К символов).",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string", "description": "Путь к spill-файлу (например spills/spill_agent_0.txt)"}
+                    },
+                    "required": ["path"]
+                }
+            }),
+        ),
+    ]
 }
 
 /// Схемы инструментов кодинга (SSOT — infra::tools::all_tools). Раскрывают
@@ -91,14 +94,18 @@ pub fn code_tool_schemas(include_write: bool) -> Vec<(String, String, serde_json
 /// Явные имена тулов из `agent.tools` (помимо мета-наборов `code_read`/`code_write`/`todo`).
 /// `tool_schemas` ДОБАВЛЯЕТ explicit-имена к базовому read-only набору (SSOT).
 fn explicit_code_tools(agent: &crate::domain::agent_manager::AgentProfile) -> Vec<String> {
-    agent.tools.iter()
+    agent
+        .tools
+        .iter()
         .filter(|t| *t != "code_read" && *t != "code_write" && *t != "todo")
         .cloned()
         .collect()
 }
 
 /// Полный набор схем кодинга для агента: мета-наборы + явные имена из `agent.tools`.
-pub fn agent_code_tool_schemas(agent: &crate::domain::agent_manager::AgentProfile) -> Vec<(String, String, serde_json::Value)> {
+pub fn agent_code_tool_schemas(
+    agent: &crate::domain::agent_manager::AgentProfile,
+) -> Vec<(String, String, serde_json::Value)> {
     let explicit = explicit_code_tools(agent);
     if agent.tools.iter().any(|t| t == "code_write") {
         crate::infra::tools::tool_schemas(true, &explicit)
@@ -147,15 +154,25 @@ pub fn get_mcp_server_path(mcp_servers_dir: &Path, name: &str) -> Result<PathBuf
     let possible_paths = vec![
         mcp_servers_dir.join(format!("{}.ts", name)),
         mcp_servers_dir.join(format!("{}.js", name)),
-        PathBuf::from("src-tauri").join("mcp_servers").join(format!("{}.ts", name)),
-        PathBuf::from("src-tauri").join("mcp_servers").join(format!("{}.js", name)),
+        PathBuf::from("src-tauri")
+            .join("mcp_servers")
+            .join(format!("{}.ts", name)),
+        PathBuf::from("src-tauri")
+            .join("mcp_servers")
+            .join(format!("{}.js", name)),
     ];
-    for path in possible_paths { if path.exists() { return Ok(path); } }
+    for path in possible_paths {
+        if path.exists() {
+            return Ok(path);
+        }
+    }
     Err(format!("MCP-сервер {} не найден", name))
 }
 
 fn find_or_download_runtime<L: Fn(String) + Clone + Send + Sync>(
-    runtime_name: &str, bins_dir: &Path, log_cb: L,
+    runtime_name: &str,
+    bins_dir: &Path,
+    log_cb: L,
 ) -> PathBuf {
     let target = env!("TARGET");
     let dev_name = format!("{}-{}.exe", runtime_name, target);
@@ -169,7 +186,9 @@ fn find_or_download_runtime<L: Fn(String) + Clone + Send + Sync>(
             exe.join("bin").join(&dev_name),
             PathBuf::from("bin").join(&dev_name),
         ] {
-            if p.exists() { return p; }
+            if p.exists() {
+                return p;
+            }
         }
     }
 
@@ -211,10 +230,9 @@ fn deno_permissions(mcp_name: &str, bins_dir: &Path) -> Vec<String> {
             "--allow-env".to_string(),
         ],
         // Вертикальные поиски (keyless REST API): только сеть + env (node-compat proxy-переменные)
-        "github_search" | "academic_search" | "youtube_search" => vec![
-            "--allow-net".to_string(),
-            "--allow-env".to_string(),
-        ],
+        "github_search" | "academic_search" | "youtube_search" => {
+            vec!["--allow-net".to_string(), "--allow-env".to_string()]
+        }
         // Сеть + запуск yt-dlp + temp-файлы + env (bins_dir)
         "youtube_mcp" => vec![
             "--allow-net".to_string(),
@@ -250,20 +268,32 @@ fn deno_permissions(mcp_name: &str, bins_dir: &Path) -> Vec<String> {
 }
 
 pub fn resolve_runtime_and_args<L: Fn(String) + Clone + Send + Sync>(
-    log_cb: L, script_path: &Path, bins_dir: &Path,
+    log_cb: L,
+    script_path: &Path,
+    bins_dir: &Path,
 ) -> (PathBuf, Vec<String>) {
     let deno_path = find_or_download_runtime("deno", bins_dir, log_cb.clone());
     log_cb(format!("   🦎 Runtime: Deno | {}", script_path.display()));
 
-    let mcp_name = script_path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-    let mut args = vec!["run".to_string(), "--no-check".to_string(), "--no-config".to_string()];
+    let mcp_name = script_path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let mut args = vec![
+        "run".to_string(),
+        "--no-check".to_string(),
+        "--no-config".to_string(),
+    ];
     args.extend(deno_permissions(mcp_name, bins_dir));
     args.push(script_path.to_string_lossy().to_string());
     (deno_path, args)
 }
 
 fn ensure_mcp_deps<L: Fn(String) + Clone + Send + Sync>(
-    mcp_name: &str, bins_dir: &Path, workspace_root: &Path, log_cb: &L,
+    mcp_name: &str,
+    bins_dir: &Path,
+    workspace_root: &Path,
+    log_cb: &L,
 ) -> Vec<(&'static str, String)> {
     if mcp_name == "browser" {
         let mut envs: Vec<(&'static str, String)> = Vec::new();
@@ -275,14 +305,23 @@ fn ensure_mcp_deps<L: Fn(String) + Clone + Send + Sync>(
         match bin_downloader::ensure_cloak_browser(bins_dir, log_cb) {
             Ok(exe) => {
                 envs.push(("KING_ORCH_CHROME_PATH", exe.to_string_lossy().to_string()));
-                log_cb(format!("🕵️ Браузер: CloakBrowser (stealth) | {}", exe.display()));
+                log_cb(format!(
+                    "🕵️ Браузер: CloakBrowser (stealth) | {}",
+                    exe.display()
+                ));
             }
             Err(e) => {
-                log_cb(format!("⚠️ CloakBrowser недоступен ({}), пробуем Chrome-for-Testing", e));
+                log_cb(format!(
+                    "⚠️ CloakBrowser недоступен ({}), пробуем Chrome-for-Testing",
+                    e
+                ));
                 match bin_downloader::ensure_chrome_bin(bins_dir, log_cb) {
                     Ok(exe) => {
                         envs.push(("KING_ORCH_CHROME_PATH", exe.to_string_lossy().to_string()));
-                        log_cb(format!("🌐 Браузер: Chrome-for-Testing | {}", exe.display()));
+                        log_cb(format!(
+                            "🌐 Браузер: Chrome-for-Testing | {}",
+                            exe.display()
+                        ));
                     }
                     Err(e2) => log_cb(format!("❌ Не удалось установить браузер: {}", e2)),
                 }
@@ -291,7 +330,8 @@ fn ensure_mcp_deps<L: Fn(String) + Clone + Send + Sync>(
         return envs;
     }
     if mcp_name == "youtube_mcp" {
-        if let Ok(_yt_path) = bin_downloader::ensure_runtime_bin("yt-dlp", bins_dir, log_cb.clone()) {
+        if let Ok(_yt_path) = bin_downloader::ensure_runtime_bin("yt-dlp", bins_dir, log_cb.clone())
+        {
             if let Some(bins_str) = bins_dir.to_str() {
                 return vec![("KING_ORCH_BINS_DIR", bins_str.to_string())];
             }
@@ -340,29 +380,47 @@ pub fn load_mcp_servers<L: Fn(String) + Clone + Send + Sync + 'static>(
         log_cb(format!("⏳ Инициализация MCP: {}", mcp_name));
         match get_mcp_server_path(mcp_servers_dir, mcp_name) {
             Ok(script_path) => {
-                let (runtime_path, runtime_args) = resolve_runtime_and_args(log_cb.clone(), &script_path, bins_dir);
+                let (runtime_path, runtime_args) =
+                    resolve_runtime_and_args(log_cb.clone(), &script_path, bins_dir);
                 let args_refs: Vec<&str> = runtime_args.iter().map(|s| s.as_str()).collect();
                 let envs = ensure_mcp_deps(mcp_name, bins_dir, workspace_root, log_cb);
-                let env_refs: Vec<(&str, &str)> = envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
-                match McpClient::spawn_stub_with_env(&runtime_path.to_string_lossy(), &args_refs, &env_refs, log_cb.clone()) {
-                    Ok(mut client) => {
-                        match client.list_tools() {
-                            Ok(tools) => {
-                                let mut loaded = 0;
-                                for tool in &tools {
-                                    if let Some(name) = tool.get("name").and_then(|n| n.as_str()) {
-                                        all_tools.push((mcp_name.clone(), name.to_string(), tool.clone()));
-                                        loaded += 1;
-                                    }
+                let env_refs: Vec<(&str, &str)> =
+                    envs.iter().map(|(k, v)| (*k, v.as_str())).collect();
+                match McpClient::spawn_stub_with_env(
+                    &runtime_path.to_string_lossy(),
+                    &args_refs,
+                    &env_refs,
+                    log_cb.clone(),
+                ) {
+                    Ok(mut client) => match client.list_tools() {
+                        Ok(tools) => {
+                            let mut loaded = 0;
+                            for tool in &tools {
+                                if let Some(name) = tool.get("name").and_then(|n| n.as_str()) {
+                                    all_tools.push((
+                                        mcp_name.clone(),
+                                        name.to_string(),
+                                        tool.clone(),
+                                    ));
+                                    loaded += 1;
                                 }
-                                let shared: SharedMcpClient = Arc::new(Mutex::new(client));
-                                mcp_pool.lock().unwrap().insert(mcp_name.clone(), shared);
-                                log_cb(format!("✅ MCP '{}' запущен. Инструментов: {}", mcp_name, loaded));
                             }
-                            Err(e) => log_cb(format!("❌ Ошибка списка инструментов у '{}': {}", mcp_name, e))
+                            let shared: SharedMcpClient = Arc::new(Mutex::new(client));
+                            mcp_pool.lock().unwrap().insert(mcp_name.clone(), shared);
+                            log_cb(format!(
+                                "✅ MCP '{}' запущен. Инструментов: {}",
+                                mcp_name, loaded
+                            ));
                         }
-                    }
-                    Err(e) => log_cb(format!("❌ Критическая ошибка запуска MCP '{}': {}", mcp_name, e)),
+                        Err(e) => log_cb(format!(
+                            "❌ Ошибка списка инструментов у '{}': {}",
+                            mcp_name, e
+                        )),
+                    },
+                    Err(e) => log_cb(format!(
+                        "❌ Критическая ошибка запуска MCP '{}': {}",
+                        mcp_name, e
+                    )),
                 }
             }
             Err(e) => log_cb(format!("❌ Ошибка поиска файла сервера: {}", e)),
@@ -418,8 +476,14 @@ mod tests {
         let schemas = agent_code_tool_schemas(&a);
         let names: Vec<String> = schemas.iter().map(|(_, n, _)| n.clone()).collect();
         assert!(names.contains(&"read_file".to_string()));
-        assert!(!names.contains(&"write_file".to_string()), "code_read не должен давать write_file");
-        assert!(!names.contains(&"bash".to_string()), "code_read не должен давать bash");
+        assert!(
+            !names.contains(&"write_file".to_string()),
+            "code_read не должен давать write_file"
+        );
+        assert!(
+            !names.contains(&"bash".to_string()),
+            "code_read не должен давать bash"
+        );
     }
 
     #[test]

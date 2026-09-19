@@ -1,10 +1,13 @@
-﻿use super::*;
-use std::path::Path;
+use super::*;
+use crate::domain::agent_manager::AgentProfile;
+use crate::infra::{
+    extract_model_filename, push_report, ChatAttachment, ChatMessage, GrammarSpec, LlamaEngine,
+    LlmMessage, ModelParams, SubCall, ToolCallInfo,
+};
+use serde_json::Value;
 use std::fs;
 use std::io::Write;
-use serde_json::Value;
-use crate::infra::{ChatMessage, LlmMessage, SubCall, ToolCallInfo, ModelParams, ChatAttachment, LlamaEngine, GrammarSpec, extract_model_filename, push_report};
-use crate::domain::agent_manager::AgentProfile;
+use std::path::Path;
 
 /// Ключ хранения чек-листа задач агента в сессии (как `thought`-сообщение).
 pub(crate) fn todo_store_key(agent_id: &str) -> String {
@@ -25,7 +28,11 @@ pub(crate) fn read_todos(messages: &[ChatMessage], agent_id: &str) -> Vec<(Strin
 }
 
 /// Записать/обновить чек-лист задач агента в сессии (персистится, переживает компакцию).
-pub(crate) fn write_todos(messages: &mut Vec<ChatMessage>, agent_id: &str, todos: &[(String, bool)]) {
+pub(crate) fn write_todos(
+    messages: &mut Vec<ChatMessage>,
+    agent_id: &str,
+    todos: &[(String, bool)],
+) {
     let key = todo_store_key(agent_id);
     let content = serde_json::to_string(todos).unwrap_or_default();
     for m in messages.iter_mut() {
@@ -62,7 +69,12 @@ pub(crate) fn run_todo_tool(
             }
             let mut s = String::from("📋 Список задач:\n");
             for (i, (t, done)) in todos.iter().enumerate() {
-                s.push_str(&format!("{}. [{}] {}\n", i + 1, if *done { "x" } else { " " }, t));
+                s.push_str(&format!(
+                    "{}. [{}] {}\n",
+                    i + 1,
+                    if *done { "x" } else { " " },
+                    t
+                ));
             }
             s
         }
@@ -80,11 +92,16 @@ pub(crate) fn run_todo_tool(
                         .unwrap_or("")
                         .to_string();
                     if title.trim().is_empty() {
-                        return "❌ Ошибка: для добавления нужен 'title' (текст задачи).".to_string();
+                        return "❌ Ошибка: для добавления нужен 'title' (текст задачи)."
+                            .to_string();
                     }
                     todos.push((title.clone(), false));
                     write_todos(messages, agent_id, &todos);
-                    format!("✅ Добавлена задача '{}'. Всего задач: {}.", title, todos.len())
+                    format!(
+                        "✅ Добавлена задача '{}'. Всего задач: {}.",
+                        title,
+                        todos.len()
+                    )
                 }
                 "done" | "remove" => {
                     let idx = resolve_todo_index(arguments, &todos);
@@ -108,7 +125,8 @@ pub(crate) fn run_todo_tool(
                     write_todos(messages, agent_id, &[]);
                     "🗑 Список задач очищен.".to_string()
                 }
-                _ => "❌ Ошибка: неизвестное действие. Используй add/done/remove/clear/list.".to_string(),
+                _ => "❌ Ошибка: неизвестное действие. Используй add/done/remove/clear/list."
+                    .to_string(),
             }
         }
         _ => "❌ Неизвестный todo-инструмент.".to_string(),
@@ -128,8 +146,9 @@ pub(crate) fn resolve_todo_index(
     }
     if let Some(t) = arguments.get("title").and_then(|v| v.as_str()) {
         let t = t.trim().to_lowercase();
-        return todos.iter().position(|(title, _)| title.to_lowercase().contains(&t));
+        return todos
+            .iter()
+            .position(|(title, _)| title.to_lowercase().contains(&t));
     }
     None
 }
-

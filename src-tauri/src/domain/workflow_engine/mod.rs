@@ -9,13 +9,16 @@ pub mod nodes;
 pub mod parser;
 
 pub use context::WorkflowContext;
-pub use parser::{find_workflow_by_stem, load_workflows, NodeType, WorkflowDef};
 pub use parser::WorkflowConfig;
+pub use parser::{find_workflow_by_stem, load_workflows, NodeType, WorkflowDef};
 
 use crate::domain::agent_manager::AgentProfile;
 use crate::domain::orchestrator;
 use crate::domain::parsers::clean_thought_tags;
-use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SamplingPresets, SubCall, LlmMessage, GrammarSpec, build_json_only_grammar};
+use crate::infra::{
+    build_json_only_grammar, ChatMessage, GrammarSpec, LlamaEngine, LlmMessage, ModelParams,
+    SamplingPresets, SubCall,
+};
 use nodes::find_next_node;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -73,7 +76,10 @@ where
             if let Some(preset) = self.sampling_presets.get(preset_name) {
                 return preset.clone();
             }
-            eprintln!("[workflow] Пресет '{}' не найден в sampling_presets.json, fallback на base params", preset_name);
+            eprintln!(
+                "[workflow] Пресет '{}' не найден в sampling_presets.json, fallback на base params",
+                preset_name
+            );
         }
         // 2. default_llm_params в config workflow
         if let Some(ref config) = workflow_config {
@@ -100,9 +106,11 @@ where
         out_pending_signal: &mut Option<ChatMessage>,
         two_phase_thinking: bool,
     ) -> Result<String, String> {
-        let mcp_pool: crate::infra::mcp_client::McpPool = std::sync::Arc::new(std::sync::Mutex::new(
-            std::collections::HashMap::<String, crate::infra::mcp_client::SharedMcpClient>::new(),
-        ));
+        let mcp_pool: crate::infra::mcp_client::McpPool =
+            std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
+                String,
+                crate::infra::mcp_client::SharedMcpClient,
+            >::new()));
 
         orchestrator::run_agent_node(
             self.log_cb.clone(),
@@ -123,7 +131,8 @@ where
             Some("workflow_engine".to_string()),
             self.mcp_servers_dir,
             self.bins_dir,
-            self.grammars_dir, mcp_pool,
+            self.grammars_dir,
+            mcp_pool,
             messages,
             self.msg_counter,
             injected_reports.to_string(),
@@ -140,7 +149,12 @@ where
     }
 
     /// Зовёт LLM со свободным ответом (без системного промпта) — для llm_freeform
-    pub fn call_llm_freeform(&self, user_text: &str, history: &[ChatMessage], ctx_label: &str) -> Result<String, String> {
+    pub fn call_llm_freeform(
+        &self,
+        user_text: &str,
+        history: &[ChatMessage],
+        ctx_label: &str,
+    ) -> Result<String, String> {
         // Явная инструкция по языку: у freeform нет системного промпта агента,
         // поэтому вшиваем минимальный system-промпт ТОЛЬКО с правилом языка,
         // чтобы ответ никогда не уходил на другой язык, чем у пользователя.
@@ -161,11 +175,13 @@ where
         let mut msgs: Vec<LlmMessage> = vec![LlmMessage {
             role: "system".to_string(),
             content: directive,
+            ..Default::default()
         }];
         msgs.extend(history.iter().map(|m| m.to_llm_message()));
         msgs.push(LlmMessage {
             role: "user".to_string(),
             content: user_text.to_string(),
+            ..Default::default()
         });
         let gen = self
             .engine
@@ -188,7 +204,15 @@ where
     /// Зовёт LLM напрямую (без .md агента) — для fact-экстрактора.
     /// `grammar` — строгая GBNF по контракту facts.yaml (точные ключи); если не передана —
     /// любой JSON-объект (запасной вариант).
-    pub fn call_llm_direct(&self, system_prompt: &str, user_text: &str, resolved_params: &ModelParams, ctx_label: &str, grammar: Option<String>, disable_reasoning: bool) -> Result<(String, String), String> {
+    pub fn call_llm_direct(
+        &self,
+        system_prompt: &str,
+        user_text: &str,
+        resolved_params: &ModelParams,
+        ctx_label: &str,
+        grammar: Option<String>,
+        disable_reasoning: bool,
+    ) -> Result<(String, String), String> {
         // Fact-экстрактор обязан вернуть строгий JSON-объект по контракту facts.yaml:
         // точные ключи, фиксированный порядок, без опций.
         //
@@ -202,22 +226,23 @@ where
             LlmMessage {
                 role: "system".to_string(),
                 content: system_prompt.to_string(),
+                ..Default::default()
             },
             LlmMessage {
                 role: "user".to_string(),
                 content: user_text.to_string(),
+                ..Default::default()
             },
         ];
-        (self.log_cb)(format!(
-            "[direct] LLM вызов (fact_extractor)..."
-        ));
+        (self.log_cb)(format!("[direct] LLM вызов (fact_extractor)..."));
         self.engine.set_grammar(Some(GrammarSpec {
             gbnf: Some(grammar.unwrap_or_else(build_json_only_grammar)),
             json_schema: None,
         }));
         let start = std::time::Instant::now();
 
-        let gen = self.engine
+        let gen = self
+            .engine
             .generate_chat(
                 &msgs,
                 self.max_gen_tokens,
@@ -231,7 +256,10 @@ where
                 self.log_cb.clone(),
             )
             .map_err(|e| format!("Ошибка LLM: {}", e));
-        (self.log_cb)(format!("[llm] LLM ответ за {:.1}с", start.elapsed().as_secs_f32()));
+        (self.log_cb)(format!(
+            "[llm] LLM ответ за {:.1}с",
+            start.elapsed().as_secs_f32()
+        ));
         gen.map(|g| (g.text, g.reasoning))
     }
 }
@@ -256,7 +284,12 @@ where
         workflow.edges.len()
     ));
 
-    let mut queue: Vec<String> = workflow.nodes.first().map(|n| n.id.clone()).into_iter().collect();
+    let mut queue: Vec<String> = workflow
+        .nodes
+        .first()
+        .map(|n| n.id.clone())
+        .into_iter()
+        .collect();
     // visited → visits: узел может выполниться несколько раз (циклы через рёбра),
     // но не больше node.max_visits (default 1 = прежнее поведение visited-логики).
     let max_visits_map: std::collections::HashMap<String, u32> = workflow
@@ -274,15 +307,27 @@ where
     let mut last_node_output: Option<serde_json::Value> = None;
 
     while let Some(node_id) = {
-        if queue.is_empty() { None } else { Some(queue.remove(0)) }
+        if queue.is_empty() {
+            None
+        } else {
+            Some(queue.remove(0))
+        }
     } {
         if runner.cancel_flag.load(Ordering::SeqCst) {
-            return Err(("Прервано пользователем".to_string(), context.messages.clone()));
+            return Err((
+                "Прервано пользователем".to_string(),
+                context.messages.clone(),
+            ));
         }
 
         let node = match workflow.nodes.iter().find(|n| n.id == node_id) {
             Some(n) => n,
-            None => return Err((format!("Узел '{}' не найден в workflow", node_id), context.messages.clone())),
+            None => {
+                return Err((
+                    format!("Узел '{}' не найден в workflow", node_id),
+                    context.messages.clone(),
+                ))
+            }
         };
 
         let node_max_visits = max_visits_map.get(&node_id).copied().unwrap_or(1);
@@ -296,10 +341,13 @@ where
         // а не тихий выход (§2.2).
         executed_steps += 1;
         if executed_steps > max_steps {
-            return Err((format!(
+            return Err((
+                format!(
                 "[workflow] '{}' превысил лимит шагов (max_steps={}) — вероятно бесконечный цикл",
                 workflow.name, max_steps
-            ), context.messages.clone()));
+            ),
+                context.messages.clone(),
+            ));
         }
 
         let node_start = Instant::now();
@@ -338,11 +386,15 @@ where
         };
 
         if !node.disabled {
-            (runner.log_cb)(format!("[workflow] Узел '{}' выполнен за {:.1}с", node.id, node_start.elapsed().as_secs_f32()));
-            context.node_outputs.insert(node.id.clone(), result.output.clone());
+            (runner.log_cb)(format!(
+                "[workflow] Узел '{}' выполнен за {:.1}с",
+                node.id,
+                node_start.elapsed().as_secs_f32()
+            ));
+            context
+                .node_outputs
+                .insert(node.id.clone(), result.output.clone());
             last_node_output = Some(result.output.clone());
-
-
         }
 
         // Строим новый порядок очереди: [next_node, ...next_nodes, ...остаток очереди]

@@ -1,11 +1,14 @@
-﻿use super::*;
-use std::path::Path;
-use std::fs;
-use std::io::Write;
-use serde_json::Value;
-use crate::infra::{ChatMessage, LlmMessage, SubCall, ToolCallInfo, ModelParams, ChatAttachment, LlamaEngine, GrammarSpec, extract_model_filename, push_report};
+use super::*;
 use crate::domain::agent_manager::AgentProfile;
 use crate::domain::parsers::{clean_thought_tags, split_thinking_and_answer};
+use crate::infra::{
+    extract_model_filename, push_report, ChatAttachment, ChatMessage, GrammarSpec, LlamaEngine,
+    LlmMessage, ModelParams, SubCall, ToolCallInfo,
+};
+use serde_json::Value;
+use std::fs;
+use std::io::Write;
+use std::path::Path;
 
 /// Хвост строки длиной ≤ `n` символов (без разрыва UTF-8).
 pub(crate) fn tail_chars(s: &str, n: usize) -> String {
@@ -26,7 +29,11 @@ pub(crate) fn extract_answer_from_combined(combined: &str, fallback: &str) -> St
     }
     // Нет распознанных маркеров размышлений → обычная чистка всего текста
     let full = clean_thought_tags(combined);
-    if !full.trim().is_empty() { full } else { fallback.to_string() }
+    if !full.trim().is_empty() {
+        full
+    } else {
+        fallback.to_string()
+    }
 }
 
 /// Артефакт докачки: финальный ответ начинается с многоточия — модель
@@ -37,8 +44,11 @@ pub(crate) fn starts_with_ellipsis(s: &str) -> bool {
 }
 
 pub(crate) fn safe_truncate(s: &str, max_len: usize) -> String {
-    if s.len() <= max_len { return s.to_string(); }
-    let end = s.char_indices()
+    if s.len() <= max_len {
+        return s.to_string();
+    }
+    let end = s
+        .char_indices()
         .take_while(|(i, _)| *i < max_len)
         .last()
         .map(|(i, c)| i + c.len_utf8())
@@ -47,17 +57,27 @@ pub(crate) fn safe_truncate(s: &str, max_len: usize) -> String {
 }
 
 pub(crate) fn truncate_result(text: &str, max_len: usize) -> String {
-    if text.len() <= max_len { text.to_string() }
-    else {
-        let cut = text.char_indices().take_while(|(i, _)| *i < max_len).last()
-            .map(|(i, c)| i + c.len_utf8()).unwrap_or(max_len.min(text.len()));
+    if text.len() <= max_len {
+        text.to_string()
+    } else {
+        let cut = text
+            .char_indices()
+            .take_while(|(i, _)| *i < max_len)
+            .last()
+            .map(|(i, c)| i + c.len_utf8())
+            .unwrap_or(max_len.min(text.len()));
         format!("{}...\n(обрезано)", &text[..cut])
     }
 }
 
 pub(crate) fn sanitize_name(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
-
