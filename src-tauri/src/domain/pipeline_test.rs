@@ -19,6 +19,13 @@ pub struct ValidationRules {
     pub timeout_sec: u64,
     pub source_file: String,
     pub target_path: String,
+    /// Опциональный файл-план (e.g. plan.md) из fixture-папки, который
+    /// копируется в `.agents_workspace/task.md` перед запуском пайплайна «Кодер».
+    #[serde(default)]
+    pub plan_file: Option<String>,
+    /// Куда копировать plan_file (по умолчанию None — план не копируется).
+    #[serde(default)]
+    pub plan_target: Option<String>,
     pub levels: ValidationLevels,
 }
 
@@ -216,6 +223,20 @@ pub fn run_pipeline_test(
     let target_file = project_root.join(&test.validation.target_path);
     std::fs::write(&target_file, &test.source_file_content)
         .map_err(|e| format!("Ошибка записи {}: {}", target_file.display(), e))?;
+
+    // Копируем план (если указан) в plan_target — для пайплайна «Кодер»
+    if let (Some(plan_file), Some(plan_target)) = (&test.validation.plan_file, &test.validation.plan_target) {
+        let plan_src = test.dir.join(plan_file);
+        let plan_content = std::fs::read_to_string(&plan_src)
+            .map_err(|e| format!("Ошибка чтения плана {}: {}", plan_src.display(), e))?;
+        let plan_path = project_root.join(plan_target);
+        if let Some(parent) = plan_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Ошибка создания {}: {}", parent.display(), e))?;
+        }
+        std::fs::write(&plan_path, &plan_content)
+            .map_err(|e| format!("Ошибка записи плана {}: {}", plan_path.display(), e))?;
+    }
 
     status_cb(format!("Запуск workflow '{}'...", test.validation.workflow_name), 10);
 
@@ -419,11 +440,43 @@ fn validate_file_change(project_root: &Path, validation: &ValidationRules) -> Le
     LevelResult { passed, details }
 }
 
+fn parse_cmdline(s: &str) -> Vec<String> {
+    // Windows-style парсинг: пробел/таб разделяют аргументы вне двойных кавычек.
+    let mut args = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    for c in s.chars() {
+        match c {
+            '"' => in_quotes = !in_quotes,
+            ' ' | '\t' if !in_quotes => {
+                if !cur.is_empty() {
+                    args.push(std::mem::take(&mut cur));
+                }
+            }
+            _ => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        args.push(cur);
+    }
+    args
+}
+
 fn validate_functional(project_root: &Path, rules: &FunctionalLevel) -> LevelResult {
     let mut details = Vec::new();
 
-    let output = std::process::Command::new("cmd")
-        .args(["/C", &rules.run_cmd])
+    // Запускаем напрямую, без cmd /C: иначе кавычки внутри run_cmd (например
+    // findstr /C:"..." ) искажаются и команда перестаёт находить паттерн.
+    let argv = parse_cmdline(&rules.run_cmd);
+    if argv.is_empty() {
+        return LevelResult {
+            passed: false,
+            details: vec!["❌ пустой run_cmd".to_string()],
+        };
+    }
+
+    let output = std::process::Command::new(&argv[0])
+        .args(&argv[1..])
         .current_dir(project_root)
         .output();
 
@@ -589,6 +642,35 @@ mod tests {
     }
 
     #[test]
+    fn test_load_coding_team_bugfix2_fixture() {
+        let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let tests = load_pipeline_tests(project_root).expect("fixtures не загрузились");
+
+        let t = tests.iter().find(|t| t.id == "coding_team_bugfix2")
+            .expect("coding_team_bugfix2 не найден");
+        assert_eq!(t.validation.workflow_name, "Аналитик кода");
+        assert_eq!(t.validation.source_file, "session_store.py");
+        assert!(t.source_file_content.contains("SessionStore._sessions"),
+            "исходник должен содержать классовый доступ (признак архитектурного бага)");
+        assert!(t.validation.plan_file.is_none(), "у аналитической фикстуры не должно быть плана");
+        assert!(!t.task_prompt.is_empty());
+    }
+
+    #[test]
+    fn test_load_coding_team_coder_fixture() {
+        let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let tests = load_pipeline_tests(project_root).expect("fixtures не загрузились");
+
+        let t = tests.iter().find(|t| t.id == "coding_team_coder_apply1")
+            .expect("coding_team_coder_apply1 не найден");
+        assert_eq!(t.validation.workflow_name, "Кодер");
+        assert_eq!(t.validation.plan_file.as_deref(), Some("plan.md"));
+        assert_eq!(t.validation.plan_target.as_deref(), Some(".agents_workspace/task.md"));
+        assert!(t.source_file_content.contains("SessionStore._sessions"));
+        assert!(!t.task_prompt.is_empty());
+    }
+
+    #[test]
     #[ignore]
     fn test_coding_team_bugfix_e2e() {
         let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
@@ -613,6 +695,83 @@ mod tests {
                 for m in &r.messages {
                     let preview: String = m.content_preview.chars().take(100).collect();
                     eprintln!("[{}] {}: {}", m.msg_type, m.author, preview);
+                }
+            }
+            Err(e) => {
+                eprintln!("=== ERROR: {} ===", e);
+            }
+        }
+
+        let result = result.expect("pipeline test упал");
+        assert!(result.overall_passed, "pipeline test НЕ пройден: {:?}", result.level1_structure.details);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_coding_team_bugfix2_e2e() {
+        let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let model_path = std::env::var("TEST_MODEL_PATH")
+            .unwrap_or_else(|_| "D:\\nn\\models\\llm\\uncen\\qwen3.8-9b\\Qwen3.8-9B-heretic-uncensored.i1-IQ4_NL.gguf".to_string());
+
+        let result = run_pipeline_test_cli(
+            "coding_team_bugfix2",
+            &model_path,
+            project_root,
+        );
+
+        // Диагностика
+        match &result {
+            Ok(r) => {
+                eprintln!("=== BUGFIX2 (Аналитик кода) RESULT ===");
+                eprintln!("overall_passed: {}", r.overall_passed);
+                eprintln!("level1: {} - {:?}", r.level1_structure.passed, r.level1_structure.details);
+                eprintln!("level2: {} - {:?}", r.level2_file.passed, r.level2_file.details);
+                eprintln!("level3: {} - {:?}", r.level3_functional.passed, r.level3_functional.details);
+                eprintln!("report: {:?}", r.report_path);
+                for m in &r.messages {
+                    let preview: String = m.content_preview.chars().take(150).collect();
+                    eprintln!("[{}] {}: {}", m.msg_type, m.author, preview);
+                }
+            }
+            Err(e) => {
+                eprintln!("=== ERROR: {} ===", e);
+            }
+        }
+
+        let result = result.expect("pipeline test упал");
+        assert!(result.overall_passed, "pipeline test НЕ пройден: {:?}", result.level1_structure.details);
+    }
+
+    #[test]
+    #[ignore]
+    fn test_coding_team_coder_apply_e2e() {
+        let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        let model_path = std::env::var("TEST_MODEL_PATH")
+            .unwrap_or_else(|_| "D:\\nn\\models\\llm\\uncen\\qwen3.8-9b\\Qwen3.8-9B-heretic-uncensored.i1-IQ4_NL.gguf".to_string());
+
+        let result = run_pipeline_test_cli(
+            "coding_team_coder_apply1",
+            &model_path,
+            project_root,
+        );
+
+        // Диагностика
+        match &result {
+            Ok(r) => {
+                eprintln!("=== CODER APPLY RESULT ===");
+                eprintln!("overall_passed: {}", r.overall_passed);
+                eprintln!("level1: {} - {:?}", r.level1_structure.passed, r.level1_structure.details);
+                eprintln!("level2: {} - {:?}", r.level2_file.passed, r.level2_file.details);
+                eprintln!("level3: {} - {:?}", r.level3_functional.passed, r.level3_functional.details);
+                eprintln!("report: {:?}", r.report_path);
+                for m in &r.messages {
+                    let preview: String = m.content_preview.chars().take(150).collect();
+                    eprintln!("[{}] {}: {}", m.msg_type, m.author, preview);
+                }
+                let fixed = project_root.join(".agents_workspace").join("test_task").join("session_store.py");
+                if let Ok(content) = std::fs::read_to_string(&fixed) {
+                    eprintln!("=== ИТОГОВЫЙ ФАЙЛ ===");
+                    eprintln!("{}", content);
                 }
             }
             Err(e) => {

@@ -141,6 +141,8 @@ nodes:
   cases_priority:
   - key: bug_captured
     to: call_task_planner
+  - key: bug-captured
+    to: call_task_planner
   default: honest_fail_bug
   ui_pos:
     x: 1928

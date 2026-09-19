@@ -42,7 +42,7 @@ set "CARGO_PROFILE_RELEASE_LTO="
 set "CARGO_PROFILE_RELEASE_CODEGEN_UNITS="
 set "CARGO_PROFILE_RELEASE_STRIP="
 
-node "%TOOLKIT%" test --project "%PROJ%" %*
+node "%TOOLKIT%" test --project "%PROJ:~0,-1%" %*
 if errorlevel 1 (
   echo [ERROR] Tests failed.
   pause

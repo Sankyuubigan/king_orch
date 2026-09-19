@@ -1,0 +1,21 @@
+{
+  "workflow_name": "Аналитик кода",
+  "model_path": "D:\\nn\\models\\llm\\uncen\\qwen3.8-9b\\Qwen3.8-9B-heretic-uncensored.i1-IQ4_NL.gguf",
+  "timeout_sec": 900,
+  "source_file": "session_store.py",
+  "target_path": ".agents_workspace/test_task/session_store.py",
+  "levels": {
+    "structure": {
+      "required_agents": ["bug_analyst", "task_planner"],
+      "forbidden_paths": ["primary_coder"]
+    },
+    "file_change": {
+      "must_contain": ["_sessions: dict", "_current_user: str"],
+      "must_not_contain": []
+    },
+    "functional": {
+      "run_cmd": "findstr /C:\"_current_user\" .agents_workspace\\test_task\\session_store.py",
+      "expected_stdout_contains": "_current_user"
+    }
+  }
+}

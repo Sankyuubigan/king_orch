@@ -23,6 +23,8 @@ test_cases/fixtures/coding_team_bugfix1/
   "timeout_sec": 600,
   "source_file": "buggy.py",
   "target_path": ".agents_workspace/test_task/buggy.py",
+  "plan_file": "plan.md",
+  "plan_target": ".agents_workspace/task.md",
   "levels": {
     "structure": {
       "required_agents": ["bug_analyst", "task_planner"],
@@ -36,6 +38,10 @@ test_cases/fixtures/coding_team_bugfix1/
   }
 }
 ```
+
+> `plan_file` / `plan_target` (необязательные): если заданы, файл `plan.md` из fixture-папки
+> копируется в `.agents_workspace/task.md` перед запуском. Нужно для пайплайна «Кодер»,
+> который применяет утверждённый план. Для пайплайна «Аналитик кода» не используются.
 
 ## 3-уровневая валидация
 
@@ -93,6 +99,18 @@ test.bat "test_coding_team_bugfix_e2e -- --ignored"
 - **Задача:** Найти первопричину бага в Python-функции `sum_list` (пропускает последний элемент) и составить план
 - **Валидация:** L1 (структура — `bug_analyst` + `task_planner`, запрещён `primary_coder`) + L2/L3 (код проекта НЕ изменён аналитиком)
 - **Запуск:** `test.bat "test_coding_team_bugfix_e2e -- --ignored"`
+
+### coding_team_bugfix2
+- **Пайплайн:** Аналитик кода
+- **Задача:** Архитектурный баг: `SessionStore` хранит состояние на уровне КЛАССА (`_sessions`, `_current_user`, `_active_regions`), из-за чего сессии разных регионов (eu/us) «протекают» между экземплярами. В задании указан только поверхностный симптом (`eu.current()` показывает чужой профиль) — аналитик должен сам догадаться, что корень архитектурный, написать падающий тест и предложить план рефакторинга (перенос состояния в `self.*`)
+- **Валидация:** L1 (структура — `bug_analyst` + `task_planner`, запрещён `primary_coder`) + L2/L3 (код проекта НЕ изменён аналитиком)
+- **Запуск:** `test.bat "test_coding_team_bugfix2_e2e -- --ignored"`
+
+### coding_team_coder_apply1
+- **Пайплайн:** Кодер
+- **Задача:** Применить утверждённый план (`.agents_workspace/task.md`, подкладывается из `plan.md` фикстуры) для исправления того же архитектурного бага `SessionStore`: `primary_coder` переносит состояние из класса в экземпляр, `qa_diagnost` верифицирует фикс
+- **Валидация:** L1 (структура — `primary_coder` + `qa_diagnost`, запрещены `bug_analyst`/`task_planner`) + L2 (файл исправлен: `self._sessions` есть, `SessionStore._sessions` нет) + L3 (функциональный: `python session_store.py` → `PASS`)
+- **Запуск:** `test.bat "test_coding_team_coder_apply_e2e -- --ignored"`
 
 ### psychotherapist_back_pain
 - **Пайплайн:** Психотерапевт

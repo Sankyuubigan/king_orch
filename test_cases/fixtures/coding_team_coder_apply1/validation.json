@@ -1,0 +1,23 @@
+{
+  "workflow_name": "Кодер",
+  "model_path": "D:\\nn\\models\\llm\\uncen\\qwen3.8-9b\\Qwen3.8-9B-heretic-uncensored.i1-IQ4_NL.gguf",
+  "timeout_sec": 900,
+  "source_file": "session_store.py",
+  "target_path": ".agents_workspace/test_task/session_store.py",
+  "plan_file": "plan.md",
+  "plan_target": ".agents_workspace/task.md",
+  "levels": {
+    "structure": {
+      "required_agents": ["primary_coder", "qa_diagnost"],
+      "forbidden_paths": ["bug_analyst", "task_planner"]
+    },
+    "file_change": {
+      "must_contain": ["self._sessions", "self._current_user", "self._active_regions"],
+      "must_not_contain": ["SessionStore._sessions", "SessionStore._current_user", "SessionStore._active_regions"]
+    },
+    "functional": {
+      "run_cmd": "python .agents_workspace\\test_task\\session_store.py",
+      "expected_stdout_contains": "PASS"
+    }
+  }
+}

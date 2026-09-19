@@ -636,6 +636,22 @@ where
                             next_nodes: vec![],
                         });
                     }
+                } else if let Some(ref priority_cases) = node.cases_priority {
+                    // Fallback: JSON не распарсился (модель оборвала ответ / битые кавычки),
+                    // но ключ со значением true виден в сыром тексте — маршрутизируем по нему.
+                    for pc in priority_cases {
+                        if raw_key_value_true(&resolved, &pc.key) {
+                            (runner.log_cb)(format!(
+                                "[switch] Приоритет (raw fallback): '{}' = true → {}",
+                                pc.key, pc.to
+                            ));
+                            return Ok(NodeResult {
+                                output: serde_json::json!({"matched_case": pc.key, "target": pc.to}),
+                                next_node: Some(pc.to.clone()),
+                                next_nodes: vec![],
+                            });
+                        }
+                    }
                 }
             }
 
@@ -982,6 +998,32 @@ fn extract_json(text: &str) -> Option<String> {
         .and_then(|start| text[start..].rfind('}').map(|end| text[start..start + end + 1].to_string()))
 }
 
+/// Проверяет, присутствует ли в сыром тексте пара `"key": true` (или `key: true`).
+/// Устойчив к обрезанному/битому JSON (незакрытые строки, кавычки внутри значений),
+/// когда обычный парсинг JSON уже не помогает. Для ключей вида `bug-captured`
+/// допускает и `bug_captured` (дефис против подчёркивания у маленьких моделей).
+fn raw_key_value_true(text: &str, key: &str) -> bool {
+    let key_variants: Vec<String> = {
+        let mut v = vec![key.to_string()];
+        if key.contains('-') {
+            v.push(key.replace('-', "_"));
+        } else if key.contains('_') {
+            v.push(key.replace('_', "-"));
+        }
+        v
+    };
+
+    for k in &key_variants {
+        let pat = format!("\"{}\"\\s*:\\s*true", k);
+        if let Ok(re) = regex::Regex::new(&pat) {
+            if re.is_match(text) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Извлекает JSON, содержащий ОДИН из указанных ключей (key-aware).
 /// Ищет все `{...}` блоки и возвращает тот, который содержит хотя бы один
 /// из `required_keys`. Используется как fallback для switch-нод, когда
@@ -1244,5 +1286,20 @@ mod tests {
         let signals = signal_map(&[]);
         let messages = vec![msg("soma_translator")];
         assert!(!condition_rule_matches(&rule("soma_translator", serde_json::json!("present")), &signals, &messages));
+    }
+
+    #[test]
+    fn raw_key_value_true_detects_broken_json() {
+        // Обрезанный ответ QA (прогон 3): JSON невалиден (незакрытые кавычки),
+        // но ключ со значением true присутствует в тексте.
+        let text = r#"{"bug-captured": true, "logs": "❌ ASSERT: us-store.get('alice') should return None (session isolation violated)\nExpected: null\nGot: {\"id\": \"alice\", \"token\": \"eu-token-123\", \"region\": \"eu\"}\n\n---\n\n## Баг пойман с поличным ✅\n\n**Что произошло:**\n```\nRegion EU:  store_eu.set(\" }"#;
+        assert!(raw_key_value_true(text, "bug-captured"));
+        assert!(raw_key_value_true(text, "bug_captured"), "разделитель-дефис/подчёркивание должен интерпретироваться одинаково");
+    }
+
+    #[test]
+    fn raw_key_value_true_requires_true_value() {
+        assert!(!raw_key_value_true(r#"{"bug-captured": false, "logs": "x"}"#, "bug-captured"));
+        assert!(!raw_key_value_true(r#"{"bug-captured": "true"}"#, "bug-captured"), "строка 'true' не считается булевым true без кавычек после ':'");
     }
 }

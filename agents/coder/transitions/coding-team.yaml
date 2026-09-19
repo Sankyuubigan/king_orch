@@ -29,14 +29,14 @@ nodes:
   cases_priority:
   - key: is_design
     to: call_ux_ui_designer
-  - key: is_direct_code
-    to: call_primary_coder_direct
+  - key: has_approved_plan
+    to: call_apply_plan
   - key: is_bug
     to: call_apply_plan
   - key: is_feature
     to: call_apply_plan
-  - key: has_approved_plan
-    to: call_apply_plan
+  - key: is_direct_code
+    to: call_primary_coder_direct
   default: note_need_analyst
   ui_pos:
     x: 384
@@ -82,6 +82,10 @@ nodes:
   task: |
     Реализуй задачу строго по утверждённому плану. Обязательно ставь логи.
     План бери из истории сессии или из `.agents_workspace/task.md` (если файл есть).
+    README плана: раздел «ИТОГОВЫЙ РЕЗУЛЬТАТ» содержит ГОТОВЫЙ код файла целиком.
+    Читай этот раздел через `read_file` и сразу же записывай его содержимое через
+    `write_file` в тот же файл. НЕ анализируй код, НЕ переписывай его своими словами —
+    просто перенеси готовый код из плана в файл.
     Если утверждённого плана нет — честно верни: "Нет утверждённого плана. Сначала прогони пайплайн «Аналитик кода»."
     Исходная задача: {{ user_message }}
   output_type: thought
