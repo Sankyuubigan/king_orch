@@ -481,6 +481,117 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   border-color: #ef535066;
 }
 
+/* ─── Condition Router tree editor ─── */
+.ge-cond-group {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-bg);
+  padding: 6px;
+  margin-bottom: 6px;
+}
+.ge-cond-root {
+  border-color: #5c6bc0;
+  background: #5c6bc011;
+}
+.ge-cond-group-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.ge-cond-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: var(--muted, #888);
+}
+.ge-cond-logic {
+  width: auto;
+  flex: 1;
+  padding: 4px 6px;
+  font-size: 12px;
+}
+.ge-cond-children {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ge-cond-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ge-cond-field {
+  flex: 1.4;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.ge-cond-eq {
+  color: #888;
+  flex-shrink: 0;
+}
+.ge-cond-equals {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 8px;
+  font-size: 12px;
+}
+.ge-cond-up,
+.ge-cond-down,
+.ge-cond-remove,
+.ge-cond-remove-group {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-bg);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.ge-cond-up:hover,
+.ge-cond-down:hover {
+  background: var(--session-hover);
+  border-color: var(--primary);
+}
+.ge-cond-remove,
+.ge-cond-remove-group {
+  color: #ef5350;
+  border-color: transparent;
+  background: transparent;
+}
+.ge-cond-remove:hover,
+.ge-cond-remove-group:hover {
+  background: #ef535022;
+  border-color: #ef535066;
+}
+.ge-cond-group-foot {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.ge-cond-add,
+.ge-cond-add-group {
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 4px 8px;
+}
+.ge-cond-add:hover,
+.ge-cond-add-group:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
 /* ─── Disabled toggle in sidebar ─── */
 .ge-disabled-row {
   display: flex;

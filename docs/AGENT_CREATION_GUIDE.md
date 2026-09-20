@@ -310,7 +310,7 @@ edges:
     cases_priority:
       - key: has_resistance
         to: call_curator
-      - key: has_somatic
+      - key: reports_body_discomfort
         to: call_soma
     default: freestyle
 ```
@@ -537,10 +537,17 @@ facts:
     description: "Простое приветствие"
     criteria: Сообщение не содержит описания проблемы
 
-  - id: has_somatic
+  - id: reports_body_discomfort
     description: "Есть соматические симптомы"
     criteria: Описывает физическую боль, зажимы, болезни
+
+  - id: somatic_presence
+    description: "Статус соматической темы в сессии"
+    criteria: "Определи этап соматики: new — жалоба только появилась, history — подтверждена и уже переведена, none — соматики нет"
+    values: [new, history, none]
 ```
+
+> **Enum-факты**: если в `facts.yaml` у факта задан `values`, экстрактор возвращает **строку из допустимых значений** (вместо `true`/`false`), а `condition_router` сравнивает её по `equals`. Булевых фактов это не касается — у них `values` нет. На поле такого факта в GUI-редакторе рисуется выпадающий список значений.
 
 ### Как добавить `llm_freeform` для off-topic
 
@@ -583,7 +590,7 @@ facts:
   criteria: Не путай с обычной усталостью, это про что-то странное в теле, но не всегда
 
 # ХОРОШО: перцептивно, позитивно, явно
-- id: has_somatic
+- id: reports_body_discomfort
   criteria: Пользователь описывает физические ощущения тела (боль, зажим, напряжение, дискомфорт, симптом болезни).
 ```
 

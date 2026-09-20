@@ -1,6 +1,6 @@
 use crate::domain::workflow_engine::context::WorkflowContext;
 use crate::domain::workflow_engine::parser::{
-    ConditionRule, EdgeDef, NodeDef, NodeType, WorkflowConfig, WorkflowDef,
+    ConditionNode, EdgeDef, NodeDef, NodeType, WorkflowConfig, WorkflowDef,
 };
 use crate::domain::workflow_engine::WorkflowRunner;
 use crate::infra::{extract_model_filename, message_phase, push_report, ChatMessage, SubCall};
@@ -14,61 +14,105 @@ pub struct NodeResult {
     pub next_nodes: Vec<String>,
 }
 
-/// Сравнивает одно условие condition_router с текущим состоянием контекста.
+/// Сравнивает одно листовое условие condition_router с текущим состоянием контекста.
 ///
-/// Разбор `rule.field` (без отдельного `signal_name` у ноды):
+/// Разбор `field`:
 /// - Поле с точкой (`validator_report.e1`, `a.b.c`): доступ к signal bus.
 ///   Первый сегмент — имя сигнала, остальные — вложенный dot-path поиск.
-///   Сравнение с `rule.equals` по типу (bool/string/number).
-/// - Поле без точки (`soma_translator`): проверка существования отчёта агента
-///   в сообщениях сессии (`author == field`). `rule.equals` должен быть bool:
-///   `true` — отчёт должен существовать, `false` — должен отсутствовать.
+///   Сравнение с `equals` по типу (bool/string/number).
+/// - Поле без точки: сначала значение из signal bus (факты экстрактора
+///   каскадируются в сигналы), если ключ присутствует — типизированное сравнение
+///   с `equals`. Иначе — проверка существования отчёта агента в сессии
+///   (`author == field`), где `equals` должен быть bool: `true` — отчёт должен
+///   существовать, `false` — должен отсутствовать.
 pub fn condition_rule_matches(
-    rule: &ConditionRule,
+    field: &str,
+    equals: &serde_json::Value,
     signals: &std::collections::HashMap<String, serde_json::Value>,
     messages: &[ChatMessage],
 ) -> bool {
-    let field = &rule.field;
-
     if field.contains('.') {
-        let mut parts = field.splitn(2, '.');
-        let signal_key = parts.next().unwrap_or("");
-        let rest = parts.next().unwrap_or("");
-        let signal = signals
-            .get(signal_key)
-            .cloned()
-            .unwrap_or(serde_json::Value::Null);
-        let mut current = signal;
-        for part in rest.split('.') {
-            match current.get(part) {
-                Some(next) => current = next.clone(),
-                None => return false,
-            }
-        }
-        return match &rule.equals {
-            serde_json::Value::Bool(expected) => {
-                current.as_bool().map(|v| v == *expected).unwrap_or(false)
-            }
-            serde_json::Value::String(expected) => current
-                .as_str()
-                .map(|v| v == expected.as_str())
-                .unwrap_or(false),
-            serde_json::Value::Number(expected) => current
-                .as_f64()
-                .map(|v| v == expected.as_f64().unwrap_or(0.0))
-                .unwrap_or(false),
-            _ => false,
-        };
+        return match_signal_path(field, equals, signals);
     }
 
-    match &rule.equals {
+    // Поле без точки: значение факта из signal bus имеет приоритет над отчётом.
+    if let Some(signal) = signals.get(field) {
+        return value_equals(signal, equals);
+    }
+
+    match equals {
         serde_json::Value::Bool(expected) => {
             let exists = messages
                 .iter()
-                .any(|m| m.author.as_deref() == Some(field.as_str()));
+                .any(|m| m.author.as_deref() == Some(field));
             exists == *expected
         }
         _ => false,
+    }
+}
+
+/// Типизированное сравнение значения из signal bus с ожидаемым `equals`.
+fn value_equals(current: &serde_json::Value, expected: &serde_json::Value) -> bool {
+    match expected {
+        serde_json::Value::Bool(e) => current.as_bool().map(|v| v == *e).unwrap_or(false),
+        serde_json::Value::String(e) => current
+            .as_str()
+            .map(|v| v == e.as_str())
+            .unwrap_or(false),
+        serde_json::Value::Number(e) => current
+            .as_f64()
+            .map(|v| v == e.as_f64().unwrap_or(0.0))
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+/// Разрешает dot-path `signal.field...` в signal bus и сравнивает с `equals`.
+fn match_signal_path(
+    field: &str,
+    equals: &serde_json::Value,
+    signals: &std::collections::HashMap<String, serde_json::Value>,
+) -> bool {
+    let mut parts = field.splitn(2, '.');
+    let signal_key = parts.next().unwrap_or("");
+    let rest = parts.next().unwrap_or("");
+    let signal = signals
+        .get(signal_key)
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let mut current = signal;
+    for part in rest.split('.') {
+        match current.get(part) {
+            Some(next) => current = next.clone(),
+            None => return false,
+        }
+    }
+    value_equals(&current, equals)
+}
+
+/// Рекурсивно вычисляет условие condition_router (лист `Rule` или группа `Group`).
+/// Группа комбинирует детей по своей `logic` ("any"/"all", по умолчанию "any").
+pub fn condition_node_matches(
+    node: &ConditionNode,
+    signals: &std::collections::HashMap<String, serde_json::Value>,
+    messages: &[ChatMessage],
+) -> bool {
+    match node {
+        ConditionNode::Rule { field, equals } => {
+            condition_rule_matches(field, equals, signals, messages)
+        }
+        ConditionNode::Group { logic, conditions } => {
+            let mode = logic.as_deref().unwrap_or("any");
+            let total = conditions.len();
+            let matched = conditions
+                .iter()
+                .filter(|c| condition_node_matches(c, signals, messages))
+                .count();
+            match mode {
+                "all" => total > 0 && matched == total,
+                _ => matched > 0,
+            }
+        }
     }
 }
 
@@ -114,13 +158,11 @@ where
                     .into_iter()
                     .filter(|k| k != "thought_process")
                     .collect();
-            // Только boolean-факты — к ним применяется coerce_bool; строковые
-            // output_fields (rewritten_query и т.п.) должны остаться строками.
+            // Только boolean-факты — к ним применяется coerce_bool; enum-факты
+            // (с values) и строковые output_fields (rewritten_query и т.п.)
+            // должны остаться строками.
             let bool_keys: Vec<String> =
-                super::fact_extractor::resolve_facts(&config, Some(workflow_dir))
-                    .iter()
-                    .map(|f| f.id.clone())
-                    .collect();
+                super::fact_extractor::bool_fact_ids(&config, Some(workflow_dir));
 
             let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
             let (llm_text, llm_reasoning) = runner.call_llm_direct(
@@ -161,7 +203,7 @@ where
                     .collect::<Vec<_>>()
                     .join(", ");
                 let retry_prompt = format!(
-                    "{}\n\nВАЖНО: Ответь ТОЛЬКО JSON-объектом строго со всеми ключами: {}. Каждый факт — true/false.",
+                    "{}\n\nВАЖНО: Ответь ТОЛЬКО JSON-объектом строго со всеми ключами: {}. Каждый факт — boolean либо строка из допустимых значений.",
                     prompt, expected_str
                 );
                 let (retry_text, retry_reasoning) = runner.call_llm_direct(
@@ -204,6 +246,26 @@ where
                 llm_text.chars().take(500).collect::<String>(),
                 llm_reasoning.chars().take(300).collect::<String>()
             ));
+
+            // Enum-факты: значение обязано входить в допустимый набор; иначе
+            // fallback ("none", если он есть в наборе, иначе первое значение).
+            let enum_keys: Vec<(String, Vec<String>)> =
+                super::fact_extractor::resolve_facts(&config, Some(workflow_dir))
+                    .into_iter()
+                    .filter(|f| !f.values.is_empty())
+                    .map(|f| (f.id, f.values))
+                    .collect();
+            normalize_enum_facts(&mut parsed, &enum_keys);
+
+            // Факты — в signal bus (SSOT для ConditionRouter/SignalRouter и {{ signals }}).
+            if let Some(obj) = parsed.as_object() {
+                for (k, v) in obj {
+                    if k == "thought_process" {
+                        continue;
+                    }
+                    context.signals.insert(k.clone(), v.clone());
+                }
+            }
 
             Ok(NodeResult {
                 output: parsed,
@@ -861,14 +923,11 @@ where
             let conditions = &node.conditions;
             let logic = node.logic.as_deref().unwrap_or("any");
 
-            let mut matched_count = 0u32;
             let total = conditions.len() as u32;
-
-            for rule in conditions {
-                if condition_rule_matches(rule, &context.signals, &context.messages) {
-                    matched_count += 1;
-                }
-            }
+            let matched_count = conditions
+                .iter()
+                .filter(|c| condition_node_matches(c, &context.signals, &context.messages))
+                .count() as u32;
 
             let condition_met = match logic {
                 "all" => matched_count == total && total > 0,
@@ -1232,6 +1291,33 @@ fn coerce_bool(v: serde_json::Value) -> serde_json::Value {
     }
 }
 
+/// Enum-факты: приводит значение к допустимому набору. Недопустимое/отсутствующее
+/// значение заменяется на fallback: `"none"`, если оно есть в наборе, иначе первое.
+fn normalize_enum_facts(parsed: &mut serde_json::Value, enums: &[(String, Vec<String>)]) {
+    let obj = match parsed.as_object_mut() {
+        Some(o) => o,
+        None => return,
+    };
+    for (key, values) in enums {
+        if values.is_empty() {
+            continue;
+        }
+        let valid = obj
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| values.iter().any(|v| v == s))
+            .unwrap_or(false);
+        if !valid {
+            let fallback = if values.iter().any(|v| v == "none") {
+                "none"
+            } else {
+                values.first().map(|s| s.as_str()).unwrap_or("")
+            };
+            obj.insert(key.clone(), serde_json::Value::String(fallback.to_string()));
+        }
+    }
+}
+
 /// Валидирует выход экстрактора против контракта facts.yaml:
 /// присутствуют ВСЕ ожидаемые ключи. Лишние ключи НЕ считаются ошибкой
 /// (мягче — не выкидываем весь результат из-за одного лишнего/неизвестного поля).
@@ -1263,6 +1349,7 @@ fn fallback_facts_json(expected: &[String]) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::workflow_engine::fact_extractor::bool_fact_ids;
 
     #[test]
     fn parse_fact_json_accepts_logged_valid_output() {
@@ -1335,11 +1422,27 @@ mod tests {
             .collect()
     }
 
-    fn rule(field: &str, equals: serde_json::Value) -> ConditionRule {
-        ConditionRule {
+    fn leaf(field: &str, equals: serde_json::Value) -> ConditionNode {
+        ConditionNode::Rule {
             field: field.to_string(),
             equals,
         }
+    }
+
+    fn group(logic: &str, conditions: Vec<ConditionNode>) -> ConditionNode {
+        ConditionNode::Group {
+            logic: Some(logic.to_string()),
+            conditions,
+        }
+    }
+
+    fn leaf_matches(
+        field: &str,
+        equals: serde_json::Value,
+        signals: &std::collections::HashMap<String, serde_json::Value>,
+        messages: &[ChatMessage],
+    ) -> bool {
+        condition_rule_matches(field, &equals, signals, messages)
     }
 
     fn msg(author: &str) -> ChatMessage {
@@ -1363,23 +1466,27 @@ mod tests {
             serde_json::json!({"e1": false, "e3": true}),
         )]);
         let messages = vec![msg("validator")];
-        assert!(condition_rule_matches(
-            &rule("validator_report.e1", serde_json::json!(false)),
+        assert!(leaf_matches(
+            "validator_report.e1",
+            serde_json::json!(false),
             &signals,
             &messages
         ));
-        assert!(condition_rule_matches(
-            &rule("validator_report.e3", serde_json::json!(true)),
+        assert!(leaf_matches(
+            "validator_report.e3",
+            serde_json::json!(true),
             &signals,
             &messages
         ));
-        assert!(!condition_rule_matches(
-            &rule("validator_report.e2", serde_json::json!(true)),
+        assert!(!leaf_matches(
+            "validator_report.e2",
+            serde_json::json!(true),
             &signals,
             &messages
         ));
-        assert!(!condition_rule_matches(
-            &rule("missing_signal.e1", serde_json::json!(false)),
+        assert!(!leaf_matches(
+            "missing_signal.e1",
+            serde_json::json!(false),
             &signals,
             &messages
         ));
@@ -1389,13 +1496,15 @@ mod tests {
     fn condition_router_dotted_nested_path() {
         let signals = signal_map(&[("s", serde_json::json!({"a": {"b": 42}}))]);
         let messages = vec![];
-        assert!(condition_rule_matches(
-            &rule("s.a.b", serde_json::json!(42)),
+        assert!(leaf_matches(
+            "s.a.b",
+            serde_json::json!(42),
             &signals,
             &messages
         ));
-        assert!(!condition_rule_matches(
-            &rule("s.a.c", serde_json::json!(42)),
+        assert!(!leaf_matches(
+            "s.a.c",
+            serde_json::json!(42),
             &signals,
             &messages
         ));
@@ -1405,18 +1514,21 @@ mod tests {
     fn condition_router_agent_report_exists() {
         let signals = signal_map(&[]);
         let messages = vec![msg("soma_translator"), msg("validator")];
-        assert!(condition_rule_matches(
-            &rule("soma_translator", serde_json::json!(true)),
+        assert!(leaf_matches(
+            "soma_translator",
+            serde_json::json!(true),
             &signals,
             &messages
         ));
-        assert!(!condition_rule_matches(
-            &rule("decomposer", serde_json::json!(true)),
+        assert!(!leaf_matches(
+            "decomposer",
+            serde_json::json!(true),
             &signals,
             &messages
         ));
-        assert!(!condition_rule_matches(
-            &rule("soma_translator", serde_json::json!(false)),
+        assert!(!leaf_matches(
+            "soma_translator",
+            serde_json::json!(false),
             &signals,
             &messages
         ));
@@ -1426,8 +1538,9 @@ mod tests {
     fn condition_router_agent_report_missing_with_equals_false() {
         let signals = signal_map(&[]);
         let messages = vec![msg("validator")];
-        assert!(condition_rule_matches(
-            &rule("soma_translator", serde_json::json!(false)),
+        assert!(leaf_matches(
+            "soma_translator",
+            serde_json::json!(false),
             &signals,
             &messages
         ));
@@ -1437,11 +1550,131 @@ mod tests {
     fn condition_router_agent_report_with_non_bool_equals_is_no_match() {
         let signals = signal_map(&[]);
         let messages = vec![msg("soma_translator")];
-        assert!(!condition_rule_matches(
-            &rule("soma_translator", serde_json::json!("present")),
+        assert!(!leaf_matches(
+            "soma_translator",
+            serde_json::json!("present"),
             &signals,
             &messages
         ));
+    }
+
+    #[test]
+    fn condition_router_fact_value_from_signals_matches() {
+        // Факты экстрактора каскадируются в signal bus: поле без точки сначала
+        // читает значение сигнала, а не проверяет отчёт агента.
+        let signals = signal_map(&[("somatic_presence", serde_json::json!("history"))]);
+        let messages = vec![];
+        assert!(leaf_matches(
+            "somatic_presence",
+            serde_json::json!("history"),
+            &signals,
+            &messages
+        ));
+        assert!(!leaf_matches(
+            "somatic_presence",
+            serde_json::json!("new"),
+            &signals,
+            &messages
+        ));
+    }
+
+    #[test]
+    fn condition_router_fact_boolean_from_signals_matches() {
+        let signals = signal_map(&[("has_problem", serde_json::json!(true))]);
+        let messages = vec![];
+        assert!(leaf_matches(
+            "has_problem",
+            serde_json::json!(true),
+            &signals,
+            &messages
+        ));
+        assert!(!leaf_matches(
+            "has_problem",
+            serde_json::json!(false),
+            &signals,
+            &messages
+        ));
+    }
+
+    #[test]
+    fn condition_router_nested_group_or_of_and() {
+        // (somatic_presence == new) OR (somatic_presence == history AND no soma report)
+        let node = group(
+            "any",
+            vec![
+                leaf("somatic_presence", serde_json::json!("new")),
+                group(
+                    "all",
+                    vec![
+                        leaf("somatic_presence", serde_json::json!("history")),
+                        leaf("soma_translator", serde_json::json!(false)),
+                    ],
+                ),
+            ],
+        );
+        let messages_empty = vec![];
+        // new → true (первый лист)
+        assert!(condition_node_matches(
+            &node,
+            &signal_map(&[("somatic_presence", serde_json::json!("new"))]),
+            &messages_empty
+        ));
+        // history + нет отчёта сомы → true (вложенная AND-группа)
+        assert!(condition_node_matches(
+            &node,
+            &signal_map(&[("somatic_presence", serde_json::json!("history"))]),
+            &messages_empty
+        ));
+        // history + отчёт сомы уже есть → false
+        assert!(!condition_node_matches(
+            &node,
+            &signal_map(&[("somatic_presence", serde_json::json!("history"))]),
+            &vec![msg("soma_translator")]
+        ));
+        // none → false
+        assert!(!condition_node_matches(
+            &node,
+            &signal_map(&[("somatic_presence", serde_json::json!("none"))]),
+            &messages_empty
+        ));
+    }
+
+    #[test]
+    fn condition_router_empty_all_group_is_false() {
+        let node = group("all", vec![]);
+        assert!(!condition_node_matches(
+            &node,
+            &signal_map(&[]),
+            &vec![]
+        ));
+    }
+
+    #[test]
+    fn normalize_enum_facts_coerces_invalid_value() {
+        let mut v = serde_json::json!({"somatic_presence": "иногда"});
+        let enums = vec![(
+            "somatic_presence".to_string(),
+            vec!["new".to_string(), "history".to_string(), "none".to_string()],
+        )];
+        normalize_enum_facts(&mut v, &enums);
+        assert_eq!(
+            v.get("somatic_presence").and_then(|x| x.as_str()),
+            Some("none")
+        );
+    }
+
+    #[test]
+    fn normalize_enum_facts_keeps_valid_value() {
+        let mut v = serde_json::json!({"somatic_presence": "history"});
+        let enums = vec![(
+            "somatic_presence".to_string(),
+            vec!["new".to_string(), "history".to_string(), "none".to_string()],
+        )];
+        normalize_enum_facts(&mut v, &enums);
+        assert_eq!(
+            v.get("somatic_presence").and_then(|x| x.as_str()),
+            Some("history")
+        );
     }
 
     #[test]
@@ -1465,6 +1698,111 @@ mod tests {
         assert!(
             !raw_key_value_true(r#"{"bug-captured": "true"}"#, "bug-captured"),
             "строка 'true' не считается булевым true без кавычек после ':'"
+        );
+    }
+
+    fn psychotherapist_workflow_dir() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .join("agents/psychotherapist/transitions")
+    }
+
+    /// Сценарий реального бага из test/last_logs.txt от 14:05:21:
+    /// модель выдала правильный enum "history", но bool_keys строился из ВСЕХ
+    /// фактов → coerce_bool превращал "history" в false → normalize_enum_facts
+    /// коэрцил в "none" → check_somatic уходил в call_focus_keeper, сома
+    /// не вызывалась. Фикстуры: реальный facts.yaml (факты+enum) и файл
+    /// с сырым ответом модели.
+    #[test]
+    fn extractor_bool_fact_ids_excludes_enum_facts() {
+        let workflow_dir = psychotherapist_workflow_dir();
+        let config = WorkflowConfig {
+            facts_file: Some("facts.yaml".into()),
+            ..Default::default()
+        };
+        let bool_keys = bool_fact_ids(&config, Some(&workflow_dir));
+        assert!(
+            bool_keys.contains(&"has_problem".to_string()),
+            "has_problem — boolean-факт (без values), должен быть в bool_keys: {:?}",
+            bool_keys
+        );
+        assert!(
+            !bool_keys.contains(&"somatic_presence".to_string()),
+            "somatic_presence — enum-факт (с values), не должен приводиться к boolean: {:?}",
+            bool_keys
+        );
+    }
+
+    #[test]
+    fn extractor_parse_preserves_enum_fact_string_from_fixture() {
+        // Фикстура ответа модели — реальный вывод из лога 14:05:21.
+        let fixture_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test_fixtures/fact_extractor/somatic_history_response.json");
+        let raw = std::fs::read_to_string(&fixture_path)
+            .unwrap_or_else(|e| panic!("фикстура не читается {}: {}", fixture_path.display(), e));
+
+        let workflow_dir = psychotherapist_workflow_dir();
+        let config = WorkflowConfig {
+            facts_file: Some("facts.yaml".into()),
+            ..Default::default()
+        };
+        // Ровно как в ноде LlmFactExtractor (nodes.rs): bool_keys из bool_fact_ids.
+        let bool_keys = bool_fact_ids(&config, Some(&workflow_dir));
+        let mut parsed = parse_fact_json(&raw, &bool_keys);
+
+        // Enum-факт обязан остаться строкой "history", а НЕ превратиться в false.
+        assert_eq!(
+            parsed.get("somatic_presence").and_then(|v| v.as_str()),
+            Some("history"),
+            "coerce_bool не должен трогать enum-факт somatic_presence; parsed={}",
+            parsed
+        );
+        assert_eq!(
+            parsed.get("has_problem").and_then(|v| v.as_bool()),
+            Some(true),
+            "boolean-факт has_problem должен остаться true"
+        );
+
+        // Дальше — нормализация enum (как в ноде) и маршрутизация check_somatic.
+        let enums = crate::domain::workflow_engine::fact_extractor::resolve_facts(
+            &config,
+            Some(&workflow_dir),
+        )
+        .into_iter()
+        .filter(|f| !f.values.is_empty())
+        .map(|f| (f.id, f.values))
+        .collect::<Vec<_>>();
+        normalize_enum_facts(&mut parsed, &enums);
+        assert_eq!(
+            parsed.get("somatic_presence").and_then(|v| v.as_str()),
+            Some("history"),
+            "нормализация enum не должна затирать валидное 'history'; parsed={}",
+            parsed
+        );
+
+        // check_somatic: (somatic_presence == new) OR (history AND нет отчёта сомы).
+        // history + нет отчёта сома_translator → должен идти в call_soma_translator.
+        let signals = parsed
+            .as_object()
+            .map(|o| o.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default();
+        let node = group(
+            "any",
+            vec![
+                leaf("somatic_presence", serde_json::json!("new")),
+                group(
+                    "all",
+                    vec![
+                        leaf("somatic_presence", serde_json::json!("history")),
+                        leaf("soma_translator", serde_json::json!(false)),
+                    ],
+                ),
+            ],
+        );
+        assert!(
+            condition_node_matches(&node, &signals, &vec![]),
+            "check_somatic (any) должен сматчиться на somatic_presence='history' без отчёта сомы → call_soma_translator"
         );
     }
 }

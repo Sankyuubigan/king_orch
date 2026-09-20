@@ -56,16 +56,37 @@ pub fn expected_output_keys(config: &WorkflowConfig, workflow_dir: Option<&Path>
 /// Гибридная GBNF-грамматика (Method 3) по контракту из facts.yaml.
 /// think-block + строгий JSON с точными ключами. Модель думает в <think>...</think>,
 /// затем выдаёт JSON. disable_reasoning НЕ включается.
+/// Boolean-ключи факт-экстрактора: факты БЕЗ values (enum) — boolean (true/false).
+/// Единый источник правды: используется и в грамматике, и в этапе парсинга
+/// (nodes.rs), чтобы enum-факт (например `somatic_presence`) НЕ приводился
+/// к boolean и не терял строковое значение.
+pub fn bool_fact_ids(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Vec<String> {
+    resolve_facts(config, workflow_dir)
+        .iter()
+        .filter(|f| f.values.is_empty())
+        .map(|f| f.id.clone())
+        .collect()
+}
+
 pub fn build_facts_grammar(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> String {
     let facts = resolve_facts(config, workflow_dir);
     let output_fields = resolve_output_fields(config, workflow_dir);
     let phases = resolve_phases(config, workflow_dir);
-    let bool_keys: Vec<String> = facts.iter().map(|f| f.id.clone()).collect();
-    let mut string_keys: Vec<String> = output_fields
+    // Boolean-факты (без values) идут в bool-ключи грамматики; enum-факты
+    // (с values) — в string-ключи (грамматика даёт свободную строку, точное
+    // значение валидируется normalize_enum_facts в nodes.rs).
+    let bool_keys = bool_fact_ids(config, workflow_dir);
+    let mut string_keys: Vec<String> = facts
         .iter()
-        .filter(|f| f.field_type != "boolean")
+        .filter(|f| !f.values.is_empty())
         .map(|f| f.id.clone())
         .collect();
+    string_keys.extend(
+        output_fields
+            .iter()
+            .filter(|f| f.field_type != "boolean")
+            .map(|f| f.id.clone()),
+    );
     if !phases.is_empty() {
         string_keys.push("phase".to_string());
     }
@@ -191,7 +212,7 @@ pub(crate) fn build_default_prompt(
         ));
     }
     if !facts_list.is_empty() {
-        prompt.push_str(&format!("\n\n### Факты (true/false, определяй по сообщению пользователя и по истории переписки)\n{}", facts_list));
+        prompt.push_str(&format!("\n\n### Факты (значение по критерию: true/false либо строка строго из перечисленных вариантов; определяй по сообщению пользователя и по истории переписки)\n{}", facts_list));
     }
 
     prompt.push_str(
@@ -212,7 +233,17 @@ pub(crate) fn build_default_prompt(
     prompt.push_str("\n\nФормат ответа (ТОЛЬКО JSON, без пояснений):\n{");
     let mut keys = Vec::new();
     for f in facts {
-        keys.push(format!("\"{}\": boolean", f.id));
+        if f.values.is_empty() {
+            keys.push(format!("\"{}\": boolean", f.id));
+        } else {
+            let vals = f
+                .values
+                .iter()
+                .map(|v| format!("\"{}\"", v))
+                .collect::<Vec<_>>()
+                .join(" | ");
+            keys.push(format!("\"{}\": {}", f.id, vals));
+        }
     }
     for f in output_fields {
         let t = if f.field_type == "boolean" {
@@ -256,7 +287,7 @@ mod tests {
 
     #[test]
     #[ignore]
-    fn test_extractor_has_somatic_false_for_emotional_complaint() {
+    fn test_extractor_somatic_presence_none_for_emotional_complaint() {
         let model_path =
             std::env::var("TEST_MODEL_PATH").expect("Set TEST_MODEL_PATH to a GGUF file path");
 
@@ -353,20 +384,21 @@ Session signals: []";
         println!("{:#}", parsed);
         println!("=== END JSON ===");
 
-        let has_somatic = parsed
-            .get("has_somatic")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+        let somatic = parsed
+            .get("somatic_presence")
+            .and_then(|v| v.as_str())
+            .unwrap_or("new");
 
-        assert!(
-            !has_somatic,
-            "has_somatic должен быть false для чисто эмоциональной жалобы, но получен true"
+        assert_eq!(
+            somatic, "none",
+            "somatic_presence должен быть 'none' для чисто эмоциональной жалобы, но получен '{}'",
+            somatic
         );
     }
 
     #[test]
     #[ignore]
-    fn test_extractor_has_somatic_false_when_no_new_somatic_in_history() {
+    fn test_extractor_somatic_presence_history_when_no_new_somatic_in_history() {
         let model_path =
             std::env::var("TEST_MODEL_PATH").expect("Set TEST_MODEL_PATH to a GGUF file path");
 
@@ -468,14 +500,15 @@ Session signals: []";
         println!("{:#}", parsed);
         println!("=== END JSON ===");
 
-        let has_somatic = parsed
-            .get("has_somatic")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
+        let somatic = parsed
+            .get("somatic_presence")
+            .and_then(|v| v.as_str())
+            .unwrap_or("new");
 
-        assert!(
-            !has_somatic,
-            "has_somatic должен быть false, когда в текущем сообщении НЕТ НОВЫХ соматических жалоб (соматика уже была в истории), но получен true"
+        assert_eq!(
+            somatic, "history",
+            "somatic_presence должен быть 'history', когда в текущем сообщении НЕТ НОВЫХ соматических жалоб (соматика уже была в истории), но получен '{}'",
+            somatic
         );
     }
 }

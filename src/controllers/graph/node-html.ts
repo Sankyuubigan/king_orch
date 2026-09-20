@@ -1,4 +1,5 @@
 import { NODE_LABELS, isDynamicNode } from "./constants";
+import { renderConditionExpression } from "./condition-editor";
 import type { GraphController } from "./graph-class";
 
 export function buildNodeInnerHtml(this: GraphController, data: any, fallbackId: string = ""): string {
@@ -35,9 +36,11 @@ export function buildNodeInnerHtml(this: GraphController, data: any, fallbackId:
     signalLine = `<div class="gn-agent" style="color:#26a69a">🎯 ${parts.join(" | ")}</div>`;
   }
   if (data.type === "condition_router") {
+    const conds = Array.isArray(data.conditions) ? data.conditions : [];
     const parts: string[] = [];
-    if (Array.isArray(data.conditions) && data.conditions.length > 0) parts.push(data.conditions.map((c: { field: string; equals: unknown }) => `${c.field}=${String(c.equals)}`).join(", "));
-    if (data.logic) parts.push(`logic: ${this.esc(data.logic)}`);
+    if (conds.length > 0) {
+      parts.push(renderConditionExpression(conds, data.logic === "all" ? "all" : "any", (s) => this.esc(s)));
+    }
     if (data.true_to) parts.push(`✓ ${this.esc(data.true_to)}`);
     if (data.false_to) parts.push(`✗ ${this.esc(data.false_to)}`);
     signalLine = `<div class="gn-agent" style="color:#5c6bc0">🔀 ${parts.join(" | ")}</div>`;

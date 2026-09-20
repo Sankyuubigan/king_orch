@@ -106,6 +106,10 @@ pub struct FactDef {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub criteria: Option<String>,
+    /// Допустимые значения enum-факта. Пусто — обычный boolean-факт (true/false).
+    /// Непусто — факт кодируется строкой из набора (например `new|history|none`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub values: Vec<String>,
 }
 
 /// Декларативное поле выхода экстрактора фактов (кроме boolean-фактов).
@@ -135,13 +139,28 @@ pub struct PriorityCase {
     pub to: String,
 }
 
-/// Единичное условие для condition_router: поле + значение для сравнения.
-/// `field` с точкой (`signal.field`) — доступ к signal bus; без точки (`agent_id`) —
-/// проверка существования отчёта агента в сессии.
+/// Условие для condition_router: лист либо вложенная группа (рекурсия).
+///
+/// Лист (`Rule`): `field` + `equals`. `field` с точкой (`signal.field`) — доступ
+/// к signal bus; без точки — сначала значение факта из signal bus (если есть),
+/// иначе проверка существования отчёта агента в сессии.
+///
+/// Группа (`Group`): свои дочерние условия + `logic` ("any"/"all", по умолчанию
+/// "any"). Вложенность позволяет выражать `new OR (history AND no-report)`.
+/// Untagged: старые плоские массивы `[{field, equals}, ...]` десериализуются
+/// как `Vec<Rule>` без правок существующих YAML.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ConditionRule {
-    pub field: String,
-    pub equals: serde_json::Value,
+#[serde(untagged)]
+pub enum ConditionNode {
+    Rule {
+        field: String,
+        equals: serde_json::Value,
+    },
+    Group {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        logic: Option<String>,
+        conditions: Vec<ConditionNode>,
+    },
 }
 
 /// Защитный десериалайзер: принимает и массив `[{key, to}, ...]` и мапу `{key: to}`
@@ -221,10 +240,11 @@ pub struct NodeDef {
         deserialize_with = "deserialize_cases_priority"
     )]
     pub cases_priority: Option<Vec<PriorityCase>>,
-    /// Условия для condition_router: `field` с точкой = доступ к сигналу
-    /// (`signal.field`), без точки = существование отчёта агента (`agent_id`).
+    /// Условия для condition_router (рекурсивные: листы и группы).
+    /// `field` с точкой = доступ к сигналу (`signal.field`), без точки = значение
+    /// факта из signal bus или существование отчёта агента (`agent_id`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub conditions: Vec<ConditionRule>,
+    pub conditions: Vec<ConditionNode>,
     /// Логика комбинирования условий condition_router: "any" | "all" (по умолчанию "any")
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub logic: Option<String>,

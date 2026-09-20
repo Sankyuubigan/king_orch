@@ -12,7 +12,7 @@ export interface GraphNodeDef {
   cases?: Record<string, string>;
   default?: string;
   cases_priority?: Array<{ key: string; to: string }>;
-  conditions?: Array<{ field: string; equals: any }>;
+  conditions?: ConditionNode[];
   logic?: string;
   input_object?: string;
   inject_thoughts?: string[];
@@ -27,6 +27,10 @@ export interface GraphNodeDef {
   system_message?: string;
   disabled?: boolean;
 }
+
+export type ConditionNode =
+  | { field: string; equals: any }
+  | { logic?: string; conditions: ConditionNode[] };
 
 export interface GraphEdgeDef {
   from: string;

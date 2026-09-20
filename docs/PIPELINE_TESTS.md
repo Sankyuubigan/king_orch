@@ -119,7 +119,7 @@ test.bat "test_coding_team_bugfix_e2e -- --ignored"
 - **Валидация:** L1 (структура — вызваны `soma_translator`, `focus_keeper`, `validator`, `grounder`)
 - **Запуск:** `test.bat "test_psychotherapist_back_pain_e2e -- --ignored"`
 - **Описание пайплайна (актуальный граф `main_conversation_flow.yaml`):**
-  1. `extract_facts` — экстрактор фактов определяет `has_problem: true`, `has_somatic: true`
+  1. `extract_facts` — экстрактор фактов определяет `has_problem: true`, `somatic_presence: new|history|none`
   2. `call_soma_translator` — расшифровка боли по НГМ
   3. `call_focus_keeper` — страж направления: декомпозиции нет, жалоба конкретная → сигнал «Конкретная проблема»
   4. `check_focus_keeper_signal` — «Конкретная проблема» → `call_validator`

@@ -1,4 +1,13 @@
 import { NODE_COLORS, NODE_LABELS } from "./constants";
+import {
+  buildKnownFields,
+  conditionAt,
+  conditionGroupList,
+  conditionSiblings,
+  isConditionGroup,
+  parseEqualsValue,
+  renderConditionsTreeHtml,
+} from "./condition-editor";
 import type { GraphController } from "./graph-class";
 
 // ─── Редактор ноды в сайдбаре ───
@@ -117,28 +126,19 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
   }
 
   if (data.type === "condition_router") {
-    if (!data.conditions) data.conditions = [];
+    if (!Array.isArray(data.conditions)) data.conditions = [];
+    const facts = (this.currentWorkflowConfig?.facts || []) as Array<{ id: string; values?: string[] }>;
+    const allNodeData = this.editor
+      ? (Object.values(this.editor.drawflow.drawflow.Home.data) as any[]).map((dn) => dn.data)
+      : [];
+    const knownFields = buildKnownFields(allNodeData);
+    const fieldOptions = Array.from(new Set([...facts.map((f) => f.id), ...knownFields]));
     html += `<div class="graph-detail-section">
-      <div class="detail-label">Логика</div>
-      <select id="ge-logic" class="ge-select">
-        <option value="any" ${data.logic !== "all" ? "selected" : ""}>any — хотя бы одно условие</option>
-        <option value="all" ${data.logic === "all" ? "selected" : ""}>all — все условия</option>
-      </select>
-    </div>
-    <div class="graph-detail-section">
-      <div class="detail-label">Условия</div>
-      <div id="ge-conditions-list">`;
-    for (let i = 0; i < data.conditions.length; i++) {
-      const c = data.conditions[i];
-      html += `<div class="ge-case-row" data-index="${i}">
-        <input class="ge-input ge-cond-field" value="${this.esc(c.field)}" placeholder="validator_report.e1 или soma_translator" style="width:45%;" />
-        <span style="color:#888;margin:0 2px;">=</span>
-        <input class="ge-input ge-cond-equals" value="${this.esc(String(c.equals))}" placeholder="true" style="width:40%;" />
-        <button class="ge-cond-remove" title="Удалить">🗑</button>
-      </div>`;
-    }
-    html += `</div>
-      <button id="ge-condition-add" class="btn-secondary" style="margin-top:4px;width:100%;font-size:12px;">+ Добавить условие</button>
+      <div class="detail-label">Условия (дерево: группы — скобки, без JSON)</div>
+      <datalist id="ge-cond-fields-list">
+        ${fieldOptions.map((f) => `<option value="${this.esc(f)}"></option>`).join("")}
+      </datalist>
+      <div id="ge-conditions-tree">${renderConditionsTreeHtml(data, { esc: (s) => this.esc(s), facts, knownFields: fieldOptions })}</div>
     </div>
     <div class="graph-detail-section">
       <div class="detail-label">True → цель</div>
@@ -368,58 +368,103 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
     });
   }
 
-  // ─── Condition Router event handlers ───
+  // ─── Condition Router event handlers (дерево условий) ───
 
-  const logicSelect = document.getElementById("ge-logic") as HTMLSelectElement;
-  if (logicSelect) {
-    logicSelect.addEventListener("change", () => {
+  document.querySelectorAll(".ge-cond-logic").forEach((sel) => {
+    sel.addEventListener("change", () => {
       this.saveCheckpoint();
-      data.logic = logicSelect.value === "all" ? "all" : undefined;
+      const path = JSON.parse((sel as HTMLElement).dataset.path || "[]") as number[];
+      const isRoot = (sel as HTMLElement).dataset.isroot === "1";
+      const logic = (sel as HTMLSelectElement).value === "all" ? "all" : "any";
+      if (isRoot) {
+        data.logic = logic === "all" ? "all" : undefined;
+      } else {
+        const target = conditionAt({ conditions: data.conditions }, path);
+        if (target && isConditionGroup(target)) target.logic = logic;
+      }
       this.updateNodeHtml(nodeId);
-    });
-  }
-
-  const conditionAddBtn = document.getElementById("ge-condition-add");
-  if (conditionAddBtn) {
-    conditionAddBtn.addEventListener("click", () => {
-      this.saveCheckpoint();
-      if (!data.conditions) data.conditions = [];
-      data.conditions.push({ field: "", equals: false });
-      this.rebuildSwitchOutputs(nodeId);
-      this.showNodeEditor(nodeId);
-    });
-  }
-
-  document.querySelectorAll(".ge-cond-remove").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      this.saveCheckpoint();
-      const row = (btn as HTMLElement).closest(".ge-case-row") as HTMLElement;
-      const idx = parseInt(row.dataset.index || "0", 10);
-      data.conditions.splice(idx, 1);
-      this.rebuildSwitchOutputs(nodeId);
-      this.showNodeEditor(nodeId);
     });
   });
 
   document.querySelectorAll(".ge-cond-field").forEach((inp) => {
     inp.addEventListener("input", () => {
-      const row = (inp as HTMLElement).closest(".ge-case-row") as HTMLElement;
-      const idx = parseInt(row.dataset.index || "0", 10);
-      data.conditions[idx].field = (inp as HTMLInputElement).value;
+      const path = JSON.parse((inp as HTMLElement).dataset.path || "[]") as number[];
+      const target = conditionAt({ conditions: data.conditions }, path);
+      if (target && !isConditionGroup(target)) target.field = (inp as HTMLInputElement).value;
       this.updateNodeHtml(nodeId);
     });
   });
 
   document.querySelectorAll(".ge-cond-equals").forEach((inp) => {
-    inp.addEventListener("input", () => {
-      const row = (inp as HTMLElement).closest(".ge-case-row") as HTMLElement;
-      const idx = parseInt(row.dataset.index || "0", 10);
-      const val = (inp as HTMLInputElement).value;
-      if (val === "true") data.conditions[idx].equals = true;
-      else if (val === "false") data.conditions[idx].equals = false;
-      else if (!isNaN(Number(val))) data.conditions[idx].equals = Number(val);
-      else data.conditions[idx].equals = val;
+    const apply = () => {
+      const path = JSON.parse((inp as HTMLElement).dataset.path || "[]") as number[];
+      const target = conditionAt({ conditions: data.conditions }, path);
+      if (target && !isConditionGroup(target)) {
+        target.equals = parseEqualsValue((inp as HTMLInputElement).value);
+      }
       this.updateNodeHtml(nodeId);
+    };
+    inp.addEventListener("input", apply);
+    inp.addEventListener("change", () => {
+      this.saveCheckpoint();
+      apply();
+    });
+  });
+
+  document.querySelectorAll(".ge-cond-add").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      this.saveCheckpoint();
+      const path = JSON.parse((btn as HTMLElement).dataset.path || "[]") as number[];
+      conditionGroupList({ conditions: data.conditions }, path).push({ field: "", equals: false });
+      this.showNodeEditor(nodeId);
+    });
+  });
+
+  document.querySelectorAll(".ge-cond-add-group").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      this.saveCheckpoint();
+      const path = JSON.parse((btn as HTMLElement).dataset.path || "[]") as number[];
+      conditionGroupList({ conditions: data.conditions }, path).push({ logic: "any", conditions: [] });
+      this.showNodeEditor(nodeId);
+    });
+  });
+
+  document.querySelectorAll(".ge-cond-remove").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      this.saveCheckpoint();
+      const path = JSON.parse((btn as HTMLElement).dataset.path || "[]") as number[];
+      const siblings = conditionSiblings({ conditions: data.conditions }, path);
+      if (!siblings) return;
+      siblings.splice(path[path.length - 1], 1);
+      this.showNodeEditor(nodeId);
+    });
+  });
+
+  document.querySelectorAll(".ge-cond-up").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      this.saveCheckpoint();
+      const path = JSON.parse((btn as HTMLElement).dataset.path || "[]") as number[];
+      const siblings = conditionSiblings({ conditions: data.conditions }, path);
+      if (!siblings) return;
+      const i = path[path.length - 1];
+      if (i > 0) {
+        [siblings[i - 1], siblings[i]] = [siblings[i], siblings[i - 1]];
+        this.showNodeEditor(nodeId);
+      }
+    });
+  });
+
+  document.querySelectorAll(".ge-cond-down").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      this.saveCheckpoint();
+      const path = JSON.parse((btn as HTMLElement).dataset.path || "[]") as number[];
+      const siblings = conditionSiblings({ conditions: data.conditions }, path);
+      if (!siblings) return;
+      const i = path[path.length - 1];
+      if (i < siblings.length - 1) {
+        [siblings[i], siblings[i + 1]] = [siblings[i + 1], siblings[i]];
+        this.showNodeEditor(nodeId);
+      }
     });
   });
 

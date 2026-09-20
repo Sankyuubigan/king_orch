@@ -213,10 +213,19 @@ nodes:
     x: 1655
 
 - id: check_somatic
-  type: condition_check
-  field: has_somatic
-  sequential_to: call_focus_keeper
+  type: condition_router
   true_to: call_soma_translator
+  false_to: call_focus_keeper
+  logic: any
+  conditions:
+  - field: somatic_presence
+    equals: new
+  - logic: all
+    conditions:
+    - field: somatic_presence
+      equals: history
+    - field: soma_translator
+      equals: false
   ui_pos:
     x: -802
     y: 218
@@ -325,6 +334,9 @@ edges:
 
 - from: call_soma_translator
   to: check_need_handedness
+
+- from: check_need_handedness
+  to: call_focus_keeper
 
 - from: note_1785141025138
   to: call_request_helper
