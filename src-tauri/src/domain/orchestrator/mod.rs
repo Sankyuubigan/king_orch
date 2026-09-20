@@ -1227,6 +1227,7 @@ where
         msg_counter,
         all_sub_calls,
         final_response: String::new(),
+        phase1_thinking: None,
         tool_calls: Vec::new(),
         consecutive_failed_tools: 0,
         spill_idx: 0,
@@ -1392,10 +1393,13 @@ where
                 });
             }
             // Сохраняем размышления в сессию как thought (раскрытие в GUI).
+            // Полный текст: лимит THOUGHT_STORE_MAX_CHARS не применяем — иначе
+            // инжект мыслей коллегам (inject_thoughts) теряет большую часть анализа.
+            ctx.phase1_thinking = Some(thinking_text.clone());
             ctx.messages.push(ChatMessage {
                 id: Some(format!("msg_{}", *ctx.msg_counter)),
                 msg_type: "thought".to_string(),
-                content: safe_truncate(&thinking_text, THOUGHT_STORE_MAX_CHARS),
+                content: thinking_text.clone(),
                 sub_calls: None,
                 author: Some(agent.id.clone()),
                 model: Some(extract_model_filename(&engine.model_path)),
@@ -1949,6 +1953,9 @@ where
                 &raw_response
             };
             let extracted = extract_think_content(thought_source);
+            if !extracted.is_empty() {
+                ctx.phase1_thinking = Some(extracted.join("\n\n"));
+            }
             for t in &extracted {
                 let stored = safe_truncate(t, THOUGHT_STORE_MAX_CHARS);
                 log_cb(format!(
@@ -1961,7 +1968,7 @@ where
                 ctx.messages.push(ChatMessage {
                     id: Some(format!("msg_{}", ctx.msg_counter)),
                     msg_type: "thought".to_string(),
-                    content: stored,
+                    content: t.clone(),
                     sub_calls: None,
                     author: Some(agent.id.clone()),
                     model: Some(extract_model_filename(&engine.model_path)),
@@ -1973,6 +1980,7 @@ where
             }
             if extracted.is_empty() && !thought_source.contains("<think") {
                 if let Some(t) = extract_thought_from_partial_json(thought_source) {
+                    ctx.phase1_thinking = Some(t.clone());
                     let stored = safe_truncate(&t, THOUGHT_STORE_MAX_CHARS);
                     log_cb(format!(
                         "💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}",
@@ -1984,7 +1992,7 @@ where
                     ctx.messages.push(ChatMessage {
                         id: Some(format!("msg_{}", ctx.msg_counter)),
                         msg_type: "thought".to_string(),
-                        content: stored,
+                        content: t.clone(),
                         sub_calls: None,
                         author: Some(agent.id.clone()),
                         model: Some(extract_model_filename(&engine.model_path)),
@@ -2390,6 +2398,7 @@ where
             response: ctx.final_response.clone(),
             time_sec: start_time.elapsed().as_secs_f32(),
             tool_calls: ctx.tool_calls,
+            thinking: ctx.phase1_thinking.clone(),
         };
         (ctx.subcall_cb)(&subcall);
         ctx.all_sub_calls.push(subcall);

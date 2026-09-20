@@ -16,6 +16,7 @@ export interface SubCall {
     response: string;
     time_sec: number;
     tool_calls: ToolCallInfo[];
+    thinking?: string;
 }
 
 export interface ToolCallInfo {

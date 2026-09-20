@@ -583,6 +583,10 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     this.el.subchatHistory.innerHTML = '';
     this.appendMessageToContainer(this.el.subchatHistory, 'system', subCall.prompt, 'Отчет контекста');
     if (subCall.tool_calls) subCall.tool_calls.forEach((tc: any) => this.el.subchatHistory.appendChild(createToolCallElement(tc.tool_name, tc.arguments, tc.result)));
+    if (subCall.thinking) {
+      const thinkingEl = createThoughtElement(subCall.agent_name, subCall.thinking);
+      this.el.subchatHistory.appendChild(thinkingEl);
+    }
     this.appendMessageToContainer(this.el.subchatHistory, 'agent', subCall.response, subCall.agent_name, `${subCall.time_sec.toFixed(1)} сек`);
   }
 

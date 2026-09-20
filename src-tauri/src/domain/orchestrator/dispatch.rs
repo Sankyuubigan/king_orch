@@ -64,6 +64,9 @@ where
     pub(crate) msg_counter: &'a mut u32,
     pub(crate) all_sub_calls: &'a mut Vec<SubCall>,
     pub(crate) final_response: String,
+    /// Полный текст размышлений Phase 1 агента — попадает в SubCall.thinking
+    /// (отчёт сабагента в GUI). Не режется лимитом THOUGHT_STORE_MAX_CHARS.
+    pub(crate) phase1_thinking: Option<String>,
     pub(crate) tool_calls: Vec<ToolCallInfo>,
     pub(crate) consecutive_failed_tools: usize,
     pub(crate) spill_idx: u32,
