@@ -250,11 +250,15 @@ pub fn run_pipeline_test(
     let mut all_sub_calls: Vec<SubCall> = Vec::new();
     let mut msg_counter: u32 = 0;
 
-    let (write_root, write_outside) = workflow
-        .config
-        .as_ref()
-        .map(|c| c.write_scope(project_root))
-        .unwrap_or((project_root.to_path_buf(), crate::infra::WriteOutside::Prompt));
+    // 🔐 Тест-харнесс: LLM в тесте НЕ должен писать в корень репозитория — во время
+    // прогонов модель плодила мусорные файлы (напр. `.session_store.py`), т.к. для
+    // workflow «Кодер» (`write_root: workdir`) зона записи здесь раскрывалась на весь
+    // проект. Авто-зона записи ограничена `.agents_workspace`, вне — жёсткий запрет.
+    // Боевое приложение не затронуто: там write_root берётся из конфига workflow и
+    // рабочей директории чата (orchestrator/mod.rs). Все fixture-папки целятся в
+    // `.agents_workspace/...`, поэтому валидация L2/L3 этим не ломается.
+    let write_root = project_root.join(".agents_workspace");
+    let write_outside = crate::infra::WriteOutside::Deny;
 
     let mut runner = WorkflowRunner {
         engine,

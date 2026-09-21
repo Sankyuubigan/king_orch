@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use super::{Tool, ToolCtx, ToolError, authorize_write, resolve_path, truncate};
+use super::{Tool, ToolCtx, ToolError, is_within_root, resolve_path, truncate};
 
 /// Запрещённые операции в bash (правило 1.1: git-мутации без разрешения запрещены;
 /// разрушительные команды — запрещены всегда). Проверка по ключевым словам.
@@ -175,8 +175,19 @@ impl Tool for Bash {
             .and_then(|v| v.as_str())
             .map(|p| resolve_path(ctx.workspace_root, p))
             .unwrap_or_else(|| ctx.workspace_root.to_path_buf());
-        // cwd вне авто-зоны записи → Deny (аналитический пайплайн) или плашка.
-        authorize_write(&cwd, ctx, "bash")?;
+        // bash — исполнитель кода в рабочем воркспейсе: разрешение проверяем по
+        // `workspace_root`, а НЕ по узкой `write_root`-зоне файловых инструментов.
+        // Обычно write_root == workspace_root (пайплайн-исполнитель) — поведение
+        // прежнее. В pipeline-тесте write_root сужен до `<root>/.agents_workspace`,
+        // но баш должен запускать проверки из корня проекта. Файловые мутаторы
+        // (write_file/edit_file) по-прежнему строго ограничены write_root.
+        if !is_within_root(ctx.workspace_root, &cwd) {
+            return Err(ToolError::Forbidden(format!(
+                "запуск bash вне рабочего воркспейса '{}' запрещён (cwd: {})",
+                ctx.workspace_root.display(),
+                cwd.display()
+            )));
+        }
 
         let program = if cfg!(target_os = "windows") {
             "cmd"
