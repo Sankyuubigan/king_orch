@@ -224,7 +224,7 @@ nodes:
     conditions:
     - field: somatic_presence
       equals: history
-    - field: soma_translator
+    - field: reports.soma_translator
       equals: false
   ui_pos:
     x: -802
@@ -302,7 +302,7 @@ nodes:
   true_to: call_grounder
   false_to: call_collector
   conditions:
-  - field: soma_translator
+  - field: reports.soma_translator
     equals: true
   logic: all
   ui_pos:

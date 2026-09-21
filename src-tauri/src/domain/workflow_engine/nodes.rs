@@ -14,41 +14,71 @@ pub struct NodeResult {
     pub next_nodes: Vec<String>,
 }
 
+/// Проверяет наличие валидного отчёта агента в истории сообщений сессии.
+///
+/// Отчёт считается существующим, если в `messages`:
+/// 1. `author == agent_id`
+/// 2. `msg_type != "signal"` (это реальный отчёт: "thought" или "message", а не системный сигнал)
+/// 3. Сообщение непустое (есть текстовый `content` либо непустые `sub_calls`)
+pub fn has_agent_report(messages: &[ChatMessage], agent_id: &str) -> bool {
+    messages.iter().any(|m| {
+        if m.author.as_deref() != Some(agent_id) || m.msg_type == "signal" {
+            return false;
+        }
+        if !m.content.trim().is_empty() {
+            return true;
+        }
+        if let Some(calls) = &m.sub_calls {
+            return calls.iter().any(|c| {
+                !c.response.trim().is_empty()
+                    || c.thinking
+                        .as_deref()
+                        .map(|t| !t.trim().is_empty())
+                        .unwrap_or(false)
+            });
+        }
+        false
+    })
+}
+
 /// Сравнивает одно листовое условие condition_router с текущим состоянием контекста.
 ///
 /// Разбор `field`:
+/// - Префикс `reports.<agent>` или `report.<agent>`: проверка существования отчёта
+///   агента в сессии через [`has_agent_report`]. `equals` должен быть bool (`true`/`false`).
 /// - Поле с точкой (`validator_report.e1`, `a.b.c`): доступ к signal bus.
 ///   Первый сегмент — имя сигнала, остальные — вложенный dot-path поиск.
 ///   Сравнение с `equals` по типу (bool/string/number).
-/// - Поле без точки: сначала значение из signal bus (факты экстрактора
-///   каскадируются в сигналы), если ключ присутствует — типизированное сравнение
-///   с `equals`. Иначе — проверка существования отчёта агента в сессии
-///   (`author == field`), где `equals` должен быть bool: `true` — отчёт должен
-///   существовать, `false` — должен отсутствовать.
+/// - Поле без точки: значение факта/сигнала из signal bus (факты экстрактора
+///   каскадируются в сигналы), типизированное сравнение с `equals`.
 pub fn condition_rule_matches(
     field: &str,
     equals: &serde_json::Value,
     signals: &std::collections::HashMap<String, serde_json::Value>,
     messages: &[ChatMessage],
 ) -> bool {
+    if let Some(agent_id) = field
+        .strip_prefix("reports.")
+        .or_else(|| field.strip_prefix("report."))
+    {
+        return match equals {
+            serde_json::Value::Bool(expected) => {
+                has_agent_report(messages, agent_id) == *expected
+            }
+            _ => false,
+        };
+    }
+
     if field.contains('.') {
         return match_signal_path(field, equals, signals);
     }
 
-    // Поле без точки: значение факта из signal bus имеет приоритет над отчётом.
+    // Поле без точки: значение факта/сигнала из signal bus
     if let Some(signal) = signals.get(field) {
         return value_equals(signal, equals);
     }
 
-    match equals {
-        serde_json::Value::Bool(expected) => {
-            let exists = messages
-                .iter()
-                .any(|m| m.author.as_deref() == Some(field));
-            exists == *expected
-        }
-        _ => false,
-    }
+    false
 }
 
 /// Типизированное сравнение значения из signal bus с ожидаемым `equals`.
@@ -1512,22 +1542,23 @@ mod tests {
 
     #[test]
     fn condition_router_agent_report_exists() {
-        let signals = signal_map(&[]);
+        let signals = signal_map(&[("soma_translator", serde_json::json!("РУКОСТЬ ИЗВЕСТНА"))]);
         let messages = vec![msg("soma_translator"), msg("validator")];
+        // Наличие сигнала soma_translator в signal bus НЕ ломает проверку отчёта через reports.<agent>!
         assert!(leaf_matches(
-            "soma_translator",
+            "reports.soma_translator",
             serde_json::json!(true),
             &signals,
             &messages
         ));
         assert!(!leaf_matches(
-            "decomposer",
+            "reports.decomposer",
             serde_json::json!(true),
             &signals,
             &messages
         ));
         assert!(!leaf_matches(
-            "soma_translator",
+            "reports.soma_translator",
             serde_json::json!(false),
             &signals,
             &messages
@@ -1536,10 +1567,10 @@ mod tests {
 
     #[test]
     fn condition_router_agent_report_missing_with_equals_false() {
-        let signals = signal_map(&[]);
+        let signals = signal_map(&[("soma_translator", serde_json::json!("РУКОСТЬ ИЗВЕСТНА"))]);
         let messages = vec![msg("validator")];
         assert!(leaf_matches(
-            "soma_translator",
+            "reports.soma_translator",
             serde_json::json!(false),
             &signals,
             &messages
@@ -1551,8 +1582,48 @@ mod tests {
         let signals = signal_map(&[]);
         let messages = vec![msg("soma_translator")];
         assert!(!leaf_matches(
-            "soma_translator",
+            "reports.soma_translator",
             serde_json::json!("present"),
+            &signals,
+            &messages
+        ));
+    }
+
+    #[test]
+    fn has_agent_report_ignores_signal_messages_and_empty_content() {
+        let signals = signal_map(&[]);
+        let empty_msg = ChatMessage {
+            id: None,
+            msg_type: "thought".to_string(),
+            content: "   ".to_string(),
+            sub_calls: None,
+            author: Some("agent_a".to_string()),
+            model: None,
+            time_sec: None,
+            attachments: None,
+            phase: None,
+        };
+        let signal_msg = ChatMessage {
+            id: None,
+            msg_type: "signal".to_string(),
+            content: "{\"key\":\"val\"}".to_string(),
+            sub_calls: None,
+            author: Some("agent_b".to_string()),
+            model: None,
+            time_sec: None,
+            attachments: None,
+            phase: None,
+        };
+        let messages = vec![empty_msg, signal_msg];
+        assert!(!leaf_matches(
+            "reports.agent_a",
+            serde_json::json!(true),
+            &signals,
+            &messages
+        ));
+        assert!(!leaf_matches(
+            "reports.agent_b",
+            serde_json::json!(true),
             &signals,
             &messages
         ));
@@ -1607,7 +1678,7 @@ mod tests {
                     "all",
                     vec![
                         leaf("somatic_presence", serde_json::json!("history")),
-                        leaf("soma_translator", serde_json::json!(false)),
+                        leaf("reports.soma_translator", serde_json::json!(false)),
                     ],
                 ),
             ],
@@ -1795,7 +1866,7 @@ mod tests {
                     "all",
                     vec![
                         leaf("somatic_presence", serde_json::json!("history")),
-                        leaf("soma_translator", serde_json::json!(false)),
+                        leaf("reports.soma_translator", serde_json::json!(false)),
                     ],
                 ),
             ],
