@@ -2561,9 +2561,42 @@ mod tests {
         // Модель видит выжимку, а не 9000 символов
         assert!(out.len() < big.len());
         assert!(out.contains("сохранён в файл spills"));
-        // read_spill возвращает полное содержимое
-        let restored = read_spill_file(&path.to_string_lossy()).expect("чтение spill");
+        // По умолчанию — полное содержимое (в пределах страницы 16000).
+        let restored = read_spill_file(&path.to_string_lossy(), 1, 16000).expect("чтение spill");
         assert_eq!(restored, big);
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_spill_pages_by_offset_and_limit() {
+        let big = "abcdefghij".repeat(1000); // 10000 символов > SPILL_THRESHOLD
+        let (_, spilled) = spill_if_large(&big, "agent1", 8);
+        let path = spilled.expect("должен быть spill");
+        // Страница по 200 символов с 401-го (1-based).
+        let page = read_spill_file(&path.to_string_lossy(), 401, 200).expect("чтение страницы");
+        // 401-й char (1-based) = idx 400 = "abcdefghij"[0..] → 'a'... проверим диапазон.
+        assert!(page.starts_with("abcdefghij".repeat(20).as_str()), "страница с 401го: {}", &page[..40]);
+        assert!(page.contains("Продолжай с offset=601"), "hint продолжения: {}", &page[page.len().saturating_sub(80)..]);
+        // Продолжение.
+        let next = read_spill_file(&path.to_string_lossy(), 601, 200).expect("чтение след. страницы");
+        assert!(next.starts_with("abcdefghij".repeat(20).as_str()));
+        let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_spill_is_utf8_safe_at_page_boundary() {
+        // Кириллица (2 байта/символ): срез на 16000 БАЙТ падал бы на середине
+        // символа; читаем по символам — паники быть не должно.
+        let big = "ю".repeat(10000); // 20000 байт
+        let (_, spilled) = spill_if_large(&big, "agent1", 9);
+        let path = spilled.expect("должен быть spill");
+        let page = read_spill_file(&path.to_string_lossy(), 1, 7000).expect("чтение");
+        // Тело страницы — ровно 7000 символов на char-границе; после него идёт
+        // hint продолжения (начинается с '\n'), т.е. до '\n' всё — 'ю'.
+        let (body, hint) = page.split_once('\n').expect("hint после тела страницы");
+        assert_eq!(body.chars().count(), 7000, "тело страницы без разрыва UTF-8");
+        assert!(body.chars().all(|c| c == 'ю'));
+        assert!(hint.contains("Продолжай с offset=7001"));
         let _ = fs::remove_file(&path);
     }
 
@@ -2573,7 +2606,7 @@ mod tests {
         let outside = std::env::current_exe()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| "src-tauri/src/main.rs".to_string());
-        let res = read_spill_file(&outside);
+        let res = read_spill_file(&outside, 1, 16000);
         assert!(res.is_err(), "чтение вне spill-директории запрещено");
     }
 

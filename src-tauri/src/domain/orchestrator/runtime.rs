@@ -68,11 +68,13 @@ pub fn builtin_tools() -> Vec<(String, String, serde_json::Value)> {
             "read_spill".to_string(),
             serde_json::json!({
                 "name": "read_spill",
-                "description": "Дочитать полный результат большого инструмента, сохранённый в файл spills (локатор приходит в сообщении '[РЕЗУЛЬТАТ ИНСТРУМЕНТА сохранён в файл spills]'). Принимает path (путь к spill-файлу). Возвращает полное содержимое (обрезанное до 16К символов).",
+                "description": "Дочитать полный результат большого инструмента, сохранённый в файл spills (локатор приходит в сообщении '[РЕЗУЛЬТАТ ИНСТРУМЕНТА сохранён в файл spills]'). Принимает path (путь к spill-файлу); offset — 1-based позиция в символах (по умолчанию 1); limit — сколько символов прочитать (по умолчанию 16000, максимум 16000). Артефакт может быть большим — дочитывай ДИАПАЗОНАМИ по подсказкам 'Продолжай с offset=N', не копируй целиком.",
                 "inputSchema": {
                     "type": "object",
                     "properties": {
-                        "path": {"type": "string", "description": "Путь к spill-файлу (например spills/spill_agent_0.txt)"}
+                        "path": {"type": "string", "description": "Путь к spill-файлу (например spills/spill_agent_0.txt)"},
+                        "offset": {"type": "integer", "description": "1-based позиция в символах, с какой начать чтение (по умолчанию 1)"},
+                        "limit": {"type": "integer", "description": "Сколько символов прочитать (по умолчанию 16000, максимум 16000)"}
                     },
                     "required": ["path"]
                 }

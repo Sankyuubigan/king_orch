@@ -64,7 +64,10 @@ fn extract_gzip(gz_bytes: &[u8], bins_dir: &Path, target_exe: &str, log_cb: &dyn
 /// Скачивание через PowerShell (фоллбэк). Использует .NET WebClient —
 /// автоматически читает системный прокси и использует Schannel (как браузер).
 fn download_via_powershell_sync(url: &str, dest: &Path, log_cb: &dyn Fn(String)) -> Result<u64, String> {
-    log_cb(format!("   PowerShell: {}...", &url[..url.len().min(80)]));
+    log_cb(format!(
+        "   PowerShell: {}...",
+        crate::infra::tools::take_utf8_start(url, 80)
+    ));
     let dest_str = dest.display().to_string();
     let ps_script = format!(
         "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \

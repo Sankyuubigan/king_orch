@@ -347,7 +347,9 @@ where
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_string();
-            match read_spill_file(&p) {
+            let offset = arguments.get("offset").and_then(|v| v.as_u64()).unwrap_or(1) as usize;
+            let limit = arguments.get("limit").and_then(|v| v.as_u64()).unwrap_or(16000) as usize;
+            match read_spill_file(&p, offset, limit) {
                 Ok(content) => {
                     tool_output = Some(content);
                 }

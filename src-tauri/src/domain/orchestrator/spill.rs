@@ -32,15 +32,17 @@ pub(crate) fn spill_if_large(
     tail_chars.reverse();
     let tail: String = tail_chars.into_iter().collect();
     let display = format!(
-        "[РЕЗУЛЬТАТ ИНСТРУМЕНТА сохранён в файл spills]\n{}\n\n... [полный результат {} символов: {}] ...\n\n{}\n\nЧтобы дочитать полностью, вызови инструмент read_spill с аргументом {{\"path\": \"{}\"}}.",
+        "[РЕЗУЛЬТАТ ИНСТРУМЕНТА сохранён в файл spills]\n{}\n\n... [полный результат {} символов: {}] ...\n\n{}\n\nЧтобы дочитать, вызови инструмент read_spill с path \"{}\" — читай ДИАПАЗОНАМИ (offset/limit), не копируй артефакт целиком.",
         head, output.len(), fpath.display(), tail, fpath.display()
     );
     (display, Some(fpath))
 }
 
 /// Встроенный инструмент `read_spill`: читает spill-файл (только внутри
-/// директории spills) и возвращает содержимое, обрезанное до 16К символов.
-pub(crate) fn read_spill_file(path: &str) -> Result<String, String> {
+/// директории spills) диапазонами символов. `offset` — 1-based позиция, с какой
+/// начать (по умолчанию 1); `limit` — сколько символов прочитать (по умолчанию
+/// 16000, максимум 16000). Срез по `char_indices` — безопасен для UTF-8.
+pub(crate) fn read_spill_file(path: &str, offset: usize, limit: usize) -> Result<String, String> {
     let p = std::path::Path::new(path);
     // Канонизируем оба пути: на Windows canonicalize добавляет префикс \\?\,
     // поэтому сравнивать нужно канонизированные версии.
@@ -55,12 +57,35 @@ pub(crate) fn read_spill_file(path: &str) -> Result<String, String> {
     }
     let content =
         std::fs::read_to_string(&abs).map_err(|e| format!("Ошибка чтения spill: {}", e))?;
-    if content.len() > 16000 {
-        Ok(format!(
-            "{}...\n[обрезано до 16000 символов]",
-            &content[..16000]
-        ))
-    } else {
-        Ok(content)
+
+    const MAX_PAGE: usize = 16000;
+    let limit = limit.clamp(1, MAX_PAGE);
+    let chars: Vec<char> = content.chars().collect();
+    let total = chars.len();
+    let start = offset.saturating_sub(1).min(total);
+    let end = (start + limit).min(total);
+    if end <= start {
+        return Ok(format!(
+            "[в диапазоне offset={}.. символов нет; всего {} символов]",
+            offset, total
+        ));
     }
+    let slice: String = chars[start..end].iter().collect();
+    let mut out = String::with_capacity(slice.len() + 64);
+    out.push_str(&slice);
+    if start > 0 && total > end {
+        out.push_str(&format!(
+            "\n… [показаны символы {}-{} из {}. Продолжай с offset={}]",
+            start + 1,
+            end,
+            total,
+            end + 1
+        ));
+    } else if total > end {
+        out.push_str(&format!(
+            "\n… [показаны символы 1-{} из {}. Продолжай с offset={}]",
+            end, total, end + 1
+        ));
+    }
+    Ok(out)
 }

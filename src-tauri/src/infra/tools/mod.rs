@@ -233,6 +233,23 @@ pub fn truncate(text: &str, limit: usize) -> String {
     }
 }
 
+/// Взять первые `max_bytes` байт строки БЕЗ разрыва UTF-8 (граница по
+/// `char_indices`). Для безопасной обрезки URL/логов/артефактов.
+pub fn take_utf8_start(s: &str, max_bytes: usize) -> String {
+    if s.len() <= max_bytes {
+        return s.to_string();
+    }
+    let mut end = 0usize;
+    for (idx, _) in s.char_indices() {
+        if idx > max_bytes {
+            break;
+        }
+        end = idx;
+    }
+    // end — граница последнего символа, полностью помещающегося в лимит.
+    s[..end].to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,6 +316,17 @@ mod tests {
         let t = truncate("abcdef", 4);
         assert!(t.contains("[вывод обрезан"));
         assert_eq!(truncate("abc", 10), "abc");
+    }
+
+    #[test]
+    fn take_utf8_start_is_byte_budget_safe() {
+        // Кириллица 'ю' = 2 байта: срез по байтам без char-границы не паникует.
+        assert_eq!(take_utf8_start("ююю", 3), "ю"); // лимит 3 байта → 1 символ
+        assert_eq!(take_utf8_start("ююю", 4), "юю");
+        assert_eq!(take_utf8_start("ююю", 1), "");
+        assert_eq!(take_utf8_start("hello world", 99), "hello world");
+        assert_eq!(take_utf8_start("hello", 3), "hel");
+        assert_eq!(take_utf8_start("", 5), "");
     }
 
     #[test]
