@@ -8,6 +8,8 @@ import { initConfirmDialog, initPermissionDialog, initVramDialog, showToast } fr
 import "@my-tauri-plugins/plugin-about-updates";
 import "@my-tauri-plugins/plugin-logs";
 import "@my-tauri-plugins/plugin-llama-engine";
+// Регистрирует <nine-router-panel> (облачный шлюз 9Router: комбо + дашборд).
+import "@my-tauri-plugins/plugin-9router";
 import { ChatController, SessionController, SettingsController, GraphController, AgentTestController, CodingTestController, UpdatePopupController } from "./controllers";
 import { bus } from "./events";
 import { logFront } from "@my-tauri-plugins/plugin-logs";

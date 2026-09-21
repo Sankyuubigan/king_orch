@@ -1,6 +1,6 @@
 {
   "productName": "King Orch",
-  "version": "26.9.110",
+  "version": "26.9.118",
   "identifier": "com.kingorch.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -47,6 +47,9 @@
   },
   "plugins": {
     "llama-engine": {
+      "data_dir_name": "com.kingorch.app"
+    },
+    "9router": {
       "data_dir_name": "com.kingorch.app"
     },
     "logs": {

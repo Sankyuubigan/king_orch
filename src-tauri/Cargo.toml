@@ -1,6 +1,6 @@
 [package]
 name = "king_orch"
-version = "26.9.110"
+version = "26.9.118"
 description = "Local LLM Multi-Agent Studio"
 authors = ["You"]
 edition = "2021"
@@ -27,6 +27,10 @@ tauri-plugin-about-updates = { path = "../../my-tauri-plugins/tauri-plugin-about
 # бекендов, каталог моделей, список моделей, параметры сэмплинга, VRAM.
 # feature host-logs связывает телеметрию движка с единой аналитикой хоста.
 tauri-plugin-llama-engine = { path = "../../my-tauri-plugins/tauri-plugin-llama-engine", features = ["host-logs"] }
+# Шлюз облачных LLM через 9Router — единый для всех хостов (SSOT): установка
+# портативного Node.js + бандла 9router, ленивый автозапуск по требованию,
+# список комбо и OpenAI-совместимый чат (kill сервера на выходе через Job Object).
+tauri-plugin-9router = { path = "../../my-tauri-plugins/tauri-plugin-9router" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["full"] }

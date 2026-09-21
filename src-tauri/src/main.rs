@@ -22,6 +22,8 @@ async fn main() {
 
     // Движковый плагин читает тот же app_config.json (APPDATA/<name>).
     tauri_plugin_llama_engine::engine::config::set_app_data_dir_name("com.kingorch.app");
+    // Шлюз 9router делит тот же app_config.json (секция nine_router).
+    tauri_plugin_9router::set_app_data_dir_name("com.kingorch.app");
 
     tauri_plugin_logs::early_log(
         "INFO",
@@ -99,6 +101,10 @@ async fn main() {
         // Движок llama.cpp — переиспользуемый плагин (SSOT). Регистрирует
         // команды движка/моделей, owns процесс llama-server (kill на выходе).
         .plugin(tauri_plugin_llama_engine::init())
+        // Шлюз облачных LLM через 9Router (SSOT). Регистрирует команды
+        // get_status/install_or_update/ensure_started/get_combos/chat_completion
+        // и owns процесс node.exe (ленивый старт, kill на выходе).
+        .plugin(tauri_plugin_9router::init())
 
         .manage(AppState {
             cancel_flag: Arc::new(AtomicBool::new(false)),

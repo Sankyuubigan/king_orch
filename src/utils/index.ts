@@ -14,3 +14,8 @@ export function formatSpeed(bps?: number): string {
   if (bps === 0) return "0 B/s";
   return `${formatBytes(bps)}/s`;
 }
+
+/// Префикс значения комбо 9Router в списке моделей (см. SettingsController).
+/// Выбор с этим префиксом идёт в облачный шлюз 9Router (плагин
+/// tauri-plugin-9router), а НЕ в локальный llama-server.
+export const NINE_ROUTER_MODEL_PREFIX = "9router:";

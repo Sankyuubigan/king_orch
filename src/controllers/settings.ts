@@ -1,9 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import { getAllCapabilities, getModelParams, resetModelParams, setModelParams } from "@my-tauri-plugins/plugin-llama-engine";
+import { getCombos as getNineRouterCombos, type ComboInfo } from "@my-tauri-plugins/plugin-9router";
 import { store } from "../store";
 import { bus } from "../events";
 import { showToast } from "../ui";
 import { setTelemetryEnabled, trackError } from "../telemetry";
+import { NINE_ROUTER_MODEL_PREFIX } from "../utils";
 
 export interface SettingsElements {
   modelSelect: HTMLSelectElement;
@@ -32,6 +34,9 @@ export interface SettingsElements {
 export class SettingsController {
   private el: SettingsElements;
   private capMap: Record<string, { uncen: boolean; vision: boolean; audio: boolean }> = {};
+  /// Кэш комбо 9Router (облачные модели) для дропдауна — см. updateModelSelect.
+  private nineRouterCombos: ComboInfo[] = [];
+  private nineRouterCombosRequested = false;
 
   constructor(el: SettingsElements) {
     this.el = el;
@@ -41,6 +46,8 @@ export class SettingsController {
 
   async loadModelParams() {
     const p = this.el.modelSelect.value; if (!p) return;
+    // Комбо 9Router — облачная модель: локальные параметры сэмплинга не храним.
+    if (p.startsWith(NINE_ROUTER_MODEL_PREFIX)) return;
     let params: any;
     try {
       params = await getModelParams(p);
@@ -59,6 +66,7 @@ export class SettingsController {
 
   private async saveModelParams() {
     const p = this.el.modelSelect.value; if (!p) return;
+    if (p.startsWith(NINE_ROUTER_MODEL_PREFIX)) return;
     const base = store.currentModelParams;
     await setModelParams(p, {
       temperature: parseFloat(this.el.tempSlider.value),
@@ -97,6 +105,40 @@ export class SettingsController {
       this.el.modelSelect.appendChild(o);
     }
     if (config.last_model && config.models.includes(config.last_model)) this.el.modelSelect.value = config.last_model;
+    this.renderNineRouterOptions();
+    void this.ensureNineRouterCombos();
+  }
+
+  /// Рисует optgroup «9Router (облако)» поверх локальных моделей из кэша комбо.
+  private renderNineRouterOptions() {
+    if (!this.nineRouterCombos.length) return;
+    const group = document.createElement("optgroup");
+    group.label = "9Router (облако)";
+    for (const c of this.nineRouterCombos) {
+      const o = document.createElement("option");
+      o.value = `${NINE_ROUTER_MODEL_PREFIX}${c.name}`;
+      o.text = `☁️ ${c.name}`;
+      group.appendChild(o);
+    }
+    this.el.modelSelect.appendChild(group);
+  }
+
+  /// Ленивая подгрузка комбо 9Router. `get_combos` сам поднимает сервер по
+  /// требованию (шлюз ленивый), но результат кэшируем — повторно не дёргаем.
+  private async ensureNineRouterCombos() {
+    if (this.nineRouterCombosRequested) return;
+    this.nineRouterCombosRequested = true;
+    try {
+      this.nineRouterCombos = await getNineRouterCombos();
+    } catch (_) {
+      // 9Router не установлен/недоступен — облачные комбо просто не показываем.
+      this.nineRouterCombos = [];
+    }
+    if (!this.nineRouterCombos.length) return;
+    const selected = this.el.modelSelect.value;
+    this.el.modelSelect.querySelector('optgroup[label="9Router (облако)"]')?.remove();
+    this.renderNineRouterOptions();
+    if (selected) this.el.modelSelect.value = selected;
   }
 
   /// Заполняет выпадающий список модели-переводчика списком установленных моделей.
@@ -218,7 +260,13 @@ export class SettingsController {
     const sliders: [HTMLInputElement, HTMLElement][] = [[this.el.tempSlider, this.el.tempValue],[this.el.topkSlider, this.el.topkValue],[this.el.toppSlider, this.el.toppValue],[this.el.minpSlider, this.el.minpValue],[this.el.reppenSlider, this.el.reppenValue],[this.el.prespenSlider, this.el.prespenValue]];
     for (const [s, l] of sliders) s?.addEventListener("input", () => { l.innerText = s.value; this.saveModelParams(); });
     this.el.btnResetParams?.addEventListener("click", async () => { const p = this.el.modelSelect.value; if (!p) return; await resetModelParams(p); await this.loadModelParams(); showToast("Параметры сброшены.", "success"); });
-    this.el.modelSelect?.addEventListener("change", async () => { await invoke("set_last_model", { path: this.el.modelSelect.value }); await this.loadModelParams(); });
+    this.el.modelSelect?.addEventListener("change", async () => {
+      const v = this.el.modelSelect.value;
+      // Комбо 9Router не пишем как last_model локального движка.
+      if (v.startsWith(NINE_ROUTER_MODEL_PREFIX)) return;
+      await invoke("set_last_model", { path: v });
+      await this.loadModelParams();
+    });
     this.el.agentSelect?.addEventListener("change", async () => { await invoke("set_config_value", { key: "last_agent", value: this.el.agentSelect.value }); });
     this.el.translatorModelSelect?.addEventListener("change", async () => {
       const v = this.el.translatorModelSelect.value || "";
