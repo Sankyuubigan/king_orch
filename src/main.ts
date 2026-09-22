@@ -10,8 +10,12 @@ import "@my-tauri-plugins/plugin-logs";
 import "@my-tauri-plugins/plugin-llama-engine";
 // Регистрирует <nine-router-panel> (облачный шлюз 9Router: комбо + дашборд).
 import "@my-tauri-plugins/plugin-9router";
-import { ChatController, SessionController, SettingsController, GraphController, AgentTestController, CodingTestController, UpdatePopupController } from "./controllers";
-import { bus } from "./events";
+import {
+  SessionController, SettingsController, GraphController, AgentTestController,
+  CodingTestController, UpdatePopupController, TabController, initChatEventRouter,
+} from "./controllers";
+import type { SharedChatControls } from "./utils";
+import type { TabSection } from "./types";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { initTelemetry, trackError } from "./telemetry";
 
@@ -24,6 +28,10 @@ async function initApp() {
   initConfirmDialog();
   initPermissionDialog();
   initVramDialog();
+
+  // ─── Глобальные Tauri-события движка и агентов (регистрируются ОДИН раз) ───
+  // (прогресс/статус/стриминг маршрутизируются в обрабатывающую чат-вкладку)
+  initChatEventRouter();
 
   // ─── Сторожевик зависаний главного потока ───
   // Если поток UI заблокирован дольше ~1с (тяжёлый рендер/синх. работа),
@@ -44,16 +52,27 @@ async function initApp() {
     /* PerformanceObserver недоступен — не критично */
   }
 
-  // ─── Контроллер сессий (боковая панель) ───
-  const sessionCtrl = new SessionController({
-    sessionList: $<HTMLDivElement>("session-list"),
-    btnNewSession: $<HTMLButtonElement>("btn-new-session"),
-  });
+  // ─── Общие (статичные) контролы сэмплинга: живут в разделе «Настройки»,
+  // используются ВСЕМИ чат-вкладками. ───
+  const sharedSampling: SharedChatControls = {
+    maxGenSlider: $<HTMLInputElement>("max-gen-slider"),
+    chkKvQuantK: $<HTMLInputElement>("chk-kv-quant-k"),
+    chkKvQuantV: $<HTMLInputElement>("chk-kv-quant-v"),
+    tempSlider: $<HTMLInputElement>("temp-slider"),
+    topkSlider: $<HTMLInputElement>("topk-slider"),
+    toppSlider: $<HTMLInputElement>("topp-slider"),
+    minpSlider: $<HTMLInputElement>("minp-slider"),
+    reppenSlider: $<HTMLInputElement>("reppen-slider"),
+    prespenSlider: $<HTMLInputElement>("prespen-slider"),
+  };
 
-  // ─── Контроллер настроек (вкладка ⚙️) ───
+  // ─── Контроллер раздела «История сессий» ───
+  // Экземпляр живёт всё приложение: слушает bus (session:open/session:deleted),
+  // по которым TabController открывает/закрывает вкладки.
+  void new SessionController({ sessionList: $<HTMLDivElement>("session-list") });
+
+  // ─── Контроллер настроек (раздел ⚙️; селекты моделей/агентов — per-tab) ───
   const settingsCtrl = new SettingsController({
-    modelSelect: $<HTMLSelectElement>("model-select"),
-    agentSelect: $<HTMLSelectElement>("agent-select"),
     maxGenSlider: $<HTMLInputElement>("max-gen-slider"), maxGenValue: $<HTMLElement>("max-gen-value"),
     chatFontSlider: $<HTMLInputElement>("chat-font-slider"), chatFontValue: $<HTMLElement>("chat-font-value"),
     chkKvQuantK: $<HTMLInputElement>("chk-kv-quant-k"),
@@ -74,41 +93,7 @@ async function initApp() {
     translatorLangSelect: $<HTMLSelectElement>("translator-lang-select"),
   });
 
-  // ─── Контроллер чата (вкладка 💬) ───
-  const chatCtrl = new ChatController({
-    chatHistory: $<HTMLDivElement>("chat-history"),
-    chatInput: $<HTMLTextAreaElement>("chat-input"),
-    btnSend: $<HTMLButtonElement>("btn-send"),
-    btnStop: $<HTMLButtonElement>("btn-stop"),
-    chatFeedback: $<HTMLDivElement>("chat-feedback"),
-    progressBar: $<HTMLDivElement>("progress-bar"),
-    statusLabel: $<HTMLDivElement>("status-label"),
-    agentSelect: $<HTMLSelectElement>("agent-select"),
-    modelSelect: $<HTMLSelectElement>("model-select"),
-    subchatHistory: $<HTMLDivElement>("subchat-history"),
-    subchatTitle: $<HTMLSpanElement>("subchat-title"),
-    btnBackChat: $<HTMLButtonElement>("btn-back-chat"),
-    maxGenSlider: $<HTMLInputElement>("max-gen-slider"),
-    chkKvQuantK: $<HTMLInputElement>("chk-kv-quant-k"),
-    chkKvQuantV: $<HTMLInputElement>("chk-kv-quant-v"),
-    tempSlider: $<HTMLInputElement>("temp-slider"),
-    topkSlider: $<HTMLInputElement>("topk-slider"),
-    toppSlider: $<HTMLInputElement>("topp-slider"),
-    minpSlider: $<HTMLInputElement>("minp-slider"),
-    reppenSlider: $<HTMLInputElement>("reppen-slider"),
-    prespenSlider: $<HTMLInputElement>("prespen-slider"),
-    viewChat: $<HTMLDivElement>("view-chat"),
-    viewSubchat: $<HTMLDivElement>("view-subchat"),
-    btnAttach: $<HTMLButtonElement>("btn-attach"),
-    fileInput: $<HTMLInputElement>("file-input"),
-    filePreview: $<HTMLDivElement>("file-preview"),
-    tokenCounter: $<HTMLDivElement>("token-counter"),
-    engineBadge: $<HTMLDivElement>("engine-badge"),
-    btnSetWorkdir: $<HTMLButtonElement>("btn-set-workdir"),
-    currentWorkdir: $<HTMLSpanElement>("current-workdir"),
-  });
-
-  // ─── Контроллер графа (вкладка 🔀 в студии агентов) ───
+  // ─── Контроллер графа (суб-вкладка 🔀 в студии агентов) ───
   const graphCtrl = new GraphController({
     graphContainer: $<HTMLDivElement>("graph-container"),
     graphSidebar: $<HTMLDivElement>("graph-sidebar"),
@@ -166,18 +151,7 @@ async function initApp() {
     codingReportLink: $<HTMLAnchorElement>("coding-report-link"),
   });
 
-  // ─── Переключение вкладок ───
-  const tabChat = $<HTMLButtonElement>("tab-chat");
-  const tabAgentStudio = $<HTMLButtonElement>("tab-agent-studio");
-  const tabSettings = $<HTMLButtonElement>("tab-settings");
-  const tabLogs = $<HTMLButtonElement>("tab-logs");
-  const viewChat = $<HTMLDivElement>("view-chat");
-  const viewAgentStudio = $<HTMLDivElement>("view-agent-studio");
-  const viewSettings = $<HTMLDivElement>("view-settings");
-  const viewLogs = $<HTMLDivElement>("view-logs");
-  const viewSubchat = $<HTMLDivElement>("view-subchat");
-
-  // Суб-вкладки студии агентов
+  // ─── Суб-вкладки студии агентов (singleton, активируются вкладкой-разделом) ───
   const subtabGraph = $<HTMLButtonElement>("subtab-graph");
   const subtabAiTest = $<HTMLButtonElement>("subtab-ai-test");
   const subtabCodingTest = $<HTMLButtonElement>("subtab-coding-test");
@@ -198,59 +172,42 @@ async function initApp() {
     if (tab === 'graph') requestAnimationFrame(() => graphCtrl.onTabActivated());
   }
 
-  function switchTab(tab: 'chat' | 'agent-studio' | 'settings' | 'logs') {
-    tabChat.classList.toggle('active', tab === 'chat');
-    tabAgentStudio.classList.toggle('active', tab === 'agent-studio');
-    tabSettings.classList.toggle('active', tab === 'settings');
-    tabLogs.classList.toggle('active', tab === 'logs');
-    viewChat.classList.toggle('active', tab === 'chat');
-    viewAgentStudio.classList.toggle('active', tab === 'agent-studio');
-    viewSubchat.classList.remove('active');
-    viewSettings.classList.toggle('active', tab === 'settings');
-    viewLogs.classList.toggle('active', tab === 'logs');
-    if (tab === 'agent-studio') {
-      switchSubTab(activeSubTab);
-    }
-    if (tab === 'agent-studio' && activeSubTab === 'graph') {
-      requestAnimationFrame(() => graphCtrl.onTabActivated());
-    }
-  }
-
-  // Управление видимостью студии агентов
-  function updateAgentStudioVisibility(visible: boolean) {
-    tabAgentStudio.classList.toggle('visible', visible);
-    if (!visible && viewAgentStudio.classList.contains('active')) {
-      switchTab('chat');
-    }
-  }
-
-  tabChat?.addEventListener("click", () => switchTab('chat'));
-  tabAgentStudio?.addEventListener("click", () => switchTab('agent-studio'));
-  tabSettings?.addEventListener("click", () => switchTab('settings'));
-  tabLogs?.addEventListener("click", () => switchTab('logs'));
-
   subtabGraph?.addEventListener("click", () => switchSubTab('graph'));
-  subtabAiTest?.addEventListener("click", () => {
-    switchSubTab('ai-test');
-    agentTestCtrl.init();
-  });
-  subtabCodingTest?.addEventListener("click", () => {
-    switchSubTab('coding-test');
-    codingTestCtrl.init();
-  });
+  subtabAiTest?.addEventListener("click", () => { switchSubTab('ai-test'); agentTestCtrl.init(); });
+  subtabCodingTest?.addEventListener("click", () => { switchSubTab('coding-test'); codingTestCtrl.init(); });
 
-  // ─── Мосты шины событий ───
-  bus.on("tab:switch", (tab: string) => switchTab(tab as 'chat' | 'agent-studio' | 'settings' | 'logs'));
-  bus.on("advanced:visibility", (visible: boolean) => updateAgentStudioVisibility(visible));
+  // ─── Контроллер вкладок рабочей области (браузерные вкладки) ───
+  const tabCtrl = new TabController(
+    $<HTMLElement>("workspace-tabs"),
+    $<HTMLElement>("chat-tab-slot"),
+    sharedSampling,
+    {
+      onSectionActivated: (_tab, section) => {
+        if (section === "agent-studio") {
+          switchSubTab(activeSubTab);
+          if (activeSubTab === 'graph') requestAnimationFrame(() => graphCtrl.onTabActivated());
+        }
+      },
+    },
+  );
 
-  // ─── Старт ───
-  settingsCtrl.loadConfig();
+  // ─── Старт: конфиг → восстановление вкладок ───
+  const config = await settingsCtrl.loadConfig();
+  tabCtrl.init(config ?? {});
+
+  // ——— Быстрая навигация по разделам из «Настройки» (открытие в той же вкладке) ———
+  $<HTMLElement>("settings-nav")?.addEventListener("click", (e) => {
+    const btn = (e.target as HTMLElement).closest(".settings-nav-btn") as HTMLElement | null;
+    const section = btn?.dataset.section as TabSection | undefined;
+    if (!section) return;
+    tabCtrl.openSection(section);
+  });
 
   // ─── Синхронизация списка моделей после изменений в веб-компонентах плагина ───
   // Модели добавляются/удаляются/скачиваются в <llama-*-panel>; обновляем
-  // хостовый конфиг и списки моделей (select/переводчик/параметры) из главного стейта.
+  // общие каталоги в Store (chat-вкладки перерисовывают селекты по config:loaded).
   document.addEventListener("llama:models-changed", () => {
-    settingsCtrl.loadConfig();
+    void settingsCtrl.loadConfig();
   });
 
   // ─── Проверка обновления при старте (всплывающее окно справа по центру) ───

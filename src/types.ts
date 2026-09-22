@@ -119,3 +119,16 @@ export interface CatalogEntry {
     vision?: boolean;
     audio?: boolean;
 }
+
+/// Статичные разделы, открываемые вкладками типа "section".
+export type TabSection = 'sessions' | 'agent-studio' | 'settings' | 'logs';
+
+/// Вкладка рабочей области (браузерный UI). `chat` — 1:1 с файлом сессии.
+export interface AppTab {
+    id: string;
+    type: 'main' | 'chat' | 'section' | 'webview';
+    sessionId?: string | null;
+    section?: TabSection | null;
+    customTitle?: string | null;
+    url?: string | null;
+}

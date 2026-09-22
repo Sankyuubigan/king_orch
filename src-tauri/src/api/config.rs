@@ -131,6 +131,14 @@ pub fn set_last_model(app: AppHandle, path: String) {
 }
 
 #[tauri::command]
+pub fn set_tabs(app: AppHandle, tabs: Vec<infra::TabState>, active_tab: Option<String>) {
+    let mut cfg = infra::load_config(&app);
+    cfg.tabs = tabs;
+    cfg.active_tab = active_tab;
+    infra::save_config(&app, &cfg);
+}
+
+#[tauri::command]
 pub fn set_theme(app: AppHandle, theme: String) {
     let mut cfg = infra::load_config(&app);
     cfg.theme = theme;

@@ -1,0 +1,219 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 840 260" width="100%" height="100%">
+  <defs>
+    <style>
+      /* Фон (следит за темой: --bg-color задаётся в styles.css) */
+      .bg-plate {
+        fill: var(--bg-color, #0e1013);
+      }
+
+      /* Живой градиентный текст */
+      .brand-title {
+        font-family: 'Permanent Marker', cursive, sans-serif;
+        font-size: 82px;
+        letter-spacing: 2px;
+        filter: drop-shadow(0 0 14px rgba(168, 85, 247, 0.28));
+        animation: textFloat 3.8s ease-in-out infinite alternate;
+        transform-origin: 480px 145px;
+      }
+
+      /* Вращение шестерни */
+      .gear-rotator {
+        transform-origin: 172px 88px;
+        animation: spinClockwise 10s linear infinite;
+      }
+
+      /* Вращение орбиты */
+      .orbit-rotator {
+        transform-origin: 172px 88px;
+        animation: spinCounter 16s linear infinite;
+      }
+
+      /* Плавное парение руки экзоскелета */
+      .hand-levitation {
+        transform-origin: 140px 180px;
+        animation: hoverHand 3.4s ease-in-out infinite alternate;
+      }
+
+      /* Пульсация кибер-световода на руке */
+      .pulse-line {
+        animation: conduitPulse 2.4s ease-in-out infinite alternate;
+      }
+
+      @keyframes spinClockwise {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+
+      @keyframes spinCounter {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(-360deg); }
+      }
+
+      @keyframes hoverHand {
+        0% { transform: translateY(0px) rotate(0deg); }
+        100% { transform: translateY(6px) rotate(-1.2deg); }
+      }
+
+      @keyframes textFloat {
+        0% { transform: translateY(0px); }
+        100% { transform: translateY(-3px); }
+      }
+
+      @keyframes conduitPulse {
+        0% { opacity: 0.4; filter: drop-shadow(0 0 1px #38bdf8); }
+        100% { opacity: 1; filter: drop-shadow(0 0 6px #38bdf8); }
+      }
+    </style>
+
+    <!-- Металлические градиенты для объема кибер-руки -->
+    <linearGradient id="titaniumLight" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="60%" stop-color="#e2e8f0" />
+      <stop offset="100%" stop-color="#94a3b8" />
+    </linearGradient>
+
+    <linearGradient id="titaniumDark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#475569" />
+      <stop offset="100%" stop-color="#1e293b" />
+    </linearGradient>
+
+    <!-- Неоновый градиент для световода и шарниров -->
+    <linearGradient id="neonCyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#818cf8" />
+    </linearGradient>
+
+    <!-- Переливающийся градиент для текста King orch -->
+    <linearGradient id="textFlowGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#f8fafc">
+        <animate attributeName="stop-color" 
+                 values="#f8fafc; #c084fc; #38bdf8; #e9d5ff; #f8fafc" 
+                 dur="6.5s" repeatCount="indefinite" />
+      </stop>
+      <stop offset="45%" stop-color="#c084fc">
+        <animate attributeName="stop-color" 
+                 values="#c084fc; #38bdf8; #f8fafc; #c084fc; #c084fc" 
+                 dur="6.5s" repeatCount="indefinite" />
+      </stop>
+      <stop offset="100%" stop-color="#38bdf8">
+        <animate attributeName="stop-color" 
+                 values="#38bdf8; #f8fafc; #c084fc; #38bdf8; #38bdf8" 
+                 dur="6.5s" repeatCount="indefinite" />
+      </stop>
+    </linearGradient>
+
+    <!-- Точная векторная шестерня -->
+    <path id="gearGeometry" fill="url(#titaniumLight)" d="
+      M 172,56 
+      L 177,56 L 179,61 A 26,26 0 0,1 187,64 L 192,61 L 196,65 L 193,70 A 26,26 0 0,1 196,78 L 201,80 L 201,86 L 201,92 L 196,94 A 26,26 0 0,1 193,102 L 196,107 L 192,111 L 187,108 A 26,26 0 0,1 179,111 L 177,116 L 172,116 L 167,116 L 165,111 A 26,26 0 0,1 157,108 L 152,111 L 148,107 L 151,102 A 26,26 0 0,1 148,94 L 143,92 L 143,86 L 143,80 L 148,78 A 26,26 0 0,1 151,70 L 148,65 L 152,61 L 157,64 A 26,26 0 0,1 165,61 L 167,56 Z" />
+  </defs>
+
+  <!-- Фон (уберите rect для прозрачности) -->
+  <rect class="bg-plate" width="100%" height="100%" rx="18" />
+
+  <!-- ==================== ИКОНКА ==================== -->
+  <g transform="translate(10, 5)">
+
+    <!-- Орбита с чипами (вращается) -->
+    <g class="orbit-rotator">
+      <path d="M 132,65 A 46,46 0 1,1 138,120" fill="none" stroke="url(#titaniumLight)" stroke-width="3" stroke-linecap="round" />
+      <path d="M 204,110 A 46,46 0 0,1 198,62" fill="none" stroke="url(#titaniumLight)" stroke-width="3" stroke-linecap="round" />
+      <circle cx="132" cy="65" r="4.5" fill="url(#titaniumLight)" />
+      <circle cx="138" cy="120" r="4.5" fill="url(#titaniumLight)" />
+      <circle cx="198" cy="62" r="4" fill="url(#titaniumLight)" />
+      <circle cx="204" cy="110" r="3" fill="url(#titaniumLight)" />
+    </g>
+
+    <!-- Шестерня (вращается) -->
+    <g class="gear-rotator">
+      <use href="#gearGeometry" />
+      <!-- Сердцевина -->
+      <circle cx="172" cy="88" r="14" fill="#0e1013" stroke="url(#neonCyan)" stroke-width="2.5" />
+      <circle cx="172" cy="88" r="5" fill="url(#titaniumLight)" />
+    </g>
+
+    <!-- Сгустки парящей энергии -->
+    <g opacity="0.85">
+      <circle cx="172" cy="122" r="3.5" fill="#38bdf8" />
+      <circle cx="158" cy="127" r="2.2" fill="#c084fc" />
+      <circle cx="185" cy="125" r="2.5" fill="#ffffff" />
+    </g>
+
+    <!-- ================= КИБЕРНЕТИЧЕСКАЯ РУКА ================= -->
+    <g class="hand-levitation">
+
+      <!-- 1. ПРЕДПЛЕЧЬЕ (нижнее крепление руки) -->
+      <!-- Внутренняя база -->
+      <path d="M 58,225 C 55,221 57,212 63,206 L 96,174 C 101,169 108,170 112,174 L 123,185 C 127,189 127,196 122,201 L 89,233 C 83,239 74,238 69,234 Z" 
+            fill="url(#titaniumDark)" />
+      <!-- Верхняя титановая бронепластина предплечья -->
+      <path d="M 68,212 L 95,185 C 97,183 102,183 105,186 L 115,196 C 117,198 117,201 114,204 L 87,230 C 84,233 80,233 77,230 Z" 
+            fill="url(#titaniumLight)" />
+
+      <!-- 2. ОСНОВНОЙ ШАРНИР ЗАПЯСТЬЯ -->
+      <circle cx="118" cy="177" r="12" fill="url(#titaniumDark)" stroke="#0e1013" stroke-width="2" />
+      <circle cx="118" cy="177" r="6.5" fill="url(#titaniumLight)" />
+      <circle cx="118" cy="177" r="2.5" fill="url(#neonCyan)" />
+
+      <!-- 3. СРЕДНИЙ ПАЛЕЦ (задний план — дает руке объем и 3D-вид) -->
+      <g opacity="0.45">
+        <path d="M 194,142 L 214,118 L 225,86 L 223,62 C 222,57 216,57 215,62 L 209,84 L 199,114 Z" 
+              fill="url(#titaniumLight)" />
+      </g>
+
+      <!-- 4. ЛАДОНЬ ЭКЗОСКЕЛЕТА (эргономичная чаша) -->
+      <path d="M 124,175 
+               C 127,163 137,156 150,154 
+               L 186,145 
+               C 194,143 200,149 198,157 
+               L 190,174 
+               C 184,186 173,193 160,193 
+               L 136,193 
+               C 127,193 121,185 124,175 Z" 
+            fill="url(#titaniumLight)" stroke="#0e1013" stroke-width="1.5" />
+
+      <!-- Неоновый световод энергии на ладони -->
+      <path class="pulse-line" d="M 136,177 L 163,169 L 178,177" 
+            fill="none" stroke="url(#neonCyan)" stroke-width="3" stroke-linecap="round" />
+
+      <!-- 5. БОЛЬШОЙ ПАЛЕЦ (двухфаланговый, огибает шестерню снизу-слева) -->
+      <!-- Базовый шарнир -->
+      <circle cx="140" cy="153" r="5" fill="url(#titaniumDark)" />
+      <!-- Проксимальная фаланга -->
+      <path d="M 136,149 L 148,133 C 151,129 156,130 159,134 L 161,137 C 163,141 161,146 157,149 L 144,157 Z" 
+            fill="url(#titaniumLight)" />
+      <!-- Средний сустав -->
+      <circle cx="155" cy="136" r="3.8" fill="url(#titaniumDark)" />
+      <!-- Дистальная фаланга (кончик пальца) -->
+      <path d="M 154,133 L 167,118 C 169,115 174,116 176,119 C 178,123 176,127 172,129 L 160,141 Z" 
+            fill="url(#titaniumLight)" />
+
+      <!-- 6. УКАЗАТЕЛЬНЫЙ ПАЛЕЦ (передний план, 3 фаланги с суставами) -->
+      <!-- Пястно-фаланговый сустав -->
+      <circle cx="189" cy="149" r="6" fill="url(#titaniumDark)" stroke="url(#neonCyan)" stroke-width="1.5" />
+      
+      <!-- Фаланга 1 (нижняя) -->
+      <path d="M 186,144 L 205,121 C 207,118 212,118 214,121 L 217,125 C 220,128 219,132 216,135 L 195,155 Z" 
+            fill="url(#titaniumLight)" />
+      
+      <!-- Сустав 2 -->
+      <circle cx="210" cy="122" r="4.5" fill="url(#titaniumDark)" />
+      
+      <!-- Фаланга 2 (средняя вертикальная) -->
+      <path d="M 207,120 L 218,89 C 220,85 224,85 226,88 L 228,92 C 230,95 228,100 225,103 L 214,128 Z" 
+            fill="url(#titaniumLight)" />
+      
+      <!-- Сустав 3 -->
+      <circle cx="222" cy="89" r="4" fill="url(#titaniumDark)" />
+      
+      <!-- Фаланга 3 (кончик пальца, аккуратно огибающий шестерню) -->
+      <path d="M 221,87 L 218,65 C 217,60 211,60 209,64 C 207,68 208,72 210,76 L 215,93 Z" 
+            fill="url(#titaniumLight)" />
+
+    </g>
+  </g>
+
+  <!-- ==================== ТЕКСТ (King orch) ==================== -->
+  <text x="300" y="152" class="brand-title" fill="url(#textFlowGradient)">King orch</text>
+
+</svg>

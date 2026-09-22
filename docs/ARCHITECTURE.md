@@ -40,26 +40,52 @@
 ## 🧱 ЯДРО (Frontend Core)
 
 ### Store (`src/store.ts`)
-Единый источник истины. Контроллеры мутируют стор напрямую.
+Общеприкладной стейт: вкладки (`tabs`/`activeTabId`), глобальный флаг `isProcessing`
+и каталоги (модели, агенты, комбо 9Router). **Чат-стейт (история/сессия/стриминг) НЕ
+хранится здесь** — он живёт в `ChatTabState` каждой чат-вкладки (вкладок может быть
+несколько). Store остаётся единым источником для всего, что не привязано к вкладке.
 
 ### EventBus (`src/events.ts`)
 Шина событий. Контроллеры НЕ импортируют друг друга — общение через `bus.emit()` / `bus.on()`.
 
 ### Main (`src/main.ts`)
-Тонкий бутстраппер. Импортирует контроллеры через `./controllers` (дверь).
+Тонкий бутстраппер. Создаёт `TabController`, разделы и студию агентов, регистрирует
+`initChatEventRouter()`, восстанавливает вкладки из конфига. Импортирует контроллеры
+через `./controllers` (дверь).
 
 ---
 
 ## ⚙️ СЛОЙ 1: КОНТРОЛЛЕРЫ
 
+### TabController (`src/controllers/tabs.ts`)
+Браузерные вкладки рабочей области. Создание (кнопка «＋», main → chat при первом вводе),
+закрытие (**последняя вкладка → авто-новая `main`**), drag по оси X, ПКМ-меню, персист в
+`app_config.json` (`set_tabs`/`active_tab`). Разделы (История/Студия/Настройки/Логи) —
+singleton-вкладки; webview-вкладка — iframe 9Router. Module-scope helper'ы:
+`getActiveChatController()` (активная чат-вкладка для других контроллеров) и
+`getChatControllerForSession(sessionId)` (для копирования живой истории).
+
 ### ChatController (`src/controllers/chat.ts`)
-Управление чатом, отправка LLM, рендеринг, автосохранение. Импортирует UI и сервисы через двери.
+Управление ОДНОЙ чат-вкладкой: отправка LLM, рендеринг, автосохранение, стриминг.
+Содержит `ChatTabState` (пер-tab стейт) и публичные методы-роутеры событий движка
+(`onProgress`/`onStatus`/`onStreamChunk`/`onAgentThought`/...), каждый с guard
+`isProcessingActive(this)`. Хук `hooks.onBecameChat(sessionId)` — вкладка main стала chat.
+**Последовательная обработка:** module-scope `activeProcessingChat` — только один
+контроллер обрабатывает запрос; освобождение — через `releaseGlobalProcessing()`.
+
+### ChatRouter (`src/controllers/chat-router.ts`)
+Регистрирует глобальные Tauri-события (`listen(...)`) ОДИН раз: `progress`, `status`,
+`stream_chunk`, `subcall_done`, `agent_thought`, `agent_tool_call`, `engine_mode`,
+`tool_permission_request`, `vram_notice`, `download_progress` (логируется глобально),
+`9router-chunk`. Передаёт в активную обрабатывающую вкладку.
 
 ### SettingsController (`src/controllers/settings.ts`)
-Конфигурация, параметры моделей, скачивание. Вызывает `invoke()` напрямую (нет сервисной обёртки).
+Конфигурация, параметры моделей, скачивание. Читает активную вкладку через
+`getActiveChatController()?.modelSelectValue`. Вызывает `invoke()` напрямую (нет сервисной обёртки).
 
 ### SessionController (`src/controllers/sessions.ts`)
-Список сессий, удаление, переименование. Работает через `../services` (дверь).
+Список сессий, удаление, копирование. Работает через `../services` (дверь). Открытие
+сессии — через `bus "session:open"` (TabController создаёт/фокусирует чат-вкладку).
 
 ### GraphController (`src/controllers/graph.ts`)
 Визуализация workflow-графов на Drawflow. Загружает/сохраняет YAML workflow через Tauri-команды.

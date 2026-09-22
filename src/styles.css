@@ -1,3 +1,13 @@
+/* Локальный шрифт логотипа (Permanent Marker, Apache-2.0; лицензия —
+   src/fonts/PERMANENT_MARKER_LICENSE.txt). Встраивается в бандл, офлайн. */
+@font-face {
+  font-family: "Permanent Marker";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("fonts/PermanentMarker-Regular.woff2") format("woff2");
+}
+
 :root {
   --bg-color: #f5f5f5;
   --panel-bg: #ffffff;
@@ -49,6 +59,7 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .session-item:hover { background: var(--session-hover); }
 .session-item.active { background: var(--session-active); border-color: var(--primary); }
 .session-title { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-right: 10px; }
+.session-open-badge { flex: 0 0 auto; font-size: 10px; line-height: 1; color: var(--primary, #2e7d32); background: var(--session-active); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; margin-left: 8px; white-space: nowrap; user-select: none; }
 .session-item-actions { position: relative; }
 .btn-session-menu { background: none; border: none; color: var(--text); cursor: pointer; padding: 2px 6px; border-radius: 4px; font-size: 16px; font-weight: bold; opacity: 0.6; }
 .btn-session-menu:hover { opacity: 1; background: var(--border); }
@@ -98,14 +109,14 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .tool-call-result { color: var(--text); max-height: 150px; overflow-y: auto; white-space: pre-wrap; background: var(--bg-color); padding: 8px; border-radius: 4px; border: 1px solid var(--border); }
 
 .subchat-header { display: flex; align-items: center; gap: 15px; padding: 10px; background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 10px; }
-#subchat-title { font-weight: bold; font-size: 15px; color: var(--primary); }
+.subchat-title { font-weight: bold; font-size: 15px; color: var(--primary); }
 
-.chat-input-area { display: flex; flex-direction: column; gap: 10px; padding: 10px; background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px; }
+.chat-input-area { display: flex; flex-direction: column; gap: 10px; padding: 10px; background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px; flex: 0 0 auto; }
 .chat-input-controls { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
 .chat-input-controls-left { display: flex; gap: 10px; align-items: center; flex: 1; min-width: 0; flex-wrap: wrap; }
 .chat-input-controls-right { display: flex; gap: 10px; flex-shrink: 0; margin-left: auto; align-items: center; }
 .workdir-path { font-size: 11px; color: var(--text-muted, #888); max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: help; }
-#chat-input { width: 100%; resize: none; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit; font-size: calc(var(--chat-font-scale, 1) * 14px); min-height: 80px; max-height: 600px; overflow-y: auto; box-sizing: border-box; background: var(--input-bg); color: var(--text); }
+.chat-input { width: 100%; resize: none; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-family: inherit; font-size: calc(var(--chat-font-scale, 1) * 14px); min-height: 80px; max-height: 600px; overflow-y: auto; box-sizing: border-box; background: var(--input-bg); color: var(--text); }
 
 /* --- Token Counter Styles --- */
 .token-counter {
@@ -164,7 +175,7 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .input-row { display: flex; gap: 10px; align-items: center; }
 .input-row label { white-space: nowrap; font-size: 14px; font-weight: 500; }
 input[type="text"], select { flex: 1; padding: 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 14px; background: var(--input-bg); color: var(--text); }
-#agent-select, #model-select { flex: 0 1 auto; min-width: 100px; max-width: 250px; padding: 6px 8px; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
+.agent-select, .model-select { flex: 0 1 auto; min-width: 100px; max-width: 250px; padding: 6px 8px; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
 .btn-icon { background: none; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 18px; line-height: 1; color: var(--text); transition: background 0.2s; display: flex; align-items: center; justify-content: center; }
 .btn-icon:hover { background: var(--session-hover); }
 .btn-icon.btn-attach-inactive { opacity: 0.35; cursor: not-allowed; filter: grayscale(1); }
@@ -1135,3 +1146,242 @@ body.edge-reconnecting {
 }
 .coding-task-list .coding-pass { color: #4caf50; }
 .coding-task-list .coding-fail { color: #f44336; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Браузерные вкладки рабочей области (TabController)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.workspace-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  background-color: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  padding: 4px 6px 0 6px;
+  overflow-x: auto;
+  flex-shrink: 0;
+  min-height: 36px;
+  scrollbar-width: thin;
+}
+
+.workspace-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  min-width: 0;
+  max-width: 220px;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  cursor: pointer;
+  background: transparent;
+  color: var(--text-muted, #888);
+  font-size: 13px;
+  user-select: none;
+  white-space: nowrap;
+  position: relative;
+}
+
+.workspace-tab:hover { background: var(--session-hover); }
+.workspace-tab.active { background: var(--bg-color); border-color: var(--border); color: var(--text); font-weight: 600; }
+
+.workspace-tab-icon { flex: 0 0 auto; font-size: 14px; }
+.workspace-tab-label { flex: 1; overflow: hidden; text-overflow: ellipsis; min-width: 30px; }
+.workspace-tab-back {
+  flex: 0 0 auto;
+  display: inline-block;
+  padding: 0 6px 0 2px;
+  cursor: pointer;
+  color: var(--primary);
+  font-weight: 700;
+  border-radius: 4px;
+}
+.workspace-tab-back:hover { background: var(--border); color: var(--danger, #f44336); }
+.workspace-tab-close {
+  flex: 0 0 auto;
+  background: none;
+  border: none;
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  font-size: 13px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  opacity: 0;
+}
+.workspace-tab:hover .workspace-tab-close { opacity: 1; }
+.workspace-tab-close:hover { background: var(--border); color: var(--danger, #f44336); }
+
+/* режим перетаскивания */
+.workspace-tab.dragging { opacity: 0.4; }
+.workspace-tab.drag-over { border-left: 2px solid var(--primary); }
+.workspace-tab.drag-ghost { opacity: 0.3; }
+
+.workspace-tab-add {
+  flex: 0 0 auto;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 5px 10px;
+  margin-bottom: 4px;
+}
+.workspace-tab-add:hover { background: var(--session-hover); }
+
+.workspace-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 0 0 6px 6px;
+  overflow: hidden;
+  background: var(--bg-color);
+}
+
+#chat-tab-slot { display: none; }
+/* Слот растягивается только когда в нём активна страница вкладки (main/chat/webview);
+   при активной статической секции скрыт, чтобы не съедать половину высоты. */
+#chat-tab-slot:has(> .tab-page.active) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+/* страница вкладки (генерируется динамически) */
+.tab-page { display: none; flex-direction: column; flex: 1; min-height: 0; padding: 10px; box-sizing: border-box; }
+.tab-page.active { display: flex; }
+
+/* внутренний .view внутри .tab-page: полную высоту страницы */
+.tab-page > .view { flex: 1; padding-top: 0; overflow: hidden; }
+
+/* активация статического раздела: снять padding-top (уже есть .view) */
+#workspace-content > .view { padding-top: 10px; }
+
+/* контекстное меню вкладки (по мотивам session-menu-*) */
+.tab-menu-dropdown {
+  position: fixed;
+  z-index: 200;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+  display: none;
+  flex-direction: column;
+  min-width: 220px;
+  padding: 5px 0;
+}
+.tab-menu-dropdown.show { display: flex; }
+.tab-menu-dropdown .session-menu-item { padding: 8px 14px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Экран новой (главной) вкладки: logo.svg над полем ввода + рейл разделов
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.chat-main-screen { display: none; }
+/* Вся вёрстка welcome-экрана — только в main-режиме; вне main-mode экран скрыт
+   и чат занимает всю высоту (chat-history flex:1). Стоит ПОСЛЕ базового
+   display:none с тем же весом, потому главное, чтобы здесь не было отдельного
+   `.chat-main-screen { display:flex }` — иначе снятие main-mode не прячет экран. */
+.chat-main-page.main-mode .chat-main-screen {
+  display: flex;
+  flex: 1;
+  padding: 24px 16px;
+  min-height: 0;
+  overflow: hidden;
+}
+.chat-main-page.main-mode .chat-history { display: none; }
+/* В main-режиме лого(1)/навигация/ввод приклеены друг к другу без зазоров. */
+.chat-main-page.main-mode { gap: 0; }
+/* В чат-режиме плашка навигации скрыта (welcome больше не показываем). */
+.chat-main-page:not(.main-mode) .main-screen-nav { display: none; }
+
+.main-screen-stage {
+  margin: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 28px;
+  width: 100%;
+  max-width: 940px;
+}
+
+.main-screen-logo {
+  width: min(520px, 78vw);
+  height: auto;
+  pointer-events: none;
+  flex-shrink: 0;
+  line-height: 0;
+}
+.main-screen-logo svg {
+  width: 100%;
+  height: auto;
+  display: block;
+  aspect-ratio: 840 / 260;
+}
+
+/* Горизонтальная плашка навигации на главной вкладке: прикреплена к плашке
+   поля ввода (общий бордер, скругление сверху), логотип остаётся над ней. */
+.main-screen-nav {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 10px;
+  margin: auto 0 -1px 0;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+}
+
+.main-screen-section-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.main-screen-section-btn:hover { background: var(--session-hover); color: var(--primary); border-color: var(--border); }
+
+/* Быстрая навигация по разделам внутри «Настройки» */
+.settings-nav { display: flex; flex-wrap: wrap; gap: 8px; }
+.settings-nav-btn {
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-bg);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
+}
+.settings-nav-btn:hover { background: var(--session-hover); border-color: var(--primary); color: var(--primary); }
+
+/* кнопка «+ модель» в ряду ввода (открывает раздел «Настройки») */
+.btn-add-model { flex: 0 0 auto; margin-left: 2px; }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Вкладка-веб-страница (iframe 9Router Web UI)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.webview-wrap { flex: 1; display: flex; min-height: 0; }
+.webview-frame { flex: 1; border: 1px solid var(--border); border-radius: 6px; background: #fff; width: 100%; }

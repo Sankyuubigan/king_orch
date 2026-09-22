@@ -1,15 +1,14 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { store } from "../store";
 import { bus } from "../events";
 import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, showToast, showPermissionRequest, showVramRequest } from "../ui";
 import type { Role, MessageMenuCallbacks } from "../ui";
-import type { ThoughtMenuCallbacks, Attachment } from "../types";
+import type { ThoughtMenuCallbacks, Attachment, ChatMessage } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
-import { chatCompletion as nineRouterChat, onChunk as onNineRouterChunk } from "@my-tauri-plugins/plugin-9router";
-import { renderMarkdown, stripStreamArtifacts, extractChannelThought, formatSpeed, NINE_ROUTER_MODEL_PREFIX } from "../utils";
+import { chatCompletion as nineRouterChat } from "@my-tauri-plugins/plugin-9router";
+import { renderMarkdown, stripStreamArtifacts, extractChannelThought, NINE_ROUTER_MODEL_PREFIX, fillModelSelect, fillAgentSelect } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError } from "../telemetry";
 import mermaid from "mermaid";
@@ -42,6 +41,41 @@ async function renderMermaid() {
     }
   });
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Маршрутизация событий движка: глобальные Tauri-listen регистрируются ОДИН
+// раз (initChatEventRouter, см. src/controllers/chat-router.ts), а все события
+// (прогресс, статус, стриминг, мысли, режим движка) перенаправляются в
+// КОНТРОЛЛЕР вкладки, которая в данный момент обрабатывает запрос.
+// Обработка СТРОГО последовательная (одна генерация за раз).
+// ─────────────────────────────────────────────────────────────────────────────
+
+let activeProcessingChat: ChatController | null = null;
+
+function isProcessingActive(controller: ChatController): boolean {
+  return activeProcessingChat !== null && activeProcessingChat === controller;
+}
+
+/** Снятие статуса «активная обработка» — только сам владелец может освободить слот. */
+export function releaseGlobalProcessing(controller: ChatController) {
+  if (activeProcessingChat === controller) {
+    activeProcessingChat = null;
+    store.isProcessing = false;
+  }
+}
+
+/** Контроллер вкладки, обрабатывающей текущий запрос (для роутера и настроек). */
+export function getActiveProcessingChat(): ChatController | null {
+  return activeProcessingChat;
+}
+
+/** Захват слота активной обработки (строго один контроллер за раз). */
+export function setActiveProcessingChat(controller: ChatController) {
+  activeProcessingChat = controller;
+  store.isProcessing = true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export interface ChatElements {
   chatHistory: HTMLDivElement;
@@ -76,8 +110,87 @@ export interface ChatElements {
   currentWorkdir: HTMLSpanElement;
 }
 
+/// Колбэки вкладки (вызывает TabController).
+export interface ChatHooks {
+  /// Вкладка стала чат-табом: получила реальную сессию (отправка либо
+  /// открыта существующая по session:open). Таб-контроллер меняет тип вкладки
+  /// main → chat, убирает экран новой вкладки и персистит.
+  onBecameChat?: (sessionId: string) => void;
+  /// Мain-вкладка получила черновик (сессия создана при наборе текста).
+  /// Таб-контроллер регистрирует sessionId у вкладки БЕЗ конвертации в чат.
+  onDraftSession?: (sessionId: string) => void;
+}
+
+/**
+ * Состояние ОДНОЙ чат-вкладки. Каждая вкладка имеет собственную сессию,
+ * историю, черновик и стриминг. Глобальный флаг `store.isProcessing` остаётся
+ * верным и единым для приложения (обработка идёт где-то).
+ */
+export class ChatTabState {
+  sessionId: string | null = null;
+  history: ChatMessage[] = [];
+  uidList: string[] = [];
+  uidCounter = 0;
+
+  /** Раскрывающийся блок «Мысли агентов» текущей вкладки. */
+  activeThoughtsBlock: HTMLDivElement | null = null;
+  realtimeSubcallKeys = new Set<string>();
+
+  /// Для watchdog зависшей обработки.
+  processingStartedAt = 0;
+  lastActivityAt = 0;
+
+  /** Таймер автосейва черновика (персист раз в 500мс). */
+  draftTimeout: number | undefined;
+
+  /// Вкладка уже показана как чат (main-экран снят). Ставится при реальной
+  /// конвертации main → chat (отправка) либо при открытии сессии.
+  isChatTab = false;
+
+  // Стриминг текста
+  rtStreamUid: string | null = null;
+  rtStreamBuffer: string = "";
+  rtIsJson: boolean = false;
+
+  // Стриминг мыслей
+  rtThoughtUid: string | null = null;
+  rtThoughtBuffer: string = "";
+  rtThoughtAuthor: string = "";
+
+  /** Идёт ли обработка ИМЕННО в этой вкладке. */
+  isProcessing = false;
+
+  /** «Вкладка имеет реальную сессию» — для таб-ленты (типы main/chat). */
+  hasSession(): boolean {
+    return this.sessionId !== null && this.sessionId !== "";
+  }
+
+  nextUid(): string {
+    return `msg_${this.uidCounter++}`;
+  }
+
+  resetForNewSession() {
+    this.history = [];
+    this.uidList = [];
+    this.uidCounter = 0;
+    this.realtimeSubcallKeys.clear();
+    this.activeThoughtsBlock = null;
+    this.rtStreamUid = null;
+    this.rtStreamBuffer = "";
+    this.rtIsJson = false;
+    this.rtThoughtUid = null;
+    this.rtThoughtBuffer = "";
+    this.rtThoughtAuthor = "";
+    this.isProcessing = false;
+    this.processingStartedAt = 0;
+    this.lastActivityAt = 0;
+  }
+}
+
 export class ChatController {
+  readonly state = new ChatTabState();
   private el: ChatElements;
+  private hooks: ChatHooks;
   private menuCallbacks: MessageMenuCallbacks;
   private thoughtMenuCallbacks: ThoughtMenuCallbacks;
   private attachments: Attachment[] = [];
@@ -87,9 +200,15 @@ export class ChatController {
   private processingWatchdog: number | null = null;
   /// Кэш каталога моделей плагина (для tokenizer_id в счётчике токенов).
   private catalogCache: CatalogEntry[] | null = null;
+  private thoughtDedupSet = new Set<string>();
 
-  constructor(el: ChatElements) {
+  /// Публичные ссылки на страницы (для чужих контроллеров: вкладки, сессии).
+  get mainView(): HTMLDivElement { return this.el.viewChat; }
+  get subView(): HTMLDivElement { return this.el.viewSubchat; }
+
+  constructor(el: ChatElements, hooks?: ChatHooks) {
     this.el = el;
+    this.hooks = hooks || {};
     this.menuCallbacks = {
       onDelete: (uid) => this.onDeleteMessage(uid),
       onClone: (uid) => this.onCloneMessage(uid),
@@ -103,7 +222,6 @@ export class ChatController {
       onCloneFromThoughts: (uid) => this.onCloneFromThoughts(uid),
     };
     this.bindDomEvents();
-    this.bindTauriEvents();
     this.bindBusEvents();
     setTimeout(() => {
       this.updateAttachButtonState();
@@ -111,6 +229,176 @@ export class ChatController {
       this.refreshEngineBadgeInit();
     }, 100);
   }
+
+  /** Текущее значение выбора модели (для SettingsController при загрузке параметров). */
+  get modelSelectValue(): string | null {
+    return this.el.modelSelect?.value || null;
+  }
+
+  // ── Публичный API для роутера событий (src/controllers/chat-router.ts) ──
+
+  onProgress(pct: number) {
+    if (!isProcessingActive(this)) return;
+    this.state.lastActivityAt = Date.now();
+    this.el.progressBar.style.width = `${pct}%`;
+  }
+
+  onStatus(text: string) {
+    if (!isProcessingActive(this)) return;
+    this.state.lastActivityAt = Date.now();
+    this.el.statusLabel.innerText = text;
+  }
+
+  onStreamChunk(rawPayload: any) {
+    if (!isProcessingActive(this)) return;
+    // Бэкенд шлёт объект { kind, author, text }; для обратной совместимости
+    // (старые вызовы) payload может прийти строкой — считаем его message.
+    const payload = rawPayload;
+    const kind: string = typeof payload === "string" ? "message" : (payload.kind || "message");
+    const chunk: string = typeof payload === "string" ? payload : (payload.text || "");
+    const author: string = (payload && typeof payload.author === "string") ? payload.author : "";
+
+    // ── МЫСЛИ: печатаем в блок «Мысли агентов» в реальном времени ──
+    if (kind === "thought") {
+      // Новый агент → новый пузырь мыслей
+      if (this.state.rtThoughtUid && this.state.rtThoughtAuthor && author && author !== this.state.rtThoughtAuthor) {
+        this.state.rtThoughtUid = null;
+        this.state.rtThoughtBuffer = "";
+        this.state.rtThoughtAuthor = "";
+      }
+      this.state.rtThoughtBuffer += chunk;
+
+      // Прячем внутренние JSON-вызовы (сабагент/инструмент) от глаз пользователя
+      if (this.state.rtThoughtBuffer.trimStart().startsWith("{") || this.state.rtThoughtBuffer.trimStart().startsWith("```json")) {
+        return;
+      }
+
+      const label = author || "Агент";
+      if (!this.state.rtThoughtUid) {
+        this.state.rtThoughtUid = this.state.nextUid();
+        this.state.rtThoughtAuthor = label;
+        const item = createThoughtElement(label, this.state.rtThoughtBuffer);
+        item.id = "rt-thought-stream";
+        this.state.activeThoughtsBlock = createThoughtsBlock([item]);
+        this.el.chatHistory.appendChild(this.state.activeThoughtsBlock);
+      } else {
+        const item = this.state.activeThoughtsBlock?.querySelector('#rt-thought-stream');
+        if (item) {
+          item.innerHTML = `🧠 <strong>${label}</strong>: <em>${this.state.rtThoughtBuffer}</em>`;
+        }
+      }
+      this.scrollToBottomIfNearEnd(this.el.chatHistory);
+      return;
+    }
+
+    // ── СООБЩЕНИЕ: старая логика основного чата ──
+    this.state.rtStreamBuffer += chunk;
+
+    // Если это внутренний JSON (вызов сабагента или тулзы) — скрываем от глаз пользователя!
+    if (this.state.rtStreamBuffer.trimStart().startsWith("{") || this.state.rtStreamBuffer.trimStart().startsWith("```json")) {
+      this.state.rtIsJson = true;
+      return;
+    }
+
+    // Если это начало ответа, создаем пустое сообщение в UI
+    if (!this.state.rtStreamUid) {
+      this.state.rtStreamUid = this.state.nextUid();
+      const displayName = (author && author.trim())
+        ? author
+        : this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace(/^[📁📊]\s*/, '');
+      this.appendMessage('agent', '', displayName, undefined, undefined, false, this.state.rtStreamUid);
+    }
+
+    // Обновляем тело сообщения. Скрываем служебные теги LLM (<|channel>...<channel|> и
+    // <|turn>) перед подачей в renderMarkdown (теги могут прийти внутри чанка).
+    const visibleText = stripStreamArtifacts(this.state.rtStreamBuffer);
+    const msgEl = this.el.chatHistory.querySelector(`[data-msg-uid="${this.state.rtStreamUid}"]`);
+    if (msgEl) {
+      const contentDiv = msgEl.querySelector('div:nth-child(2)');
+      if (contentDiv) {
+        contentDiv.innerHTML = renderMarkdown(visibleText);
+        this.scrollToBottomIfNearEnd(this.el.chatHistory);
+      }
+    }
+
+    // Печатаем "Мысли" агента (формат <|channel>thought>...) в раскрывающийся блок.
+    const channelThought = extractChannelThought(this.state.rtStreamBuffer);
+    if (channelThought) {
+      if (!this.state.activeThoughtsBlock && msgEl) {
+        const item = createThoughtElement("Агент", channelThought);
+        item.id = "rt-channel-thought";
+        this.state.activeThoughtsBlock = createThoughtsBlock([item]);
+        this.el.chatHistory.insertBefore(this.state.activeThoughtsBlock, msgEl);
+      } else if (this.state.activeThoughtsBlock) {
+        let item = this.state.activeThoughtsBlock.querySelector('#rt-channel-thought');
+        if (!item) {
+          item = createThoughtElement("Агент", channelThought);
+          item.id = "rt-channel-thought";
+          addToThoughtsBlock(this.state.activeThoughtsBlock, item as HTMLElement);
+        } else {
+          item.innerHTML = `🧠 <strong>Агент</strong>: <em>${channelThought}</em>`;
+        }
+      }
+    }
+  }
+
+  onSubcallDone(call: any) {
+    if (!isProcessingActive(this)) return;
+    this.state.realtimeSubcallKeys.add(`${call.agent_name}:${call.time_sec.toFixed(2)}`);
+    const item = createSubcallElement(call, (c) => this.showSubchat(c));
+    if (this.state.activeThoughtsBlock) { addToThoughtsBlock(this.state.activeThoughtsBlock, item); }
+    else { this.state.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(this.state.activeThoughtsBlock); }
+    this.scrollToBottomIfNearEnd(this.el.chatHistory);
+  }
+
+  onAgentThought(payload: { author: string, thought: string, time_sec: number }) {
+    if (!isProcessingActive(this)) return;
+    const dedupKey = `${payload.author}:${payload.thought.substring(0, 200)}`;
+    if (this.thoughtDedupSet.has(dedupKey)) return;
+    this.thoughtDedupSet.add(dedupKey);
+    const item = createThoughtElement(payload.author, payload.thought, payload.time_sec);
+    if (this.state.activeThoughtsBlock) { addToThoughtsBlock(this.state.activeThoughtsBlock, item); }
+    else { this.state.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(this.state.activeThoughtsBlock); }
+    this.scrollToBottomIfNearEnd(this.el.chatHistory);
+  }
+
+  onAgentToolCall(p: { author: string, tool: string, args?: string, result?: string }) {
+    if (!isProcessingActive(this)) return;
+    const key = `${p.author}:${p.tool}`;
+    if (p.result !== undefined) {
+      const item = this.state.activeThoughtsBlock?.querySelector(`[data-tool-key="${key}"]`);
+      if (item) {
+        item.querySelector(".tool-thought-status")?.remove();
+        const resultDiv = document.createElement("div");
+        resultDiv.className = "tool-thought-result";
+        resultDiv.textContent = `→ ${p.result}`;
+        item.appendChild(resultDiv);
+        this.scrollToBottomIfNearEnd(this.el.chatHistory);
+      }
+      return;
+    }
+    const item = createToolThoughtElement(p.author, p.tool, p.args);
+    if (this.state.activeThoughtsBlock) { addToThoughtsBlock(this.state.activeThoughtsBlock, item); }
+    else { this.state.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(this.state.activeThoughtsBlock); }
+    this.scrollToBottomIfNearEnd(this.el.chatHistory);
+  }
+
+  onEngineMode(p: { mode?: string, tok_per_sec?: number, detail?: string }) {
+    if (!isProcessingActive(this)) return;
+    this.updateEngineBadge(p.mode || "cpu", p.tok_per_sec || 0, p.detail || "");
+  }
+
+  onToolPermission(payload: any) {
+    if (!isProcessingActive(this)) return;
+    showPermissionRequest(payload);
+  }
+
+  onVramNotice(payload: any) {
+    if (!isProcessingActive(this)) return;
+    showVramRequest(payload);
+  }
+
+  // ── Вспомогательные ──
 
   private scrollToBottomIfNearEnd(el: HTMLElement) {
     const threshold = 100;
@@ -157,7 +445,7 @@ export class ChatController {
             modelPath,
             agentId,
             message: text,
-            history: store.chatHistory
+            history: this.state.history
         });
 
         const tokens = await countTokens(promptText, tokenizerId);
@@ -190,18 +478,20 @@ export class ChatController {
     }
   }
 
+  // ── Операции над сообщениями ──
+
   private async onDeleteMessage(uid: string) {
-    const idx = store.msgUidList.indexOf(uid); if (idx === -1) return;
-    store.chatHistory.splice(idx, 1); store.msgUidList.splice(idx, 1);
+    const idx = this.state.uidList.indexOf(uid); if (idx === -1) return;
+    this.state.history.splice(idx, 1); this.state.uidList.splice(idx, 1);
     this.renderChatFromHistory();
-    if (store.currentSessionId) await this.persistSession();
+    if (this.state.hasSession()) await this.persistSession();
     this.triggerTokenCount();
     showToast("Сообщение удалено.", "success");
   }
 
   private async onCloneMessage(uid: string) {
-    const idx = store.msgUidList.indexOf(uid); if (idx === -1) return;
-    const clonedHistory = store.chatHistory.slice(0, idx + 1);
+    const idx = this.state.uidList.indexOf(uid); if (idx === -1) return;
+    const clonedHistory = this.state.history.slice(0, idx + 1);
     const newId = Date.now().toString();
     await saveSession(newId, clonedHistory, "", this.el.modelSelect?.value, this.el.agentSelect?.value);
     showToast("Клон сессии создан!", "success");
@@ -210,9 +500,9 @@ export class ChatController {
   }
 
   private async onCopyMessage(uid: string) {
-    const idx = store.msgUidList.indexOf(uid);
+    const idx = this.state.uidList.indexOf(uid);
     if (idx === -1) return;
-    const msg = store.chatHistory[idx];
+    const msg = this.state.history[idx];
     try {
       await navigator.clipboard.writeText(msg.content);
       showToast("Сообщение скопировано в буфер обмена", "success");
@@ -223,9 +513,9 @@ export class ChatController {
   }
 
   private onEditMessage(uid: string) {
-    const idx = store.msgUidList.indexOf(uid);
+    const idx = this.state.uidList.indexOf(uid);
     if (idx === -1) return;
-    const msg = store.chatHistory[idx];
+    const msg = this.state.history[idx];
     const msgEl = this.el.chatHistory.querySelector(`[data-msg-uid="${uid}"]`) as HTMLDivElement | null;
     if (!msgEl) return;
 
@@ -236,7 +526,7 @@ export class ChatController {
     this.renderEditor(msgEl, contentDiv, originalContent, (newContent) => {
       msg.content = newContent;
       this.renderChatFromHistory();
-      if (store.currentSessionId) this.persistSession();
+      if (this.state.hasSession()) this.persistSession();
       this.triggerTokenCount();
       showToast("Сообщение обновлено.", "success");
     });
@@ -258,9 +548,9 @@ export class ChatController {
   }
 
   private async onTranslateMessage(uid: string) {
-    const idx = store.msgUidList.indexOf(uid);
+    const idx = this.state.uidList.indexOf(uid);
     if (idx === -1) return;
-    const msg = store.chatHistory[idx];
+    const msg = this.state.history[idx];
     if (!msg || msg.type === "thought") return;
 
     if (!store.translatorModel) {
@@ -280,7 +570,7 @@ export class ChatController {
       });
       msg.content = `${source}\n\n---\n**${langInfo.footer}**\n\n${translated.trim()}`;
       this.renderChatFromHistory();
-      if (store.currentSessionId) this.persistSession();
+      if (this.state.hasSession()) this.persistSession();
       showToast("Сообщение переведено.", "success");
     } catch (e) {
       showToast(`Ошибка перевода: ${e}`, "error");
@@ -331,8 +621,8 @@ export class ChatController {
   }
 
   private async onRunFromMessage(uid: string) {
-    if (store.isProcessing) return;
-    const idx = store.msgUidList.indexOf(uid);
+    if (store.isProcessing || this.state.isProcessing) return;
+    const idx = this.state.uidList.indexOf(uid);
     if (idx === -1) return;
 
     const activeAgent = this.el.agentSelect.value;
@@ -341,22 +631,20 @@ export class ChatController {
 
     logFront(`[chat] Нажата кнопка 'Отправить и запустить' для сообщения: ${uid}`);
 
-    store.chatHistory = store.chatHistory.slice(0, idx + 1);
-    store.msgUidList = store.msgUidList.slice(0, idx + 1);
+    this.state.history = this.state.history.slice(0, idx + 1);
+    this.state.uidList = this.state.uidList.slice(0, idx + 1);
     this.renderChatFromHistory();
 
     this.setProcessingState(true);
 
-if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
-    await this.persistSession();
-    bus.emit("session:changed");
-
-    const preSendLength = store.chatHistory.length;
+    this.ensureSessionId();
+    if (!this.state.isChatTab) this.becomeChatTab();
+    const preSendLength = this.state.history.length;
     const startTime = performance.now();
     try {
       const _p = store.currentModelParams;
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value), dry_multiplier: _p?.dry_multiplier ?? 0.0, dry_base: _p?.dry_base ?? 1.75, dry_allowed_length: _p?.dry_allowed_length ?? 2, dry_penalty_last_n: _p?.dry_penalty_last_n ?? 0, xtc_probability: _p?.xtc_probability ?? 0.0, xtc_threshold: _p?.xtc_threshold ?? 0.1 };
-      const allHistory = store.chatHistory.slice();
+      const allHistory = this.state.history.slice();
 
       let mmprojPath: string | null = null; // этот путь всегда текстовый (без вложений) — mmproj не нужен
 
@@ -373,7 +661,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
         modelParams: params,
         attachments: [],
         mmprojPath,
-        sessionId: store.currentSessionId ?? ""
+        sessionId: this.state.sessionId ?? ""
       });
 
       if (response?.has_error) {
@@ -393,11 +681,11 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
             }
         });
         
-        const oldUids = store.msgUidList.slice(0, preSendLength);
-        const newUids = afterOldHistory.map(() => store.nextUid());
+        const oldUids = this.state.uidList.slice(0, preSendLength);
+        const newUids = afterOldHistory.map(() => this.state.nextUid());
 
-        store.chatHistory = [...oldHistory, ...afterOldHistory];
-        store.msgUidList = [...oldUids, ...newUids];
+        this.state.history = [...oldHistory, ...afterOldHistory];
+        this.state.uidList = [...oldUids, ...newUids];
       }
 
       this.renderChatFromHistory();
@@ -406,12 +694,12 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
 
     } catch (error) {
       if (String(error).includes("Отменено") || String(error).includes("Прервано")) {
-        store.chatHistory.push({ type: "message", author: "system", content: "⚠️ Прервано." });
-        store.msgUidList.push(store.nextUid());
+        this.state.history.push({ type: "message", author: "system", content: "⚠️ Прервано." });
+        this.state.uidList.push(this.state.nextUid());
       } else {
         showToast(`Ошибка: ${error}`, "error");
-        store.chatHistory.push({ type: "message", author: "system", content: `⚠️ Ошибка: ${error}` });
-        store.msgUidList.push(store.nextUid());
+        this.state.history.push({ type: "message", author: "system", content: `⚠️ Ошибка: ${error}` });
+        this.state.uidList.push(this.state.nextUid());
         void trackError("chat.send.runFrom", error);
       }
       this.renderChatFromHistory();
@@ -424,17 +712,17 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
   private async onDeleteThoughts(assistantUid: string | null, thoughtUids: string[]) {
     if (thoughtUids.length > 0) {
       const removeSet = new Set(thoughtUids);
-      for (let i = store.chatHistory.length - 1; i >= 0; i--) {
-        if (removeSet.has(store.msgUidList[i])) {
-          store.chatHistory.splice(i, 1);
-          store.msgUidList.splice(i, 1);
+      for (let i = this.state.history.length - 1; i >= 0; i--) {
+        if (removeSet.has(this.state.uidList[i])) {
+          this.state.history.splice(i, 1);
+          this.state.uidList.splice(i, 1);
         }
       }
     } else if (assistantUid) {
-      const idx = store.msgUidList.indexOf(assistantUid); if (idx === -1) return;
-      if (store.chatHistory[idx].sub_calls) store.chatHistory[idx].sub_calls = [];
+      const idx = this.state.uidList.indexOf(assistantUid); if (idx === -1) return;
+      if (this.state.history[idx].sub_calls) this.state.history[idx].sub_calls = [];
       let i = idx - 1;
-      while (i >= 0 && store.chatHistory[i].type === 'thought') { store.chatHistory.splice(i, 1); store.msgUidList.splice(i, 1); i--; }
+      while (i >= 0 && this.state.history[i].type === 'thought') { this.state.history.splice(i, 1); this.state.uidList.splice(i, 1); i--; }
     } else {
       return;
     }
@@ -444,11 +732,11 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
   }
 
   private async onCloneFromThoughts(assistantUid: string) {
-    const idx = store.msgUidList.indexOf(assistantUid); if (idx === -1) return;
+    const idx = this.state.uidList.indexOf(assistantUid); if (idx === -1) return;
     let first = idx; let i = idx - 1;
-    while (i >= 0 && store.chatHistory[i].type === 'thought') { first = i; i--; }
+    while (i >= 0 && this.state.history[i].type === 'thought') { first = i; i--; }
     const cloneIdx = first - 1; if (cloneIdx < 0) { showToast("Нельзя клонировать.", "error"); return; }
-    const clonedHistory = store.chatHistory.slice(0, cloneIdx + 1);
+    const clonedHistory = this.state.history.slice(0, cloneIdx + 1);
     const newId = Date.now().toString();
     await saveSession(newId, clonedHistory, "", this.el.modelSelect?.value, this.el.agentSelect?.value);
     showToast("Клон сессии создан!", "success");
@@ -462,7 +750,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
   }
 
   appendMessage(role: Role, content: string, agentName?: string, timeText?: string, subCalls?: any[], skipSubcallRender = false, uid?: string, attachments?: Attachment[]) {
-    store.activeThoughtsBlock = null;
+    this.state.activeThoughtsBlock = null;
     if (subCalls && subCalls.length > 0 && !skipSubcallRender) {
       const items = subCalls.map(call => createSubcallElement(call, (c) => this.showSubchat(c)));
       this.el.chatHistory.appendChild(createThoughtsBlock(items, uid, this.thoughtMenuCallbacks, []));
@@ -527,12 +815,12 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
   }
 
   renderChatFromHistory() {
-    this.el.chatHistory.innerHTML = ''; store.activeThoughtsBlock = null;
+    this.el.chatHistory.innerHTML = ''; this.state.activeThoughtsBlock = null;
     let thoughtsItems: HTMLElement[] = []; let thoughtsUids: string[] = []; let lastAssistantUid: string | undefined;
-    for (let i = 0; i < store.chatHistory.length; i++) {
-      const msg = store.chatHistory[i]; const uid = store.msgUidList[i];
-      if (msg.type === 'thought' || msg.type === 'signal') {
-        const content = msg.type === 'signal' ? `[Сигнал] ${msg.content}` : msg.content;
+    for (let i = 0; i < this.state.history.length; i++) {
+      const msg = this.state.history[i]; const uid = this.state.uidList[i];
+      if (msg.type === 'thought') {
+        const content = msg.content;
         const tool = this.parseToolThought(msg.content);
         if (tool) {
           thoughtsItems.push(createToolThoughtElement(msg.author || 'Система', tool.tool, tool.args, tool.result, true));
@@ -597,32 +885,36 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
   }
 
   setProcessingState(state: boolean) {
-    store.isProcessing = state;
+    this.state.isProcessing = state;
     this.el.modelSelect.disabled = this.el.agentSelect.disabled = this.el.btnSend.disabled = state;
     this.el.btnStop.disabled = !state;
-    if (state) { 
-        store.processingStartedAt = Date.now();
-        store.lastActivityAt = Date.now();
-        this.armProcessingWatchdog();
-        this.el.chatFeedback.style.display = "block"; 
-        this.el.progressBar.style.width = "0%"; 
-        this.el.statusLabel.innerText = "Подготовка..."; 
-        store.realtimeSubcallKeys.clear(); 
-        
-        store.rtStreamUid = null;
-        store.rtStreamBuffer = "";
-        store.rtIsJson = false;
-        store.rtThoughtUid = null;
-        store.rtThoughtBuffer = "";
-        store.rtThoughtAuthor = "";
+    if (state) {
+        this.state.processingStartedAt = Date.now();
+        this.state.lastActivityAt = Date.now();
+        // Полный сброс стриминговых буферов перед новым прогоном.
+        this.state.realtimeSubcallKeys.clear();
+        this.state.activeThoughtsBlock = null;
+        this.state.rtStreamUid = null;
+        this.state.rtStreamBuffer = "";
+        this.state.rtIsJson = false;
+        this.state.rtThoughtUid = null;
+        this.state.rtThoughtBuffer = "";
+        this.state.rtThoughtAuthor = "";
+        setActiveProcessingChat(this);
+        store.isProcessing = true;
+        this.armProcessingWatchdog();;
+        this.el.chatFeedback.style.display = "block";
+        this.el.progressBar.style.width = "0%";
+        this.el.statusLabel.innerText = "Подготовка...";
     }
-    else { 
+    else {
         // Полный сброс «рабочего» состояния: чат больше не в процессе обработки —
         // скрываем панель прогресса и возвращаем статус/прогресс к дефолту, чтобы
         // UI не оставался в застывшем виде («Загрузка модели...», прогресс 10%).
         this.disarmProcessingWatchdog();
-        this.el.chatFeedback.style.display = "none"; 
-        this.el.progressBar.style.width = "0%"; 
+        releaseGlobalProcessing(this);
+        this.el.chatFeedback.style.display = "none";
+        this.el.progressBar.style.width = "0%";
         this.el.statusLabel.innerText = "Обработка...";
     }
     bus.emit("processing:changed", state);
@@ -644,25 +936,25 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
   /** Сторож зависшей обработки: если движок молчит дольше лимита — разблокируем UI. */
   private onProcessingWatchdog() {
     this.processingWatchdog = null;
-    if (!store.isProcessing) return;
-    if (Date.now() - store.lastActivityAt > PROCESSING_IDLE_LIMIT_MS) {
+    if (!this.state.isProcessing) return;
+    if (Date.now() - this.state.lastActivityAt > PROCESSING_IDLE_LIMIT_MS) {
       logFront(`[chat] Watchdog: движок молчит ${PROCESSING_IDLE_LIMIT_MS / 1000} сек — обработка остановлена`);
       this.setProcessingState(false);
       showToast("⏱ Движок молчал более 15 минут — обработка остановлена.", "error");
-      void trackError("chat.watchdog.timeout", new Error(`движок молчал ${Date.now() - store.lastActivityAt} мс`));
+      void trackError("chat.watchdog.timeout", new Error(`движок молчал ${Date.now() - this.state.lastActivityAt} мс`));
     } else {
       this.armProcessingWatchdog();
     }
   }
 
   /** Сохранение текущей сессии с привязкой выбранных модели и агента. */
-  private persistSession(draft?: string) {
-    const id = store.currentSessionId;
-    if (!id) return;
+  private persistSession(draft?: string): Promise<void> {
+    const id = this.state.sessionId;
+    if (!id) return Promise.resolve();
     const model = this.el.modelSelect?.value || undefined;
     const agent = this.el.agentSelect?.value || undefined;
     const d = draft !== undefined ? draft : this.el.chatInput.value;
-    return saveSession(id, store.chatHistory, d, model, agent);
+    return saveSession(id, this.state.history, d, model, agent);
   }
 
   private hasOption(select: HTMLSelectElement | null, value: string): boolean {
@@ -670,30 +962,74 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     return Array.from(select.options).some(o => o.value === value);
   }
 
+  /// Гарантирует наличие ID сессии (создаёт при первом обращении).
+  private ensureSessionId(): string {
+    if (!this.state.sessionId) {
+      this.state.sessionId = Date.now().toString();
+    }
+    return this.state.sessionId;
+  }
+
+  /// Конвертация вкладки в чат-режим (убрать main-экран). Вызывается ТОЛЬКО
+  /// по факту отправки сообщения либо открытия сессии, не при наборе черновика.
+  private becomeChatTab() {
+    this.state.isChatTab = true;
+    this.hooks.onBecameChat?.(this.state.sessionId ?? "");
+  }
+
+  /// Восстановление черновика на МАIN-вкладке: подгружает сессию, но НЕ
+  /// конвертирует вкладку в чат (welcome + прижатая плашка остаются).
+  async openSessionDraft(id: string) {
+    if (this.state.isProcessing) return;
+    try {
+      const session = await loadSession(id);
+      this.state.sessionId = session.id ?? id;
+      if (session.model && this.hasOption(this.el.modelSelect, session.model)) {
+        this.el.modelSelect.value = session.model;
+        bus.emit("model:changed", session.model);
+      }
+      if (session.agent && this.hasOption(this.el.agentSelect, session.agent)) {
+        this.el.agentSelect.value = session.agent;
+      }
+      if (session.draft) {
+        this.el.chatInput.value = session.draft;
+        this.el.chatInput.style.height = "auto";
+        this.el.chatInput.style.height = `${this.el.chatInput.scrollHeight}px`;
+      }
+      this.updateAttachButtonState();
+      this.triggerTokenCount();
+    } catch (e) {
+      void trackError("chat.openSessionDraft", e);
+    }
+  }
+
   async handleSend() {
-    const text = this.el.chatInput.value.trim(); if (!text && this.attachments.length === 0) return; if (store.isProcessing) return;
+    const text = this.el.chatInput.value.trim(); if (!text && this.attachments.length === 0) return;
+    if (store.isProcessing || this.state.isProcessing) return;
     const activeAgent = this.el.agentSelect.value; const modelPath = this.el.modelSelect.value;
     if (!modelPath) { showToast("Выберите модель!", "error"); return; }
-    const userUid = store.nextUid(); store.msgUidList.push(userUid);
+    const userUid = this.state.nextUid(); this.state.uidList.push(userUid);
     const displayText = text || (this.attachments.length > 0 ? `[${this.attachments.length} файлов]` : '');
     this.appendMessage('user', displayText, undefined, undefined, undefined, false, userUid, this.attachments);
-    this.el.chatInput.value = ""; this.el.chatInput.style.height = "auto"; clearTimeout(store.draftTimeout);
+    this.el.chatInput.value = ""; this.el.chatInput.style.height = "auto"; clearTimeout(this.state.draftTimeout);
     this.el.filePreview.innerHTML = '';
     const attachments = [...this.attachments];
     this.attachments = [];
     this.setProcessingState(true);
-    if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
-    const historyBefore = store.chatHistory.length;
-    const preSendLength = historyBefore + 1;
-    store.chatHistory.push({ type: "message", author: "user", content: displayText, attachments });
+    this.ensureSessionId();
+    // Вкладка ещё main-режима — конвертируем в чат именно при отправке,
+    // а не на первом набранном символе (чтобы плашка ввода не «прыгала»).
+    if (!this.state.isChatTab) this.becomeChatTab();
+    const historyBefore = this.state.history.length;
+    void historyBefore;
+    this.state.history.push({ type: "message", author: "user", content: displayText, attachments });
     await this.persistSession("");
     bus.emit("session:changed");
     const startTime = performance.now();
     try {
-      const displayName = this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace(/^[📁📊]\s*/, '');
       const _p2 = store.currentModelParams;
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value), dry_multiplier: _p2?.dry_multiplier ?? 0.0, dry_base: _p2?.dry_base ?? 1.75, dry_allowed_length: _p2?.dry_allowed_length ?? 2, dry_penalty_last_n: _p2?.dry_penalty_last_n ?? 0, xtc_probability: _p2?.xtc_probability ?? 0.0, xtc_threshold: _p2?.xtc_threshold ?? 0.1 };
-      const allHistory = store.chatHistory.slice();
+      const allHistory = this.state.history.slice();
       let mmprojPath: string | null = null;
       if (attachments && attachments.length > 0) {
         try { mmprojPath = await getMmprojPath(modelPath); } catch (_) {}
@@ -714,7 +1050,7 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
             modelParams: params,
             attachments,
             mmprojPath,
-            sessionId: store.currentSessionId ?? ""
+            sessionId: this.state.sessionId ?? ""
         });
       if (response?.has_error) {
         void trackError("chat.send.outcome", response.has_error);
@@ -729,41 +1065,42 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
                 m.time_sec = dur;
             }
         });
-        store.chatHistory = [...newMessages];
-        store.msgUidList = store.chatHistory.map(() => store.nextUid());
+        this.state.history = [...newMessages];
+        this.state.uidList = this.state.history.map(() => this.state.nextUid());
       }
-      const hasRT = response.sub_calls && response.sub_calls.some((c: any) => store.realtimeSubcallKeys.has(`${c.agent_name}:${c.time_sec.toFixed(2)}`));
+      const hasRT = response.sub_calls && response.sub_calls.some((c: any) => this.state.realtimeSubcallKeys.has(`${c.agent_name}:${c.time_sec.toFixed(2)}`));
+      void hasRT;
       if (response.text || newMessages.length > 0) {
         this.renderChatFromHistory();
       }
       // Защита от потери ответа: ищем последнее СООБЩЕНИЕ (не мысль) от агента.
-      const lastMessage = [...store.chatHistory].reverse().find((m: any) => m.type === 'message');
+      const lastMessage = [...this.state.history].reverse().find((m: any) => m.type === 'message');
       const hasFinal = lastMessage && lastMessage.author === activeAgent;
       if (response.text && !hasFinal) {
-        store.chatHistory.push({
+        this.state.history.push({
           type: "message",
           author: activeAgent,
           content: response.text,
           sub_calls: (response.sub_calls && response.sub_calls.length) ? response.sub_calls : undefined,
         });
-        store.msgUidList.push(store.nextUid());
+        this.state.uidList.push(this.state.nextUid());
         this.renderChatFromHistory();
       }
       await this.persistSession();
     } catch (error) {
       if (String(error).includes("Отменено") || String(error).includes("Прервано")) {
-          store.chatHistory.push({ type: "message", author: "system", content: "⚠️ Прервано." });
-          store.msgUidList.push(store.nextUid());
+          this.state.history.push({ type: "message", author: "system", content: "⚠️ Прервано." });
+          this.state.uidList.push(this.state.nextUid());
       } else {
           showToast(`Ошибка: ${error}`, "error");
-          store.chatHistory.push({ type: "message", author: "system", content: `⚠️ Ошибка: ${error}` });
-          store.msgUidList.push(store.nextUid());
+          this.state.history.push({ type: "message", author: "system", content: `⚠️ Ошибка: ${error}` });
+          this.state.uidList.push(this.state.nextUid());
           void trackError("chat.send", error);
       }
       this.renderChatFromHistory();
       await this.persistSession();
-    } finally { 
-        this.setProcessingState(false); 
+    } finally {
+        this.setProcessingState(false);
         this.triggerTokenCount();
     }
   }
@@ -792,36 +1129,33 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
       messages.push({ role: "user", content: text });
     }
     bus.emit("log", `☁️ 9Router → комбо «${comboName}»`);
-    const full = await nineRouterChat({ model: comboName, messages, author: activeAgent });
+    const full = (await nineRouterChat({ model: comboName, messages, author: activeAgent })) ?? "";
     return { text: full, messages: [] };
   }
 
   private triggerDraftSave() {
-    if (!store.currentSessionId && this.el.chatInput.value.trim() !== "") {
-      store.currentSessionId = Date.now().toString(); store.chatHistory = [];
+    if (!this.state.sessionId && this.el.chatInput.value.trim() !== "") {
+      // Черновик на пустой (main) вкладке: сессия создаётся и персистится,
+      // но вкладка НЕ конвертируется в чат — welcome и прижатая к низу плашка
+      // остаются до фактической отправки.
+      const sid = this.ensureSessionId();
+      this.hooks.onDraftSession?.(sid);
       this.persistSession().then(() => bus.emit("session:changed"));
-    } else if (store.currentSessionId) {
-      clearTimeout(store.draftTimeout);
-      store.draftTimeout = window.setTimeout(() => { this.persistSession(); }, 500);
+    } else if (this.state.sessionId) {
+      clearTimeout(this.state.draftTimeout);
+      this.state.draftTimeout = window.setTimeout(() => { this.persistSession(); }, 500);
     }
   }
 
-  startNewSession() {
-    if (store.isProcessing) return;
-    store.currentSessionId = null; store.resetForNewSession(); this.thoughtDedupSet.clear();
-    this.el.chatHistory.innerHTML = ''; this.el.chatInput.value = ''; this.el.chatInput.style.height = "auto";
-    this.el.filePreview.innerHTML = ''; this.attachments = [];
-    this.updateAttachButtonState();
-    this.appendMessage('system', 'Новая сессия. Выберите агента и напишите запрос.');
-    bus.emit("session:changed"); bus.emit("tab:switch", 'chat');
-    this.triggerTokenCount();
-  }
-
+  /// Открыть существующую сессию в ЧАТ-вкладке (с конвертацией в чат-режим).
   async openSession(id: string) {
-    if (store.isProcessing) return;
+    if (this.state.isProcessing) return;
     try {
       const session = await loadSession(id);
-      store.currentSessionId = id; store.chatHistory = session.messages;
+      // Единый источник правды: ID сессии из файла (совпадает с ключом вкладки).
+      this.state.sessionId = session.id ?? id;
+      this.state.history = session.messages;
+      this.state.uidCounter = 0; this.state.uidList = this.state.history.map(() => this.state.nextUid());
       this.el.chatInput.value = session.draft || "";
       setTimeout(() => { this.el.chatInput.style.height = "auto"; this.el.chatInput.style.height = `${this.el.chatInput.scrollHeight}px`; }, 0);
       if (session.model && this.hasOption(this.el.modelSelect, session.model)) {
@@ -831,8 +1165,9 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
       if (session.agent && this.hasOption(this.el.agentSelect, session.agent)) {
         this.el.agentSelect.value = session.agent;
       }
-      store.uidCounter = 0; store.msgUidList = store.chatHistory.map(() => store.nextUid());
-      this.renderChatFromHistory(); bus.emit("session:changed"); bus.emit("tab:switch", 'chat');
+      this.renderChatFromHistory();
+      bus.emit("session:changed");
+      this.becomeChatTab();
       this.updateAttachButtonState();
       this.triggerTokenCount();
     } catch(e) {
@@ -948,17 +1283,28 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     this.el.chatInput?.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); this.handleSend(); } });
     this.el.btnStop?.addEventListener("click", async () => { if (this.el.btnStop.disabled) return; this.el.btnStop.disabled = true; this.el.btnStop.innerText = "Стоп..."; this.appendMessage('system', 'Остановка...'); await invoke("stop_processing"); this.el.btnStop.innerText = "⏹ Стоп"; });
     this.el.btnBackChat?.addEventListener("click", () => { this.el.viewSubchat.classList.remove('active'); this.el.viewChat.classList.add('active'); });
-    this.el.chatInput.addEventListener("input", () => { 
-        this.el.chatInput.style.height = "auto"; 
-        this.el.chatInput.style.height = `${this.el.chatInput.scrollHeight}px`; 
-        this.triggerDraftSave(); 
+    this.el.chatInput.addEventListener("input", () => {
+        this.el.chatInput.style.height = "auto";
+        this.el.chatInput.style.height = `${this.el.chatInput.scrollHeight}px`;
+        this.triggerDraftSave();
         this.triggerTokenCount();
     });
-    this.el.chatInput.addEventListener("blur", () => { if (store.currentSessionId) { clearTimeout(store.draftTimeout); this.persistSession(); } });
+    this.el.chatInput.addEventListener("blur", () => { if (this.state.hasSession()) { clearTimeout(this.state.draftTimeout); this.persistSession(); } });
     this.el.btnAttach?.addEventListener("click", () => { if (!this.el.btnAttach.disabled) this.el.fileInput.click(); });
     this.el.fileInput?.addEventListener("change", (e) => this.handleFileSelect((e.target as HTMLInputElement).files));
-    this.el.modelSelect?.addEventListener("change", () => { this.updateAttachButtonState(); this.triggerTokenCount(); if (store.currentSessionId) this.persistSession(); });
-    this.el.agentSelect?.addEventListener("change", () => { this.triggerTokenCount(); if (store.currentSessionId) this.persistSession(); });
+    this.el.modelSelect?.addEventListener("change", () => {
+      bus.emit("model:changed", this.el.modelSelect.value);
+      this.updateAttachButtonState(); this.triggerTokenCount();
+      const v = this.el.modelSelect.value;
+      void invoke("set_last_model", { path: v }).catch(() => {});
+      if (this.state.hasSession()) this.persistSession();
+    });
+    this.el.agentSelect?.addEventListener("change", () => {
+      this.triggerTokenCount();
+      const v = this.el.agentSelect.value;
+      void invoke("set_config_value", { key: "last_agent", value: v }).catch(() => {});
+      if (this.state.hasSession()) this.persistSession();
+    });
     this.el.btnSetWorkdir?.addEventListener("click", async () => {
       try {
         const dir = await openDialog({ directory: true });
@@ -973,189 +1319,12 @@ if (!store.currentSessionId) store.currentSessionId = Date.now().toString();
     });
   }
 
-  private thoughtDedupSet = new Set<string>();
-
-  private bindTauriEvents() {
-    listen("progress", (e) => { store.lastActivityAt = Date.now(); this.el.progressBar.style.width = `${e.payload}%`; });
-    listen("status", (e) => { store.lastActivityAt = Date.now(); this.el.statusLabel.innerText = e.payload as string; });
-
-    listen("tool_permission_request", (e) => { showPermissionRequest(e.payload as any); });
-
-    listen("vram_notice", (e) => { showVramRequest(e.payload as any); });
-
-    listen("download_progress", (e) => {
-      const { downloaded, total, speed_bps } = e.payload as { downloaded: number; total: number; speed_bps?: number };
-      if (total > 0) {
-        const pct = ((downloaded / total) * 100).toFixed(1);
-        const mbD = (downloaded / 1024 / 1024).toFixed(1);
-        const mbT = (total / 1024 / 1024).toFixed(1);
-        const speed = formatSpeed(speed_bps);
-        logFront(`📥 Скачивание: ${mbD} MB / ${mbT} MB (${pct}%)${speed ? ` · ${speed}` : ""}`);
-      }
-    });
-
-    // СТРИМИНГ ОТВЕТА В ЧАТ В РЕАЛЬНОМ ВРЕМЕНИ
-    listen("stream_chunk", (e) => this.handleStreamChunk(e.payload as any));
-
-    // Стриминг облачных комбо 9Router: плагин шлёт { text, author, kind } —
-    // приводим к формату stream_chunk и переиспользуем общий рендер.
-    void onNineRouterChunk((c) => this.handleStreamChunk({ kind: c.kind, author: c.author, text: c.text }));
-
-    // Прочие события агентов/движка — отдельным методом, чтобы не раздувать этот.
-    this.bindAgentEvents();
-  }
-
-  /** Общий рендер потока: и локальный `stream_chunk`, и облачный `9router-chunk`. */
-  private handleStreamChunk(rawPayload: any) {
-        if (!store.isProcessing) return;
-        // Бэкенд шлёт объект { kind, author, text }; для обратной совместимости
-        // (старые вызовы) payload может прийти строкой — считаем его message.
-        const payload = rawPayload;
-        const kind: string = typeof payload === "string" ? "message" : (payload.kind || "message");
-        const chunk: string = typeof payload === "string" ? payload : (payload.text || "");
-        const author: string = (payload && typeof payload.author === "string") ? payload.author : "";
-
-        // ── МЫСЛИ: печатаем в блок «Мысли агентов» в реальном времени ──
-        // Примечание: служебные теги LLM (<|channel>...<|turn> и т.п.) уже
-        // отфильтрованы на бэкенде в stream_cb (parsers::clean_thought_tags),
-        // поэтому здесь приходит уже чистый текст.
-        if (kind === "thought") {
-            // Новый агент → новый пузырь мыслей
-            if (store.rtThoughtUid && store.rtThoughtAuthor && author && author !== store.rtThoughtAuthor) {
-                store.rtThoughtUid = null;
-                store.rtThoughtBuffer = "";
-                store.rtThoughtAuthor = "";
-            }
-            store.rtThoughtBuffer += chunk;
-
-            // Прячем внутренние JSON-вызовы (сабагент/инструмент) от глаз пользователя
-            if (store.rtThoughtBuffer.trimStart().startsWith("{") || store.rtThoughtBuffer.trimStart().startsWith("```json")) {
-                return;
-            }
-
-            const label = author || "Агент";
-            if (!store.rtThoughtUid) {
-                store.rtThoughtUid = store.nextUid();
-                store.rtThoughtAuthor = label;
-                const item = createThoughtElement(label, store.rtThoughtBuffer);
-                item.id = "rt-thought-stream";
-                store.activeThoughtsBlock = createThoughtsBlock([item]);
-                this.el.chatHistory.appendChild(store.activeThoughtsBlock);
-            } else {
-                const item = store.activeThoughtsBlock?.querySelector('#rt-thought-stream');
-                if (item) {
-                    item.innerHTML = `🧠 <strong>${label}</strong>: <em>${store.rtThoughtBuffer}</em>`;
-                }
-            }
-            this.scrollToBottomIfNearEnd(this.el.chatHistory);
-            return;
-        }
-
-        // ── СООБЩЕНИЕ: старая логика основного чата ──
-        store.rtStreamBuffer += chunk;
-
-        // Если это внутренний JSON (вызов сабагента или тулзы) — скрываем от глаз пользователя!
-        // Учитываем и служебный формат <|channel>json> (уже очищен в буфере).
-        if (store.rtStreamBuffer.trimStart().startsWith("{") || store.rtStreamBuffer.trimStart().startsWith("```json")) {
-            store.rtIsJson = true;
-            return;
-        }
-
-        // Если это начало ответа, создаем пустое сообщение в UI
-        if (!store.rtStreamUid) {
-            store.rtStreamUid = store.nextUid();
-            const displayName = (author && author.trim())
-                ? author
-                : this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace(/^[📁📊]\s*/, '');
-            this.appendMessage('agent', '', displayName, undefined, undefined, false, store.rtStreamUid);
-        }
-
-        // Обновляем тело сообщения. Скрываем служебные теги LLM (<|channel>...<channel|> и
-        // <|turn>) перед подачей в renderMarkdown (теги могут прийти внутри чанка).
-        const visibleText = stripStreamArtifacts(store.rtStreamBuffer);
-        const msgEl = this.el.chatHistory.querySelector(`[data-msg-uid="${store.rtStreamUid}"]`);
-        if (msgEl) {
-            const contentDiv = msgEl.querySelector('div:nth-child(2)');
-            if (contentDiv) {
-                contentDiv.innerHTML = renderMarkdown(visibleText);
-                this.scrollToBottomIfNearEnd(this.el.chatHistory);
-            }
-        }
-
-        // Печатаем "Мысли" агента (формат <|channel>thought>...) в раскрывающийся блок.
-        const channelThought = extractChannelThought(store.rtStreamBuffer);
-        if (channelThought) {
-            if (!store.activeThoughtsBlock && msgEl) {
-                const item = createThoughtElement("Агент", channelThought);
-                item.id = "rt-channel-thought";
-                store.activeThoughtsBlock = createThoughtsBlock([item]);
-                this.el.chatHistory.insertBefore(store.activeThoughtsBlock, msgEl);
-            } else if (store.activeThoughtsBlock) {
-                let item = store.activeThoughtsBlock.querySelector('#rt-channel-thought');
-                if (!item) {
-                    item = createThoughtElement("Агент", channelThought);
-                    item.id = "rt-channel-thought";
-                    addToThoughtsBlock(store.activeThoughtsBlock, item as HTMLElement);
-                } else {
-                    item.innerHTML = `🧠 <strong>Агент</strong>: <em>${channelThought}</em>`;
-                }
-            }
-        }
-  }
-
-  /** Подписки на события агентов и режима движка. */
-  private bindAgentEvents() {
-    listen("subcall_done", (e) => {
-      const call = e.payload as any;
-      store.realtimeSubcallKeys.add(`${call.agent_name}:${call.time_sec.toFixed(2)}`);
-      const item = createSubcallElement(call, (c) => this.showSubchat(c));
-      if (store.activeThoughtsBlock) { addToThoughtsBlock(store.activeThoughtsBlock, item); }
-      else { store.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(store.activeThoughtsBlock); }
-      this.scrollToBottomIfNearEnd(this.el.chatHistory);
-    });
-    
-    listen("agent_thought", (e) => {
-      const payload = e.payload as { author: string, thought: string, time_sec: number };
-      const dedupKey = `${payload.author}:${payload.thought.substring(0, 200)}`;
-      if (this.thoughtDedupSet.has(dedupKey)) return;
-      this.thoughtDedupSet.add(dedupKey);
-      const item = createThoughtElement(payload.author, payload.thought, payload.time_sec);
-      if (store.activeThoughtsBlock) { addToThoughtsBlock(store.activeThoughtsBlock, item); }
-      else { store.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(store.activeThoughtsBlock); }
-      this.scrollToBottomIfNearEnd(this.el.chatHistory);
-    });
-
-    listen("agent_tool_call", (e) => {
-      const p = e.payload as { author: string, tool: string, args?: string, result?: string };
-      const key = `${p.author}:${p.tool}`;
-      if (p.result !== undefined) {
-        const item = store.activeThoughtsBlock?.querySelector(`[data-tool-key="${key}"]`);
-        if (item) {
-          item.querySelector(".tool-thought-status")?.remove();
-          const resultDiv = document.createElement("div");
-          resultDiv.className = "tool-thought-result";
-          resultDiv.textContent = `→ ${p.result}`;
-          item.appendChild(resultDiv);
-          this.scrollToBottomIfNearEnd(this.el.chatHistory);
-        }
-        return;
-      }
-      const item = createToolThoughtElement(p.author, p.tool, p.args);
-      if (store.activeThoughtsBlock) { addToThoughtsBlock(store.activeThoughtsBlock, item); }
-      else { store.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(store.activeThoughtsBlock); }
-      this.scrollToBottomIfNearEnd(this.el.chatHistory);
-    });
-
-    listen("engine_mode", (e) => {
-      const p = e.payload as { mode?: string, tok_per_sec?: number, detail?: string };
-      this.updateEngineBadge(p.mode || "cpu", p.tok_per_sec || 0, p.detail || "");
-    });
-  }
-
   private bindBusEvents() {
-    bus.on("session:new", () => this.startNewSession());
-    bus.on("session:open", (id: string) => this.openSession(id));
     bus.on("config:loaded", (config: any) => {
+      // Общие каталоги уже в store (заполнил SettingsController) — перерисовываем
+      // селекты этой вкладки, сохраняя текущий выбор.
+      fillModelSelect(this.el.modelSelect);
+      fillAgentSelect(this.el.agentSelect);
       this.updateAttachButtonState();
       this.triggerTokenCount();
       if (config.workdir) {

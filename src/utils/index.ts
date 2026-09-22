@@ -1,6 +1,19 @@
 // 🚪 ПУБЛИЧНЫЙ КОНТРАКТ утилит
 export { renderMarkdown } from './markdown'
 export { stripStreamArtifacts, extractChannelThought } from './stream-filter'
+export { buildChatPage, buildWebviewPage } from './chat-dom'
+export type { ChatPageElements, SharedChatControls } from './chat-dom'
+export { buildSessionMarkdown, copyMarkdownToClipboard } from './session-clipboard'
+
+// Константа и заполнители селектов моделей/агентов перенесены в
+// ./model-options (чтобы не тянуть store в leaf-утилиту), ре-экспортируются
+// отсюда для обратной совместимости.
+export {
+  NINE_ROUTER_MODEL_PREFIX,
+  fillModelSelect,
+  fillAgentSelect,
+  renderNineRouterOptions,
+} from './model-options'
 
 export function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
@@ -14,8 +27,3 @@ export function formatSpeed(bps?: number): string {
   if (bps === 0) return "0 B/s";
   return `${formatBytes(bps)}/s`;
 }
-
-/// Префикс значения комбо 9Router в списке моделей (см. SettingsController).
-/// Выбор с этим префиксом идёт в облачный шлюз 9Router (плагин
-/// tauri-plugin-9router), а НЕ в локальный llama-server.
-export const NINE_ROUTER_MODEL_PREFIX = "9router:";

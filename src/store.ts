@@ -1,29 +1,22 @@
-import type { ChatMessage, ModelParams } from "./types";
+import type { AppTab, ModelParams } from "./types";
 
 /**
  * Центральное хранилище состояния приложения.
  * Единый источник истины — никакого дублирования переменных.
  * Каждый контроллер читает/пишет сюда, а не в свои локальные переменные.
+ *
+ * ⚠️ Чат-стейт (история, сессия, стриминг, обработка) вынесен в per-tab
+ * `ChatTabState` (см. controllers/chat.ts) — вкладок может быть несколько.
+ * В Store остаются только общеприкладные поля и флаг «идёт обработка где-либо».
  */
 class Store {
-  // Чат
+  // Рабочая область: вкладки + активная
+  tabs: AppTab[] = [];
+  activeTabId: string | null = null;
+
+  // Глобальный флаг «в приложении идёт обработка» (только один запрос за раз).
+  // Per-tab «обрабатывается ли моя вкладка» живёт в ChatTabState.
   isProcessing = false;
-  chatHistory: ChatMessage[] = [];
-  currentSessionId: string | null = null;
-  activeThoughtsBlock: HTMLDivElement | null = null;
-  realtimeSubcallKeys = new Set<string>();
-
-  // Watchdog обработки: когда началась активность и когда была последняя
-  // (progress/status/stream). Нужен, чтобы снять зависшее состояние обработки.
-  processingStartedAt = 0;
-  lastActivityAt = 0;
-
-  // Трекинг сообщений
-  uidCounter = 0;
-  msgUidList: string[] = [];
-
-  // Черновик
-  draftTimeout: number | undefined;
 
   // Продвинутые функции
   showAdvancedFeatures = false;
@@ -46,34 +39,15 @@ class Store {
 
   // Рабочая директория для кодера (bash tool current_dir)
   workdir: string | null = null;
-  
-  // Для стриминга текста в реальном времени
-  rtStreamUid: string | null = null;
-  rtStreamBuffer: string = "";
-  rtIsJson: boolean = false;
 
-  // Для стриминга мыслей в блок «Мысли агентов» в реальном времени
-  rtThoughtUid: string | null = null;
-  rtThoughtBuffer: string = "";
-  rtThoughtAuthor: string = "";
-
-  nextUid(): string {
-    return `msg_${this.uidCounter++}`;
-  }
-
-  resetForNewSession() {
-    this.chatHistory = [];
-    this.msgUidList = [];
-    this.uidCounter = 0;
-    this.realtimeSubcallKeys.clear();
-    this.activeThoughtsBlock = null;
-    this.rtStreamUid = null;
-    this.rtStreamBuffer = "";
-    this.rtIsJson = false;
-    this.rtThoughtUid = null;
-    this.rtThoughtBuffer = "";
-    this.rtThoughtAuthor = "";
-  }
+  // ── Общие каталоги для дропдаунов всех чат-вкладок (SSOT) ──
+  // Заполняются SettingsController.loadConfig и перерисовываются каждой вкладкой.
+  models: string[] = [];
+  lastModel: string | null = null;
+  lastAgent: string | null = null;
+  agents: any[] = [];
+  capabilities: Record<string, { uncen: boolean; vision: boolean; audio: boolean }> = {};
+  nineRouterCombos: { name: string; models: string[] }[] = [];
 }
 
 /** Глобальный синглтон стора. Импортируется контроллерами. */

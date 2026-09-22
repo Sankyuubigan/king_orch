@@ -6,10 +6,9 @@ import { bus } from "../events";
 import { showToast } from "../ui";
 import { setTelemetryEnabled, trackError } from "../telemetry";
 import { NINE_ROUTER_MODEL_PREFIX } from "../utils";
+import { getActiveChatController } from "./tabs";
 
 export interface SettingsElements {
-  modelSelect: HTMLSelectElement;
-  agentSelect: HTMLSelectElement;
   maxGenSlider: HTMLInputElement; maxGenValue: HTMLElement;
   chkKvQuantK: HTMLInputElement;
   chkKvQuantV: HTMLInputElement;
@@ -33,8 +32,7 @@ export interface SettingsElements {
 
 export class SettingsController {
   private el: SettingsElements;
-  private capMap: Record<string, { uncen: boolean; vision: boolean; audio: boolean }> = {};
-  /// Кэш комбо 9Router (облачные модели) для дропдауна — см. updateModelSelect.
+  /// Кэш комбо 9Router (облачные модели) — пишем в store.nineRouterCombos.
   private nineRouterCombos: ComboInfo[] = [];
   private nineRouterCombosRequested = false;
 
@@ -42,10 +40,18 @@ export class SettingsController {
     this.el = el;
     this.bindDomEvents();
     this.bindBusEvents();
+    // Панель 9Router (настройки) сообщает об изменении комбо (кнопки
+    // «Обновить комбо»/установка/смена пути) — перечитываем дропдаун хоста.
+    window.addEventListener("9router:combos-changed", () => { void this.refreshNineRouterCombos(); });
   }
 
+  /**
+   * Загрузка параметров сэмплинга текущей модели в общие слайдеры.
+   * Модель берётся из АКТИВНОЙ чат-вкладки (селекты моделей — per-tab).
+   */
   async loadModelParams() {
-    const p = this.el.modelSelect.value; if (!p) return;
+    const p = getActiveChatController()?.modelSelectValue ?? store.lastModel;
+    if (!p) return;
     // Комбо 9Router — облачная модель: локальные параметры сэмплинга не храним.
     if (p.startsWith(NINE_ROUTER_MODEL_PREFIX)) return;
     let params: any;
@@ -65,7 +71,8 @@ export class SettingsController {
   }
 
   private async saveModelParams() {
-    const p = this.el.modelSelect.value; if (!p) return;
+    const p = getActiveChatController()?.modelSelectValue ?? store.lastModel;
+    if (!p) return;
     if (p.startsWith(NINE_ROUTER_MODEL_PREFIX)) return;
     const base = store.currentModelParams;
     await setModelParams(p, {
@@ -85,60 +92,40 @@ export class SettingsController {
   }
 
   /// Загружает актуальные возможности всех моделей (живой
-  /// `get_all_capabilities` плагина, единый источник правды) и перерисовывает
-  /// список моделей. Заменяет использование устаревающего `model_meta`.
-  private async refreshModelSelect(config: any) {
+  /// `get_all_capabilities` плагина, единый источник правды) и пишет в Store —
+  /// дропдауны всех чат-вкладок перерисовываются из store.capabilities.
+  private async refreshCapabilities() {
     try {
-      this.capMap = await getAllCapabilities();
-    } catch (_) { this.capMap = {}; }
-    this.updateModelSelect(config);
+      store.capabilities = await getAllCapabilities();
+    } catch (_) { store.capabilities = {}; }
   }
 
-  updateModelSelect(config: any) {
-    this.el.modelSelect.innerHTML = "";
-    for (const m of config.models) {
-      const o = document.createElement("option");
-      o.value = m;
-      const fileName = m.split(/[/\\]/).pop() || m;
-      const badges = this.capabilityIcons(this.capMap[m]).map(i => i.icon).join(" ");
-      o.text = fileName + (badges ? `  ${badges}` : "");
-      this.el.modelSelect.appendChild(o);
-    }
-    if (config.last_model && config.models.includes(config.last_model)) this.el.modelSelect.value = config.last_model;
-    this.renderNineRouterOptions();
-    void this.ensureNineRouterCombos();
-  }
-
-  /// Рисует optgroup «9Router (облако)» поверх локальных моделей из кэша комбо.
-  private renderNineRouterOptions() {
-    if (!this.nineRouterCombos.length) return;
-    const group = document.createElement("optgroup");
-    group.label = "9Router (облако)";
-    for (const c of this.nineRouterCombos) {
-      const o = document.createElement("option");
-      o.value = `${NINE_ROUTER_MODEL_PREFIX}${c.name}`;
-      o.text = `☁️ ${c.name}`;
-      group.appendChild(o);
-    }
-    this.el.modelSelect.appendChild(group);
-  }
-
-  /// Ленивая подгрузка комбо 9Router. `get_combos` сам поднимает сервер по
-  /// требованию (шлюз ленивый), но результат кэшируем — повторно не дёргаем.
+  /// Ленивая подгрузка комбо 9Router: `get_combos` сам поднимает сервер по
+  /// требованию (шлюз ленивый), результат кэшируем — повторно не дёргаем.
   private async ensureNineRouterCombos() {
     if (this.nineRouterCombosRequested) return;
+    await this.refreshNineRouterCombos();
+  }
+
+  /// Перечитывает комбо 9Router и пишет в store.nineRouterCombos.
+  /// При ошибке/пустом списке НЕ защёлкивает флаг — даёт повторную попытку.
+  private async refreshNineRouterCombos() {
     this.nineRouterCombosRequested = true;
     try {
       this.nineRouterCombos = await getNineRouterCombos();
     } catch (_) {
-      // 9Router не установлен/недоступен — облачные комбо просто не показываем.
       this.nineRouterCombos = [];
+      this.nineRouterCombosRequested = false;
+      store.nineRouterCombos = [];
+      return;
     }
-    if (!this.nineRouterCombos.length) return;
-    const selected = this.el.modelSelect.value;
-    this.el.modelSelect.querySelector('optgroup[label="9Router (облако)"]')?.remove();
-    this.renderNineRouterOptions();
-    if (selected) this.el.modelSelect.value = selected;
+    if (!this.nineRouterCombos.length) {
+      this.nineRouterCombosRequested = false;
+      store.nineRouterCombos = [];
+      return;
+    }
+    store.nineRouterCombos = this.nineRouterCombos.map(c => ({ name: c.name, models: c.models || [] }));
+    bus.emit("model-catalog-changed");
   }
 
   /// Заполняет выпадающий список модели-переводчика списком установленных моделей.
@@ -157,20 +144,13 @@ export class SettingsController {
     }
   }
 
-  private capabilityIcons(meta?: { uncen?: boolean; vision?: boolean; audio?: boolean }): { icon: string; title: string }[] {
-    const out: { icon: string; title: string }[] = [];
-    if (meta?.uncen) out.push({ icon: "😈", title: "Без цензуры (uncensored)" });
-    if (meta?.vision) out.push({ icon: "👁️", title: "Видит изображения (vision)" });
-    if (meta?.audio) out.push({ icon: "🎵", title: "Понимает аудио (audio)" });
-    return out;
-  }
-
   async loadConfig() {
     bus.emit("log", "Загрузка конфигурации...");
     try {
       const config: any = await invoke("get_config");
-      await this.refreshModelSelect(config);
-      this.updateTranslatorModelSelect(config);
+      // Общие каталоги моделей/агентов — SSOT в Store (селекты живут по-вкладке).
+      store.models = Array.isArray(config.models) ? config.models : store.models;
+      store.lastModel = config.last_model ?? null;
       if (config.translator_model) {
         this.el.translatorModelSelect.value = config.translator_model;
         store.translatorModel = config.translator_model;
@@ -182,12 +162,14 @@ export class SettingsController {
         store.translatorLang = config.translator_lang;
       }
       if (config.context_size) store.contextSize = config.context_size;
+      if (config.workdir) store.workdir = config.workdir;
       if (config.max_gen_tokens) { this.el.maxGenSlider.value = config.max_gen_tokens.toString(); this.el.maxGenValue.innerText = config.max_gen_tokens.toString(); }
       if (config.chat_font_scale !== undefined) {
         const pct = Math.round(config.chat_font_scale * 100);
         this.el.chatFontSlider.value = pct.toString();
         this.el.chatFontValue.innerText = `${pct}%`;
         this.applyChatFontScale(config.chat_font_scale);
+        store.workdir = store.workdir;
       }
       if (config.kv_quant_keys !== undefined) this.el.chkKvQuantK.checked = config.kv_quant_keys;
       if (config.kv_quant_values !== undefined) this.el.chkKvQuantV.checked = config.kv_quant_values;
@@ -206,10 +188,13 @@ export class SettingsController {
         this.el.chkErrorReports.checked = config.allow_error_reports;
         setTelemetryEnabled(config.allow_error_reports);
       }
+      await this.refreshCapabilities();
       await this.loadAgents(config.last_agent);
       bus.emit("config:loaded", config);
       await this.loadModelParams();
-    } catch(e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.loadConfig", e); }
+      void this.ensureNineRouterCombos();
+      return config;
+    } catch(e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.loadConfig", e); return null; }
   }
 
   /** Применяет масштаб шрифта чата (1.0 = 100%) через CSS-переменную. */
@@ -220,20 +205,8 @@ export class SettingsController {
   private async loadAgents(lastAgent?: string) {
     try {
       const entries: any[] = await invoke("get_agents");
-      this.el.agentSelect.innerHTML = '';
-      for (const e of entries) {
-        if (!e.is_hidden && (e.folder === null || store.showFolderAgents)) {
-          const o = document.createElement("option");
-          o.value = e.id;
-          const prefix = e.entry_type === 'workflow' ? '📁' : '📊';
-          const folderPart = e.folder ? `${e.folder} - ` : '';
-          o.text = `${prefix} ${folderPart}${e.name} (${e.id})`;
-          this.el.agentSelect.appendChild(o);
-        }
-      }
-      if (lastAgent && Array.from(this.el.agentSelect.options).some(o => o.value === lastAgent)) {
-        this.el.agentSelect.value = lastAgent;
-      }
+      store.agents = entries;
+      store.lastAgent = lastAgent ?? null;
     } catch(e) { void trackError("settings.loadAgents", e); }
   }
 
@@ -259,15 +232,7 @@ export class SettingsController {
     this.el.promptFormatSelect?.addEventListener("change", async () => { await invoke("set_prompt_format", { format: this.el.promptFormatSelect.value }); });
     const sliders: [HTMLInputElement, HTMLElement][] = [[this.el.tempSlider, this.el.tempValue],[this.el.topkSlider, this.el.topkValue],[this.el.toppSlider, this.el.toppValue],[this.el.minpSlider, this.el.minpValue],[this.el.reppenSlider, this.el.reppenValue],[this.el.prespenSlider, this.el.prespenValue]];
     for (const [s, l] of sliders) s?.addEventListener("input", () => { l.innerText = s.value; this.saveModelParams(); });
-    this.el.btnResetParams?.addEventListener("click", async () => { const p = this.el.modelSelect.value; if (!p) return; await resetModelParams(p); await this.loadModelParams(); showToast("Параметры сброшены.", "success"); });
-    this.el.modelSelect?.addEventListener("change", async () => {
-      const v = this.el.modelSelect.value;
-      // Комбо 9Router не пишем как last_model локального движка.
-      if (v.startsWith(NINE_ROUTER_MODEL_PREFIX)) return;
-      await invoke("set_last_model", { path: v });
-      await this.loadModelParams();
-    });
-    this.el.agentSelect?.addEventListener("change", async () => { await invoke("set_config_value", { key: "last_agent", value: this.el.agentSelect.value }); });
+    this.el.btnResetParams?.addEventListener("click", async () => { const p = getActiveChatController()?.modelSelectValue ?? store.lastModel; if (!p) return; await resetModelParams(p); await this.loadModelParams(); showToast("Параметры сброшены.", "success"); });
     this.el.translatorModelSelect?.addEventListener("change", async () => {
       const v = this.el.translatorModelSelect.value || "";
       store.translatorModel = v || null;
@@ -289,6 +254,7 @@ export class SettingsController {
       store.showFolderAgents = val;
       await invoke("set_config_value", { key: "show_folder_agents", value: val });
       await this.loadAgents();
+      bus.emit("model-catalog-changed");
     });
     this.el.chkErrorReports?.addEventListener("change", async () => {
       const val = this.el.chkErrorReports.checked;
@@ -299,8 +265,10 @@ export class SettingsController {
   }
 
   private bindBusEvents() {
+    // Параметры сэмплинга = АКТИВНАЯ вкладка (селекты моделей per-tab):
+    // меняется выбор в активной вкладке → перечитываем параметры.
     bus.on("model:changed", (modelPath: string) => {
-      if (this.el.modelSelect.value === modelPath) this.loadModelParams();
+      if (getActiveChatController()?.modelSelectValue === modelPath) this.loadModelParams();
     });
   }
 }

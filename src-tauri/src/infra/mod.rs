@@ -28,7 +28,7 @@ pub use tauri_plugin_llama_engine::engine::*;
 pub use tauri_plugin_llama_engine::get_engine_dir;
 
 // ─── Публичные типы ───
-pub use config::{AppConfig, SamplingPresets};
+pub use config::{AppConfig, SamplingPresets, TabState};
 pub use session_manager::{ChatSession, SessionMeta};
 pub use mcp_client::{McpClient, McpPool, SharedMcpClient};
 

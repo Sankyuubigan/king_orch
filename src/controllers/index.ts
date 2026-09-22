@@ -1,6 +1,13 @@
 // 🚪 ПУБЛИЧНЫЙ КОНТРАКТ контроллеров
-export { ChatController } from './chat'
-export type { ChatElements } from './chat'
+export {
+  ChatController,
+  ChatTabState,
+  getActiveProcessingChat,
+  releaseGlobalProcessing,
+} from './chat'
+export type { ChatElements, ChatHooks } from './chat'
+export { initChatEventRouter } from './chat-router'
+export { TabController } from './tabs'
 
 export { SessionController } from './sessions'
 export type { SessionElements } from './sessions'

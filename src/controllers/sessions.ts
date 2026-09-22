@@ -2,13 +2,16 @@ import { store } from "../store";
 import { bus } from "../events";
 import { showToast, confirmDialog } from "../ui";
 import { fetchSessions, deleteSession, renameSession, openSessionFolder, loadSession } from "../services";
+import { copyMarkdownToClipboard } from "../utils";
 import { trackError } from "../telemetry";
+import { getChatControllerForSession } from "./tabs";
 
 export interface SessionElements {
   sessionList: HTMLDivElement;
-  btnNewSession: HTMLButtonElement;
 }
 
+/// Раздел «История сессий» (кнопка на экране новой вкладки). Клик по сессии
+/// открывает её в чат-вкладке (bus "session:open" → TabController).
 export class SessionController {
   private el: SessionElements;
 
@@ -16,6 +19,7 @@ export class SessionController {
     this.el = el;
     this.bindDomEvents();
     this.bindBusEvents();
+    this.loadSessionsListUI();
   }
 
   async loadSessionsListUI() {
@@ -24,7 +28,9 @@ export class SessionController {
       this.el.sessionList.innerHTML = "";
       for (const s of sessions) {
         const div = document.createElement("div");
-        div.className = `session-item ${s.id === store.currentSessionId ? 'active' : ''}`;
+        const isOpen = store.tabs.some(t => t.type === "chat" && t.sessionId === s.id);
+        div.className = `session-item ${isOpen ? 'active' : ''}`;
+        if (isOpen) div.title = "Открыта во вкладке";
         const titleSpan = document.createElement("span");
         titleSpan.className = "session-title";
         titleSpan.title = s.title;
@@ -42,6 +48,12 @@ export class SessionController {
         const deleteBtn = actions.querySelector('.btn-delete') as HTMLElement;
         deleteBtn.dataset.id = s.id;
         div.appendChild(titleSpan);
+        if (isOpen) {
+          const badge = document.createElement("span");
+          badge.className = "session-open-badge";
+          badge.textContent = "открыта";
+          div.appendChild(badge);
+        }
         div.appendChild(actions);
         div.addEventListener("click", (e) => { if (!(e.target as HTMLElement).closest('.session-item-actions')) bus.emit("session:open", s.id); });
         const menuBtn = div.querySelector('.btn-session-menu');
@@ -49,7 +61,7 @@ export class SessionController {
         menuBtn?.addEventListener("click", (e) => { e.stopPropagation(); document.querySelectorAll('.session-menu-dropdown.show').forEach(dd => { if (dd !== dropdown) dd.classList.remove('show'); }); dropdown?.classList.toggle('show'); });
         renameBtn.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); const cur = renameBtn.dataset.title || ''; const newT = prompt("Новое название:", cur); if (newT && newT.trim() !== "" && newT !== cur) { try { await renameSession(s.id, newT.trim()); this.loadSessionsListUI(); } catch(err) { showToast(`Ошибка: ${err}`, "error"); void trackError("sessions.rename", err); } } });
         exploreBtn.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); try { await openSessionFolder(s.id); } catch(err) { void trackError("sessions.openFolder", err); } });
-        copyBtn.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); try { await this.copySessionToClipboard(s); } catch(err) { showToast(`Ошибка: ${err}`, "error"); void trackError("sessions.copy", err); } });
+        copyBtn.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); try { await this.copySessionToClipboard(s.id, s.title); } catch(err) { showToast(`Ошибка: ${err}`, "error"); void trackError("sessions.copy", err); } });
         deleteBtn.addEventListener("click", async (e) => { e.stopPropagation(); dropdown?.classList.remove('show'); await this.deleteSessionUI(s.id); });
         this.el.sessionList.appendChild(div);
       }
@@ -58,33 +70,13 @@ export class SessionController {
     }
   }
 
-  private async copySessionToClipboard(s: { id: string; title: string }) {
-    let messages: any[] = [];
-    try {
-      const session = await loadSession(s.id);
-      messages = (session && Array.isArray(session.messages)) ? session.messages : [];
-    } catch (err) {
-      if (store.currentSessionId === s.id) messages = store.chatHistory;
-      else { throw err; }
-    }
-    const md = this.buildSessionMarkdown(s.title, messages);
-    await navigator.clipboard.writeText(md);
-    showToast("Переписка скопирована в буфер", "success");
-  }
-
-  private buildSessionMarkdown(title: string, messages: any[]): string {
-    let out = `# ${title}\n\n`;
-    for (const msg of messages) {
-      if (!msg || msg.type !== "message") continue;
-      const content = (msg.content ?? "").trim();
-      if (!content) continue;
-      let role = "Ассистент";
-      if (msg.author === "user") role = "Пользователь";
-      else if (msg.author === "system") role = "Система";
-      else if (msg.author) role = String(msg.author);
-      out += `### ${role}\n\n${content}\n\n`;
-    }
-    return out.trim() + "\n";
+  private async copySessionToClipboard(id: string, title: string) {
+    // Открытая вкладка: копируем ЖИВОЙ список сообщений (без перезагрузки).
+    const liveCtl = getChatControllerForSession(id);
+    const messages = liveCtl
+      ? liveCtl.state.history
+      : ((await loadSession(id))?.messages ?? []);
+    await copyMarkdownToClipboard(title, messages);
   }
 
   private async deleteSessionUI(id: string) {
@@ -92,20 +84,21 @@ export class SessionController {
     if (!yes) return;
     try {
       await deleteSession(id);
-      if (store.currentSessionId === id) bus.emit("session:new");
-      else this.loadSessionsListUI();
+      // TabController закроет чат-вкладку этой сессии (если открыта).
+      bus.emit("session:deleted", id);
+      this.loadSessionsListUI();
       showToast("Удалено.", "success");
     } catch(e) { showToast(`Ошибка: ${e}`, "error"); void trackError("sessions.delete", e); }
   }
 
   private bindDomEvents() {
-    this.el.btnNewSession?.addEventListener("click", () => bus.emit("session:new"));
-    document.addEventListener("click", (e) => { document.querySelectorAll('.msg-menu-dropdown.show, .session-menu-dropdown.show').forEach(dd => { if (!dd.parentElement?.contains(e.target as Node)) dd.classList.remove('show'); }); });
+    document.addEventListener("click", (e) => { document.querySelectorAll('.msg-menu-dropdown.show, .session-menu-dropdown.show, .tab-menu-dropdown.show').forEach(dd => { if (!dd.parentElement?.contains(e.target as Node)) dd.classList.remove('show'); }); });
   }
 
   private bindBusEvents() {
     bus.on("session:changed", () => this.loadSessionsListUI());
+    bus.on("session:deleted", () => this.loadSessionsListUI());
     bus.on("config:loaded", () => this.loadSessionsListUI());
-    bus.on("processing:changed", (isProcessing: boolean) => { this.el.btnNewSession.disabled = isProcessing; });
+    bus.on("tabs:changed", () => this.loadSessionsListUI());
   }
 }

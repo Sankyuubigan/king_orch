@@ -8,61 +8,20 @@
 </head>
 <body>
   <div class="app-container">
-    
-    <aside class="sidebar">
-      <button id="btn-new-session" class="btn-primary">📝 Новая сессия</button>
-      <div class="session-list-title">История чатов</div>
-      <div id="session-list" class="session-list"></div>
-    </aside>
 
     <main class="main-content">
-      <div class="tabs">
-        <button id="tab-chat" class="tab-btn active">💬 Чат</button>
-        <button id="tab-agent-studio" class="tab-btn hidden-tab">🧪 Студия агентов</button>
-        <button id="tab-settings" class="tab-btn">⚙️ Настройки</button>
-        <button id="tab-logs" class="tab-btn">📝 Логи</button>
-      </div>
 
-      <div id="view-chat" class="view active chat-layout">
-        <div id="chat-history" class="chat-history">
-          <div class="message message-system">Система готова. Выберите агента и напишите запрос.</div>
+      <div class="workspace-tabs" id="workspace-tabs"></div>
+
+      <div class="workspace-content" id="workspace-content">
+        <div id="chat-tab-slot"></div>
+
+        <div id="view-sessions" class="view">
+          <div class="session-list-title">История чатов</div>
+          <div id="session-list" class="session-list"></div>
         </div>
 
-        <div class="feedback" id="chat-feedback" style="display: none;">
-          <div class="result-toolbar">
-            <div id="status-label" class="status-label">Обработка...</div>
-          </div>
-          <div class="progress-bar-container">
-            <div id="progress-bar" class="progress-bar"></div>
-          </div>
-        </div>
-
-        <div class="chat-input-area group-box">
-          <textarea id="chat-input" placeholder="Спросите что угодно (Enter — перенос строки, Ctrl+Enter — отправить)..."></textarea>
-          
-          <div id="file-preview" class="file-preview-row"></div>
-
-          <div class="chat-input-controls">
-            <div class="chat-input-controls-left">
-              <button id="btn-attach" class="btn-icon" title="Прикрепить файл (изображение/аудио)">📎</button>
-              <input type="file" id="file-input" accept="image/*,audio/*,.wav,.mp3,.flac,.jpg,.jpeg,.png,.webp" multiple style="display: none;" />
-              <button id="btn-set-workdir" class="btn-icon" title="Текущий каталог">📂</button>
-              <span id="current-workdir" class="workdir-path" title="Текущий каталог">—</span>
-              <select id="agent-select" title="Выбор агента"></select>
-              <select id="model-select" title="Выбор модели GGUF"></select>
-              <button id="btn-add-model" class="btn-secondary" title="Добавить новую модель (локально)">+</button>
-              <div id="token-counter" class="token-counter" title="Токены: Текущие / Лимит контекста">0 / 8192</div>
-              <div id="engine-badge" class="engine-badge engine-idle" title="Режим движка (GPU/CPU)">…</div>
-            </div>
-            <div class="chat-input-controls-right">
-              <button id="btn-stop" class="btn-danger" disabled>⏹ Стоп</button>
-              <button id="btn-send" class="btn-primary" style="flex-direction: column; line-height: 1.2; white-space: normal;">Отправить<br><small>Ctrl+Enter</small></button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div id="view-agent-studio" class="view">
+        <div id="view-agent-studio" class="view">
         <div class="sub-tabs">
           <button id="subtab-graph" class="subtab-btn active">🔀 Граф</button>
           <button id="subtab-ai-test" class="subtab-btn">🤖 Тест агентов ИИ</button>
@@ -231,16 +190,17 @@
         </div>
       </div>
 
-      <div id="view-subchat" class="view chat-layout">
-        <div class="subchat-header">
-          <button id="btn-back-chat" class="btn-secondary">⬅ Назад к чату</button>
-          <span id="subchat-title">Отчет сабагента</span>
-        </div>
-        <div id="subchat-history" class="chat-history"></div>
-      </div>
-
       <div id="view-settings" class="view" style="overflow-y: auto;">
         
+        <div class="group-box">
+          <div class="group-title">Разделы</div>
+          <div class="settings-nav" id="settings-nav">
+            <button class="settings-nav-btn" data-section="sessions">🕘 История чатов</button>
+            <button class="settings-nav-btn" data-section="agent-studio">🧪 Студия агентов</button>
+            <button class="settings-nav-btn" data-section="logs">📝 Логи</button>
+          </div>
+        </div>
+
         <div class="group-box">
           <div class="group-title">О приложении</div>
           <about-updates-panel repo="Sankyuubigan/king_orch"></about-updates-panel>
@@ -257,7 +217,7 @@
         </div>
 
         <div class="group-box">
-          <div class="group-title">Модели LLM</div>
+          <div class="group-title">Локальные Модели LLM</div>
           <llama-models-panel></llama-models-panel>
         </div>
 
@@ -397,6 +357,7 @@
         <logs-panel></logs-panel>
       </div>
 
+      </div><!-- /workspace-content -->
     </main>
   </div>
 

@@ -21,8 +21,35 @@ use tauri::{AppHandle, Manager};
 /// сериализовался в тот же JSON, что и `EngineConfig` плагина.
 pub use tauri_plugin_llama_engine::engine::config::{ModelMeta, ModelParams};
 
+/// Одна вкладка рабочей области (браузерный UI). Сериализуется в `app_config.json`
+/// как часть `AppConfig.tabs`. Типы: "main" (главная/новая вкладка), "chat"
+/// (сессия чата — 1:1 с файлом сессии), "section" (Статика: история сессий,
+/// студия агентов, настройки, логи), "webview" (встроенная страница, напр. 9Router).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct TabState {
+    pub id: String,
+    #[serde(rename = "type")]
+    pub tab_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub section: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Clone)]
 pub struct AppConfig {
+    /// Открытые вкладки рабочей области (браузерный UI). Пустые — на старте
+    /// фронтенд создаёт одну главную вкладку.
+    #[serde(default)]
+    pub tabs: Vec<TabState>,
+    /// id активной вкладки (если сохранённая вкладка была закрыта — фронтенд
+    /// выбирает первую из списка).
+    #[serde(default)]
+    pub active_tab: Option<String>,
     pub models: Vec<String>,
     pub last_model: Option<String>,
     #[serde(default)]
@@ -108,6 +135,8 @@ fn default_two_phase_default() -> bool { true }
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            tabs: Vec::new(),
+            active_tab: None,
             models: Vec::new(),
             last_model: None,
             last_agent: None,
