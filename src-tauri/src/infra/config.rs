@@ -211,8 +211,25 @@ pub fn load_config(app: &AppHandle) -> AppConfig {
 }
 
 pub fn save_config(app: &AppHandle, config: &AppConfig) {
-    if let Ok(data) = serde_json::to_string_pretty(config) {
-        let _ = fs::write(get_config_path(app), data);
+    let path = get_config_path(app);
+    save_config_file(&path, config);
+}
+
+pub fn save_config_file(path: &Path, config: &AppConfig) {
+    let mut root: serde_json::Value = fs::read_to_string(path)
+        .ok()
+        .and_then(|d| serde_json::from_str(&d).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+    let host_value = serde_json::to_value(config).unwrap_or_else(|_| serde_json::json!({}));
+    if let (serde_json::Value::Object(root_map), serde_json::Value::Object(host_map)) =
+        (&mut root, host_value)
+    {
+        for (k, v) in host_map {
+            root_map.insert(k, v);
+        }
+    }
+    if let Ok(data) = serde_json::to_string_pretty(&root) {
+        let _ = fs::write(path, data);
     }
 }
 
@@ -310,4 +327,28 @@ pub fn load_sampling_presets(project_dir: &Path) -> SamplingPresets {
     eprintln!("[config] sampling_presets.json не найден (пробовали: {:?}), пресеты не загружены",
         possible_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>());
     HashMap::new()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_save_config_file_preserves_external_fields() {
+        let tmp = std::env::temp_dir().join(format!("king_orch_cfg_test_{}.json", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let initial_json = r#"{"nine_router":{"dir":"D:\\custom\\9router","port":20128}}"#;
+        fs::write(&tmp, initial_json).unwrap();
+
+        let cfg = AppConfig::default();
+        save_config_file(&tmp, &cfg);
+
+        let saved = fs::read_to_string(&tmp).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        let _ = fs::remove_file(&tmp);
+
+        assert_eq!(
+            val.get("nine_router").and_then(|nr| nr.get("dir")).and_then(|d| d.as_str()),
+            Some("D:\\custom\\9router")
+        );
+    }
 }
