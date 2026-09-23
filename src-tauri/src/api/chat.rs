@@ -358,6 +358,8 @@ pub async fn chat_request(
         .map(|m| m.len() as f64 / (1024.0 * 1024.0))
         .unwrap_or(0.0);
     let effective_ctx = (prompt_tokens + max_gen_tokens + 128).min(context_size);
+    // estimate_vram_mb резолвит KV-spec по текущему engine_source
+    // (BeeLlama → kvarn5/kvarn4+tail1024, иначе legacy-флаги, всегда false).
     let total_mb =
         infra::estimate_vram_mb(&model_path, effective_ctx, kv_quant_keys, kv_quant_values);
     let kv_mb = (total_mb - file_mb).max(0.0);

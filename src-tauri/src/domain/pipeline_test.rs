@@ -245,7 +245,13 @@ pub fn run_pipeline_test(
     let mcp_servers_dir = project_root.join("src-tauri").join("mcp_servers");
     let bins_dir = project_root.join("src-tauri").join("bin");
     let sampling_presets = crate::infra::load_sampling_presets(project_root);
-    let model_params = ModelParams::default();
+    let app_config = crate::infra::config::load_config_early();
+    let model_params = app_config
+        .model_params
+        .get(&test.validation.model_path)
+        .cloned()
+        .unwrap_or_default();
+    let max_gen_tokens = app_config.max_gen_tokens as usize;
 
     let mut all_sub_calls: Vec<SubCall> = Vec::new();
     let mut msg_counter: u32 = 0;
@@ -267,7 +273,7 @@ pub fn run_pipeline_test(
         log_cb: log_cb.clone(),
         status_cb: status_cb.clone(),
         subcall_cb: |_: &SubCall| {},
-        max_gen_tokens: 2048,
+        max_gen_tokens,
         model_params: &model_params,
         format_type: "Auto",
         cancel_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),

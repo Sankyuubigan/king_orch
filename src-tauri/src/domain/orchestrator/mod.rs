@@ -825,6 +825,21 @@ where
         agent.name, depth
     ));
 
+    // Если вызов пришёл не из workflow_engine (напр. legacy .md чат или сабагент),
+    // применяем кастомную температуру агента из frontmatter поверх переданных model_params.
+    // Из workflow_engine параметры уже приходят с учётом полного каскада приоритетов.
+    let effective_params_storage;
+    let model_params = if caller_name.as_deref() != Some("workflow_engine") && agent.temperature.is_some() {
+        let mut p = model_params.clone();
+        if let Some(temp) = agent.temperature {
+            p.temperature = temp;
+        }
+        effective_params_storage = p;
+        &effective_params_storage
+    } else {
+        model_params
+    };
+
     // ── Определяем signal_contract РАНЬШЕ — нужен для корректного промпта (Method 3). ──
     let signal_contract: Option<SignalContract> = {
         let signals_dir = agent
@@ -2443,6 +2458,7 @@ mod tests {
             replace_report: false,
             tools: Vec::new(),
             current_date: false,
+            temperature: None,
         }
     }
 
@@ -3045,8 +3061,7 @@ mod tests {
             |_| {},
         )
         .unwrap();
-        let mut params = ModelParams::default();
-        params.temperature = 0.8;
+        let params = ModelParams::default();
 
         let msgs = vec![
             LlmMessage {

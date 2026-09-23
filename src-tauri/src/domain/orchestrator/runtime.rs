@@ -449,6 +449,7 @@ mod tests {
             replace_report: false,
             tools: tools.iter().map(|s| s.to_string()).collect(),
             current_date: false,
+            temperature: None,
         }
     }
 

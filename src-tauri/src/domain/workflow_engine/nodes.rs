@@ -194,7 +194,7 @@ where
             let bool_keys: Vec<String> =
                 super::fact_extractor::bool_fact_ids(&config, Some(workflow_dir));
 
-            let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
+            let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config, None);
             let (llm_text, llm_reasoning) = runner.call_llm_direct(
                 &prompt,
                 &current_msg,
@@ -390,7 +390,7 @@ where
             // Только узлы с output_type: message стримят ответ в основной чат.
             // Остальные (thought по умолчанию) стримят мысли в блок «Мысли агентов».
             let allow_stream = node.output_type.as_deref() == Some("message");
-            let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config);
+            let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config, Some(agent));
             let mut pending_signal = None;
             let result = runner.call_agent(
                 agent,
@@ -688,9 +688,11 @@ where
         NodeType::LlmFreeform => {
             let user_text =
                 context.resolve_template(node.input.as_deref().unwrap_or("{{ user_message }}"));
+            let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config, None);
             let result = runner.call_llm_freeform(
                 &user_text,
                 &context.history,
+                &resolved_params,
                 &format!("graph:{}", node.id),
             )?;
             Ok(NodeResult {

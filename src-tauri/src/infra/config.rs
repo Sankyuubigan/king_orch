@@ -128,7 +128,7 @@ fn default_translator_lang() -> String {
 }
 
 fn default_context_size() -> u32 { 24576 }
-fn default_max_gen_tokens() -> u32 { 4096 }
+fn default_max_gen_tokens() -> u32 { 2048 }
 fn default_reasoning_budget() -> u32 { 1500 }
 fn default_kv_quant_keys() -> bool { false }
 fn default_kv_quant_values() -> bool { false }

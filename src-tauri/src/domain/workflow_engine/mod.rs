@@ -59,39 +59,74 @@ pub struct WorkflowRunner<'a, L, S, C> {
     pub write_outside: crate::infra::WriteOutside,
 }
 
+/// Вычисляет результирующие ModelParams по каскаду приоритетов (SSOT):
+/// 1. Явный node.llm_params на узле (пресет sampling_presets.json) — строгий приоритет (пинит всё).
+/// 2. Иначе: база = config.default_llm_params (пресет) либо user_params (база пользователя).
+/// 3. frontmatter агента (agent.temperature) — overlay поверх базы (переопределяет только temperature).
+pub fn resolve_params_cascade(
+    sampling_presets: &SamplingPresets,
+    user_params: &ModelParams,
+    node_llm_params: &Option<String>,
+    workflow_config: &Option<WorkflowConfig>,
+    agent: Option<&AgentProfile>,
+) -> ModelParams {
+    // 1. Приоритет: явный пресет llm_params на узле
+    if let Some(ref preset_name) = node_llm_params {
+        if let Some(preset) = sampling_presets.get(preset_name) {
+            return preset.clone();
+        }
+        eprintln!(
+            "[workflow] Пресет '{}' не найден в sampling_presets.json, fallback на base params",
+            preset_name
+        );
+    }
+
+    // 2. База: default_llm_params в config workflow, либо параметры пользователя
+    let mut params = if let Some(ref config) = workflow_config {
+        if let Some(ref default_name) = config.default_llm_params {
+            if let Some(preset) = sampling_presets.get(default_name) {
+                preset.clone()
+            } else {
+                eprintln!("[workflow] Дефолтный пресет '{}' не найден в sampling_presets.json, fallback на base params", default_name);
+                user_params.clone()
+            }
+        } else {
+            user_params.clone()
+        }
+    } else {
+        user_params.clone()
+    };
+
+    // 3. Overlay frontmatter: если у агента задана кастомная temperature
+    if let Some(agent) = agent {
+        if let Some(temp) = agent.temperature {
+            params.temperature = temp;
+        }
+    }
+
+    params
+}
+
 impl<'a, L, S, C> WorkflowRunner<'a, L, S, C>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
     S: Fn(String, u8) + Clone + Send + Sync + 'static,
     C: Fn(&SubCall) + Clone + Send + Sync + 'static,
 {
-    /// Резолвит параметры LLM для узла: node.llm_params → config.default_llm_params → base params.
+    /// Резолвит параметры LLM для узла с учётом каскада приоритетов (SSOT).
     pub fn resolve_llm_params(
         &self,
         node_llm_params: &Option<String>,
         workflow_config: &Option<WorkflowConfig>,
+        agent: Option<&AgentProfile>,
     ) -> ModelParams {
-        // 1. Приоритет: llm_params на узле
-        if let Some(ref preset_name) = node_llm_params {
-            if let Some(preset) = self.sampling_presets.get(preset_name) {
-                return preset.clone();
-            }
-            eprintln!(
-                "[workflow] Пресет '{}' не найден в sampling_presets.json, fallback на base params",
-                preset_name
-            );
-        }
-        // 2. default_llm_params в config workflow
-        if let Some(ref config) = workflow_config {
-            if let Some(ref default_name) = config.default_llm_params {
-                if let Some(preset) = self.sampling_presets.get(default_name) {
-                    return preset.clone();
-                }
-                eprintln!("[workflow] Дефолтный пресет '{}' не найден в sampling_presets.json, fallback на base params", default_name);
-            }
-        }
-        // 3. Базовые параметры пользователя
-        self.model_params.clone()
+        resolve_params_cascade(
+            self.sampling_presets,
+            self.model_params,
+            node_llm_params,
+            workflow_config,
+            agent,
+        )
     }
 
     /// Выполняет .md агента через `run_agent_node()`
@@ -153,6 +188,7 @@ where
         &self,
         user_text: &str,
         history: &[ChatMessage],
+        resolved_params: &ModelParams,
         ctx_label: &str,
     ) -> Result<String, String> {
         // Явная инструкция по языку: у freeform нет системного промпта агента,
@@ -188,7 +224,7 @@ where
             .generate_chat(
                 &msgs,
                 self.max_gen_tokens,
-                self.model_params,
+                resolved_params,
                 self.format_type,
                 false,
                 self.cancel_flag.clone(),
@@ -449,4 +485,106 @@ where
     ));
 
     Ok(final_output)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn test_presets() -> SamplingPresets {
+        let mut presets = HashMap::new();
+        let mut strict = ModelParams::default();
+        strict.temperature = 0.0;
+        strict.top_p = 1.0;
+        strict.repetition_penalty = 1.1;
+        presets.insert("strict".to_string(), strict);
+
+        let mut creative = ModelParams::default();
+        creative.temperature = 0.8;
+        creative.top_p = 0.95;
+        presets.insert("creative".to_string(), creative);
+        presets
+    }
+
+    fn test_agent(id: &str, temp: Option<f32>) -> AgentProfile {
+        AgentProfile {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: String::new(),
+            system_prompt: String::new(),
+            is_hidden: false,
+            mode: "worker".to_string(),
+            mcp_servers: Vec::new(),
+            subagents: Vec::new(),
+            folder: None,
+            replace_report: false,
+            tools: Vec::new(),
+            current_date: false,
+            temperature: temp,
+        }
+    }
+
+    #[test]
+    fn node_preset_has_absolute_priority() {
+        let presets = test_presets();
+        let user = ModelParams { temperature: 0.5, ..Default::default() };
+        let node_preset = Some("strict".to_string());
+        let wf_config = Some(WorkflowConfig {
+            default_llm_params: Some("creative".to_string()),
+            ..Default::default()
+        });
+        let agent = test_agent("primary_coder", Some(0.3));
+
+        let res = resolve_params_cascade(&presets, &user, &node_preset, &wf_config, Some(&agent));
+        // Явный пресет узла "strict" пинит всё, включая temperature=0.0
+        assert_eq!(res.temperature, 0.0);
+        assert_eq!(res.repetition_penalty, 1.1);
+    }
+
+    #[test]
+    fn agent_frontmatter_temperature_overlays_on_graph_default_preset() {
+        let presets = test_presets();
+        let user = ModelParams { temperature: 0.5, ..Default::default() };
+        let node_preset = None;
+        let wf_config = Some(WorkflowConfig {
+            default_llm_params: Some("strict".to_string()),
+            ..Default::default()
+        });
+        let agent = test_agent("primary_coder", Some(0.1));
+
+        let res = resolve_params_cascade(&presets, &user, &node_preset, &wf_config, Some(&agent));
+        // База strict (rep_pen 1.1), но temperature перетерта на 0.1 из frontmatter
+        assert_eq!(res.temperature, 0.1);
+        assert_eq!(res.repetition_penalty, 1.1);
+    }
+
+    #[test]
+    fn agent_without_temperature_keeps_graph_default_preset() {
+        let presets = test_presets();
+        let user = ModelParams { temperature: 0.5, ..Default::default() };
+        let node_preset = None;
+        let wf_config = Some(WorkflowConfig {
+            default_llm_params: Some("strict".to_string()),
+            ..Default::default()
+        });
+        let agent = test_agent("analyst", None);
+
+        let res = resolve_params_cascade(&presets, &user, &node_preset, &wf_config, Some(&agent));
+        assert_eq!(res.temperature, 0.0);
+        assert_eq!(res.repetition_penalty, 1.1);
+    }
+
+    #[test]
+    fn agent_frontmatter_overlays_on_user_base_when_no_presets() {
+        let presets = test_presets();
+        let user = ModelParams { temperature: 0.5, top_p: 0.9, ..Default::default() };
+        let node_preset = None;
+        let wf_config = None;
+        let agent = test_agent("ux_ui_designer", Some(0.4));
+
+        let res = resolve_params_cascade(&presets, &user, &node_preset, &wf_config, Some(&agent));
+        assert_eq!(res.temperature, 0.4);
+        assert_eq!(res.top_p, 0.9);
+    }
 }

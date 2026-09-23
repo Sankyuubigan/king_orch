@@ -25,6 +25,8 @@ pub struct AgentProfile {
     pub tools: Vec<String>,
     #[serde(default)]
     pub current_date: bool,
+    #[serde(default)]
+    pub temperature: Option<f32>,
 }
 
 /// Единая точка входа в UI — может быть .md агентом или YAML графом
@@ -102,6 +104,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             let mut visible = false;
             let mut replace_report = false;
             let mut current_date = false;
+            let mut temperature: Option<f32> = None;
             let mut mcp_servers = Vec::new();
             let mut tools = Vec::new();
             let frontmatter_lines: Vec<&str> = frontmatter.lines().collect();
@@ -114,6 +117,9 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 else if line.starts_with("replace_report:") { replace_report = line["replace_report:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("single_report:") { replace_report = line["single_report:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("current_date:") { current_date = line["current_date:".len()..].trim().parse().unwrap_or(false); }
+                else if line.starts_with("temperature:") {
+                    temperature = line["temperature:".len()..].trim().parse::<f32>().ok();
+                }
                 else if line.starts_with("mcp_servers:") {
                     if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["mcp_servers:".len()..].trim()) { mcp_servers = parsed; }
                 }
@@ -147,7 +153,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 }
                 i += 1;
             }
-            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date }); }
+            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date, temperature }); }
         }
     }
     None
@@ -215,5 +221,14 @@ mod tests {
         let a = parse("---\nname: Test\ntools:\n  read: true\ndescription: d\n---\nbody\n");
         assert_eq!(a.tools, vec!["code_read"]);
         assert_eq!(a.description, "d");
+    }
+
+    #[test]
+    fn temperature_parsed_from_frontmatter() {
+        let a = parse("---\nname: Primary Coder\ntemperature: 0.1\n---\nbody\n");
+        assert_eq!(a.temperature, Some(0.1));
+
+        let b = parse("---\nname: Default Agent\n---\nbody\n");
+        assert_eq!(b.temperature, None);
     }
 }

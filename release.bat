@@ -54,4 +54,6 @@ if errorlevel 1 (
 )
 
 echo [+DONE] release.bat finished.
+echo.
+pause
 endlocal

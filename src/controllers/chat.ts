@@ -435,9 +435,11 @@ export class ChatController {
     }
 
     try {
+        // kv_quant_* — legacy (Variant A: всегда false). KV-spec (BeeLlama KVarN)
+        // резолвится на бэкенде по engine_source — хардкод здесь не влияет на OOM.
         const kvQuantKeys = false;
         const kvQuantValues = false;
-        const maxGen = parseInt(this.el.maxGenSlider?.value || "4096", 10);
+        const maxGen = parseInt(this.el.maxGenSlider?.value || "2048", 10);
 
         const promptText = await invoke<string>("get_prompt_preview", {
             modelPath,
