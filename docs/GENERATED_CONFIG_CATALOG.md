@@ -7,6 +7,8 @@
 
 ### AppConfig
 
+- `tabs`: `Vec<TabState>`
+- `active_tab`: `Option<String>`
 - `models`: `Vec<String>`
 - `last_model`: `Option<String>`
 - `last_agent`: `Option<String>`
@@ -25,6 +27,7 @@
 - `mmproj_files`: `HashMap<String`
 - `model_meta`: `HashMap<String`
 - `llamacpp_dir`: `Option<String>`
+- `engine_source`: `Option<String>`
 - `engine_variant`: `Option<String>`
 - `allow_error_reports`: `bool`
 - `chat_font_scale`: `f32`

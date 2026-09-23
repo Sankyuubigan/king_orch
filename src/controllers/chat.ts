@@ -91,8 +91,6 @@ export interface ChatElements {
   subchatTitle: HTMLSpanElement;
   btnBackChat: HTMLButtonElement;
   maxGenSlider: HTMLInputElement;
-  chkKvQuantK: HTMLInputElement;
-  chkKvQuantV: HTMLInputElement;
   tempSlider: HTMLInputElement;
   topkSlider: HTMLInputElement;
   toppSlider: HTMLInputElement;
@@ -437,8 +435,8 @@ export class ChatController {
     }
 
     try {
-        const kvQuantKeys = this.el.chkKvQuantK?.checked ?? false;
-        const kvQuantValues = this.el.chkKvQuantV?.checked ?? false;
+        const kvQuantKeys = false;
+        const kvQuantValues = false;
         const maxGen = parseInt(this.el.maxGenSlider?.value || "4096", 10);
 
         const promptText = await invoke<string>("get_prompt_preview", {
@@ -656,8 +654,8 @@ export class ChatController {
         contextSize: store.contextSize,
         promptTokens: this.lastPromptTokens,
         maxGenTokens: parseInt(this.el.maxGenSlider.value, 10),
-        kvQuantKeys: this.el.chkKvQuantK.checked,
-        kvQuantValues: this.el.chkKvQuantV.checked,
+        kvQuantKeys: false,
+        kvQuantValues: false,
         modelParams: params,
         attachments: [],
         mmprojPath,
@@ -1045,8 +1043,8 @@ export class ChatController {
             contextSize: store.contextSize,
             promptTokens: this.lastPromptTokens,
             maxGenTokens: parseInt(this.el.maxGenSlider.value, 10),
-            kvQuantKeys: this.el.chkKvQuantK.checked,
-            kvQuantValues: this.el.chkKvQuantV.checked,
+            kvQuantKeys: false,
+            kvQuantValues: false,
             modelParams: params,
             attachments,
             mmprojPath,

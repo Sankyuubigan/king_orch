@@ -10,10 +10,7 @@ import { getActiveChatController } from "./tabs";
 
 export interface SettingsElements {
   maxGenSlider: HTMLInputElement; maxGenValue: HTMLElement;
-  chkKvQuantK: HTMLInputElement;
-  chkKvQuantV: HTMLInputElement;
   themeSelect: HTMLSelectElement;
-  promptFormatSelect: HTMLSelectElement;
   tempSlider: HTMLInputElement; tempValue: HTMLElement;
   topkSlider: HTMLInputElement; topkValue: HTMLElement;
   toppSlider: HTMLInputElement; toppValue: HTMLElement;
@@ -171,10 +168,7 @@ export class SettingsController {
         this.applyChatFontScale(config.chat_font_scale);
         store.workdir = store.workdir;
       }
-      if (config.kv_quant_keys !== undefined) this.el.chkKvQuantK.checked = config.kv_quant_keys;
-      if (config.kv_quant_values !== undefined) this.el.chkKvQuantV.checked = config.kv_quant_values;
       if (config.theme) { this.el.themeSelect.value = config.theme; document.documentElement.setAttribute('data-theme', config.theme); }
-      if (config.prompt_format) this.el.promptFormatSelect.value = config.prompt_format;
       if (config.show_advanced_features !== undefined) {
         this.el.chkShowAdvanced.checked = config.show_advanced_features;
         store.showAdvancedFeatures = config.show_advanced_features;
@@ -222,14 +216,7 @@ export class SettingsController {
         this.applyChatFontScale(scale);
         await invoke("set_config_value", { key: "chat_font_scale", value: scale });
     });
-    this.el.chkKvQuantK?.addEventListener("change", async () => {
-        await invoke("set_config_value", { key: "kv_quant_keys", value: this.el.chkKvQuantK.checked });
-    });
-    this.el.chkKvQuantV?.addEventListener("change", async () => {
-        await invoke("set_config_value", { key: "kv_quant_values", value: this.el.chkKvQuantV.checked });
-    });
     this.el.themeSelect?.addEventListener("change", async () => { document.documentElement.setAttribute('data-theme', this.el.themeSelect.value); await invoke("set_theme", { theme: this.el.themeSelect.value }); });
-    this.el.promptFormatSelect?.addEventListener("change", async () => { await invoke("set_prompt_format", { format: this.el.promptFormatSelect.value }); });
     const sliders: [HTMLInputElement, HTMLElement][] = [[this.el.tempSlider, this.el.tempValue],[this.el.topkSlider, this.el.topkValue],[this.el.toppSlider, this.el.toppValue],[this.el.minpSlider, this.el.minpValue],[this.el.reppenSlider, this.el.reppenValue],[this.el.prespenSlider, this.el.prespenValue]];
     for (const [s, l] of sliders) s?.addEventListener("input", () => { l.innerText = s.value; this.saveModelParams(); });
     this.el.btnResetParams?.addEventListener("click", async () => { const p = getActiveChatController()?.modelSelectValue ?? store.lastModel; if (!p) return; await resetModelParams(p); await this.loadModelParams(); showToast("Параметры сброшены.", "success"); });

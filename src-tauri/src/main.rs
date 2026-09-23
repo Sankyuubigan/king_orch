@@ -212,7 +212,6 @@ async fn main() {
             api::config::set_config_value,
             api::config::set_last_model,
             api::config::set_theme,
-            api::config::set_prompt_format,
             api::config::set_tabs,
             api::agents::get_agents,
             api::sessions::get_sessions,

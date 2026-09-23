@@ -52,16 +52,6 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
                 cfg.max_gen_tokens = v as u32;
             }
         }
-        "kv_quant_keys" => {
-            if let Some(v) = value.as_bool() {
-                cfg.kv_quant_keys = v;
-            }
-        }
-        "kv_quant_values" => {
-            if let Some(v) = value.as_bool() {
-                cfg.kv_quant_values = v;
-            }
-        }
         "confidence_threshold" => {
             if let Some(v) = value.as_f64() {
                 cfg.confidence_threshold = v as f32;
@@ -142,12 +132,5 @@ pub fn set_tabs(app: AppHandle, tabs: Vec<infra::TabState>, active_tab: Option<S
 pub fn set_theme(app: AppHandle, theme: String) {
     let mut cfg = infra::load_config(&app);
     cfg.theme = theme;
-    infra::save_config(&app, &cfg);
-}
-
-#[tauri::command]
-pub fn set_prompt_format(app: AppHandle, format: String) {
-    let mut cfg = infra::load_config(&app);
-    cfg.prompt_format = format;
     infra::save_config(&app, &cfg);
 }

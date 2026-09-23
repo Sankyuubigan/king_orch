@@ -215,10 +215,18 @@ pub async fn chat_request(
     if let Some(rb) = reasoning_budget {
         cfg.reasoning_budget = rb;
     }
-    cfg.kv_quant_keys = kv_quant_keys;
-    cfg.kv_quant_values = kv_quant_values;
+    // Variant A: KV-квант всегда выключен (ответственность с юзера снята).
+    // BeeLlama получает KVarN через source.runtime в engine_sources.json.
+    // Входящие kv_quant_* из API игнорируются — молча force false.
+    let _ = (kv_quant_keys, kv_quant_values);
+    cfg.kv_quant_keys = false;
+    cfg.kv_quant_values = false;
+    // Формат промпта всегда Auto (UI-селект убран).
+    cfg.prompt_format = "Auto".to_string();
     infra::save_config(&app, &cfg);
     let reasoning_budget = cfg.reasoning_budget;
+    let kv_quant_keys = false;
+    let kv_quant_values = false;
 
     // ── Проверка установки движка llama.cpp (llama-server) ──
     // Новая архитектура: движок — ОТДЕЛЬНЫЙ процесс, инференс возможен ТОЛЬКО

@@ -67,12 +67,17 @@ pub struct AppConfig {
     /// --reasoning-budget). Размышления не попадают в content и в историю.
     #[serde(default = "default_reasoning_budget")]
     pub reasoning_budget: u32,
+    /// Устарело (UI убран): всегда false. Старые ключи в app_config.json
+    /// игнорируются при загрузке (см. load_config). BeeLlama включает KVarN
+    /// через source.runtime в engine_sources.json.
     #[serde(default = "default_kv_quant_keys")]
     pub kv_quant_keys: bool,
     #[serde(default = "default_kv_quant_values")]
     pub kv_quant_values: bool,
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// Устарело (UI убран): всегда "Auto". Старые значения ChatML/Gemma/…
+    /// принудительно сбрасываются в load_config.
     #[serde(default = "default_prompt_format")]
     pub prompt_format: String,
     #[serde(default = "default_confidence_threshold")]
@@ -87,6 +92,10 @@ pub struct AppConfig {
     pub model_meta: HashMap<String, ModelMeta>,
     #[serde(default)]
     pub llamacpp_dir: Option<String>,
+    /// Источник бинарей движка: "ggml-org" (дефолт) / "beellama" (KVarN).
+    /// None = дефолт (ggml-org). См. engine_sources.json плагина.
+    #[serde(default)]
+    pub engine_source: Option<String>,
     /// Предпочтение юзера: какой бекенд движка использовать ("auto" / "cpu" /
     /// "cuda-12.4" / "cuda-13.3" / "vulkan" / "hip-radeon"). None = авто.
     #[serde(default)]
@@ -155,6 +164,7 @@ impl Default for AppConfig {
             mmproj_files: HashMap::new(),
             model_meta: HashMap::new(),
             llamacpp_dir: None,
+            engine_source: None,
             engine_variant: None,
             allow_error_reports: default_allow_error_reports(),
             chat_font_scale: default_chat_font_scale(),
@@ -196,7 +206,9 @@ pub fn app_data_dir_early() -> PathBuf {
 pub fn load_config_early() -> AppConfig {
     let path = app_data_dir_early().join("app_config.json");
     if let Ok(data) = fs::read_to_string(path) {
-        serde_json::from_str(&data).unwrap_or_default()
+        let mut cfg: AppConfig = serde_json::from_str(&data).unwrap_or_default();
+        sanitize_retired_fields(&mut cfg);
+        cfg
     } else {
         AppConfig::default()
     }
@@ -204,10 +216,20 @@ pub fn load_config_early() -> AppConfig {
 
 pub fn load_config(app: &AppHandle) -> AppConfig {
     if let Ok(data) = fs::read_to_string(get_config_path(app)) {
-        serde_json::from_str(&data).unwrap_or_default()
+        let mut cfg: AppConfig = serde_json::from_str(&data).unwrap_or_default();
+        sanitize_retired_fields(&mut cfg);
+        cfg
     } else {
         AppConfig::default()
     }
+}
+
+/// Старые ключи UI, снятые с юзера: всегда дефолт (false / Auto).
+/// Сбрасывается при каждом чтении — мигрирует app_config.json без ручной чистки.
+fn sanitize_retired_fields(cfg: &mut AppConfig) {
+    cfg.kv_quant_keys = false;
+    cfg.kv_quant_values = false;
+    cfg.prompt_format = "Auto".to_string();
 }
 
 pub fn save_config(app: &AppHandle, config: &AppConfig) {

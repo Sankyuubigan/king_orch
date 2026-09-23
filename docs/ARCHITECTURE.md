@@ -142,7 +142,7 @@ singleton-вкладки; webview-вкладка — iframe 9Router. Module-scop
 
 | Файл | Команды | Зона ответственности |
 |------|---------|---------------------|
-| `config.rs` | `get_config`, `set_config_value`, `set_last_model`, `set_theme`, `set_prompt_format` | Чтение/запись конфигурации |
+| `config.rs` | `get_config`, `set_config_value`, `set_last_model`, `set_theme` | Чтение/запись конфигурации |
 | `sessions.rs` | `get_sessions`, `load_session`, `save_session`, `delete_session`, `rename_session`, `open_session_folder` | CRUD сессий |
 | `models.rs` | `get_models_catalog`, `get_model_params`, `set_model_params`, `reset_model_params`, `add_model` | Параметры моделей и каталог |
 | `agents.rs` | `get_agents` | Загрузка списка entry points (.md + YAML) |

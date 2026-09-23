@@ -101,7 +101,7 @@ Memory	14.62%	Катастрофа
 Не смешивай tools + grammar — llama.cpp отклоняет
 --jinja по умолчанию (since b7170) — правильный чат-шаблон
 GBNF для чистого structured output (не tool calling) — fact extractor, signal contracts
-LLGuidance — новый движок встроенный в llama.cpp, быстрее GBNF, лучше JSON Schema покрытие, есть готовые рецепты для Qwen-3
+LLGuidance — опциональный движок в llama.cpp (флаг сборки -DLLAMA_LLGUIDANCE=ON, дефолт OFF; требует Rust toolchain при сборке), быстрее GBNF и лучшее JSON Schema покрытие, но официальные пре-билды релизов ggml-org его НЕ содержат; в King Orch не используется — остаёмся на hybrid GBNF (Method 3)
 Не пересили грамматику — aldehir: "grammar constraining isn't a silver bullet. Sometimes you can overly constrain a model and it starts producing incorrect output."
 6. Агентные фреймворки для локальных моделей
 Фреймворк	Подход

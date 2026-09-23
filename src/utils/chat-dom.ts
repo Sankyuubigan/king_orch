@@ -8,13 +8,11 @@ import logoUrl from "../../logo.svg?raw";
 /// экран новой вкладки: логотип `logo.svg` над полем ввода + рейл разделов.
 ///
 /// Селекты агента/модели и контролы ввода создаются ПО-ВКЛАДКЕ (страниц может
-/// быть несколько одновременно). Слайдеры сэмплинга и чекбоксы KV-квантования
-/// — общие для приложения (живут в разделе «Настройки»), передаются через `shared`.
+/// быть несколько одновременно). Слайдеры сэмплинга — общие для приложения
+/// (живут в разделе «Настройки»), передаются через `shared`.
 
 export interface SharedChatControls {
   maxGenSlider: HTMLInputElement;
-  chkKvQuantK: HTMLInputElement;
-  chkKvQuantV: HTMLInputElement;
   tempSlider: HTMLInputElement;
   topkSlider: HTMLInputElement;
   toppSlider: HTMLInputElement;
@@ -240,8 +238,6 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
     mainScreen,
     sectionRail,
     maxGenSlider: shared.maxGenSlider,
-    chkKvQuantK: shared.chkKvQuantK,
-    chkKvQuantV: shared.chkKvQuantV,
     tempSlider: shared.tempSlider,
     topkSlider: shared.topkSlider,
     toppSlider: shared.toppSlider,

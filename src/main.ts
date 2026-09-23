@@ -58,8 +58,6 @@ async function initApp() {
   // используются ВСЕМИ чат-вкладками. ───
   const sharedSampling: SharedChatControls = {
     maxGenSlider: $<HTMLInputElement>("max-gen-slider"),
-    chkKvQuantK: $<HTMLInputElement>("chk-kv-quant-k"),
-    chkKvQuantV: $<HTMLInputElement>("chk-kv-quant-v"),
     tempSlider: $<HTMLInputElement>("temp-slider"),
     topkSlider: $<HTMLInputElement>("topk-slider"),
     toppSlider: $<HTMLInputElement>("topp-slider"),
@@ -89,10 +87,7 @@ async function initApp() {
   const settingsCtrl = new SettingsController({
     maxGenSlider: $<HTMLInputElement>("max-gen-slider"), maxGenValue: $<HTMLElement>("max-gen-value"),
     chatFontSlider: $<HTMLInputElement>("chat-font-slider"), chatFontValue: $<HTMLElement>("chat-font-value"),
-    chkKvQuantK: $<HTMLInputElement>("chk-kv-quant-k"),
-    chkKvQuantV: $<HTMLInputElement>("chk-kv-quant-v"),
     themeSelect: $<HTMLSelectElement>("theme-select"),
-    promptFormatSelect: $<HTMLSelectElement>("prompt-format-select"),
     tempSlider: $<HTMLInputElement>("temp-slider"), tempValue: $<HTMLElement>("temp-value"),
     topkSlider: $<HTMLInputElement>("topk-slider"), topkValue: $<HTMLElement>("topk-value"),
     toppSlider: $<HTMLInputElement>("topp-slider"), toppValue: $<HTMLElement>("topp-value"),

@@ -44,7 +44,7 @@ npm-зависимость MCP-сервера `browser`) — `puppeteer.connect(
 | Граф: открыть / сохранить | `#btn-open-workflow`, `#btn-save-workflow`, контейнер `#graph-container` |
 | Настройки: проверка обновлений | `#btn-check-update`, `#btn-install-update` |
 | Параметры генерации | `#temp-slider`, `#topk-slider`, `#topp-slider`, `#minp-slider`, `#reppen-slider`, `#prespen-slider`, `#btn-reset-params` |
-| Тема / формат промпта | `#theme-select`, `#prompt-format-select` |
+| Тема | `#theme-select` |
 | Логи | `#log-view` (textarea), сохранить `#btn-save-logs` |
 | Модал подтверждения | `#confirm-overlay`, `#confirm-btn-yes`, `#confirm-btn-no` |
 
