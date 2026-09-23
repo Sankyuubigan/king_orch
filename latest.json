@@ -1,11 +1,11 @@
 {
-  "version": "26.9.151",
-  "notes": "King Orch 26.9.151",
-  "pub_date": "2026-09-23T12:19:15.690Z",
+  "version": "26.9.155",
+  "notes": "King Orch 26.9.155",
+  "pub_date": "2026-09-23T14:11:55.385Z",
   "platforms": {
     "windows-x86_64": {
-      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVURlh4c2JxZjRQYTdHOWlVbytJcXM3aXNmLy9WYmZlcmkvdjEvNDdHZVRVblFSUHJxbmhDL0lRbHVNVlBiVmJiNFlrUVNjMysxLzVmTCtHcnpJek1WeE12TXUrdTMrdHc0PQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwMTY1OTQyCWZpbGU6S2luZyBPcmNoXzI2LjkuMTUxX3g2NC1zZXR1cC5leGUKRkNIRHYreVE4TmVPdFhFVlVrTzdIM1A5NTZ4NlY3bTdNQm1keVBVTnRUVmZoV1hhekhhK0dWbmJDTzI2RVVyT3VxVFd5YlVId2VYZStBVzN3WVd2Q3c9PQo=",
-      "url": "https://github.com/Sankyuubigan/king_orch/releases/download/v26.9.151/King.Orch_26.9.151_x64-setup.exe"
+      "signature": "dW50cnVzdGVkIGNvbW1lbnQ6IHNpZ25hdHVyZSBmcm9tIHRhdXJpIHNlY3JldCBrZXkKUlVURlh4c2JxZjRQYXdyUXlqelFrZVFsYWNQV1E1dlpqOC9mQmJ4V0FRd1pwQ2FJeGRoMnFROXl5NlVKVTMycCt2QTZhczREY0JRRW11VEJTR0xqWkZkOWU3MmpPWlEyclFnPQp0cnVzdGVkIGNvbW1lbnQ6IHRpbWVzdGFtcDoxNzkwMTcyNjk3CWZpbGU6S2luZyBPcmNoXzI2LjkuMTU1X3g2NC1zZXR1cC5leGUKU25iRjF5MHk2eVBHLzBBWlV0Z1VTMDZoRGppbGQyTzJXd0tEWkNwUllPakNBV25MYzB1aS9lZEZrbmplMVZ6M05TWTcxb0pCVjdrNWswUEg1SldZQUE9PQo=",
+      "url": "https://github.com/Sankyuubigan/king_orch/releases/download/v26.9.155/King.Orch_26.9.155_x64-setup.exe"
     }
   }
 }
