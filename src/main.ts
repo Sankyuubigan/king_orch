@@ -10,6 +10,8 @@ import "@my-tauri-plugins/plugin-logs";
 import "@my-tauri-plugins/plugin-llama-engine";
 // Регистрирует <nine-router-panel> (облачный шлюз 9Router: комбо + дашборд).
 import "@my-tauri-plugins/plugin-9router";
+// Регистрирует <downloader-widget> / <downloader-progress> (единый прогресс загрузок).
+import "@my-tauri-plugins/plugin-downloader";
 import {
   SessionController, SettingsController, GraphController, AgentTestController,
   CodingTestController, UpdatePopupController, TabController, initChatEventRouter,
@@ -69,7 +71,19 @@ async function initApp() {
   // ─── Контроллер раздела «История сессий» ───
   // Экземпляр живёт всё приложение: слушает bus (session:open/session:deleted),
   // по которым TabController открывает/закрывает вкладки.
-  void new SessionController({ sessionList: $<HTMLDivElement>("session-list") });
+  void new SessionController({
+    sessionList: $<HTMLDivElement>("session-list"),
+    sessionPreviewTitle: $<HTMLDivElement>("session-preview-title"),
+    sessionPreviewDate: $<HTMLDivElement>("session-preview-date"),
+    sessionPreviewOpen: $<HTMLButtonElement>("session-preview-open"),
+    sessionPreviewBody: $<HTMLDivElement>("session-preview-body"),
+    sessionSelectToggle: $<HTMLButtonElement>("session-select-toggle"),
+    sessionSelectBar: $<HTMLDivElement>("session-select-bar"),
+    sessionSelectCount: $<HTMLSpanElement>("session-select-count"),
+    sessionSelectAll: $<HTMLButtonElement>("session-select-all"),
+    sessionBulkDelete: $<HTMLButtonElement>("session-bulk-delete"),
+    sessionSelectCancel: $<HTMLButtonElement>("session-select-cancel"),
+  });
 
   // ─── Контроллер настроек (раздел ⚙️; селекты моделей/агентов — per-tab) ───
   const settingsCtrl = new SettingsController({

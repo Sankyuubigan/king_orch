@@ -17,8 +17,33 @@
         <div id="chat-tab-slot"></div>
 
         <div id="view-sessions" class="view">
-          <div class="session-list-title">История чатов</div>
-          <div id="session-list" class="session-list"></div>
+          <div class="sessions-layout">
+            <aside class="sessions-left">
+              <div class="sessions-left-header">
+                <div class="session-list-title">История чатов</div>
+                <button type="button" class="btn-secondary sessions-select-toggle" id="session-select-toggle">Выбрать</button>
+              </div>
+              <div class="sessions-select-bar" id="session-select-bar" hidden>
+                <span class="sessions-select-count" id="session-select-count">Выбрано: 0</span>
+                <button type="button" class="btn-secondary sessions-select-all" id="session-select-all">Все</button>
+                <button type="button" class="btn-danger sessions-bulk-delete" id="session-bulk-delete" disabled>Удалить</button>
+                <button type="button" class="btn-secondary sessions-select-cancel" id="session-select-cancel">Отмена</button>
+              </div>
+              <div id="session-list" class="session-list"></div>
+            </aside>
+            <section class="sessions-preview">
+              <header class="sessions-preview-header">
+                <div class="sessions-preview-meta">
+                  <div class="sessions-preview-title" id="session-preview-title">Предпросмотр</div>
+                  <div class="sessions-preview-date" id="session-preview-date"></div>
+                </div>
+                <button type="button" class="btn-primary sessions-preview-open" id="session-preview-open" hidden>Открыть</button>
+              </header>
+              <div class="sessions-preview-body" id="session-preview-body">
+                <div class="sessions-preview-empty">Наведите на сессию слева, чтобы увидеть переписку</div>
+              </div>
+            </section>
+          </div>
         </div>
 
         <div id="view-agent-studio" class="view">
@@ -402,6 +427,9 @@
 
   <!-- Контейнер для всплывающих уведомлений -->
   <div id="toast-container"></div>
+
+  <!-- Глобальный прогресс активных загрузок (единый движок tauri-plugin-downloader) -->
+  <downloader-widget></downloader-widget>
 
   <!-- Всплывающее окно проверки обновлений (показывается справа по центру высоты) -->
   <div id="update-popup" class="update-popup" style="display: none;">

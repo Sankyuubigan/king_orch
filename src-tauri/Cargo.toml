@@ -1,6 +1,6 @@
 [package]
 name = "king_orch"
-version = "26.9.134"
+version = "26.9.142"
 description = "Local LLM Multi-Agent Studio"
 authors = ["You"]
 edition = "2021"
@@ -31,6 +31,9 @@ tauri-plugin-llama-engine = { path = "../../my-tauri-plugins/tauri-plugin-llama-
 # портативного Node.js + бандла 9router, ленивый автозапуск по требованию,
 # список комбо и OpenAI-совместимый чат (kill сервера на выходе через Job Object).
 tauri-plugin-9router = { path = "../../my-tauri-plugins/tauri-plugin-9router" }
+# Единый движок скачивания (SSOT): 6 уровней, stall/resume, прогресс speed/ETA,
+# без системных окон (CREATE_NO_WINDOW). Используют хост и все плагины.
+tauri-plugin-downloader = { path = "../../my-tauri-plugins/tauri-plugin-downloader" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["full"] }

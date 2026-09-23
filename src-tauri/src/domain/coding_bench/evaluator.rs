@@ -125,6 +125,11 @@ pub fn run_command(cmd: &str, cwd: &Path, timeout_sec: u64, bins_dir: &Path) -> 
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        child.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
     let mut child = child
         .spawn()
         .map_err(|e| format!("Ошибка запуска {}: {}", full_cmd, e))?;

@@ -479,10 +479,14 @@ fn validate_functional(project_root: &Path, rules: &FunctionalLevel) -> LevelRes
         };
     }
 
-    let output = std::process::Command::new(&argv[0])
-        .args(&argv[1..])
-        .current_dir(project_root)
-        .output();
+    let mut cmd = std::process::Command::new(&argv[0]);
+    cmd.args(&argv[1..]).current_dir(project_root);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+    let output = cmd.output();
 
     match output {
         Ok(out) => {

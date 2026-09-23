@@ -108,13 +108,19 @@ pub async fn install_update_from_github(url: String, app: AppHandle) -> Result<(
         chrono::Local::now().timestamp()
     ));
 
-    // Скачивание с цепочкой фоллбэков (reqwest → PowerShell → MCP)
-    crate::infra::download_fallback::download_with_fallback(
+    // Скачивание единым движком (6 уровней, прогресс, без лишних окон).
+    tauri_plugin_downloader::download(
         &url,
         &tmp,
-        None,
-        &|msg| eprintln!("[updater] {}", msg),
-        &|_, _| {},
+        tauri_plugin_downloader::DownloadOptions {
+            label: "Обновление приложения".into(),
+            kind: "app".into(),
+            ..Default::default()
+        },
+        Some(&|msg: String| {
+            eprintln!("[updater] {}", msg);
+            log::info!("[updater] {}", msg);
+        }),
     )
     .await
     .map_err(|e| format!("Ошибка скачивания установщика: {}", e))?;

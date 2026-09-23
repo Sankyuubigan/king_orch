@@ -78,11 +78,17 @@ fn run_command(
     timeout: Duration,
 ) -> Result<(String, i32), ToolError> {
     let resolved = resolve_executable(program);
-    let mut child = Command::new(&resolved)
-        .args(args)
+    let mut cmd = Command::new(&resolved);
+    cmd.args(args)
         .current_dir(cwd)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW — без пустых консольных окон
+    }
+    let mut child = cmd
         .spawn()
         .map_err(|e| ToolError::Io(format!("не удалось запустить {}: {}", resolved, e)))?;
 

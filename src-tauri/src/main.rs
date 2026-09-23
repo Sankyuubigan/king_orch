@@ -98,6 +98,8 @@ async fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_about_updates::init())
         .plugin(tauri_plugin_logs::init())
+        // Единый движок скачивания (SSOT): engine, bin, app update, 9router.
+        .plugin(tauri_plugin_downloader::init())
         // Движок llama.cpp — переиспользуемый плагин (SSOT). Регистрирует
         // команды движка/моделей, owns процесс llama-server (kill на выходе).
         .plugin(tauri_plugin_llama_engine::init())

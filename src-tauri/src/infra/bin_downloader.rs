@@ -61,82 +61,40 @@ fn extract_gzip(gz_bytes: &[u8], bins_dir: &Path, target_exe: &str, log_cb: &dyn
     Ok(())
 }
 
-/// Скачивание через PowerShell (фоллбэк). Использует .NET WebClient —
-/// автоматически читает системный прокси и использует Schannel (как браузер).
-fn download_via_powershell_sync(url: &str, dest: &Path, log_cb: &dyn Fn(String)) -> Result<u64, String> {
-    log_cb(format!(
-        "   PowerShell: {}...",
-        crate::infra::tools::take_utf8_start(url, 80)
-    ));
-    let dest_str = dest.display().to_string();
-    let ps_script = format!(
-        "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
-         $ProgressPreference = 'SilentlyContinue'; \
-         Invoke-WebRequest -Uri '{url}' -OutFile '{dest}' -UseBasicParsing; \
-         (Get-Item '{dest}').Length",
-        url = url.replace('\'', "''"),
-        dest = dest_str.replace('\'', "''"),
-    );
-    let output = std::process::Command::new("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", &ps_script])
-        .output()
-        .map_err(|e| format!("PowerShell не найден: {}", e))?;
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let bytes: u64 = stdout.parse().unwrap_or(0);
-        if bytes > 0 {
-            return Ok(bytes);
-        }
-        return fs::metadata(dest).map(|m| m.len()).map_err(|e| e.to_string());
-    }
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    Err(format!("PowerShell: {}", stderr.trim()))
-}
-
-/// Скачивание байтов с фоллбэком: reqwest → PowerShell ( temp-файл → чтение в память).
+/// Скачивание байтов единым движком tauri-plugin-downloader (temp-файл → память).
 fn download_bytes_with_fallback(url: &str, log_cb: &dyn Fn(String)) -> Result<Vec<u8>, String> {
-    // Уровень 1: reqwest
-    if let Ok(resp) = reqwest::blocking::get(url) {
-        if resp.status().is_success() {
-            return resp.bytes().map(|b| b.to_vec()).map_err(|e| e.to_string());
-        }
-        log_cb(format!("⚠️ reqwest HTTP {} — пробуем PowerShell...", resp.status()));
-    } else {
-        log_cb(format!("⚠️ reqwest недоступен — пробуем PowerShell..."));
-    }
-    // Уровень 2: PowerShell → temp-файл → чтение
-    let tmp = std::env::temp_dir().join("king_dl_tmp.bin");
-    download_via_powershell_sync(url, &tmp, log_cb)?;
-    let bytes = fs::read(&tmp).map_err(|e| format!("Ошибка чтения temp-файла: {}", e))?;
-    let _ = fs::remove_file(&tmp);
+    let opts = tauri_plugin_downloader::DownloadOptions {
+        label: "Загрузка бинаря".into(),
+        kind: "bin".into(),
+        ..Default::default()
+    };
+    let bytes = tauri_plugin_downloader::download_bytes_blocking(url, opts)?;
+    log_cb(format!("📥 Скачано {} МБ", bytes.len() as f64 / 1024.0 / 1024.0));
     Ok(bytes)
 }
 
-fn download_file_sync(url: &str, dest: &Path, log_cb: &dyn Fn(String)) -> Result<(), String> {
+/// Скачивание файла единым движком tauri-plugin-downloader.
+/// `log_cb` должен быть `Send + Sync` — требование async-callback'ов движка.
+fn download_file_sync(
+    url: &str,
+    dest: &Path,
+    log_cb: &(dyn Fn(String) + Send + Sync),
+) -> Result<(), String> {
     log_cb(format!("📥 Скачивание {}...", url));
-
-    // Уровень 1: reqwest
-    match reqwest::blocking::get(url) {
-        Ok(resp) => {
-            let status = resp.status();
-            if !status.is_success() {
-                log_cb(format!("⚠️ reqwest HTTP {} — пробуем PowerShell...", status));
-                return download_via_powershell_sync(url, dest, log_cb).map(|_| ());
-            }
-            let total = resp.content_length().unwrap_or(0);
-            let bytes = resp.bytes().map_err(|e| format!("Ошибка чтения ответа: {}", e))?;
-            log_cb(format!("📥 Скачано {} МБ", bytes.len() as f64 / 1024.0 / 1024.0));
-            fs::write(dest, &bytes).map_err(|e| format!("Ошибка записи {}: {}", dest.display(), e))?;
-            if total > 0 && (bytes.len() as u64) < total {
-                return Err(format!("Недокачано: {} из {} байт", bytes.len(), total));
-            }
-            Ok(())
-        }
-        Err(e) => {
-            log_cb(format!("⚠️ reqwest не смог: {}. Пробуем PowerShell...", e));
-            download_via_powershell_sync(url, dest, log_cb).map(|_| ())
-        }
-    }
+    let opts = tauri_plugin_downloader::DownloadOptions {
+        label: dest
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_else(|| "Бинарь".into()),
+        kind: "bin".into(),
+        ..Default::default()
+    };
+    tauri_plugin_downloader::download_blocking(url, dest, opts, Some(log_cb))?;
+    log_cb(format!(
+        "📥 Скачано {} МБ",
+        fs::metadata(dest).map(|m| m.len()).unwrap_or(0) as f64 / 1024.0 / 1024.0
+    ));
+    Ok(())
 }
 
 fn extract_zip_entry(zip_bytes: &[u8], bins_dir: &Path, target_exe: &str, log_cb: &dyn Fn(String)) -> Result<(), String> {
@@ -226,7 +184,7 @@ fn find_chrome_exe(dir: &Path) -> Option<PathBuf> {
 
 /// Авто-докачка Chrome-for-Testing (стабильный канал, win64) в bins/chrome/.
 /// Возвращает путь к chrome.exe.
-pub fn ensure_chrome_bin<L: Fn(String)>(bins_dir: &Path, log_cb: &L) -> Result<PathBuf, String> {
+pub fn ensure_chrome_bin<L: Fn(String) + Send + Sync>(bins_dir: &Path, log_cb: &L) -> Result<PathBuf, String> {
     let chrome_dir = bins_dir.join("chrome");
     if let Some(exe) = find_chrome_exe(&chrome_dir) {
         return Ok(exe);
@@ -296,7 +254,7 @@ fn find_cloak_exe(dir: &Path) -> Option<PathBuf> {
 
 /// Авто-докачка CloakBrowser (stealth-Chromium, бесплатная v146-сборка без ключа)
 /// в bins/cloak/. Проверяет SHA-256 по манифесту релиза. Возвращает путь к exe.
-pub fn ensure_cloak_browser<L: Fn(String)>(bins_dir: &Path, log_cb: &L) -> Result<PathBuf, String> {
+pub fn ensure_cloak_browser<L: Fn(String) + Send + Sync>(bins_dir: &Path, log_cb: &L) -> Result<PathBuf, String> {
     let cloak_dir = bins_dir.join("cloak");
     if let Some(exe) = find_cloak_exe(&cloak_dir) {
         return Ok(exe);
@@ -350,7 +308,11 @@ pub fn ensure_cloak_browser<L: Fn(String)>(bins_dir: &Path, log_cb: &L) -> Resul
     Ok(exe)
 }
 
-pub fn ensure_runtime_bin(name: &str, bins_dir: &Path, log_cb: impl Fn(String)) -> Result<PathBuf, String> {
+pub fn ensure_runtime_bin(
+    name: &str,
+    bins_dir: &Path,
+    log_cb: impl Fn(String) + Send + Sync,
+) -> Result<PathBuf, String> {
     let bins_dir = bins_dir.to_path_buf();
     let bin_name = bin_filename(name);
     let bin_path = bins_dir.join(&bin_name);

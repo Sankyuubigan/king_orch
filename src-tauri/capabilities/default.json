@@ -18,6 +18,7 @@
     "shell:allow-open",
     "logs:default",
     "llama-engine:default",
-    "9router:default"
+    "9router:default",
+    "downloader:default"
   ]
 }

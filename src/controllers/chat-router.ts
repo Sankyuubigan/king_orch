@@ -33,16 +33,32 @@ export function initChatEventRouter(): void {
   listen("tool_permission_request", (e) => active()?.onToolPermission(e.payload as any));
   listen("vram_notice", (e) => active()?.onVramNotice(e.payload as any));
 
-  // Скачивание модели/движка — глобальный лог (вкладка «Логи»), не привязан к
-  // активной чат-вкладке.
-  listen("download_progress", (e) => {
-    const { downloaded, total, speed_bps } = e.payload as { downloaded: number; total: number; speed_bps?: number };
-    if (total > 0) {
-      const pct = ((downloaded / total) * 100).toFixed(1);
-      const mbD = (downloaded / 1024 / 1024).toFixed(1);
-      const mbT = (total / 1024 / 1024).toFixed(1);
-      const speed = formatSpeed(speed_bps);
-      logFront(`📥 Скачивание: ${mbD} MB / ${mbT} MB (${pct}%)${speed ? ` · ${speed}` : ""}`);
+  // Скачивание модели/движка — единый движок downloader (прогресс speed/ETA).
+  listen("downloader:progress", (e) => {
+    const p = e.payload as {
+      label: string;
+      downloaded: number;
+      total: number;
+      speed_bps?: number;
+      status?: string;
+      message?: string;
+    };
+    if (p.status && p.status !== "running") {
+      logFront(
+        p.status === "done"
+          ? `✅ Завершено: ${p.label}`
+          : `⚠️ ${p.label}: ${p.message || p.status}`,
+      );
+      return;
+    }
+    if (p.total > 0) {
+      const pct = ((p.downloaded / p.total) * 100).toFixed(1);
+      const mbD = (p.downloaded / 1024 / 1024).toFixed(1);
+      const mbT = (p.total / 1024 / 1024).toFixed(1);
+      const speed = formatSpeed(p.speed_bps);
+      logFront(
+        `📥 ${p.label}: ${mbD} MB / ${mbT} MB (${pct}%)${speed ? ` · ${speed}` : ""}`,
+      );
     }
   });
 }

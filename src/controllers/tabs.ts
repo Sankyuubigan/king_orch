@@ -53,10 +53,6 @@ interface TabEntry {
   labelEl: HTMLElement;
   ctrl: ChatController | null;
   title: string;
-  /// Навигационный стек разделов (только для type === "section"): последний
-  /// элемент = текущий `section`. Верхнеуровневые переходы заменяют стек,
-  /// переход из «Настройки» в подраздел (Логи/Студия) — пушит.
-  sectionStack: TabSection[] | null;
 }
 
 /// Текущая активная chat-вкладка (фокус), не требующая обязательной обработки.
@@ -138,13 +134,13 @@ export class TabController {
     return tab;
   }
 
-  /** Открыть/сфокусировать раздел в единственной вкладке-хосте разделов.
-   * Возврат к верхнему уровню — «Настройки» (replасе/back), переход из настроек
-   * в подраздел (Логи/Студия) — push/хлебные крошки. */
+  /** Открыть/сфокусировать вкладку раздела. Каждый раздел — НЕЗАВИСИМАЯ вкладка
+   * (Логи и Настройки живут одновременно, без синглтона-стека). */
   openSection(tabSection: TabSection): AppTab | null {
-    const existing = this.entries.find(t => t.type === "section");
+    const existing = this.entries.find(
+      t => t.type === "section" && t.section === tabSection,
+    );
     if (existing) {
-      this.navigateSection(existing, tabSection);
       this.activate(existing.id);
       return this.tabToApp(existing);
     }
@@ -154,49 +150,6 @@ export class TabController {
     this.activate(tab.id);
     this.persistTabs();
     return tab;
-  }
-
-  /** Навигация по разделам внутри вкладки-хоста. */
-  private navigateSection(entry: TabEntry, target: TabSection) {
-    const nextView = document.querySelector<HTMLElement>(SECTION_VIEWS[target]);
-    if (!nextView) return;
-    const stack = entry.sectionStack ?? [entry.section ?? "settings"];
-    if (stack.length && stack[stack.length - 1] === target) return;
-    if (stack.length && stack[stack.length - 1] === "settings") {
-      // Из «Настройки» в подраздел (Логи/Студия) — push в стек навигации.
-      stack.push(target);
-      entry.sectionStack = stack;
-    } else {
-      // С верхнеуровневого раздела — замена стека (топ-уровень).
-      entry.sectionStack = [target];
-    }
-    this.switchSectionView(entry, target);
-  }
-
-  /** Переключает статические .view-разделы под выбранный target. */
-  private switchSectionView(entry: TabEntry, target: TabSection) {
-    const prevView = entry.viewEl;
-    const nextView = document.querySelector<HTMLElement>(SECTION_VIEWS[target] ?? "#view-settings");
-    if (!nextView) return;
-    if (prevView && prevView !== nextView) prevView.classList.remove("active");
-    entry.section = target;
-    entry.viewEl = nextView;
-    entry.title = this.sectionTitle(target);
-  }
-
-  /** Хлебная крошка «‹» в ярлыке вкладки: назад по стеку разделов. */
-  goBackSection(entry: TabEntry) {
-    const stack = entry.sectionStack;
-    if (!stack || stack.length <= 1) {
-      this.closeTab(entry.id);
-      return;
-    }
-    stack.pop();
-    const target = stack[stack.length - 1];
-    this.switchSectionView(entry, target);
-    if (store.activeTabId === entry.id) this.activate(entry.id);
-    this.renderStrip();
-    this.persistTabs();
   }
 
   /** Открыть/сфокусировать чат-вкладку сессии `id` (bus "session:open"). */
@@ -273,8 +226,8 @@ export class TabController {
   // ── Materialization (view + контроллер) ──
 
   private materializeTab(tab: AppTab) {
-    // Вкладка-хост разделов — синглтон: дубли из старых конфигов схлопываем.
-    if (tab.type === "section" && this.entries.some(e => e.type === "section")) {
+    // Раздел — обычная независимая вкладка; дедуп по section уже в openSection.
+    if (tab.type === "section" && this.entries.some(e => e.type === "section" && e.section === tab.section)) {
       return;
     }
     const entry: TabEntry = {
@@ -289,7 +242,6 @@ export class TabController {
       labelEl: document.createElement("span"),
       ctrl: null,
       title: this.defaultTitle(tab),
-      sectionStack: tab.type === "section" ? [tab.section as TabSection ?? "settings"] : null,
     };
     switch (tab.type) {
       case "main": {
@@ -456,20 +408,7 @@ export class TabController {
       icon.textContent = t.type === "section" ? SECTION_ICONS[t.section as TabSection] : (TAB_ICONS[t.type] ?? "❔");
       const label = document.createElement("span");
       label.className = "workspace-tab-label";
-      if (t.type === "section" && t.sectionStack && t.sectionStack.length > 1) {
-        // Хлебная крошка «‹»: назад по стеку разделов (Настройки › Логи).
-        const back = document.createElement("span");
-        back.className = "workspace-tab-back";
-        back.textContent = "‹";
-        back.title = "Назад";
-        back.addEventListener("click", (e) => {
-          e.stopPropagation();
-          this.goBackSection(t);
-        });
-        label.append(back, document.createTextNode(` ${t.title}`));
-      } else {
-        label.textContent = t.title;
-      }
+      label.textContent = t.title;
       const close = document.createElement("button");
       close.className = "workspace-tab-close";
       close.title = "Закрыть вкладку";
