@@ -1345,6 +1345,56 @@ body.edge-reconnecting {
 }
 .workspace-tab-add:hover { background: var(--session-hover); }
 
+.workspace-tab-menu {
+  position: relative;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  margin-left: auto;
+  padding-left: 4px;
+}
+
+.workspace-tab-menu-toggle {
+  width: 32px;
+  height: 28px;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 17px;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+.workspace-tab-menu-toggle:hover { background: var(--session-hover); }
+
+.workspace-tab-menu-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 250;
+  display: none;
+  min-width: 190px;
+  padding: 5px 0;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+}
+.workspace-tab-menu-dropdown.show { display: flex; flex-direction: column; }
+
+.workspace-tab-menu-item {
+  padding: 8px 14px;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.workspace-tab-menu-item:hover { background: var(--session-hover); color: var(--primary); }
+
 .workspace-content {
   flex: 1;
   display: flex;
@@ -1394,7 +1444,7 @@ body.edge-reconnecting {
 .tab-menu-dropdown .session-menu-item { padding: 8px 14px; }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Экран новой (главной) вкладки: logo.svg над полем ввода + рейл разделов
+   Экран новой (главной) вкладки: logo.svg над полем ввода
    ═══════════════════════════════════════════════════════════════════════════ */
 
 .chat-main-screen { display: none; }
@@ -1410,10 +1460,7 @@ body.edge-reconnecting {
   overflow: hidden;
 }
 .chat-main-page.main-mode .chat-history { display: none; }
-/* В main-режиме лого(1)/навигация/ввод приклеены друг к другу без зазоров. */
-.chat-main-page.main-mode { gap: 0; }
-/* В чат-режиме плашка навигации скрыта (welcome больше не показываем). */
-.chat-main-page:not(.main-mode) .main-screen-nav { display: none; }
+.chat-main-page.main-mode { gap: 10px; }
 
 .main-screen-stage {
   margin: auto;
@@ -1439,39 +1486,6 @@ body.edge-reconnecting {
   display: block;
   aspect-ratio: 840 / 260;
 }
-
-/* Горизонтальная плашка навигации на главной вкладке: прикреплена к плашке
-   поля ввода (общий бордер, скругление сверху), логотип остаётся над ней. */
-.main-screen-nav {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  flex: 0 0 auto;
-  padding: 10px;
-  margin: auto 0 -1px 0;
-  background: var(--panel-bg);
-  border: 1px solid var(--border);
-  border-bottom: none;
-  border-radius: 6px 6px 0 0;
-}
-
-.main-screen-section-btn {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 16px;
-  border: 1px solid transparent;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--text);
-  font-size: 13px;
-  cursor: pointer;
-  text-align: left;
-  white-space: nowrap;
-  transition: background 0.2s, border-color 0.2s, color 0.2s;
-}
-.main-screen-section-btn:hover { background: var(--session-hover); color: var(--primary); border-color: var(--border); }
 
 /* Быстрая навигация по разделам внутри «Настройки» */
 .settings-nav { display: flex; flex-wrap: wrap; gap: 8px; }

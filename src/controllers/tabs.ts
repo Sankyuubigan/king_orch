@@ -91,11 +91,21 @@ export class TabController {
   private persistTimer: number | null = null;
   private dragState: { id: string; index: number } | null = null;
 
+  private onDocumentClick = (event: MouseEvent) => {
+    if (!this.stripEl.contains(event.target as Node)) this.closeNavigationMenu();
+  };
+
+  private onDocumentKeydown = (event: KeyboardEvent) => {
+    if (event.key === "Escape") this.closeNavigationMenu();
+  };
+
   constructor(stripEl: HTMLElement, slotEl: HTMLElement, shared: SharedChatControls, hooks?: TabControllerHooks) {
     this.stripEl = stripEl;
     this.slotEl = slotEl;
     this.shared = shared;
     this.hooks = hooks || {};
+    document.addEventListener("click", this.onDocumentClick);
+    document.addEventListener("keydown", this.onDocumentKeydown);
     this.bindStripEvents();
     this.bindBusEvents();
   }
@@ -360,12 +370,6 @@ export class TabController {
         const page = buildChatPage(true, this.shared);
         entry.viewEl = page.pageRoot;
         this.bindChatPage(page, entry, true);
-        // Экран новой вкладки: клики по плашке навигации разделов.
-        page.sectionRail?.addEventListener("click", (e) => {
-          const btn = (e.target as HTMLElement).closest(".main-screen-section-btn") as HTMLElement | null;
-          if (!btn?.dataset.section) return;
-          this.openSection(btn.dataset.section as TabSection);
-        });
         entry.title = "Новая сессия";
         break;
       }
@@ -544,6 +548,13 @@ export class TabController {
 
   // ── Полоса вкладок ──
 
+  private closeNavigationMenu() {
+    const menu = this.stripEl.querySelector<HTMLElement>(".workspace-tab-menu");
+    const button = this.stripEl.querySelector<HTMLButtonElement>(".workspace-tab-menu-toggle");
+    menu?.classList.remove("show");
+    button?.setAttribute("aria-expanded", "false");
+  }
+
   private renderStrip() {
     this.stripEl.innerHTML = "";
     for (const t of this.entries) {
@@ -575,6 +586,43 @@ export class TabController {
     addBtn.textContent = "＋";
     addBtn.addEventListener("click", () => this.newMainTab());
     this.stripEl.appendChild(addBtn);
+
+    const nav = document.createElement("div");
+    nav.className = "workspace-tab-menu";
+    const menuButton = document.createElement("button");
+    menuButton.className = "workspace-tab-menu-toggle";
+    menuButton.type = "button";
+    menuButton.title = "Открыть меню";
+    menuButton.setAttribute("aria-label", "Открыть меню");
+    menuButton.setAttribute("aria-haspopup", "menu");
+    menuButton.setAttribute("aria-expanded", "false");
+    menuButton.textContent = "☰";
+    const menu = document.createElement("div");
+    menu.className = "workspace-tab-menu-dropdown";
+    menu.setAttribute("role", "menu");
+    const defs: [TabSection, string][] = [
+      ["sessions", "🕘 История чатов"],
+      ["settings", "⚙️ Настройки"],
+    ];
+    for (const [section, label] of defs) {
+      const item = document.createElement("button");
+      item.className = "workspace-tab-menu-item";
+      item.type = "button";
+      item.dataset.section = section;
+      item.textContent = label;
+      item.addEventListener("click", () => {
+        this.closeNavigationMenu();
+        this.openSection(section);
+      });
+      menu.appendChild(item);
+    }
+    menuButton.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = menu.classList.toggle("show");
+      menuButton.setAttribute("aria-expanded", String(open));
+    });
+    nav.append(menuButton, menu);
+    this.stripEl.appendChild(nav);
   }
 
   private showContextMenu(entry: TabEntry, x: number, y: number) {

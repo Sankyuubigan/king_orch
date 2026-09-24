@@ -45,7 +45,6 @@ export interface ChatPageElements extends SharedChatControls {
   btnSetWorkdir: HTMLButtonElement;
   currentWorkdir: HTMLSpanElement;
   mainScreen: HTMLDivElement | null;
-  sectionRail: HTMLDivElement | null;
 }
 
 const py = (tag: string, className?: string): HTMLElement => {
@@ -78,10 +77,8 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
   if (main) viewChat.classList.add("main-mode");
 
   let mainScreen: HTMLDivElement | null = null;
-  let sectionRail: HTMLDivElement | null = null;
   if (main) {
     mainScreen = py("div", "chat-main-screen") as HTMLDivElement;
-    // Инлайн-рендер логотипа: .bg-plate тянет var(--bg-color) из CSS темы.
     const logo = document.createElement("div");
     logo.className = "main-screen-logo";
     logo.innerHTML = namespaceLogoIds(logoUrl, `lg${Date.now().toString(36)}${(logoInstanceSeq++).toString(36)}`);
@@ -91,21 +88,6 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
     stage.appendChild(logo);
     mainScreen.appendChild(stage);
     viewChat.appendChild(mainScreen);
-
-    // Горизонтальная плашка навигации: вставляется ОТДЕЛЬНО от stage (логотипа)
-    // и прикрепляется к плашке поля ввода (см. append перед .chat-input-area).
-    sectionRail = py("div", "main-screen-nav") as HTMLDivElement;
-    const defs: [string, string][] = [
-      ["sessions", "🕘 История чатов"],
-      ["settings", "⚙️ Настройки"],
-    ];
-    for (const [key, label] of defs) {
-      const btn = document.createElement("button");
-      btn.className = "main-screen-section-btn";
-      btn.dataset.section = key;
-      btn.textContent = label;
-      sectionRail.appendChild(btn);
-    }
   }
 
   const chatHistory = py("div", "chat-history") as HTMLDivElement;
@@ -125,10 +107,6 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
   feedback.appendChild(progressWrap);
   viewChat.appendChild(feedback);
 
-  // Плашка навигации (main-вкладка) — сразу над плашкой поля ввода.
-  if (sectionRail) viewChat.appendChild(sectionRail);
-
-  // ── Область ввода (общая и для main, и для chat) ──
   const inputArea = py("div", "chat-input-area group-box");
   const chatInput = document.createElement("textarea");
   chatInput.className = "chat-input";
@@ -236,7 +214,6 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
     btnSetWorkdir,
     currentWorkdir,
     mainScreen,
-    sectionRail,
     maxGenSlider: shared.maxGenSlider,
     tempSlider: shared.tempSlider,
     topkSlider: shared.topkSlider,
