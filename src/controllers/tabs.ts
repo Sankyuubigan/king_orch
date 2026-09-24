@@ -106,10 +106,32 @@ export class TabController {
     return store.tabs.find(t => t.id === store.activeTabId) ?? null;
   }
 
+  private resetEntries() {
+    if (this.persistTimer !== null) {
+      clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    for (const entry of this.entries) {
+      if (entry.ctrl) TAB_REGISTRY.delete(entry.ctrl.state.sessionId ?? "");
+      if (entry.type === "section") {
+        this.parkSectionNode(entry.viewEl);
+      } else {
+        entry.viewEl.remove();
+      }
+      entry.stripEl.remove();
+    }
+    this.entries = [];
+    store.tabs = [];
+    store.activeTabId = null;
+    activeChatController = null;
+    this.clearWorkspaceActive();
+  }
+
   /** Инициализация после загрузки конфига: восстанавливает вкладки.
    * Битую сохранённую вкладку пропускаем с логом — одна гнилая запись
    * не должна ронять весь старт (иначе пустое окно без ошибок). */
-  init(config: any) {
+  init(config: any, persist = true) {
+    this.resetEntries();
     const saved: AppTab[] = Array.isArray(config?.tabs) ? config.tabs : [];
     for (const tab of saved) {
       try {
@@ -120,15 +142,15 @@ export class TabController {
       }
     }
     if (this.entries.length === 0) {
-      this.newMainTab();
+      this.newMainTab(persist);
     } else {
       // Активная вкладка восстановления: если ID пропал — берём первую.
       const wanted = saved.some(t => t.id === store.activeTabId) ? store.activeTabId : null;
-      this.activate(wanted ?? this.entries[0].id);
+      this.activate(wanted ?? this.entries[0].id, persist);
     }
     this.renderStrip();
     this.updateStudioVisibility(!!config?.show_advanced_features);
-    this.persistTabsImmediate();
+    if (persist) this.persistTabsImmediate();
   }
 
   /** Скрывает/показывает кнопку «Студия агентов» в Настройках. */
@@ -138,12 +160,12 @@ export class TabController {
   }
 
   /** Новая пустая (главная) вкладка — экран «Новая вкладка» с logo.svg. */
-  newMainTab(): AppTab {
+  newMainTab(persist = true): AppTab {
     const tab: AppTab = { id: genTabId(), type: "main", sessionId: null, section: null, customTitle: null, url: null };
     this.materializeTab(tab);
     this.renderStrip();
-    this.activate(tab.id);
-    this.persistTabs();
+    this.activate(tab.id, persist);
+    if (persist) this.persistTabs();
     return tab;
   }
 
@@ -465,7 +487,7 @@ export class TabController {
     if (node.parentElement !== park) park.appendChild(node);
   }
 
-  activate(id: string) {
+  activate(id: string, persist = true) {
     store.activeTabId = id;
     let nowFocus: ChatController | null = null;
     this.clearWorkspaceActive();
@@ -494,7 +516,7 @@ export class TabController {
     activeChatController = nowFocus;
     this.refreshActivePage();
     this.renderStrip();
-    this.persistTabs();
+    if (persist) this.persistTabs();
     const tab = this.entries.find(t => t.id === id);
     if (tab && tab.type === "section") {
       this.hooks.onSectionActivated?.(this.tabToApp(tab), tab.section as TabSection);

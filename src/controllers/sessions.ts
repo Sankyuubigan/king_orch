@@ -75,6 +75,8 @@ export class SessionController {
   private previewCache = new Map<string, ChatMessage[]>();
   private selectMode = false;
   private selectedIds = new Set<string>();
+  private sessionsLoadPromise: Promise<void> | null = null;
+  private sessionsReloadQueued = false;
 
   constructor(el: SessionElements) {
     this.el = el;
@@ -87,7 +89,6 @@ export class SessionController {
     this.el.sessionSelectCancel.addEventListener("click", () => this.setSelectMode(false));
     this.el.sessionSelectAll.addEventListener("click", () => this.selectAll());
     this.el.sessionBulkDelete.addEventListener("click", () => void this.bulkDeleteSelected());
-    this.loadSessionsListUI();
   }
 
   private setSelectMode(on: boolean) {
@@ -161,7 +162,25 @@ export class SessionController {
     }
   }
 
-  async loadSessionsListUI() {
+  loadSessionsListUI(): Promise<void> {
+    if (this.sessionsLoadPromise) {
+      this.sessionsReloadQueued = true;
+      return this.sessionsLoadPromise;
+    }
+    const promise = (async () => {
+      do {
+        this.sessionsReloadQueued = false;
+        await this.loadSessionsListUIOnce();
+      } while (this.sessionsReloadQueued);
+    })().finally(() => {
+      this.sessionsLoadPromise = null;
+      if (this.sessionsReloadQueued) void this.loadSessionsListUI();
+    });
+    this.sessionsLoadPromise = promise;
+    return promise;
+  }
+
+  private async loadSessionsListUIOnce() {
     try {
       const sessions = (await fetchSessions()) as SessionMeta[];
       sessions.sort((a, b) => b.updated_at - a.updated_at);
@@ -469,7 +488,5 @@ export class SessionController {
       this.previewCache.clear();
       this.loadSessionsListUI();
     });
-    bus.on("config:loaded", () => this.loadSessionsListUI());
-    bus.on("tabs:changed", () => this.loadSessionsListUI());
   }
 }

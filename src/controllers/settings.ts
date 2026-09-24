@@ -182,10 +182,12 @@ export class SettingsController {
         this.el.chkErrorReports.checked = config.allow_error_reports;
         setTelemetryEnabled(config.allow_error_reports);
       }
-      await this.refreshCapabilities();
-      await this.loadAgents(config.last_agent);
+      await Promise.all([
+        this.refreshCapabilities(),
+        this.loadAgents(config.last_agent),
+        this.loadModelParams(),
+      ]);
       bus.emit("config:loaded", config);
-      await this.loadModelParams();
       void this.ensureNineRouterCombos();
       return config;
     } catch(e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.loadConfig", e); return null; }

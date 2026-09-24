@@ -15,17 +15,28 @@ import "@my-tauri-plugins/plugin-9router";
 // Регистрирует <downloader-widget> / <downloader-progress> (единый прогресс загрузок).
 import "@my-tauri-plugins/plugin-downloader";
 import {
-  SessionController, SettingsController, GraphController, AgentTestController,
+  SessionController, SettingsController, AgentTestController,
   CodingTestController, UpdatePopupController, TabController, initChatEventRouter,
+  loadGraphController,
 } from "./controllers";
+import type { GraphController } from "./controllers";
 import type { SharedChatControls } from "./utils";
 import type { TabSection } from "./types";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { initTelemetry, trackError } from "./telemetry";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
+const bootStartedAt = performance.now();
+
+function revealBootScreen() {
+  requestAnimationFrame(() => {
+    document.getElementById("boot-screen")?.classList.add("is-hidden");
+    logFront(`[BOOT] first UI frame ${Math.round(performance.now() - bootStartedAt)}ms`);
+  });
+}
 
 async function initApp() {
+  logFront(`[BOOT] initApp start ${Math.round(performance.now() - bootStartedAt)}ms`);
   // ─── Телеметрия: вешаем ловушки ошибок UI раньше всего остального ───
   // (уважает настройку «Отправлять анонимные отчёты об ошибках»)
   await initTelemetry();
@@ -71,7 +82,7 @@ async function initApp() {
   // ─── Контроллер раздела «История сессий» ───
   // Экземпляр живёт всё приложение: слушает bus (session:open/session:deleted),
   // по которым TabController открывает/закрывает вкладки.
-  void new SessionController({
+  const sessionCtrl = new SessionController({
     sessionList: $<HTMLDivElement>("session-list"),
     sessionPreviewTitle: $<HTMLDivElement>("session-preview-title"),
     sessionPreviewDate: $<HTMLDivElement>("session-preview-date"),
@@ -105,19 +116,35 @@ async function initApp() {
   });
 
   // ─── Контроллер графа (суб-вкладка 🔀 в студии агентов) ───
-  const graphCtrl = new GraphController({
-    graphContainer: $<HTMLDivElement>("graph-container"),
-    graphSidebar: $<HTMLDivElement>("graph-sidebar"),
-    graphDetailTitle: $<HTMLSpanElement>("graph-detail-title"),
-    graphDetailContent: $<HTMLDivElement>("graph-detail-content"),
-    graphSidebarClose: $<HTMLButtonElement>("graph-sidebar-close"),
-    btnOpenWorkflow: $<HTMLButtonElement>("btn-open-workflow"),
-    btnSaveWorkflow: $<HTMLButtonElement>("btn-save-workflow"),
-    currentWorkflowName: $<HTMLSpanElement>("current-workflow-name"),
-    btnUndo: $<HTMLButtonElement>("btn-undo"),
-    btnRedo: $<HTMLButtonElement>("btn-redo"),
-    dirtyIndicator: $<HTMLSpanElement>("dirty-indicator"),
-  });
+  let graphCtrl: GraphController | null = null;
+  let graphCtrlPromise: Promise<GraphController> | null = null;
+
+  async function getGraphCtrl(): Promise<GraphController> {
+    if (graphCtrl) return graphCtrl;
+    if (!graphCtrlPromise) {
+      graphCtrlPromise = loadGraphController().then((GraphControllerClass) => {
+        graphCtrl = new GraphControllerClass({
+          graphContainer: $<HTMLDivElement>("graph-container"),
+          graphSidebar: $<HTMLDivElement>("graph-sidebar"),
+          graphDetailTitle: $<HTMLSpanElement>("graph-detail-title"),
+          graphDetailContent: $<HTMLDivElement>("graph-detail-content"),
+          graphSidebarClose: $<HTMLButtonElement>("graph-sidebar-close"),
+          btnOpenWorkflow: $<HTMLButtonElement>("btn-open-workflow"),
+          btnSaveWorkflow: $<HTMLButtonElement>("btn-save-workflow"),
+          currentWorkflowName: $<HTMLSpanElement>("current-workflow-name"),
+          btnUndo: $<HTMLButtonElement>("btn-undo"),
+          btnRedo: $<HTMLButtonElement>("btn-redo"),
+          dirtyIndicator: $<HTMLSpanElement>("dirty-indicator"),
+        });
+        return graphCtrl;
+      });
+    }
+    return graphCtrlPromise;
+  }
+
+  function activateGraph() {
+    void getGraphCtrl().then((ctrl) => requestAnimationFrame(() => ctrl.onTabActivated()));
+  }
 
   // ─── Контроллер теста агентов (суб-вкладка в студии агентов) ───
   const agentTestCtrl = new AgentTestController({
@@ -180,7 +207,7 @@ async function initApp() {
     viewSubGraph.classList.toggle('active', tab === 'graph');
     viewSubAiTest.classList.toggle('active', tab === 'ai-test');
     viewSubCodingTest.classList.toggle('active', tab === 'coding-test');
-    if (tab === 'graph') requestAnimationFrame(() => graphCtrl.onTabActivated());
+    if (tab === 'graph') activateGraph();
   }
 
   subtabGraph?.addEventListener("click", () => switchSubTab('graph'));
@@ -194,17 +221,23 @@ async function initApp() {
     sharedSampling,
     {
       onSectionActivated: (_tab, section) => {
+        if (section === "sessions") {
+          void sessionCtrl.loadSessionsListUI();
+        }
         if (section === "agent-studio") {
           switchSubTab(activeSubTab);
-          if (activeSubTab === 'graph') requestAnimationFrame(() => graphCtrl.onTabActivated());
+          if (activeSubTab === 'graph') activateGraph();
         }
       },
     },
   );
 
-  // ─── Старт: конфиг → восстановление вкладок ───
+  // ─── Старт: сначала показываем рабочую оболочку, затем восстанавливаем конфиг ───
+  tabCtrl.init({}, false);
+  revealBootScreen();
   const config = await settingsCtrl.loadConfig();
-  tabCtrl.init(config ?? {});
+  tabCtrl.init(config ?? {}, false);
+  logFront(`[BOOT] initApp ready ${Math.round(performance.now() - bootStartedAt)}ms`);
 
   // ——— Быстрая навигация по разделам (открытие в той же вкладке) ———
   // Делегирование на document: клоны settings/engines (дубли вкладок) id не
@@ -235,6 +268,7 @@ async function initApp() {
 
 document.addEventListener("DOMContentLoaded", () => {
   initApp().catch((e) => {
+    revealBootScreen();
     console.error("initApp failed:", e);
     showToast(`Ошибка инициализации: ${e}`, "error");
     void trackError("init", e);

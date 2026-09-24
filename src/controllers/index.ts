@@ -15,8 +15,11 @@ export type { SessionElements } from './sessions'
 export { SettingsController } from './settings'
 export type { SettingsElements } from './settings'
 
-export { GraphController } from './graph'
-export type { GraphElements } from './graph'
+export type { GraphController, GraphElements } from './graph'
+
+export async function loadGraphController(): Promise<typeof import('./graph').GraphController> {
+  return (await import('./graph')).GraphController;
+}
 
 export { AgentTestController } from './agent-test'
 export type { AgentTestElements } from './agent-test'

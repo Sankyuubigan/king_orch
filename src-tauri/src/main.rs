@@ -10,9 +10,11 @@ mod infra;
 use api::AppState;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
+use std::time::Instant;
 
 #[tokio::main]
 async fn main() {
+    let process_started = Instant::now();
     // ── Логирование с первой миллисекунды запуска ──
     // Единый log::Log из tauri-plugin-logs (core rules §2.5): файл king_orch.log
     // РЯДОМ С EXE (юзер может прислать его, даже если приложение не открывается
@@ -45,13 +47,20 @@ async fn main() {
             std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_default(),
         ),
     );
+    tauri_plugin_logs::early_log(
+        "INFO",
+        &format!("[BOOT] early logging ready {}ms", process_started.elapsed().as_millis()),
+    );
 
     // ── Системный прокси: детект до любых HTTP-запросов ──
     infra::system_proxy::detect_and_set_proxy();
 
-    // ── Диагностика сети: DNS, TCP, proxy ──
-    infra::network_diagnostics::run_diagnostics();
     let gpu = infra::gpu_detector::detect_gpu();
+    let required_variant = match infra::gpu_detector::required_cuda_gen(&gpu) {
+        Some(infra::gpu_detector::CudaGen::Cuda13) => infra::llamacpp_installer::VARIANT_CUDA13,
+        Some(infra::gpu_detector::CudaGen::Cuda12) => infra::llamacpp_installer::VARIANT_CUDA,
+        None => infra::llamacpp_installer::VARIANT_CPU,
+    };
     tauri_plugin_logs::early_log(
         "INFO",
         &format!(
@@ -61,7 +70,7 @@ async fn main() {
             gpu.cuda_minor,
             gpu.compute_major,
             gpu.compute_minor,
-            infra::llamacpp_installer::select_variant(),
+            required_variant,
         ),
     );
     tauri_plugin_logs::early_log("INFO", "Tauri: создание приложения…");
@@ -91,6 +100,11 @@ async fn main() {
         },
     );
 
+    tauri_plugin_logs::early_log(
+        "INFO",
+        &format!("[BOOT] pre-Tauri checks done {}ms", process_started.elapsed().as_millis()),
+    );
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
@@ -115,7 +129,7 @@ async fn main() {
             cancel_flag: Arc::new(AtomicBool::new(false)),
         })
         .setup(move |app| {
-            log::info!("setup(): начало");
+            log::info!("[BOOT] setup begin {}ms", process_started.elapsed().as_millis());
             let app_handle = app.handle();
 
             // 🔐 Форвардинг запросов разрешений в UI (плашка с 3 кнопками).
@@ -127,38 +141,42 @@ async fn main() {
                 tauri_plugin_logs::set_reporting_enabled(false);
             }
             tauri_plugin_logs::track_event("app_started", None);
+            std::thread::spawn(|| {
+                infra::network_diagnostics::run_diagnostics();
+            });
 
             let _ = infra::session_manager::sessions_dir(&app_handle);
             log::info!("setup(): сессии и чат-лог готовы");
 
-            // ── 🛡 Авто-чистка «отравленных» конфигов ──
-            // Легаси-версии могли добавить mmproj (мультимодальный ПРОЕКТОР) в
-            // список моделей/активную модель. Запуск проектора как LLM валит
-            // llama-server. Игнорируем такие записи на старте (см. is_mmproj_file).
-            // Модели удаляются из списка, но файл юзера на диске не трогаем.
+            // Очистка старых mmproj-записей выполняется после setup, чтобы
+            // проверка GGUF-файлов не задерживала создание окна.
             {
-                let mut cfg = infra::load_config(&app_handle);
-                let removed: Vec<String> = cfg
-                    .models
-                    .iter()
-                    .filter(|m| infra::is_mmproj_file(m))
-                    .cloned()
-                    .collect();
-                if !removed.is_empty() {
+                let cleanup_app = app_handle.clone();
+                std::thread::spawn(move || {
+                    let mut cfg = infra::load_config(&cleanup_app);
+                    let removed: Vec<String> = cfg
+                        .models
+                        .iter()
+                        .filter(|m| infra::is_mmproj_file(m))
+                        .cloned()
+                        .collect();
+                    if removed.is_empty() {
+                        return;
+                    }
                     cfg.models.retain(|m| !infra::is_mmproj_file(m));
                     if let Some(last) = &cfg.last_model {
                         if infra::is_mmproj_file(last) {
                             cfg.last_model = None;
                         }
                     }
-                    infra::save_config(&app_handle, &cfg);
+                    infra::save_config(&cleanup_app, &cfg);
                     for m in &removed {
                         log::warn!(
                             "setup(): удалён mmproj из списка моделей: {} (файл не тронут)",
                             m
                         );
                     }
-                }
+                });
             }
 
             // ── Новая архитектура: движок llama.cpp — ОТДЕЛЬНЫЙ процесс ──
@@ -176,7 +194,7 @@ async fn main() {
                 let _ = tauri_plugin_llama_engine::commands::check_engine_update(app_for_update).await;
             });
 
-            log::info!("setup(): OK");
+            log::info!("[BOOT] setup complete {}ms", process_started.elapsed().as_millis());
 
             // ── Диагностика + страховка WebView2 окна ──
             // Логируем события окна (фокус/закрытие) в локальный лог и

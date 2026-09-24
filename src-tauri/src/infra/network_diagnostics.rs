@@ -11,13 +11,19 @@ const TEST_HOSTS: &[(&str, u16)] = &[
     ("objects.githubusercontent.com", 443),
 ];
 
+const TCP_TIMEOUT: Duration = Duration::from_millis(800);
+
 /// Запустить полную диагностику сети. Вызывать ОДИН раз при старте (main.rs).
 pub fn run_diagnostics() {
     log_system_proxy();
-    for &(host, port) in TEST_HOSTS {
-        check_dns(host);
-        check_tcp(host, port);
-    }
+    std::thread::scope(|s| {
+        for &(host, port) in TEST_HOSTS {
+            s.spawn(move || {
+                check_dns(host);
+                check_tcp(host, port);
+            });
+        }
+    });
 }
 
 fn log_system_proxy() {
@@ -127,7 +133,7 @@ fn check_tcp(host: &str, port: u16) {
                 .next()
                 .expect("at least one addr")
         }),
-        Duration::from_secs(5),
+        TCP_TIMEOUT,
     ) {
         Ok(_stream) => {
             let elapsed = start.elapsed();

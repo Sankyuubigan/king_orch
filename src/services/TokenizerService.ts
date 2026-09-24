@@ -1,8 +1,14 @@
-import { AutoTokenizer } from '@huggingface/transformers';
-
 let tokenizerCache: Record<string, any> = {};
 let currentInitPromise: Promise<any> | null = null;
 let currentModelId: string | null = null;
+let transformersPromise: Promise<typeof import("@huggingface/transformers")> | null = null;
+
+async function getAutoTokenizer() {
+    if (!transformersPromise) {
+        transformersPromise = import("@huggingface/transformers");
+    }
+    return (await transformersPromise).AutoTokenizer;
+}
 
 /**
  * Глобальный сервис подсчета токенов во фронтенде (Live preview).
@@ -14,7 +20,9 @@ export async function countTokens(text: string, tokenizerId: string): Promise<nu
         if (!tokenizerCache[tokenizerId]) {
             if (currentModelId !== tokenizerId || !currentInitPromise) {
                 currentModelId = tokenizerId;
-                currentInitPromise = AutoTokenizer.from_pretrained(tokenizerId);
+                currentInitPromise = getAutoTokenizer().then((AutoTokenizer) =>
+                    AutoTokenizer.from_pretrained(tokenizerId)
+                );
             }
             tokenizerCache[tokenizerId] = await currentInitPromise;
         }

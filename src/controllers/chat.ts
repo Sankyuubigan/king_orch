@@ -11,9 +11,9 @@ import { chatCompletion as nineRouterChat } from "@my-tauri-plugins/plugin-9rout
 import { renderMarkdown, stripStreamArtifacts, extractChannelThought, NINE_ROUTER_MODEL_PREFIX, fillModelSelect, fillAgentSelect } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError } from "../telemetry";
-import mermaid from "mermaid";
 
-mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
+let mermaidPromise: Promise<typeof import("mermaid")> | null = null;
+let mermaidInitialized = false;
 
 /// Watchdog зависшей обработки: если движок молчит дольше лимита, а обработка
 /// формально идёт — снимаем состояние (кнопки/стоп возвращаются юзеру).
@@ -29,6 +29,12 @@ const TRANSLATOR_LANGS: Record<string, { menu: string; footer: string }> = {
 
 async function renderMermaid() {
   try {
+    if (!mermaidPromise) mermaidPromise = import("mermaid");
+    const { default: mermaid } = await mermaidPromise;
+    if (!mermaidInitialized) {
+      mermaid.initialize({ startOnLoad: false, theme: "dark", securityLevel: "loose" });
+      mermaidInitialized = true;
+    }
     await mermaid.run();
   } catch(e) {
     console.error('Mermaid render error:', e);
@@ -419,6 +425,10 @@ export class ChatController {
     const text = this.el.chatInput?.value || "";
     const contextSize = store.contextSize;
 
+    if (!text.trim()) {
+      if (this.el.tokenCounter) this.el.tokenCounter.innerText = `0 / ${contextSize}`;
+      return;
+    }
     if (!modelPath || !agentId) return;
     // Облачные комбо 9Router: локальный счётчик токенов/VRAM неприменим.
     if (modelPath.startsWith(NINE_ROUTER_MODEL_PREFIX)) {
