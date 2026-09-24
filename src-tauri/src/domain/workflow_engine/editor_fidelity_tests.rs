@@ -90,6 +90,37 @@ edges: []
 }
 
 #[test]
+fn detects_missing_condition_router_sequential_target() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+visible: true
+nodes:
+  - id: router
+    type: condition_router
+    conditions:
+      - field: has_problem
+        equals: true
+    true_to: yes
+    false_to: no
+    sequential_to: missing
+  - id: yes
+    type: note
+  - id: no
+    type: note
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics.iter().any(|diagnostic| {
+        diagnostic.code == "NODE_TARGET_MISSING"
+            && diagnostic.location == "nodes[id=router].sequential_to"
+    }));
+}
+
+#[test]
 fn detects_current_psychotherapist_dynamic_edge() {
     let source: Value = serde_yaml::from_str(include_str!(
         "../../../../agents/psychotherapist/transitions/main_conversation_flow.yaml"

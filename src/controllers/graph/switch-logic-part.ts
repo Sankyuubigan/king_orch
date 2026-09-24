@@ -120,7 +120,7 @@ export function onSwitchConnectionChanged(this: GraphController, fromNodeId: str
 
 export function getSwitchOutputCount(this: GraphController, node: GraphNodeDef): number {
   if (node.type === "condition_check") return 3;
-  if (node.type === "condition_router") return 2;
+  if (node.type === "condition_router") return 3;
   if (node.cases) return Object.keys(node.cases).length;
   if (node.cases_priority) return node.cases_priority.length + (node.default ? 1 : 0);
   if (node.default) return 1;
@@ -159,6 +159,7 @@ export function getImplicitSwitchEdges(this: GraphController, nodes: GraphNodeDe
     if (node.type === "condition_router") {
       if (node.true_to) implicit.push({ from: node.id, to: node.true_to });
       if (node.false_to) implicit.push({ from: node.id, to: node.false_to });
+      if (node.sequential_to) implicit.push({ from: node.id, to: node.sequential_to });
       continue;
     }
     if (node.cases_priority) {

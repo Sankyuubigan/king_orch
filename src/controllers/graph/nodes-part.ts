@@ -21,7 +21,7 @@ export function addNode(this: GraphController, type: string, clientX?: number, c
     cx = (preRect.width / 2 - 100) * (1 / zoom);
     cy = (preRect.height / 2 - 50) * (1 / zoom);
   }
-  const outs = type === "condition_check" ? 3 : type === "condition_router" ? 2 : (isDynamicNode(type) ? 2 : OUTPUT_COUNT[type] ?? 1);
+  const outs = type === "condition_check" ? 3 : type === "condition_router" ? 3 : (isDynamicNode(type) ? 2 : OUTPUT_COUNT[type] ?? 1);
 
   const inputs: Record<string, { connections: any[] }> = {};
   for (let i = 1; i <= 1; i++) inputs[`input_${i}`] = { connections: [] };
@@ -126,6 +126,7 @@ export function clearNodeTargets(this: GraphController, data: GraphNodeDef): voi
   if (data.type === "condition_router") {
     data.true_to = undefined;
     data.false_to = undefined;
+    data.sequential_to = undefined;
     return;
   }
   if (data.cases_priority) {
@@ -190,6 +191,7 @@ export function renameNode(this: GraphController, oldKey: string, newKey: string
       if (nd.true_to === oldKey) nd.true_to = trimmed;
       if (nd.false_to === oldKey) nd.false_to = trimmed;
     } else if (nd.type === "condition_router") {
+      if (nd.sequential_to === oldKey) nd.sequential_to = trimmed;
       if (nd.true_to === oldKey) nd.true_to = trimmed;
       if (nd.false_to === oldKey) nd.false_to = trimmed;
     } else {

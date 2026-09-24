@@ -146,6 +146,17 @@ pub fn condition_node_matches(
     }
 }
 
+fn sequential_after_branch(
+    branch_target: Option<&str>,
+    sequential_to: Option<&str>,
+) -> Vec<String> {
+    match (branch_target, sequential_to) {
+        (Some(branch), Some(sequential)) if branch == sequential => Vec::new(),
+        (_, Some(sequential)) => vec![sequential.to_string()],
+        _ => Vec::new(),
+    }
+}
+
 /// Выполняет один узел графа и возвращает результат + id следующего узла
 pub fn execute_node<L, S, C>(
     node: &NodeDef,
@@ -985,13 +996,18 @@ where
             } else {
                 node.false_to.clone()
             };
+            let next_nodes = sequential_after_branch(
+                target.as_deref(),
+                node.sequential_to.as_deref(),
+            );
 
             (runner.log_cb)(format!(
-                "[condition_router] logic='{}' matched={}/{} → {}",
+                "[condition_router] logic='{}' matched={}/{} → {} | sequential: {}",
                 logic,
                 matched_count,
                 total,
-                target.as_deref().unwrap_or("-")
+                target.as_deref().unwrap_or("-"),
+                node.sequential_to.as_deref().unwrap_or("-")
             ));
 
             Ok(NodeResult {
@@ -1000,10 +1016,11 @@ where
                     "matched_count": matched_count,
                     "total": total,
                     "logic": logic,
-                    "target": target
+                    "target": target,
+                    "sequential_to": node.sequential_to
                 }),
                 next_node: target,
-                next_nodes: vec![],
+                next_nodes,
             })
         }
 
@@ -1038,13 +1055,10 @@ where
             };
 
             // Порядок: сначала branch (true/false), потом sequential
-            let mut next_nodes: Vec<String> = Vec::new();
-            if let Some(ref seq) = node.sequential_to {
-                // sequential не должен дублироваться с branch_target
-                if branch_target.as_ref().map_or(true, |bt| bt != seq) {
-                    next_nodes.push(seq.clone());
-                }
-            }
+            let next_nodes = sequential_after_branch(
+                branch_target.as_deref(),
+                node.sequential_to.as_deref(),
+            );
 
             (runner.log_cb)(format!(
                 "[condition_check] {} = {} → {} | sequential: {}",
@@ -1503,6 +1517,24 @@ mod tests {
             attachments: None,
             phase: Some(2),
         }
+    }
+
+    #[test]
+    fn sequential_after_branch_queues_distinct_target() {
+        assert_eq!(
+            sequential_after_branch(Some("true_branch"), Some("after")),
+            vec!["after".to_string()]
+        );
+        assert_eq!(
+            sequential_after_branch(Some("false_branch"), Some("after")),
+            vec!["after".to_string()]
+        );
+    }
+
+    #[test]
+    fn sequential_after_branch_skips_duplicate_and_missing_target() {
+        assert!(sequential_after_branch(Some("same"), Some("same")).is_empty());
+        assert!(sequential_after_branch(None, None).is_empty());
     }
 
     #[test]

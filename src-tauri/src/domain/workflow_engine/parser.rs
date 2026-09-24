@@ -898,6 +898,40 @@ edges: []
         );
     }
 
+    #[test]
+    fn condition_router_sequential_target_survives_roundtrip() {
+        let source = r#"
+name: router
+visible: true
+nodes:
+  - id: route
+    type: condition_router
+    conditions:
+      - field: has_problem
+        equals: true
+    logic: any
+    true_to: yes
+    false_to: no
+    sequential_to: after
+  - id: yes
+    type: note
+  - id: no
+    type: note
+  - id: after
+    type: note
+edges: []
+"#;
+        let workflow: WorkflowDef = serde_yaml::from_str(source).expect("parse");
+        let serialized = serde_yaml::to_string(&workflow).expect("serialize");
+        let reparsed: WorkflowDef = serde_yaml::from_str(&serialized).expect("reparse");
+        let router = reparsed
+            .nodes
+            .iter()
+            .find(|node| node.id == "route")
+            .expect("router");
+        assert_eq!(router.sequential_to.as_deref(), Some("after"));
+    }
+
     /// Тест round-trip через parse_workflow_file — проверяет, что внешние facts
     /// больше не вливаются в config.facts и не дублируются в сохранённом YAML.
     #[test]

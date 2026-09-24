@@ -41,6 +41,7 @@ export function buildNodeInnerHtml(this: GraphController, data: any, fallbackId:
     if (conds.length > 0) {
       parts.push(renderConditionExpression(conds, data.logic === "all" ? "all" : "any", (s) => this.esc(s)));
     }
+    if (data.sequential_to) parts.push(`→ ${this.esc(data.sequential_to)}`);
     if (data.true_to) parts.push(`✓ ${this.esc(data.true_to)}`);
     if (data.false_to) parts.push(`✗ ${this.esc(data.false_to)}`);
     signalLine = `<div class="gn-agent" style="color:#5c6bc0">🔀 ${parts.join(" | ")}</div>`;

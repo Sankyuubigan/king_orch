@@ -59,6 +59,7 @@ export const CONDITION_CHECK_CASES = [
 export const CONDITION_ROUTER_CASES = [
   { key: "true", field: "true_to" as const },
   { key: "false", field: "false_to" as const },
+  { key: "seq", field: "sequential_to" as const },
 ];
 
 export const MAX_HISTORY = 50;

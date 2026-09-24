@@ -141,6 +141,10 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
       <div id="ge-conditions-tree">${renderConditionsTreeHtml(data, { esc: (s) => this.esc(s), facts, knownFields: fieldOptions })}</div>
     </div>
     <div class="graph-detail-section">
+      <div class="detail-label">Sequential → цель (всегда)</div>
+      <input type="text" id="ge-sequential-to" class="ge-input" placeholder="node id" value="${this.esc(data.sequential_to || "")}" />
+    </div>
+    <div class="graph-detail-section">
       <div class="detail-label">True → цель</div>
       <input type="text" id="ge-true-to" class="ge-input" placeholder="node id" value="${this.esc(data.true_to || "")}" />
     </div>

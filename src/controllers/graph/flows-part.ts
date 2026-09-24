@@ -135,6 +135,7 @@ export async function handleOpen(this: GraphController): Promise<void> {
         } else if (node.type === "condition_router") {
           if (node.true_to) targets.push({ to: node.true_to, caseKey: "true", location: `nodes[id=${node.id}].true_to` });
           if (node.false_to) targets.push({ to: node.false_to, caseKey: "false", location: `nodes[id=${node.id}].false_to` });
+          if (node.sequential_to) targets.push({ to: node.sequential_to, caseKey: "seq", location: `nodes[id=${node.id}].sequential_to` });
         } else if (node.cases_priority) {
           for (const [caseIndex, cp] of node.cases_priority.entries()) {
             targets.push({
