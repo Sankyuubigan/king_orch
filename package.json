@@ -17,6 +17,7 @@
     "@my-tauri-plugins/plugin-logs": "file:../my-tauri-plugins/tauri-plugin-logs",
     "@my-tauri-plugins/plugin-9router": "file:../my-tauri-plugins/tauri-plugin-9router",
     "@my-tauri-plugins/plugin-downloader": "file:../my-tauri-plugins/tauri-plugin-downloader",
+    "@my-tauri-plugins/plugin-image-engine": "file:../my-tauri-plugins/tauri-plugin-image-engine",
     "@tauri-apps/api": "2.10.1",
     "@tauri-apps/plugin-dialog": "2.7.0",
     "@tauri-apps/plugin-process": "2.3.1",

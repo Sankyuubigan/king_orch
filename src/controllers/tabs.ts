@@ -8,6 +8,7 @@ import type { ChatPageElements, SharedChatControls } from "../utils";
 import { showToast, confirmDialog } from "../ui";
 import { deleteSession, openSessionFolder, fetchSessions } from "../services";
 import { trackError } from "../telemetry";
+import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { ensureStarted } from "@my-tauri-plugins/plugin-9router";
 
 const SECTION_VIEWS: Record<TabSection, string> = {
@@ -15,6 +16,7 @@ const SECTION_VIEWS: Record<TabSection, string> = {
   "agent-studio": "#view-agent-studio",
   settings: "#view-settings",
   logs: "#view-logs",
+  engines: "#view-engines",
 };
 
 const SECTION_ICONS: Record<TabSection, string> = {
@@ -22,7 +24,10 @@ const SECTION_ICONS: Record<TabSection, string> = {
   "agent-studio": "🧪",
   settings: "⚙️",
   logs: "📝",
+  engines: "🚂",
 };
+
+const DUPLICABLE_SECTIONS: TabSection[] = ["settings", "engines"];
 
 const TAB_ICONS: Partial<Record<AppTab["type"], string>> = {
   main: "🏠",
@@ -46,7 +51,8 @@ interface TabEntry {
   customTitle: string | null;
   url: string | null;
   /// Элемент-«страница» вкладки: pageRoot для main/chat/webview,
-  /// статический .view-раздел для section.
+  /// собственный wrapper .section-host для section (узел раздела один
+  /// на приложение и мигрирует в wrapper активной вкладки).
   viewEl: HTMLElement;
   /// Кнопка в полосе вкладок.
   stripEl: HTMLElement;
@@ -100,11 +106,18 @@ export class TabController {
     return store.tabs.find(t => t.id === store.activeTabId) ?? null;
   }
 
-  /** Инициализация после загрузки конфига: восстанавливает вкладки. */
+  /** Инициализация после загрузки конфига: восстанавливает вкладки.
+   * Битую сохранённую вкладку пропускаем с логом — одна гнилая запись
+   * не должна ронять весь старт (иначе пустое окно без ошибок). */
   init(config: any) {
     const saved: AppTab[] = Array.isArray(config?.tabs) ? config.tabs : [];
     for (const tab of saved) {
-      this.materializeTab(tab);
+      try {
+        this.materializeTab(tab);
+      } catch (e) {
+        logFront(`[tabs] init: пропуск битой вкладки ${tab?.id} (${tab?.type}:${tab?.section ?? tab?.sessionId ?? ""}): ${e}`);
+        void trackError("tabs.init-materialize", e);
+      }
     }
     if (this.entries.length === 0) {
       this.newMainTab();
@@ -134,22 +147,83 @@ export class TabController {
     return tab;
   }
 
-  /** Открыть/сфокусировать вкладку раздела. Каждый раздел — НЕЗАВИСИМАЯ вкладка
-   * (Логи и Настройки живут одновременно, без синглтона-стека). */
-  openSection(tabSection: TabSection): AppTab | null {
-    const existing = this.entries.find(
-      t => t.type === "section" && t.section === tabSection,
-    );
-    if (existing) {
-      this.activate(existing.id);
-      return this.tabToApp(existing);
+  /** Оригинальный DOM-узел раздела. Узел один на приложение, клонов нет:
+   * дубли settings/engines делят один живой узел (контроллеры биндятся по id
+   * один раз при старте, клоны были бы мертвыми). Узел мигрирует
+   * appendChild в wrapper активной вкладки, на парковке — без .active. */
+  private sectionEl(tabSection: TabSection): HTMLElement | null {
+    const sel = SECTION_VIEWS[tabSection] ?? "#view-settings";
+    const el = document.querySelector<HTMLElement>(sel);
+    if (!el) {
+      const err = `Не найден static-раздел ${tabSection} (${sel})`;
+      logFront(`[tabs] ${err}`);
+      void trackError("tabs.section-missing", err);
+      showToast(err, "error");
     }
+    return el;
+  }
+
+  /** Открыть/сфокусировать вкладку раздела. sessions/agent-studio/logs —
+   * синглтон; settings/engines — дубли разрешены, все дубли указывают на один
+   * живой DOM-узел (состояние общее, привязки контроллеров целы). */
+  openSection(tabSection: TabSection): AppTab | null {
+    if (!DUPLICABLE_SECTIONS.includes(tabSection)) {
+      const existing = this.entries.find(
+        t => t.type === "section" && t.section === tabSection,
+      );
+      if (existing) {
+        logFront(`[tabs] openSection ${tabSection} -> focus ${existing.id}`);
+        this.activate(existing.id);
+        return this.tabToApp(existing);
+      }
+    }
+    const el = this.sectionEl(tabSection);
+    if (!el) return null;
     const tab: AppTab = { id: genTabId(), type: "section", sessionId: null, section: tabSection, customTitle: null, url: null };
     this.materializeTab(tab);
+    const created = this.entries[this.entries.length - 1];
+    if (!created || created.type !== "section" || created.section !== tabSection) {
+      logFront(`[tabs] openSection ${tabSection}: materialize пропустил (дедуп)`);
+      return null;
+    }
+    logFront(`[tabs] openSection ${tabSection} -> new ${created.id}`);
     this.renderStrip();
-    this.activate(tab.id);
+    this.activate(created.id);
     this.persistTabs();
-    return tab;
+    return this.tabToApp(created);
+  }
+
+  /** Открыть раздел В ТОЙ ЖЕ вкладке (клик из settings-nav): активная
+   * section-вкладка перепривязывается на новый раздел без создания вкладки.
+   * DOM не клонируется — только смена указателя на оригинальный узел. */
+  openSectionInPlace(tabSection: TabSection): AppTab | null {
+    const active = this.entries.find(t => t.id === store.activeTabId);
+    if (active && active.type === "section") {
+      if (active.section === tabSection) {
+        logFront(`[tabs] in-place ${tabSection}: уже открыт в ${active.id}`);
+        this.activate(active.id);
+        return this.tabToApp(active);
+      }
+      const src = this.sectionEl(tabSection);
+      if (!src) return null;
+      // Синглтон-раздел уже открыт в другой вкладке — закрываем её,
+      // чтобы не плодить два таба на один static-view.
+      if (!DUPLICABLE_SECTIONS.includes(tabSection)) {
+        const other = this.entries.find(e => e.id !== active.id && e.type === "section" && e.section === tabSection);
+        if (other) this.closeTab(other.id);
+      }
+      const from = active.section ?? "?";
+      active.section = tabSection;
+      active.viewEl = src;
+      active.title = this.sectionTitle(tabSection);
+      store.tabs = this.entries.map(t => this.tabToApp(t));
+      logFront(`[tabs] in-place ${from} -> ${tabSection} в ${active.id}`);
+      this.renderStrip();
+      this.activate(active.id);
+      this.persistTabs();
+      return this.tabToApp(active);
+    }
+    return this.openSection(tabSection);
   }
 
   /** Открыть/сфокусировать чат-вкладку сессии `id` (bus "session:open"). */
@@ -192,15 +266,22 @@ export class TabController {
 
   closeTab(id: string) {
     const idx = this.entries.findIndex(t => t.id === id);
-    if (idx === -1) return;
+    if (idx === -1) {
+      logFront(`[tabs] closeTab: нет вкладки ${id}`);
+      return;
+    }
     const entry = this.entries[idx];
     if (entry.ctrl) TAB_REGISTRY.delete(entry.ctrl.state.sessionId ?? "");
     if (entry.type === "section") {
-      // Статический раздел не удаляем, но снимаем активность, чтобы не остался
-      // на экране после закрытия вкладки-хоста.
-      entry.viewEl.classList.remove("active");
+      // Оригинальный узел один на всех и из DOM не удаляется никогда.
+      // Последний наследник — паркуем узел (снять .active, вернуть в
+      // workspace-content); общий — класс не трогаем, его поднимет activate.
+      const shared = this.entries.some(e => e.id !== id && e.viewEl === entry.viewEl);
+      if (!shared) this.parkSectionNode(entry.viewEl);
+      logFront(`[tabs] closeTab section ${entry.section} ${id}${shared ? " (узел общий, оставлен)" : " (парковка)"}`);
     } else {
       entry.viewEl.remove();
+      logFront(`[tabs] closeTab ${entry.type} ${id}`);
     }
     entry.stripEl.remove();
     this.entries.splice(idx, 1);
@@ -217,7 +298,9 @@ export class TabController {
       const next = this.entries[Math.min(idx, this.entries.length - 1)];
       this.activate(next.id);
     } else {
-      this.refreshActivePage();
+      // Переактивация текущей: её activate поднимет узел заново
+      // (closeTab мог снять класс с общего узла до splice).
+      this.activate(store.activeTabId);
     }
     this.renderStrip();
     this.persistTabs();
@@ -226,8 +309,9 @@ export class TabController {
   // ── Materialization (view + контроллер) ──
 
   private materializeTab(tab: AppTab) {
-    // Раздел — обычная независимая вкладка; дедуп по section уже в openSection.
-    if (tab.type === "section" && this.entries.some(e => e.type === "section" && e.section === tab.section)) {
+    // Дедуп только для синглтон-разделов; settings/engines — дубли разрешены.
+    if (tab.type === "section" && tab.section && !DUPLICABLE_SECTIONS.includes(tab.section)
+      && this.entries.some(e => e.type === "section" && e.section === tab.section)) {
       return;
     }
     const entry: TabEntry = {
@@ -265,7 +349,10 @@ export class TabController {
         break;
       }
       case "section": {
-        const viewEl = document.querySelector<HTMLElement>(SECTION_VIEWS[tab.section as TabSection] ?? "#view-settings");
+        // Прямой lookup без тоста: user-facing пути (openSection/InPlace)
+        // уже проверили узел через sectionEl; throw здесь ловит init().
+        const sel = SECTION_VIEWS[tab.section as TabSection] ?? "#view-settings";
+        const viewEl = document.querySelector<HTMLElement>(sel);
         if (!viewEl) throw new Error(`Не найден static-раздел ${tab.section}`);
         entry.viewEl = viewEl;
         entry.title = this.sectionTitle(tab.section as TabSection);
@@ -344,6 +431,7 @@ export class TabController {
       case "agent-studio": return "Студия агентов";
       case "settings": return "Настройки";
       case "logs": return "Логи";
+      case "engines": return "Движки";
     }
   }
 
@@ -360,16 +448,48 @@ export class TabController {
 
   // ── Активация ──
 
+  /** Инвариант видимости: гасим ВСЕ .active внутри рабочей области,
+   * включая stray-узлы на любом уровне вложенности. Внутренний mainView
+   * чата поднимает refreshActivePage сразу после (subchat-стейт при смене
+   * вкладки и так сбрасывался в main, поведение не меняется). Сабтаб студии
+   * поднимает onSectionActivated. */
+  private clearWorkspaceActive() {
+    const root = document.getElementById("workspace-content") ?? document.body;
+    root.querySelectorAll(".view.active, .tab-page.active").forEach(n => n.classList.remove("active"));
+  }
+
+  /** Возврат раздел-узла на парковку, когда его вкладка закрыта и наследников нет. */
+  private parkSectionNode(node: HTMLElement) {
+    node.classList.remove("active");
+    const park = document.getElementById("workspace-content") ?? document.body;
+    if (node.parentElement !== park) park.appendChild(node);
+  }
+
   activate(id: string) {
     store.activeTabId = id;
     let nowFocus: ChatController | null = null;
+    this.clearWorkspaceActive();
     for (const t of this.entries) {
-      const isActive = t.id === id;
-      t.viewEl.classList.toggle("active", isActive);
-      t.stripEl.classList.toggle("active", isActive);
-      if (isActive && (t.type === "chat" || t.type === "main")) {
-        nowFocus = t.ctrl;
+      t.stripEl.classList.toggle("active", t.id === id);
+    }
+    const active = this.entries.find(t => t.id === id);
+    if (active) {
+      active.viewEl.classList.add("active");
+      if (active.type === "chat" || active.type === "main") {
+        nowFocus = active.ctrl;
       }
+      logFront(`[tabs] activate ${active.type}${active.section ? `:${active.section}` : ""} ${id}`);
+    } else {
+      logFront(`[tabs] activate: нет вкладки ${id}`);
+    }
+    // Самопроверка инварианта «ровно одна видимая страница» — сразу в лог,
+    // чтобы наслоение было видно без отладчика.
+    const sectionVisible = document.querySelectorAll("#workspace-content > .view.active").length;
+    const pageVisible = Array.from(this.slotEl.children).filter(
+      ch => (ch as HTMLElement).classList?.contains("tab-page") && (ch as HTMLElement).classList.contains("active"),
+    ).length;
+    if (sectionVisible + pageVisible !== 1) {
+      logFront(`[tabs] ВНИМАНИЕ: видимых страниц ${sectionVisible + pageVisible} (разделы:${sectionVisible} чат/веб:${pageVisible}), ожидалась 1`);
     }
     activeChatController = nowFocus;
     this.refreshActivePage();

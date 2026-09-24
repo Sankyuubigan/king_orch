@@ -223,27 +223,13 @@
             <button class="settings-nav-btn" data-section="sessions">🕘 История чатов</button>
             <button class="settings-nav-btn" data-section="agent-studio">🧪 Студия агентов</button>
             <button class="settings-nav-btn" data-section="logs">📝 Логи</button>
+            <button class="settings-nav-btn" data-section="engines">🚂 Движки для локального запуска моделей</button>
           </div>
         </div>
 
         <div class="group-box">
           <div class="group-title">О приложении</div>
           <about-updates-panel repo="Sankyuubigan/king_orch"></about-updates-panel>
-        </div>
-
-        <div class="group-box">
-          <div class="group-title">Движок запуска нейромоделей</div>
-          <llama-engine-panel></llama-engine-panel>
-        </div>
-
-        <div class="group-box">
-          <div class="group-title">Скачать новую модель</div>
-          <llama-download-panel></llama-download-panel>
-        </div>
-
-        <div class="group-box">
-          <div class="group-title">Локальные Модели LLM</div>
-          <llama-models-panel></llama-models-panel>
         </div>
 
         <div class="group-box">
@@ -363,6 +349,38 @@
 
       <div id="view-logs" class="view">
         <logs-panel></logs-panel>
+      </div>
+
+      <div id="view-engines" class="view" style="overflow-y: auto;" data-engines-src>
+        <div class="group-box">
+          <div class="group-title">Движок запуска нейромоделей</div>
+          <llama-engine-panel></llama-engine-panel>
+        </div>
+
+        <div class="group-box">
+          <div class="group-title">Скачать новую модель LLM</div>
+          <llama-download-panel></llama-download-panel>
+        </div>
+
+        <div class="group-box">
+          <div class="group-title">Локальные Модели LLM</div>
+          <llama-models-panel></llama-models-panel>
+        </div>
+
+        <div class="group-box">
+          <div class="group-title">Движок запуска ImageGEN моделей</div>
+          <image-engine-panel></image-engine-panel>
+        </div>
+
+        <div class="group-box">
+          <div class="group-title">Скачать новую модель ImageGEN</div>
+          <image-bundle-panel></image-bundle-panel>
+        </div>
+
+        <div class="group-box">
+          <div class="group-title">Локальные модели ImageGEN</div>
+          <image-models-panel></image-models-panel>
+        </div>
       </div>
 
       </div><!-- /workspace-content -->

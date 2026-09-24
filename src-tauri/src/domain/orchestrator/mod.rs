@@ -286,6 +286,7 @@ pub fn build_worst_agent_prompt(
         .map(|agent| {
             let mut tools = runtime::builtin_tools();
             tools.extend(runtime::agent_code_tool_schemas(agent));
+            tools.extend(crate::infra::image_tool_schemas(&agent.tools));
             let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
             let mut sp =
                 build_system_prompt(agent, history, has_tools, &tools, 2048, false, false, false);
@@ -611,10 +612,17 @@ where
                 });
             }
         }
+        // 🖼 Пост-проход: PNG из image-тулов → attachments последнего
+        // agent-сообщения (показ сгенерированных картинок в чате).
+        let mut wf_messages = ctx.messages;
+        let attached = crate::infra::tools::media::attach_saved_images(&mut wf_messages);
+        if attached > 0 {
+            log_cb(format!("🖼 Прикреплено изображений к ответу: {}", attached));
+        }
         return Ok(ChatRunResult {
             text: String::new(),
             sub_calls: all_sub_calls,
-            messages: ctx.messages,
+            messages: wf_messages,
             engine_mode: engine.engine_mode().to_string(),
             engine_tok_per_sec: engine.tok_per_sec(),
             engine_mode_detail: engine.engine_mode_detail().to_string(),
@@ -696,6 +704,12 @@ where
             attachments: None,
             phase: Some(2),
         });
+        // 🖼 Пост-проход: PNG из image-тулов → attachments последнего
+        // agent-сообщения (показ сгенерированных картинок в чате).
+        let attached = crate::infra::tools::media::attach_saved_images(&mut messages_store);
+        if attached > 0 {
+            log_cb(format!("🖼 Прикреплено изображений к ответу: {}", attached));
+        }
         Ok(ChatRunResult {
             text: final_res,
             sub_calls: all_sub_calls,
@@ -901,6 +915,11 @@ where
     // 🛠 Capability кодинга: `tools: ["code_read"]` — только чтение; `tools: ["code_write"]` —
     // чтение + мутаторы (внутри корня авто, вне — плашка). SSOT — infra::tools.
     all_tools.extend(runtime::agent_code_tool_schemas(agent));
+
+    // 🖼 Capability изображений: `tools: ["generate_image"]` / `["edit_image"]` в .md
+    // агента → схемы media-тулов (мета-имя "media"). Исполнение — через
+    // tauri-plugin-image-engine, референсы — аттачменты текущего запроса.
+    all_tools.extend(crate::infra::image_tool_schemas(&agent.tools));
 
     let has_real_tools = !all_tools.is_empty() || !agent.tools.is_empty();
 
@@ -1233,6 +1252,7 @@ where
         bins_dir,
         grammars_dir,
         session_id: session_id.clone(),
+        request_attachments: attachments.to_vec(),
         workspace_root: workspace_root.clone(),
         write_root: write_root.clone(),
         write_outside,

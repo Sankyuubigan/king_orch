@@ -19,6 +19,7 @@
     "logs:default",
     "llama-engine:default",
     "9router:default",
+    "image-engine:default",
     "downloader:default"
   ]
 }

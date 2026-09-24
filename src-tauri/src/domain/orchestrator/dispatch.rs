@@ -51,6 +51,9 @@ where
     pub(crate) bins_dir: &'a Path,
     pub(crate) grammars_dir: &'a Path,
     pub(crate) session_id: String,
+    /// Аттачменты текущего запроса (порядок = порядок прикрепления).
+    /// Для edit_image превращаются в ref_images[] HTTP в том же порядке.
+    pub(crate) request_attachments: Vec<crate::infra::ChatAttachment>,
     pub(crate) workspace_root: PathBuf,
     /// Авто-зона записи пайплайна (обычно == workspace_root; для аналитического —
     /// <workspace_root>/.agents_workspace).
@@ -400,6 +403,42 @@ where
                     Err(e) => {
                         tool_output = Some(format!("Ошибка '{}': {}", tool_name, e));
                     }
+                }
+            }
+        } else if tool_name == "generate_image" || tool_name == "edit_image" {
+            // 🖼 Инструменты изображений (SSOT — infra::tools::media): исполнение
+            // через tauri-plugin-image-engine, референсы — аттачменты запроса.
+            tool_found = true;
+            let code_ctx = crate::infra::ToolCtx {
+                workspace_root: &self.workspace_root,
+                write_root: &self.write_root,
+                write_outside: self.write_outside,
+                session_id: &self.session_id,
+                approver: &self.approver,
+                agent_id: &self.agent.id,
+                bins_dir: self.bins_dir,
+            };
+            match crate::infra::execute_image_tool(
+                tool_name,
+                arguments,
+                &code_ctx,
+                &self.request_attachments,
+                &self.session_id,
+            ) {
+                Some(Ok(res)) => {
+                    tool_output = Some(res);
+                    crate::infra::event_bus::global_bus().publish(
+                        crate::infra::event_bus::AgentEvent::ToolCall {
+                            agent: self.agent.id.clone(),
+                            tool: tool_name.to_string(),
+                        },
+                    );
+                }
+                Some(Err(e)) => {
+                    tool_output = Some(format!("Ошибка '{}': {}", tool_name, e));
+                }
+                None => {
+                    tool_output = Some(format!("Ошибка: Инструмент '{}' не найден.", tool_name));
                 }
             }
         } else if let Some((mcp_name, _, _)) = self

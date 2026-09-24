@@ -1,0 +1,75 @@
+name: Медиа-поток (изображения)
+
+visible: true
+
+config:
+  facts_file: facts.yaml
+  default_llm_params: creative
+
+nodes:
+  # ── Классификация и маршрутизация ──
+
+  - id: extract_facts
+    type: llm_fact_extractor
+    input: |
+      User: {{ user_message }}
+      Session history (последние сообщения сессии): {{ messages }}
+    llm_params: strict
+
+  - id: route
+    type: switch
+    input_object: "{{ nodes.extract_facts.output }}"
+    cases_priority:
+      - key: needs_image_edit
+        to: edit_image
+      - key: needs_image_generate
+        to: generate_image
+    default: no_image_task
+
+  # ── Ветка редактирования (терминальная) ──
+
+  - id: edit_image
+    type: llm_worker
+    agent: image_editor
+    task: |
+      Отредактируй прикреплённые изображения.
+
+      Правка (переписанная, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+      Исходная просьба пользователя: {{ user_message }}
+    output_type: message
+
+  # ── Ветка генерации (терминальная) ──
+
+  - id: generate_image
+    type: llm_worker
+    agent: image_generator
+    task: |
+      Сгенерируй изображение с нуля.
+
+      Описание (переписанное, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+      Исходная просьба пользователя: {{ user_message }}
+    output_type: message
+
+  # ── Не image-запрос: честный выход ──
+
+  - id: no_image_task
+    type: llm_worker
+    agent: image_generator
+    task: |
+      Пользователь НЕ просил изображение (классификатор: ни generate, ни edit).
+      Ответь честно одной строкой: что ты умеешь (генерация с нуля и редактирование
+      прикреплённых картинок) и попроси описать задачу. НЕ вызывай инструменты.
+    output_type: message
+
+edges:
+  - from: extract_facts
+    to: route
+
+  - from: edit_image
+    to: END
+
+  - from: generate_image
+    to: END
+
+  - from: no_image_task
+    to: END

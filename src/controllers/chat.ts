@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { store } from "../store";
 import { bus } from "../events";
 import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, showToast, showPermissionRequest, showVramRequest } from "../ui";
@@ -214,6 +214,7 @@ export class ChatController {
       onCopy: (uid) => this.onCopyMessage(uid),
       onEdit: (uid) => this.onEditMessage(uid),
       onTranslate: (uid) => this.onTranslateMessage(uid),
+      onSaveImage: (uid) => this.onSaveImageMessage(uid),
     };
     this.thoughtMenuCallbacks = {
       onDeleteThoughts: (uid, uids) => this.onDeleteThoughts(uid, uids),
@@ -497,6 +498,32 @@ export class ChatController {
     showToast("Клон сессии создан!", "success");
     bus.emit("session:changed");
     bus.emit("session:open", newId);
+  }
+
+  private async onSaveImageMessage(uid: string) {
+    const idx = this.state.uidList.indexOf(uid);
+    if (idx === -1) return;
+    const msg = this.state.history[idx];
+    const images = (msg.attachments || []).filter((a) => a.mime_type?.startsWith("image/"));
+    if (images.length === 0) {
+      showToast("В сообщении нет изображений", "error");
+      return;
+    }
+    // Первое изображение — сразу в диалог, остальные — по очереди после сохранения.
+    for (const img of images) {
+      const ext = img.mime_type === "image/jpeg" ? "jpg" : img.mime_type === "image/webp" ? "webp" : "png";
+      const defName = (img.file_name || `image.${ext}`).replace(/\.[a-z0-9]+$/i, "") + `.${ext}`;
+      const savePath = await saveDialog({ defaultPath: defName, filters: [{ name: "Изображения", extensions: [ext] }] });
+      if (!savePath) return;
+      try {
+        await invoke("save_image_file", { path: savePath, dataBase64: img.data_base64 });
+        showToast(`Изображение сохранено: ${savePath}`, "success");
+      } catch (err) {
+        showToast(`Ошибка сохранения: ${err}`, "error");
+        void trackError("chat.saveImage", err);
+        return;
+      }
+    }
   }
 
   private async onCopyMessage(uid: string) {

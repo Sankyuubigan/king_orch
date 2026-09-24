@@ -107,6 +107,9 @@ async fn main() {
         // get_status/install_or_update/ensure_started/get_combos/chat_completion
         // и owns процесс node.exe (ленивый старт, kill на выходе).
         .plugin(tauri_plugin_9router::init())
+        // Движок изображений stable-diffusion.cpp (SSOT). Регистрирует
+        // команды движка/бандла/генерации, owns процесс sd-server (kill на выходе).
+        .plugin(tauri_plugin_image_engine::init())
 
         .manage(AppState {
             cancel_flag: Arc::new(AtomicBool::new(false)),
@@ -235,6 +238,7 @@ async fn main() {
             api::coding_test::run_coding_bench,
             api::file_utils::write_text_file,
             api::file_utils::read_text_file,
+            api::file_utils::save_image_file,
             api::translate::translate_message,
             api::updater::check_github_release_update,
             api::updater::install_update_from_github,

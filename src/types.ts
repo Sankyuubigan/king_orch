@@ -121,7 +121,7 @@ export interface CatalogEntry {
 }
 
 /// Статичные разделы, открываемые вкладками типа "section".
-export type TabSection = 'sessions' | 'agent-studio' | 'settings' | 'logs';
+export type TabSection = 'sessions' | 'agent-studio' | 'settings' | 'logs' | 'engines';
 
 /// Вкладка рабочей области (браузерный UI). `chat` — 1:1 с файлом сессии.
 export interface AppTab {

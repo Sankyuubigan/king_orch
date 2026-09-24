@@ -12,6 +12,7 @@ use crate::infra::permissions::PermissionApprover;
 
 pub mod fs;
 pub mod lsp;
+pub mod media;
 pub mod search;
 pub mod shell;
 

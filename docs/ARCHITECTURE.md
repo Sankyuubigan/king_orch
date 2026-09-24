@@ -61,7 +61,13 @@
 Браузерные вкладки рабочей области. Создание (кнопка «＋», main → chat при первом вводе),
 закрытие (**последняя вкладка → авто-новая `main`**), drag по оси X, ПКМ-меню, персист в
 `app_config.json` (`set_tabs`/`active_tab`). Разделы (История/Студия/Настройки/Логи) —
-singleton-вкладки; webview-вкладка — iframe 9Router. Module-scope helper'ы:
+singleton-вкладки (sessions/agent-studio/logs); settings/engines — дубли делят
+один живой DOM-узел (клонов нет, привязки контроллеров целы), навигация
+из «Настройки» — in-place (`openSectionInPlace`); инвариант видимости —
+`clearWorkspaceActive` гасит всё + поднимается ровно один (`activate`
+самопроверяется в лог); раздел «Движки» (`#view-engines`) — плашки
+llama/image-engine из настроек. webview-вкладка — iframe 9Router.
+Module-scope helper'ы:
 `getActiveChatController()` (активная чат-вкладка для других контроллеров) и
 `getChatControllerForSession(sessionId)` (для копирования живой истории).
 

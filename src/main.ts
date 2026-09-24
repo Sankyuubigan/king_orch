@@ -8,6 +8,8 @@ import { initConfirmDialog, initPermissionDialog, initVramDialog, showToast } fr
 import "@my-tauri-plugins/plugin-about-updates";
 import "@my-tauri-plugins/plugin-logs";
 import "@my-tauri-plugins/plugin-llama-engine";
+// Регистрирует <image-engine-panel> / <image-bundle-panel> (движок изображений + бандл Qwen Image 2.1).
+import "@my-tauri-plugins/plugin-image-engine";
 // Регистрирует <nine-router-panel> (облачный шлюз 9Router: комбо + дашборд).
 import "@my-tauri-plugins/plugin-9router";
 // Регистрирует <downloader-widget> / <downloader-progress> (единый прогресс загрузок).
@@ -204,12 +206,15 @@ async function initApp() {
   const config = await settingsCtrl.loadConfig();
   tabCtrl.init(config ?? {});
 
-  // ——— Быстрая навигация по разделам из «Настройки» (открытие в той же вкладке) ———
-  $<HTMLElement>("settings-nav")?.addEventListener("click", (e) => {
+  // ——— Быстрая навигация по разделам (открытие в той же вкладке) ———
+  // Делегирование на document: клоны settings/engines (дубли вкладок) id не
+  // несут, слушатель на одном #settings-nav их бы не поймал.
+  document.addEventListener("click", (e) => {
     const btn = (e.target as HTMLElement).closest(".settings-nav-btn") as HTMLElement | null;
-    const section = btn?.dataset.section as TabSection | undefined;
+    if (!btn) return;
+    const section = btn.dataset.section as TabSection | undefined;
     if (!section) return;
-    tabCtrl.openSection(section);
+    tabCtrl.openSectionInPlace(section);
   });
 
   // ─── Синхронизация списка моделей после изменений в веб-компонентах плагина ───

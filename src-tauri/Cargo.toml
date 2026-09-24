@@ -1,6 +1,6 @@
 [package]
 name = "king_orch"
-version = "26.9.156"
+version = "26.9.163"
 description = "Local LLM Multi-Agent Studio"
 authors = ["You"]
 edition = "2021"
@@ -34,6 +34,9 @@ tauri-plugin-9router = { path = "../../my-tauri-plugins/tauri-plugin-9router" }
 # Единый движок скачивания (SSOT): 6 уровней, stall/resume, прогресс speed/ETA,
 # без системных окон (CREATE_NO_WINDOW). Используют хост и все плагины.
 tauri-plugin-downloader = { path = "../../my-tauri-plugins/tauri-plugin-downloader" }
+# Движок изображений stable-diffusion.cpp (SSOT): установка бекендов sd-server,
+# бандл Qwen Image 2.1, VRAM-preflight, generate/edit по HTTP.
+tauri-plugin-image-engine = { path = "../../my-tauri-plugins/tauri-plugin-image-engine" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["full"] }
@@ -52,6 +55,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 flate2 = "1.0"
 url = "2"
 log = "0.4"
+base64 = "0.22"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Networking_WinHttp", "Win32_Foundation"] }
 

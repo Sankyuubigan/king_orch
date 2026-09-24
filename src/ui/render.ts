@@ -71,7 +71,8 @@ export function createMessageElement(
   }
 
   if (msgUid && menuCallbacks && (role === 'user' || role === 'agent')) {
-    const menu = createMessageMenu(msgUid, menuCallbacks, role === 'agent' ? translateLabel : undefined);
+    const hasImage = (attachments || []).some((a) => a.mime_type?.startsWith("image/"));
+    const menu = createMessageMenu(msgUid, menuCallbacks, role === 'agent' ? translateLabel : undefined, hasImage);
     msgDiv.appendChild(menu);
   }
 

@@ -7,6 +7,7 @@ export interface MessageMenuCallbacks {
   onCopy: (msgUid: string) => void;
   onEdit: (msgUid: string) => void;
   onTranslate: (msgUid: string) => void;
+  onSaveImage?: (msgUid: string) => void;
 }
 
 let activeMenu: HTMLDivElement | null = null;
@@ -22,6 +23,7 @@ export function createMessageMenu(
   msgUid: string,
   callbacks: MessageMenuCallbacks,
   translateLabel?: string,
+  hasImage?: boolean,
 ): HTMLDivElement {
   const wrapper = document.createElement("div");
   wrapper.className = "msg-menu-wrapper";
@@ -101,6 +103,18 @@ export function createMessageMenu(
   });
 
   dropdown.appendChild(copyItem);
+  if (hasImage && callbacks.onSaveImage) {
+    const saveImageItem = document.createElement("button");
+    saveImageItem.className = "msg-menu-item";
+    saveImageItem.textContent = "💾 Сохранить изображение";
+    saveImageItem.addEventListener("click", (e) => {
+      e.stopPropagation();
+      dropdown.classList.remove("show");
+      activeMenu = null;
+      callbacks.onSaveImage!(msgUid);
+    });
+    dropdown.appendChild(saveImageItem);
+  }
   dropdown.appendChild(editItem);
   dropdown.appendChild(cloneItem);
   if (translateLabel) {
