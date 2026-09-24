@@ -51,9 +51,8 @@ where
     pub(crate) bins_dir: &'a Path,
     pub(crate) grammars_dir: &'a Path,
     pub(crate) session_id: String,
-    /// Аттачменты текущего запроса (порядок = порядок прикрепления).
-    /// Для edit_image превращаются в ref_images[] HTTP в том же порядке.
-    pub(crate) request_attachments: Vec<crate::infra::ChatAttachment>,
+    pub(crate) request_media: Arc<RequestMedia>,
+    pub(crate) image_artifacts: Arc<ImageArtifactRegistry>,
     pub(crate) workspace_root: PathBuf,
     /// Авто-зона записи пайплайна (обычно == workspace_root; для аналитического —
     /// <workspace_root>/.agents_workspace).
@@ -234,7 +233,7 @@ where
             );
         }
 
-        let (mut output, tool_found) = self.run_tool_core(tool_name, arguments);
+        let (output, tool_found, tool_succeeded) = self.run_tool_core(tool_name, arguments);
 
         if !tool_found {
             if self
@@ -284,7 +283,7 @@ where
             *self.msg_counter += 1;
         }
 
-        if !tool_found || output.starts_with("Ошибка") {
+        if !tool_found || !tool_succeeded {
             // Ресурсная ошибка image-движка (нет памяти) — не «плохие аргументы»:
             // повтор тем же способом бесполезен. Честный стоп сразу (§2.2, §1.7.1).
             if super::vram::is_resource_error(&output)
@@ -353,9 +352,10 @@ where
     /// (execute_tool_call) и нативного OpenAI tools[] (execute_native_tool_calls).
     /// Применяет плагин-слой on_tool_result и пишет диагностический лог результата.
     /// Возвращает (output, found).
-    fn run_tool_core(&mut self, tool_name: &str, arguments: &Value) -> (String, bool) {
+    fn run_tool_core(&mut self, tool_name: &str, arguments: &Value) -> (String, bool, bool) {
         let mut tool_output = None;
         let mut tool_found = false;
+        let mut tool_succeeded = false;
         if tool_name == "read_spill" {
             // Встроенный инструмент дочитки больших результатов инструментов.
             tool_found = true;
@@ -369,6 +369,7 @@ where
             match read_spill_file(&p, offset, limit) {
                 Ok(content) => {
                     tool_output = Some(content);
+                    tool_succeeded = true;
                 }
                 Err(e) => {
                     tool_output = Some(format!("Ошибка read_spill: {}", e));
@@ -379,6 +380,7 @@ where
             tool_found = true;
             let result = run_todo_tool(tool_name, arguments, &mut *self.messages, &self.agent.id);
             tool_output = Some(result);
+            tool_succeeded = true;
         } else if crate::infra::tools::is_code_tool_reference(tool_name) {
             // 🛠 Инструменты кодинга (SSOT в infra::tools::all_tools): read/grep/glob/
             // list_directory (read-only, авто) + write/edit/bash (мутаторы: внутри
@@ -403,10 +405,12 @@ where
                     approver: &self.approver,
                     agent_id: &self.agent.id,
                     bins_dir: self.bins_dir,
+                    image_artifacts: None,
                 };
                 match crate::infra::tools::execute_tool(tool_name, arguments, &code_ctx) {
                     Ok(res) => {
                         tool_output = Some(res);
+                        tool_succeeded = true;
                         crate::infra::event_bus::global_bus().publish(
                             crate::infra::event_bus::AgentEvent::ToolCall {
                                 agent: self.agent.id.clone(),
@@ -420,60 +424,120 @@ where
                 }
             }
         } else if tool_name == "generate_image" || tool_name == "edit_image" {
-            // 🖼 Инструменты изображений (SSOT — infra::tools::media): исполнение
-            // через tauri-plugin-image-engine, референсы — аттачменты запроса.
-            // VRAM-очередь (§6.5): llama-server глушится ДО spawn sd-server
-            // (suspend_for_external_compute) и поднимается ПОСЛЕ — два движка
-            // в 16 ГБ не влезают. KV-кэш LLM при этом теряется (новый процесс).
             tool_found = true;
-            let code_ctx = crate::infra::ToolCtx {
-                workspace_root: &self.workspace_root,
-                write_root: &self.write_root,
-                write_outside: self.write_outside,
-                session_id: &self.session_id,
-                approver: &self.approver,
-                agent_id: &self.agent.id,
-                bins_dir: self.bins_dir,
-            };
-            let was_suspended = self.engine.suspend_for_external_compute();
-            if was_suspended {
-                (self.log_cb)("⏸ LLM-движок выгружен из VRAM на время генерации изображения (KV-кэш будет потерян)".to_string());
-                log::info!("⏸ LLM suspend перед '{}' (агент '{}')", tool_name, self.agent.id);
+            let granted = self
+                .all_tools
+                .iter()
+                .any(|(meta, name, _)| meta == "media" && name == tool_name);
+            if !granted {
+                tool_output = Some(format!(
+                    "Ошибка '{}': инструмент недоступен агенту '{}'",
+                    tool_name, self.agent.id
+                ));
             }
-            let img_res = crate::infra::execute_image_tool(
-                tool_name,
-                arguments,
-                &code_ctx,
-                &self.request_attachments,
-                &self.session_id,
-            );
-            if was_suspended {
-                match self.engine.resume_after_external_compute() {
-                    Ok(()) => {
-                        (self.log_cb)("▶ LLM-движок перезапущен после генерации изображения".to_string());
-                        log::info!("▶ LLM resume после '{}' (агент '{}')", tool_name, self.agent.id);
+            let mut selected_attachments = Vec::new();
+            if tool_output.is_none() && tool_name == "edit_image" {
+                let requested_ids = arguments
+                    .get("source_image_ids")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|ids| {
+                        ids.iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                log::debug!(
+                    "[media] Resolving source_image_ids for agent '{}': ids={:?}",
+                    self.agent.id,
+                    requested_ids
+                );
+                match self
+                    .request_media
+                    .resolve_arguments(arguments, &*self.messages)
+                {
+                    Ok(attachments) => {
+                        log::info!(
+                            "[media] Resolved source_image_ids for agent '{}': requested={} resolved={}",
+                            self.agent.id,
+                            requested_ids.len(),
+                            attachments.len()
+                        );
+                        selected_attachments = attachments;
                     }
-                    Err(e) => {
-                        (self.log_cb)(format!("⚠️ Не удалось перезапустить LLM после генерации: {}", e));
-                        log::error!("LLM resume после '{}' не удался: {}", tool_name, e);
+                    Err(error) => {
+                        tool_output = Some(super::vram::tool_error_to_output(
+                            tool_name,
+                            crate::infra::ToolError::Usage(error),
+                        ));
                     }
                 }
             }
-            match img_res {
-                Some(Ok(res)) => {
-                    tool_output = Some(res);
-                    crate::infra::event_bus::global_bus().publish(
-                        crate::infra::event_bus::AgentEvent::ToolCall {
-                            agent: self.agent.id.clone(),
-                            tool: tool_name.to_string(),
-                        },
-                    );
+            if tool_output.is_none() {
+                let code_ctx = crate::infra::ToolCtx {
+                    workspace_root: &self.workspace_root,
+                    write_root: &self.write_root,
+                    write_outside: self.write_outside,
+                    session_id: &self.session_id,
+                    approver: &self.approver,
+                    agent_id: &self.agent.id,
+                    bins_dir: self.bins_dir,
+                    image_artifacts: Some(&self.image_artifacts),
+                };
+                let was_suspended = self.engine.suspend_for_external_compute();
+                if was_suspended {
+                    (self.log_cb)("⏸ LLM-движок выгружен из VRAM на время генерации изображения (KV-кэш будет потерян)".to_string());
+                    log::info!("⏸ LLM suspend перед '{}' (агент '{}')", tool_name, self.agent.id);
                 }
-                Some(Err(e)) => {
-                    tool_output = Some(super::vram::tool_error_to_output(tool_name, e));
+                let image_result = crate::infra::execute_image_tool(
+                    tool_name,
+                    arguments,
+                    &code_ctx,
+                    &selected_attachments,
+                );
+                if was_suspended {
+                    match self.engine.resume_after_external_compute() {
+                        Ok(()) => {
+                            (self.log_cb)("▶ LLM-движок перезапущен после генерации изображения".to_string());
+                            log::info!("▶ LLM resume после '{}' (агент '{}')", tool_name, self.agent.id);
+                        }
+                        Err(error) => {
+                            (self.log_cb)(format!("⚠️ Не удалось перезапустить LLM после генерации: {}", error));
+                            log::error!("LLM resume после '{}' не удался: {}", tool_name, error);
+                        }
+                    }
                 }
-                None => {
-                    tool_output = Some(format!("Ошибка: Инструмент '{}' не найден.", tool_name));
+                match image_result {
+                    Some(Ok(result)) => {
+                        tool_output = Some(result);
+                        tool_succeeded = true;
+                        crate::infra::event_bus::global_bus().publish(
+                            crate::infra::event_bus::AgentEvent::ToolCall {
+                                agent: self.agent.id.clone(),
+                                tool: tool_name.to_string(),
+                            },
+                        );
+                    }
+                    Some(Err(error)) => {
+                        let raw_error = error.to_string();
+                        log::error!(
+                            "Ошибка media-тула '{}' (агент '{}'): {}",
+                            tool_name,
+                            self.agent.id,
+                            raw_error
+                        );
+                        if super::vram::is_resource_error(&raw_error) {
+                            tool_output =
+                                Some(super::vram::tool_error_to_output(tool_name, error));
+                        } else {
+                            tool_output = Some(format!(
+                                "Ошибка '{}': внутренняя ошибка media-движка",
+                                tool_name
+                            ));
+                        }
+                    }
+                    None => {
+                        tool_output = Some(format!("Ошибка: Инструмент '{}' не найден.", tool_name));
+                    }
                 }
             }
         } else if let Some((mcp_name, _, _)) = self
@@ -490,6 +554,7 @@ where
                 {
                     Ok(res) => {
                         tool_output = Some(res);
+                        tool_succeeded = true;
                         crate::infra::event_bus::global_bus().publish(
                             crate::infra::event_bus::AgentEvent::ToolCall {
                                 agent: self.agent.id.clone(),
@@ -518,7 +583,7 @@ where
             output.chars().count(),
             safe_truncate(&output, 300)
         ));
-        (output, tool_found)
+        (output, tool_found, tool_succeeded)
     }
 
     /// Нативный OpenAI tools[]: исполняет ВСЕ tool_calls из одного ответа модели
@@ -570,8 +635,8 @@ where
             {
                 (self.log_cb)(format!("⚠️ Нативный вызов: '{}' использовал tool '{}' для сабагента — это ошибка синтаксиса (нужен target).", self.agent.name, call.name));
             }
-            let (output, found) = self.run_tool_core(&call.name, &args);
-            if found && !output.starts_with("Ошибка") {
+            let (output, found, succeeded) = self.run_tool_core(&call.name, &args);
+            if found && succeeded {
                 any_success = true;
             }
             // Ресурсная ошибка image-движка в native-пути — честный стоп сразу,
@@ -704,6 +769,8 @@ where
             session_id,
             workspace_root,
             write_root,
+            request_media,
+            image_artifacts,
             write_outside,
             agent_grammar,
             active_grammar,
@@ -740,7 +807,8 @@ where
                 *agents,
                 parsed.content.clone(),
                 vec![],
-                &[],
+                request_media.clone(),
+                image_artifacts.clone(),
                 max_gen_tokens,
                 *model_params,
                 *format_type,

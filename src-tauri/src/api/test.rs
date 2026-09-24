@@ -157,8 +157,9 @@ pub async fn run_iterative_test(
             agent,
             &agents,
             test_case.input_data.clone(),
-            vec![], // _history не используется напрямую
-            &[],    // attachments (не используются в тестах)
+            vec![],
+            std::sync::Arc::new(domain::RequestMedia::empty()),
+            std::sync::Arc::new(crate::infra::ImageArtifactRegistry::new()),
             max_gen_tokens,
             &model_params,
             &format_type,

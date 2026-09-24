@@ -40,4 +40,7 @@ pub use config::{
 pub use session_manager::{get_session, get_sessions, save_session, delete_session, rename_session, open_session_folder};
 pub use permissions::{PermissionApprover, GrantDecision, global_approver, test_approver};
 pub use tools::{Tool, ToolCtx, ToolError, WriteOutside, tool_schemas, execute_tool, all_tools};
-pub use tools::media::{execute_image_tool, image_tool_schemas};
+pub use tools::media::{
+    attach_saved_images_from_sub_calls, execute_image_tool, image_tool_schemas,
+    ImageArtifactRegistry,
+};

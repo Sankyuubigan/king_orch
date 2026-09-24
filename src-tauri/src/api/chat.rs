@@ -492,28 +492,48 @@ pub fn get_prompt_preview(
     agent_id: String,
     message: String,
     history: Vec<ChatMessage>,
+    attachments: Vec<ChatAttachment>,
 ) -> Result<String, String> {
     let agents_dir = crate::infra::find_agents_dir(&app);
     let agents = crate::domain::load_agents(&agents_dir)?;
 
     // Системный промпт: либо конкретного .md-агента, либо — в режиме графа —
     // самого «тяжёлого» агента графа (worst-case для оценки VRAM).
-    let system_prompt = match agents.iter().find(|a| a.id == agent_id) {
-        Some(agent) => {
-            let tools = crate::domain::builtin_tools();
-            let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
-            crate::domain::build_system_prompt(
-                agent, &history, has_tools, &tools, 2048, false, false, false,
-            )
+    let (mut system_prompt, uses_image_selection) =
+        match agents.iter().find(|a| a.id == agent_id) {
+            Some(agent) => {
+                let mut tools = crate::domain::builtin_tools();
+                tools.extend(crate::infra::image_tool_schemas(&agent.tools));
+                let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
+                let prompt = crate::domain::build_system_prompt(
+                    agent, &history, has_tools, &tools, 2048, false, false, false,
+                );
+                let uses_image_selection =
+                    agent.tools.iter().any(|tool| tool == "edit_image");
+                (prompt, uses_image_selection)
+            }
+            None => {
+                let workflows = crate::domain::load_workflows(&agents_dir)?;
+                let wf = crate::domain::find_workflow_by_stem(&workflows, &agent_id)
+                    .ok_or("Entry point не найден: нет ни .md агента, ни workflow с таким ID")?;
+                let (prompt, _) = crate::domain::build_worst_agent_prompt(&agents, wf, &history);
+                let uses_image_selection = wf.nodes.iter().any(|node| {
+                    node.agent.as_deref().and_then(|agent_id| {
+                        agents.iter().find(|agent| agent.id == agent_id)
+                    })
+                    .is_some_and(|agent| agent.tools.iter().any(|tool| tool == "edit_image"))
+                });
+                (prompt, uses_image_selection)
+            }
+        };
+    let request_media = crate::domain::RequestMedia::build(&attachments, &history);
+    if uses_image_selection {
+        let candidates = request_media.candidate_prompt();
+        if !candidates.is_empty() {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&candidates);
         }
-        None => {
-            let workflows = crate::domain::load_workflows(&agents_dir)?;
-            let wf = crate::domain::find_workflow_by_stem(&workflows, &agent_id)
-                .ok_or("Entry point не найден: нет ни .md агента, ни workflow с таким ID")?;
-            let (system_prompt, _) = crate::domain::build_worst_agent_prompt(&agents, wf, &history);
-            system_prompt
-        }
-    };
+    }
 
     let mut llm_messages: Vec<LlmMessage> = vec![LlmMessage {
         role: "system".to_string(),
@@ -522,7 +542,13 @@ pub fn get_prompt_preview(
     }];
 
     for msg in llm_history(&history) {
-        llm_messages.push(msg.to_llm_message());
+        let mut message = msg.to_llm_message();
+        if uses_image_selection {
+            message
+                .content
+                .push_str(&request_media.message_suffix(msg.id.as_deref()));
+        }
+        llm_messages.push(message);
     }
 
     if !message.is_empty() {

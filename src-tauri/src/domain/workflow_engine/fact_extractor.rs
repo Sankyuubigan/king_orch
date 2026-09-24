@@ -11,6 +11,7 @@ pub fn build_extractor_prompt(
     signals: &str,
     workflow_dir: Option<&Path>,
     history: &str,
+    image_candidates: &str,
 ) -> String {
     let facts = resolve_facts(config, workflow_dir);
     let phases = resolve_phases(config, workflow_dir);
@@ -25,7 +26,8 @@ pub fn build_extractor_prompt(
             .replace("{{ phases }}", &phases_list)
             .replace("{{ signals }}", signals)
             .replace("{{ user_message }}", user_message)
-            .replace("{{ history }}", history);
+            .replace("{{ history }}", history)
+            .replace("{{ image_candidates }}", image_candidates);
         return result;
     }
 

@@ -14,6 +14,7 @@ pub use parser::{find_workflow_by_stem, load_workflows, NodeType, WorkflowDef};
 
 use crate::domain::agent_manager::AgentProfile;
 use crate::domain::orchestrator;
+use crate::domain::orchestrator::RequestMedia;
 use crate::domain::parsers::clean_thought_tags;
 use crate::infra::{
     build_json_only_grammar, ChatMessage, GrammarSpec, LlamaEngine, LlmMessage, ModelParams,
@@ -55,8 +56,16 @@ pub struct WorkflowRunner<'a, L, S, C> {
     /// Авто-зона записи пайплайна (обычно == workspace_root; для аналитического —
     /// <workspace_root>/.agents_workspace).
     pub write_root: std::path::PathBuf,
+    pub request_media: Arc<RequestMedia>,
+    pub image_artifacts: Arc<crate::infra::ImageArtifactRegistry>,
     /// Поведение при записи вне write_root (Prompt | Deny).
     pub write_outside: crate::infra::WriteOutside,
+}
+
+fn sanitized_llm_message(message: &ChatMessage) -> LlmMessage {
+    let mut llm_message = message.to_llm_message();
+    llm_message.content = orchestrator::prompt::sanitize_model_visible_text(&message.content);
+    llm_message
 }
 
 /// Вычисляет результирующие ModelParams по каскаду приоритетов (SSOT):
@@ -156,7 +165,8 @@ where
             self.agents,
             task.to_string(),
             vec![],
-            &[],
+            self.request_media.clone(),
+            self.image_artifacts.clone(),
             self.max_gen_tokens,
             resolved_params,
             self.format_type,
@@ -213,10 +223,10 @@ where
             content: directive,
             ..Default::default()
         }];
-        msgs.extend(history.iter().map(|m| m.to_llm_message()));
+        msgs.extend(history.iter().map(sanitized_llm_message));
         msgs.push(LlmMessage {
             role: "user".to_string(),
-            content: user_text.to_string(),
+            content: orchestrator::prompt::sanitize_model_visible_text(user_text),
             ..Default::default()
         });
         let gen = self
@@ -266,7 +276,7 @@ where
             },
             LlmMessage {
                 role: "user".to_string(),
-                content: user_text.to_string(),
+                content: orchestrator::prompt::sanitize_model_visible_text(user_text),
                 ..Default::default()
             },
         ];
@@ -523,6 +533,27 @@ mod tests {
             current_date: false,
             temperature: temp,
         }
+    }
+
+    #[test]
+    fn freeform_history_message_hides_filesystem_paths() {
+        let message = ChatMessage {
+            id: Some("msg_1".to_string()),
+            msg_type: "message".to_string(),
+            content: "D:\\private\\image.png /home/user/image.png output/image.png \\\\server\\share\\image.png".to_string(),
+            sub_calls: None,
+            author: Some("user".to_string()),
+            model: None,
+            time_sec: None,
+            attachments: None,
+            phase: None,
+        };
+        let sanitized = sanitized_llm_message(&message);
+        assert!(!sanitized.content.contains("D:\\private"));
+        assert!(!sanitized.content.contains("/home/user"));
+        assert!(!sanitized.content.contains("output/image.png"));
+        assert!(!sanitized.content.contains("\\\\server\\share"));
+        assert_eq!(sanitized.content.matches("[filesystem path omitted]").count(), 4);
     }
 
     #[test]

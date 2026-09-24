@@ -141,9 +141,59 @@ pub fn build_system_prompt(
     sp
 }
 
+pub(crate) fn sanitize_model_visible_text(text: &str) -> String {
+    let mut sanitized = String::with_capacity(text.len());
+    for part in text.split_inclusive(char::is_whitespace) {
+        let token = part
+            .trim_matches(char::is_whitespace)
+            .trim_matches(|character: char| {
+                matches!(character, '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '`' | '<' | '>')
+                    || matches!(character, '.' | ',' | ';' | ':' | '!' | '?')
+            });
+        if is_path_like(token) {
+            sanitized.push_str("[filesystem path omitted]");
+        } else {
+            sanitized.push_str(part);
+        }
+    }
+    sanitized
+}
+
+fn is_path_like(token: &str) -> bool {
+    let token = token.trim_matches(|character: char| {
+        matches!(character, '"' | '\'' | '(' | ')' | '[' | ']' | '{' | '}' | '`' | '<' | '>')
+            || matches!(character, '.' | ',' | ';' | ':' | '!' | '?')
+    });
+    if token.is_empty() {
+        return false;
+    }
+    let bytes = token.as_bytes();
+    if token.starts_with("\\\\")
+        || (bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'/' | b'\\'))
+        || token.starts_with('/')
+    {
+        return true;
+    }
+    if token.contains("://") {
+        return false;
+    }
+    let file_name = token
+        .rsplit(|character| character == '/' || character == '\\')
+        .next()
+        .unwrap_or(token)
+        .to_ascii_lowercase();
+    token.contains(|character| character == '/' || character == '\\')
+        && [".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".avif"]
+            .iter()
+            .any(|extension| file_name.ends_with(extension))
+}
+
 /// Строгая инструкция по языку ответа, основанная на языке последнего
 /// сообщения пользователя. Слабые модели игнорируют общие фразы вроде
-/// «отвечай на языке пользователя» и сползают в английский по умолчанию,
+/// «отвечай на языке пользователя» и сползают на английский по умолчанию,
 /// поэтому инструкция формулируется ЯВНО и (для русского) двуязычно.
 pub(crate) fn language_directive(messages: &[ChatMessage]) -> String {
     let text: String = messages
@@ -185,6 +235,17 @@ mod tests {
             attachments: None,
             phase: None,
         }
+    }
+
+    #[test]
+    fn sanitizes_filesystem_paths_from_model_visible_text() {
+        let text = "saved D:\\private\\image.png; /home/user/image.png; output/image.png; \\\\server\\share\\image.png";
+        let sanitized = sanitize_model_visible_text(text);
+        assert!(!sanitized.contains("D:\\private"));
+        assert!(!sanitized.contains("/home/user"));
+        assert!(!sanitized.contains("output/image.png"));
+        assert!(!sanitized.contains("\\\\server\\share"));
+        assert_eq!(sanitized.matches("[filesystem path omitted]").count(), 4);
     }
 
     #[test]

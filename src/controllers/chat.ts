@@ -486,7 +486,8 @@ export class ChatController {
             modelPath,
             agentId,
             message: text,
-            history: this.state.history
+            history: this.state.history,
+            attachments: this.attachments
         });
 
         const tokens = await countTokens(promptText, tokenizerId);

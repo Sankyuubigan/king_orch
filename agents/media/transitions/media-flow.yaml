@@ -32,7 +32,7 @@ nodes:
     type: llm_worker
     agent: image_editor
     task: |
-      Отредактируй прикреплённые изображения.
+      Отредактируй изображение, на который пользователь указал в переписке.
 
       Правка (переписанная, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
       Исходная просьба пользователя: {{ user_message }}

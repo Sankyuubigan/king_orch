@@ -1,3 +1,4 @@
+use crate::domain::orchestrator::prompt::sanitize_model_visible_text;
 use crate::infra::{llm_history, ChatMessage};
 use std::collections::HashMap;
 
@@ -19,6 +20,7 @@ pub struct WorkflowContext {
     /// Заполняется из messages[] при создании контекста и при каждом emit_signal.
     /// SSOT для SignalRouter/ConditionRouter и {{ signals }} шаблона.
     pub signals: HashMap<String, serde_json::Value>,
+    pub image_candidates: String,
 }
 
 impl WorkflowContext {
@@ -34,7 +36,13 @@ impl WorkflowContext {
             history,
             output_emitted: false,
             signals: HashMap::new(),
+            image_candidates: String::new(),
         }
+    }
+
+    pub fn with_image_candidates(mut self, candidates: String) -> Self {
+        self.image_candidates = candidates;
+        self
     }
 
     /// Добавляет сигнал в bus (вызывается из dispatch.rs после emit_signal).
@@ -47,7 +55,11 @@ impl WorkflowContext {
         let mut result = template.to_string();
 
         // {{ user_message }}
-        result = result.replace("{{ user_message }}", &self.user_message);
+        result = result.replace(
+            "{{ user_message }}",
+            &sanitize_model_visible_text(&self.user_message),
+        );
+        result = result.replace("{{ image_candidates }}", &self.image_candidates);
 
         // {{ signals }} — JSON-объект из signal bus (ключ → значение)
         if result.contains("{{ signals }}") {
@@ -65,7 +77,7 @@ impl WorkflowContext {
                     serde_json::json!({
                         "type": m.msg_type,
                         "author": m.author,
-                        "content": m.content
+                        "content": sanitize_model_visible_text(&m.content)
                     })
                 })
                 .collect();
@@ -92,5 +104,37 @@ impl WorkflowContext {
         }
 
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn message(content: &str) -> ChatMessage {
+        ChatMessage {
+            id: Some("msg_1".to_string()),
+            msg_type: "message".to_string(),
+            content: content.to_string(),
+            sub_calls: None,
+            author: Some("user".to_string()),
+            model: None,
+            time_sec: None,
+            attachments: None,
+            phase: None,
+        }
+    }
+
+    #[test]
+    fn templates_hide_filesystem_paths() {
+        let context = WorkflowContext::new(
+            "open D:\\private\\image.png".to_string(),
+            vec![message("saved /home/user/image.png")],
+            Vec::new(),
+        );
+        let resolved = context.resolve_template("{{ user_message }} {{ messages }}");
+        assert!(!resolved.contains("D:\\private"));
+        assert!(!resolved.contains("/home/user"));
+        assert_eq!(resolved.matches("[filesystem path omitted]").count(), 2);
     }
 }

@@ -179,6 +179,7 @@ where
                 &signals,
                 Some(workflow_dir),
                 &history,
+                &context.image_candidates,
             );
 
             // Строгая грамматика по контракту facts.yaml: точные ключи, без опций.
@@ -422,7 +423,7 @@ where
 
             // Тип сохранения: message (в чат юзеру) или thought (внутренний отчёт)
             let msg_type = node.output_type.as_deref().unwrap_or("thought");
-            let msg = ChatMessage {
+            let mut msg = ChatMessage {
                 id: Some(format!("msg_{}", runner.msg_counter)),
                 msg_type: msg_type.to_string(),
                 content: result.clone(),
@@ -433,6 +434,18 @@ where
                 attachments: None,
                 phase: Some(2),
             };
+            let current_sub_calls = msg.sub_calls.clone().unwrap_or_default();
+            let attached = crate::infra::attach_saved_images_from_sub_calls(
+                &mut msg,
+                &current_sub_calls,
+                &runner.image_artifacts,
+            )?;
+            if attached > 0 {
+                (runner.log_cb)(format!(
+                    "🖼 Прикреплено изображений к ответу узла '{}': {}",
+                    agent_id, attached
+                ));
+            }
             push_report(&mut context.messages, msg, agent.replace_report, Some(2));
             *runner.msg_counter += 1;
             // Сигнал сохраняется ПОСЛЕ thought для корректного порядка [thought, signal].
@@ -660,7 +673,8 @@ where
                 context.user_message.clone(),
                 context.messages.clone(),
                 context.history.clone(),
-            );
+            )
+            .with_image_candidates(context.image_candidates.clone());
 
             let sub_result = match super::run_workflow(sub_wf, &mut sub_ctx, runner) {
                 Ok(r) => r,

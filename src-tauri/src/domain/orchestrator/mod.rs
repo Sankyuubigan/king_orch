@@ -3,6 +3,7 @@ pub(crate) mod dispatch;
 pub(crate) use dispatch::*;
 pub(crate) mod compaction;
 pub(crate) mod grammar;
+pub(crate) mod image_catalog;
 pub(crate) mod invocation;
 pub(crate) mod prompt_log;
 pub(crate) mod result;
@@ -14,6 +15,7 @@ pub(crate) mod vram;
 pub(crate) use compaction::*;
 pub(crate) use consts::*;
 pub(crate) use grammar::*;
+pub use image_catalog::RequestMedia;
 pub(crate) use invocation::*;
 pub(crate) use prompt_log::*;
 pub(crate) use result::*;
@@ -44,7 +46,7 @@ use crate::domain::workflow_engine::{
 use crate::infra::llm_types::GenerationResult;
 use crate::infra::{
     extract_model_filename, llm_history, ChatAttachment, ChatMessage, FunctionDef, GrammarSpec,
-    LlamaEngine, LlmMessage, ModelParams, SubCall, ToolDefinition,
+    LlamaEngine, LlmMessage, ModelParams, SubCall, ToolDefinition, ImageArtifactRegistry,
 };
 use prompt::build_system_prompt;
 use std::collections::HashMap;
@@ -410,6 +412,25 @@ where
 
     let workflows = load_workflows(&agents_dir).unwrap_or_default();
     let workflow_match = find_workflow_by_stem(&workflows, &agent_id).filter(|wf| wf.visible);
+    let mut messages_store = history.clone();
+    for (index, message) in messages_store.iter_mut().enumerate() {
+        if message.id.is_none() {
+            message.id = Some(format!("msg_{index}"));
+        }
+    }
+    let mut msg_counter = messages_store.len() as u32;
+    let request_media = Arc::new(RequestMedia::build(&attachments, &messages_store));
+    let image_artifacts = Arc::new(ImageArtifactRegistry::new());
+    log::info!(
+        "[media] Каталог изображений: кандидатов={}, ids={:?}",
+        request_media.candidate_ids().len(),
+        request_media.candidate_ids()
+    );
+    log_cb(format!(
+        "[media] Каталог изображений: {} кандидат(ов), IDs={:?}",
+        request_media.candidate_ids().len(),
+        request_media.candidate_ids()
+    ));
 
     // ── Worst-case оценка стартового контекста движка ──
     // Токенизатор живёт ВНУТРИ движка (llama-server) и недоступен до его старта,
@@ -423,9 +444,10 @@ where
             .iter()
             .find(|a| a.id == agent_id)
             .map(|agent| {
-                let mut tools = runtime::builtin_tools();
-                tools.extend(runtime::agent_code_tool_schemas(agent));
-                let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
+                 let mut tools = runtime::builtin_tools();
+                 tools.extend(runtime::agent_code_tool_schemas(agent));
+                 tools.extend(crate::infra::image_tool_schemas(&agent.tools));
+                 let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
                 (
                     build_system_prompt(
                         agent,
@@ -442,15 +464,44 @@ where
             })
             .unwrap_or_else(|| (String::new(), false)),
     };
+    let uses_image_selection = if let Some(workflow) = workflow_match.as_ref() {
+        workflow.nodes.iter().any(|node| {
+            node.node_type == NodeType::LlmWorker
+                && node.agent.as_deref().and_then(|agent_id| {
+                    agents
+                        .iter()
+                        .find(|agent| agent.id == agent_id)
+                })
+                .is_some_and(|agent| agent.tools.iter().any(|tool| tool == "edit_image"))
+        })
+    } else {
+        agents
+            .iter()
+            .find(|agent| agent.id == agent_id)
+            .is_some_and(|agent| agent.tools.iter().any(|tool| tool == "edit_image"))
+    };
+    let image_catalog_text = if uses_image_selection {
+        request_media.candidate_prompt()
+    } else {
+        String::new()
+    };
     let history_text: String = llm_history(&history)
         .iter()
         .map(|m| m.content.as_str())
         .collect();
     let history_chars = history_text.chars().count();
-    let total_chars =
-        worst_system_prompt.chars().count() + history_chars + user_text.chars().count();
-    let image_tokens = attachments.len() as u32 * 2048;
-    let chars_per_token = estimate_chars_per_token(&worst_system_prompt, &history_text, &user_text);
+    let image_catalog_chars = image_catalog_text.chars().count();
+    let total_chars = worst_system_prompt.chars().count()
+        + history_chars
+        + image_catalog_chars
+        + user_text.chars().count();
+    let image_tokens = request_media.current_attachments().len() as u32 * 2048;
+    let token_estimate_history = format!("{history_text}{image_catalog_text}");
+    let chars_per_token = estimate_chars_per_token(
+        &worst_system_prompt,
+        &token_estimate_history,
+        &user_text,
+    );
     let tool_budget = if worst_has_tools {
         TOOL_WORKING_BUDGET
     } else {
@@ -464,10 +515,10 @@ where
         .min(context_size)
         .max(2048);
     log_cb(format!(
-        "📐 Стартовый контекст движка: {} токенов (worst-case промпт ~{} символов{}, история ~{} симв., изображения ~{} токенов, резерв JSON {}, бюджет инструментов {}, max_gen {})",
+        "📐 Стартовый контекст движка: {} токенов (worst-case промпт ~{} символов{}, история ~{} симв., каталог изображений ~{} симв., изображения ~{} токенов, резерв JSON {}, бюджет инструментов {}, max_gen {})",
         engine_ctx_limit, worst_system_prompt.chars().count(),
         if worst_has_tools { " с инструментами" } else { "" },
-        history_chars, image_tokens, TOKEN_ESTIMATE_RESERVE, tool_budget, max_gen_tokens
+        history_chars, image_catalog_chars, image_tokens, TOKEN_ESTIMATE_RESERVE, tool_budget, max_gen_tokens
     ));
 
     let engine = if mmproj_path.is_some() {
@@ -494,13 +545,6 @@ where
             stream_cb,
         )?
     };
-    let mut messages_store = history.clone();
-    for (i, msg) in messages_store.iter_mut().enumerate() {
-        if msg.id.is_none() {
-            msg.id = Some(format!("msg_{}", i));
-        }
-    }
-    let mut msg_counter = messages_store.len() as u32;
 
     let actual_user_text = if user_text.is_empty() {
         history
@@ -579,7 +623,8 @@ where
             actual_user_text.clone(),
             messages_store.clone(),
             recent_history.clone(),
-        );
+        )
+        .with_image_candidates(request_media.candidate_prompt());
         let mut runner = WorkflowRunner {
             engine: &engine,
             agents: &agents,
@@ -602,6 +647,8 @@ where
             session_id: session_id.clone(),
             workspace_root: tools_root.clone(),
             write_root: write_root.clone(),
+            request_media: request_media.clone(),
+            image_artifacts: image_artifacts.clone(),
             write_outside,
         };
         let mut fallback_error: Option<String> = None;
@@ -647,17 +694,10 @@ where
                 });
             }
         }
-        // 🖼 Пост-проход: PNG из image-тулов → attachments последнего
-        // agent-сообщения (показ сгенерированных картинок в чате).
-        let mut wf_messages = ctx.messages;
-        let attached = crate::infra::tools::media::attach_saved_images(&mut wf_messages);
-        if attached > 0 {
-            log_cb(format!("🖼 Прикреплено изображений к ответу: {}", attached));
-        }
         return Ok(ChatRunResult {
             text: String::new(),
             sub_calls: all_sub_calls,
-            messages: wf_messages,
+            messages: ctx.messages,
             engine_mode: engine.engine_mode().to_string(),
             engine_tok_per_sec: engine.tok_per_sec(),
             engine_mode_detail: engine.engine_mode_detail().to_string(),
@@ -688,7 +728,8 @@ where
             &agents,
             user_text,
             recent_history,
-            &attachments,
+            request_media.clone(),
+            image_artifacts.clone(),
             max_gen_usize,
             &model_params,
             &format_type,
@@ -728,7 +769,7 @@ where
         } else {
             Some(all_sub_calls.clone())
         };
-        messages_store.push(ChatMessage {
+        let mut final_message = ChatMessage {
             id: Some(format!("msg_{}", msg_counter)),
             msg_type: "message".to_string(),
             content: final_res.clone(),
@@ -738,13 +779,17 @@ where
             time_sec: None,
             attachments: None,
             phase: Some(2),
-        });
-        // 🖼 Пост-проход: PNG из image-тулов → attachments последнего
-        // agent-сообщения (показ сгенерированных картинок в чате).
-        let attached = crate::infra::tools::media::attach_saved_images(&mut messages_store);
+        };
+        let current_sub_calls = final_message.sub_calls.clone().unwrap_or_default();
+        let attached = crate::infra::attach_saved_images_from_sub_calls(
+            &mut final_message,
+            &current_sub_calls,
+            &image_artifacts,
+        )?;
         if attached > 0 {
             log_cb(format!("🖼 Прикреплено изображений к ответу: {}", attached));
         }
+        messages_store.push(final_message);
         Ok(ChatRunResult {
             text: final_res,
             sub_calls: all_sub_calls,
@@ -833,7 +878,8 @@ pub(crate) fn run_agent_node<L, S, C>(
     agents: &[AgentProfile],
     user_text: String,
     _history: Vec<ChatMessage>,
-    attachments: &[ChatAttachment],
+    request_media: Arc<RequestMedia>,
+    image_artifacts: Arc<ImageArtifactRegistry>,
     max_gen_tokens: usize,
     model_params: &ModelParams,
     format_type: &str,
@@ -888,6 +934,7 @@ where
     } else {
         model_params
     };
+    let attachments = request_media.current_attachments().to_vec();
 
     // ── Определяем signal_contract РАНЬШЕ — нужен для корректного промпта (Method 3). ──
     let signal_contract: Option<SignalContract> = {
@@ -1051,6 +1098,13 @@ where
         is_native,
         is_hybrid,
     );
+    if agent.tools.iter().any(|tool| tool == "edit_image") {
+        let image_candidates = request_media.candidate_prompt();
+        if !image_candidates.is_empty() {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&image_candidates);
+        }
+    }
     // 4.5: плагин-слой — точка расширения системного промпта (pass-through, если плагинов нет).
     crate::infra::plugins::global_plugins().on_system_prompt(&agent.id, &mut system_prompt);
 
@@ -1073,7 +1127,10 @@ where
     for msg in llm_history(messages) {
         let actual_author = msg.author.as_deref().unwrap_or("user");
         let role;
-        let mut content = msg.content.clone();
+        let mut content = prompt::sanitize_model_visible_text(&msg.content);
+        if agent.tools.iter().any(|tool| tool == "edit_image") {
+            content.push_str(&request_media.message_suffix(msg.id.as_deref()));
+        }
 
         if actual_author == "user" {
             role = "user";
@@ -1099,14 +1156,15 @@ where
         });
     }
 
+    let model_user_text = prompt::sanitize_model_visible_text(&user_text);
     let user_text_dup = llm_messages
         .last()
-        .map(|m| m.role == "user" && m.content == user_text)
+        .map(|m| m.role == "user" && m.content == model_user_text)
         .unwrap_or(false);
-    if !user_text_dup && !user_text.is_empty() {
+    if !user_text_dup && !model_user_text.is_empty() {
         llm_messages.push(LlmMessage {
             role: "user".to_string(),
-            content: user_text.clone(),
+            content: model_user_text,
             ..Default::default()
         });
     }
@@ -1287,7 +1345,8 @@ where
         bins_dir,
         grammars_dir,
         session_id: session_id.clone(),
-        request_attachments: attachments.to_vec(),
+        request_media,
+        image_artifacts,
         workspace_root: workspace_root.clone(),
         write_root: write_root.clone(),
         write_outside,
@@ -3490,6 +3549,8 @@ mod tests {
                 session_id: "test-session".to_string(),
                 workspace_root: project_dir.clone(),
                 write_root: project_dir.clone(),
+                request_media: Arc::new(RequestMedia::empty()),
+                image_artifacts: Arc::new(ImageArtifactRegistry::new()),
                 write_outside: crate::infra::WriteOutside::Prompt,
             };
 

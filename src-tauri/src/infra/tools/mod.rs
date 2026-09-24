@@ -59,6 +59,7 @@ pub struct ToolCtx<'a> {
     pub approver: &'a PermissionApprover,
     pub agent_id: &'a str,
     pub bins_dir: &'a Path,
+    pub image_artifacts: Option<&'a media::ImageArtifactRegistry>,
 }
 
 /// Ошибка тула. Все ветки завершаются честным сообщением (правило 2.2: тишина = ложь).
@@ -264,6 +265,7 @@ mod tests {
             approver: crate::infra::permissions::test_approver(),
             agent_id: "test_agent",
             bins_dir: std::path::Path::new("."),
+            image_artifacts: None,
         }
     }
 

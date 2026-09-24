@@ -288,6 +288,10 @@ pub fn run_pipeline_test(
         session_id: format!("pipeline_test_{}", test.id),
         workspace_root: project_root.to_path_buf(),
         write_root,
+        request_media: std::sync::Arc::new(
+            crate::domain::orchestrator::RequestMedia::empty(),
+        ),
+        image_artifacts: std::sync::Arc::new(crate::infra::ImageArtifactRegistry::new()),
         write_outside,
     };
 

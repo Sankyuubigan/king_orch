@@ -307,6 +307,7 @@ mod tests {
             approver: crate::infra::permissions::test_approver(),
             agent_id: "test_agent",
             bins_dir: root,
+            image_artifacts: None,
         }
     }
 
