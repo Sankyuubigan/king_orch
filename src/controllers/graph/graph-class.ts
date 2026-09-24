@@ -1,6 +1,7 @@
 import Drawflow from "drawflow";
 import "drawflow/dist/drawflow.min.css";
 import type { DrawflowNode } from "drawflow";
+import type { GraphDiagnostic } from "../../services";
 import type { GraphElements, GraphSnapshot } from "./types";
 import type { GraphApi } from "./graph-api";
 
@@ -22,6 +23,7 @@ export class GraphController {
   redoStack: GraphSnapshot[] = [];
   isRestoring: boolean = false;
   isDirty: boolean = false;
+  yamlDiagnostics: GraphDiagnostic[] = [];
   pristineSnapshot: GraphSnapshot | null = null;
   copiedNode: DrawflowNode | null = null;
 

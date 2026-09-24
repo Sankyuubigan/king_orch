@@ -133,6 +133,8 @@ async function initApp() {
           btnOpenWorkflow: $<HTMLButtonElement>("btn-open-workflow"),
           btnSaveWorkflow: $<HTMLButtonElement>("btn-save-workflow"),
           currentWorkflowName: $<HTMLSpanElement>("current-workflow-name"),
+          yamlWarning: $<HTMLDetailsElement>("graph-yaml-warning"),
+          yamlWarningList: $<HTMLUListElement>("graph-yaml-warning-list"),
           btnUndo: $<HTMLButtonElement>("btn-undo"),
           btnRedo: $<HTMLButtonElement>("btn-redo"),
           dirtyIndicator: $<HTMLSpanElement>("dirty-indicator"),

@@ -82,6 +82,10 @@
             <button id="btn-redo" class="graph-add-btn" disabled title="Повторить (Ctrl+Shift+Z)">↪</button>
             <div style="flex:1;"></div>
             <span id="current-workflow-name" style="font-weight:600; color:var(--primary); font-size:13px;">Файл не выбран</span>
+            <details id="graph-yaml-warning" class="graph-yaml-warning" hidden>
+              <summary>YAML повреждён; будет исправлен после Сохранить</summary>
+              <ul id="graph-yaml-warning-list"></ul>
+            </details>
             <span id="dirty-indicator" style="font-size:16px; line-height:1;"></span>
             <button id="btn-save-workflow" class="btn-primary" disabled style="padding:6px 16px; margin-left:4px;">💾 Сохранить</button>
           </div>

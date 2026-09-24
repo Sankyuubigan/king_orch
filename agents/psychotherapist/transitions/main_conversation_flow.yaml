@@ -12,8 +12,8 @@ nodes:
   type: llm_fact_extractor
   input: '{{ user_message }}'
   ui_pos:
-    y: 493
     x: -1990
+    y: 493
   llm_params: strict
 
 - id: check_has_problem
@@ -33,16 +33,16 @@ nodes:
   - validator
   - decomposer
   ui_pos:
-    y: -347
     x: 3183
+    y: -347
 
 - id: call_soma_translator
   type: llm_worker
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    y: 153
-    x: -554
+    x: -561
+    y: 210
   llm_params: strict
 
 - id: call_decomposer
@@ -52,8 +52,8 @@ nodes:
   inject_thoughts:
   - soma_translator
   ui_pos:
-    x: 989
     y: 506
+    x: 989
 
 - id: call_validator
   type: llm_worker
@@ -64,8 +64,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 1345
     y: 152
+    x: 1345
   llm_params: strict
 
 - id: call_grounder
@@ -80,8 +80,8 @@ nodes:
   - decomposer
   - data_collector
   ui_pos:
-    x: 2841
     y: -451
+    x: 2841
 
 - id: call_focus_keeper
   type: llm_worker
@@ -91,8 +91,8 @@ nodes:
   inject_response:
   - decomposer
   ui_pos:
-    y: 295
-    x: -202
+    x: 326
+    y: 197
   llm_params: strict
 
 - id: check_focus_keeper_signal
@@ -106,16 +106,16 @@ nodes:
   - key: НУЖЕН ВЫБОР МИШЕНИ
     to: note_ask_target
   ui_pos:
-    y: 209
-    x: 223
+    x: 567
+    y: 287
 
 - id: note_ask_target
   type: note
   input: переспрашиваем юзера, с какой мишенью работаем
   system_message: "Специалист уже выделил мишени для работы (список выше в чате). Чтобы двигаться дальше, нам нужно определиться, с какой именно мишенью работаем. \nПожалуйста, напишите номер или название мишени, с которой хотите работать."
   ui_pos:
-    x: 718
-    y: 664
+    x: 978
+    y: 662
 
 - id: call_pattern_finder
   type: llm_worker
@@ -145,8 +145,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 3468
     y: -5
+    x: 3468
 
 - id: call_shadow_worker
   type: llm_worker
@@ -181,8 +181,8 @@ nodes:
   type: note
   input: вычисление типа
   ui_pos:
-    x: 2085
     y: 41
+    x: 2085
 
 - id: check_critical_elements
   type: condition_router
@@ -209,14 +209,13 @@ nodes:
     equals: false
   logic: any
   ui_pos:
-    y: 81
     x: 1655
+    y: 81
 
 - id: check_somatic
   type: condition_router
   true_to: call_soma_translator
   false_to: call_focus_keeper
-  logic: any
   conditions:
   - field: somatic_presence
     equals: new
@@ -226,6 +225,7 @@ nodes:
       equals: history
     - field: reports.soma_translator
       equals: false
+  logic: any
   ui_pos:
     x: -802
     y: 218
@@ -237,16 +237,16 @@ nodes:
   - key: НУЖНА РУКОСТЬ
     to: note_1785123862689
   ui_pos:
-    y: -39
-    x: -298
+    x: -332
+    y: 117
 
 - id: note_1785123862689
   type: note
   input: уточнение рукости у юзера
   system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
   ui_pos:
-    y: -216
-    x: -44
+    x: -90
+    y: -9
 
 - id: note_1785141025138
   type: note
@@ -264,8 +264,8 @@ nodes:
 
     В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
-    y: 748
     x: -1323
+    y: 748
 
 - id: call_request_helper
   type: llm_worker
@@ -294,8 +294,8 @@ nodes:
     equals: true
   logic: all
   ui_pos:
-    x: 1967
     y: -283
+    x: 1967
 
 - id: check_elements2
   type: condition_router
@@ -317,6 +317,9 @@ edges:
 - from: note_1782220193985
   to: call_validator
 
+- from: note_1785123862689
+  to: call_focus_keeper
+
 - from: call_focus_keeper
   to: check_focus_keeper_signal
 
@@ -334,9 +337,6 @@ edges:
 
 - from: call_soma_translator
   to: check_need_handedness
-
-- from: check_need_handedness
-  to: call_focus_keeper
 
 - from: note_1785141025138
   to: call_request_helper

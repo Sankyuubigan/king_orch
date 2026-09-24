@@ -15,6 +15,8 @@ export interface GraphElements {
   btnOpenWorkflow: HTMLButtonElement;
   btnSaveWorkflow: HTMLButtonElement;
   currentWorkflowName: HTMLSpanElement;
+  yamlWarning: HTMLDetailsElement;
+  yamlWarningList: HTMLUListElement;
   btnUndo: HTMLButtonElement;
   btnRedo: HTMLButtonElement;
   dirtyIndicator: HTMLSpanElement;

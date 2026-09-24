@@ -2,8 +2,9 @@ use serde::Serialize;
 use std::fs;
 use std::path::Path;
 
-use crate::domain::workflow_engine::parser::{
-    separate_top_level_fields, EdgeDef, FactsFile, NodeDef, WorkflowConfig,
+use crate::domain::{
+    analyze_workflow_fidelity, separate_top_level_fields, EdgeDef, FactsFile, GraphDiagnostic,
+    NodeDef, WorkflowConfig, WorkflowDef,
 };
 
 /// Workflow со включённым file_stem + team
@@ -18,9 +19,15 @@ pub struct GraphWorkflowDef {
     pub edges: Vec<EdgeDef>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct GraphWorkflowReadResult {
+    pub workflow: GraphWorkflowDef,
+    pub diagnostics: Vec<GraphDiagnostic>,
+}
+
 /// Загружает один YAML-файл workflow по полному пути
 #[tauri::command]
-pub fn read_workflow_file(path: String) -> Result<GraphWorkflowDef, String> {
+pub fn read_workflow_file(path: String) -> Result<GraphWorkflowReadResult, String> {
     let content = fs::read_to_string(&path)
         .map_err(|e| format!("Ошибка чтения файла {}: {}", path, e))?;
     let file_stem = Path::new(&path)
@@ -28,9 +35,11 @@ pub fn read_workflow_file(path: String) -> Result<GraphWorkflowDef, String> {
         .unwrap_or_default()
         .to_string_lossy()
         .to_string();
-    let mut wf: crate::domain::workflow_engine::parser::WorkflowDef =
-        serde_yaml::from_str(&content)
-            .map_err(|e| format!("Ошибка парсинга YAML: {}", e))?;
+    let source: serde_yaml::Value = serde_yaml::from_str(&content)
+        .map_err(|e| format!("Ошибка парсинга YAML: {}", e))?;
+    let mut wf: WorkflowDef = serde_yaml::from_value(source.clone())
+        .map_err(|e| format!("Ошибка парсинга YAML: {}", e))?;
+    let diagnostics = analyze_workflow_fidelity(&source, &wf)?;
     wf.file_stem = file_stem.clone();
 
     // Если facts пуст, но указан facts_file — загружаем факты для отображения во фронтенде
@@ -48,14 +57,17 @@ pub fn read_workflow_file(path: String) -> Result<GraphWorkflowDef, String> {
         }
     }
 
-    Ok(GraphWorkflowDef {
-        team: String::new(),
-        name: wf.name,
-        file_stem,
-        visible: wf.visible,
-        config: wf.config,
-        nodes: wf.nodes,
-        edges: wf.edges,
+    Ok(GraphWorkflowReadResult {
+        workflow: GraphWorkflowDef {
+            team: String::new(),
+            name: wf.name,
+            file_stem,
+            visible: wf.visible,
+            config: wf.config,
+            nodes: wf.nodes,
+            edges: wf.edges,
+        },
+        diagnostics,
     })
 }
 
@@ -64,7 +76,7 @@ pub fn read_workflow_file(path: String) -> Result<GraphWorkflowDef, String> {
 pub fn save_workflow(
     app: tauri::AppHandle,
     path: String,
-    mut workflow: crate::domain::workflow_engine::parser::WorkflowDef,
+    mut workflow: WorkflowDef,
 ) -> Result<(), String> {
     let _ = &app;
 
@@ -89,7 +101,7 @@ pub fn save_workflow(
 
     // Валидация: сгенерированный YAML должен обратно парситься.
     // Если нет — файл НЕ записываем (иначе данные потеряются).
-    serde_yaml::from_str::<crate::domain::workflow_engine::parser::WorkflowDef>(&yaml_final)
+    serde_yaml::from_str::<WorkflowDef>(&yaml_final)
         .map_err(|e| format!("❌ Сгенерированный YAML невалиден, файл НЕ сохранён: {}", e))?;
 
     fs::write(&path, &yaml_final)

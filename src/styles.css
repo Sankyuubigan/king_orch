@@ -403,6 +403,28 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   font-size: 13px;
   flex-wrap: wrap;
 }
+#graph-toolbar .graph-yaml-warning {
+  max-width: min(620px, 100%);
+  color: var(--danger);
+  background: var(--msg-system);
+  border: 1px solid var(--danger);
+  border-radius: 5px;
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 1.35;
+}
+#graph-toolbar .graph-yaml-warning summary {
+  cursor: pointer;
+  font-weight: 600;
+  white-space: nowrap;
+}
+#graph-toolbar .graph-yaml-warning ul {
+  margin: 6px 0 2px;
+  padding-left: 18px;
+  max-height: 180px;
+  overflow-y: auto;
+  white-space: normal;
+}
 #graph-toolbar .toolbar-separator {
   width: 1px;
   height: 24px;

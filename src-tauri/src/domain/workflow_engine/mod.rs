@@ -4,13 +4,18 @@
 //! Каждый workflow — это направленный граф узлов (nodes) и рёбер (edges).
 
 pub mod context;
+pub mod editor_fidelity;
 pub mod fact_extractor;
 pub mod nodes;
 pub mod parser;
 
 pub use context::WorkflowContext;
+pub use editor_fidelity::{analyze_workflow_fidelity, GraphDiagnostic};
 pub use parser::WorkflowConfig;
-pub use parser::{find_workflow_by_stem, load_workflows, NodeType, WorkflowDef};
+pub use parser::{
+    find_workflow_by_stem, load_workflows, separate_top_level_fields, EdgeDef, FactsFile,
+    NodeDef, NodeType, WorkflowDef,
+};
 
 use crate::domain::agent_manager::AgentProfile;
 use crate::domain::orchestrator;

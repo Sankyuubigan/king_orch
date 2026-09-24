@@ -1,6 +1,7 @@
 import { GraphController } from "./graph-class";
 import * as lifecyclePart from "./lifecycle-part";
 import * as canvasPart from "./canvas-part";
+import * as diagnosticsPart from "./diagnostics-part";
 import * as menuPart from "./menu-part";
 import * as flowsPart from "./flows-part";
 import * as historyPart from "./history-part";
@@ -14,6 +15,7 @@ import * as nodeHtmlModule from "./node-html";
 Object.assign(GraphController.prototype, {
   ...lifecyclePart,
   ...canvasPart,
+  ...diagnosticsPart,
   ...menuPart,
   ...flowsPart,
   ...historyPart,

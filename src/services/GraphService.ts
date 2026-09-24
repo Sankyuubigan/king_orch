@@ -49,8 +49,19 @@ export interface WorkflowGraphDef {
   edges: GraphEdgeDef[];
 }
 
-export async function readWorkflowFile(path: string): Promise<WorkflowGraphDef> {
-  return invoke<WorkflowGraphDef>("read_workflow_file", { path });
+export interface GraphDiagnostic {
+  code: string;
+  location: string;
+  message: string;
+}
+
+export interface WorkflowGraphReadResult {
+  workflow: WorkflowGraphDef;
+  diagnostics: GraphDiagnostic[];
+}
+
+export async function readWorkflowFile(path: string): Promise<WorkflowGraphReadResult> {
+  return invoke<WorkflowGraphReadResult>("read_workflow_file", { path });
 }
 
 export async function saveWorkflow(path: string, workflow: WorkflowGraphDef): Promise<void> {

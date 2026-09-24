@@ -17,7 +17,10 @@ export async function handleOpen(this: GraphController): Promise<void> {
       });
       if (!selected) return;
 
-      const wf = await readWorkflowFile(selected);
+      const readResult = await readWorkflowFile(selected);
+      const wf = readResult.workflow;
+      const diagnostics = [...readResult.diagnostics];
+      this.setYamlDiagnostics(diagnostics);
 
       this.currentFilePath = selected;
       this.currentWorkflowName = wf.name;
@@ -28,10 +31,19 @@ export async function handleOpen(this: GraphController): Promise<void> {
 
       this.el.currentWorkflowName.textContent = `${wf.name} (${wf.file_stem || ""}.yaml)`;
 
-      const nonSwitchEdges = wf.edges.filter((e) => {
-        const fn = wf.nodes.find((n) => n.id === e.from);
-        return !fn || !isDynamicNode(fn.type);
+      const nonSwitchEdgeEntries = wf.edges.flatMap((edge, index) => {
+        const fromNode = wf.nodes.find((node) => node.id === edge.from);
+        if (fromNode && isDynamicNode(fromNode.type)) {
+          diagnostics.push({
+            code: "DYNAMIC_EDGE_NOT_RENDERED",
+            location: `edges[${index}]`,
+            message: `ребро '${edge.from}' → '${edge.to}' из динамической ноды нельзя точно отобразить и сохранить: маршрут хранится в полях ноды`,
+          });
+          return [];
+        }
+        return [{ edge, index }];
       });
+      const nonSwitchEdges = nonSwitchEdgeEntries.map(({ edge }) => edge);
       const allEdges = [...nonSwitchEdges, ...this.getImplicitSwitchEdges(wf.nodes)];
       const nodePositions = this.computeAutoLayout(wf.nodes, allEdges);
 
@@ -92,47 +104,76 @@ export async function handleOpen(this: GraphController): Promise<void> {
         setTimeout(() => this.enableReverseConnection(id), 0);
       }
 
-      for (const edge of nonSwitchEdges) {
-        if (!nodesData[edge.from] || !nodesData[edge.to]) continue;
+      for (const { edge, index } of nonSwitchEdgeEntries) {
+        if (!nodesData[edge.from] || !nodesData[edge.to]) {
+          diagnostics.push({
+            code: "EDGE_ENDPOINT_MISSING",
+            location: `edges[${index}]`,
+            message: `ребро '${edge.from}' → '${edge.to}' не может быть отображено: один из endpoint отсутствует среди nodes[].id`,
+          });
+          continue;
+        }
         try {
           this.editor!.addConnection(edge.from, edge.to, `output_1`, "input_1");
         } catch (connErr) {
-          console.error("addConnection error:", connErr);
-          void trackError("graph.restoreConnection", connErr);
+          diagnostics.push({
+            code: "IMPORT_CONNECTION_FAILED",
+            location: `edges[${index}]`,
+            message: `Drawflow не смог восстановить связь '${edge.from}' → '${edge.to}': ${connErr}`,
+          });
         }
       }
 
       // Switch/SignalRouter/ConditionCheck connections come from node data (source of truth)
       for (const node of wf.nodes) {
         if (!isDynamicNode(node.type)) continue;
-        const targets: Array<{ to: string; caseKey?: string }> = [];
+        const targets: Array<{ to: string; caseKey?: string; location: string }> = [];
         if (node.type === "condition_check") {
-          if (node.true_to) targets.push({ to: node.true_to, caseKey: "true" });
-          if (node.false_to) targets.push({ to: node.false_to, caseKey: "false" });
-          if (node.sequential_to) targets.push({ to: node.sequential_to, caseKey: "seq" });
+          if (node.true_to) targets.push({ to: node.true_to, caseKey: "true", location: `nodes[id=${node.id}].true_to` });
+          if (node.false_to) targets.push({ to: node.false_to, caseKey: "false", location: `nodes[id=${node.id}].false_to` });
+          if (node.sequential_to) targets.push({ to: node.sequential_to, caseKey: "seq", location: `nodes[id=${node.id}].sequential_to` });
         } else if (node.type === "condition_router") {
-          if (node.true_to) targets.push({ to: node.true_to, caseKey: "true" });
-          if (node.false_to) targets.push({ to: node.false_to, caseKey: "false" });
+          if (node.true_to) targets.push({ to: node.true_to, caseKey: "true", location: `nodes[id=${node.id}].true_to` });
+          if (node.false_to) targets.push({ to: node.false_to, caseKey: "false", location: `nodes[id=${node.id}].false_to` });
         } else if (node.cases_priority) {
-          for (const cp of node.cases_priority) targets.push({ to: cp.to, caseKey: cp.key });
+          for (const [caseIndex, cp] of node.cases_priority.entries()) {
+            targets.push({
+              to: cp.to,
+              caseKey: cp.key,
+              location: `nodes[id=${node.id}].cases_priority[${caseIndex}]`,
+            });
+          }
         } else if (node.cases) {
-          for (const [key, val] of Object.entries(node.cases)) targets.push({ to: val, caseKey: key });
+          for (const [key, val] of Object.entries(node.cases)) {
+            targets.push({ to: val, caseKey: key, location: `nodes[id=${node.id}].cases.${key}` });
+          }
         }
-        if (node.default) targets.push({ to: node.default, caseKey: "default" });
+        if (node.default) targets.push({ to: node.default, caseKey: "default", location: `nodes[id=${node.id}].default` });
         for (const target of targets) {
-          if (!target.to || !nodesData[target.to]) continue;
+          if (!target.to || !nodesData[target.to]) {
+            diagnostics.push({
+              code: "NODE_TARGET_MISSING",
+              location: target.location,
+              message: `маршрут '${target.to || "(пусто)"}' не будет отображён: целевая нода отсутствует`,
+            });
+            continue;
+          }
           const outIdx = this.getSwitchOutputIndex(node, target.caseKey);
           try {
             this.editor!.addConnection(node.id, target.to, `output_${outIdx + 1}`, "input_1");
           } catch (connErr) {
-            console.error("addConnection error:", connErr);
-            void trackError("graph.restoreConnection.switch", connErr);
+            diagnostics.push({
+              code: "IMPORT_CONNECTION_FAILED",
+              location: target.location,
+              message: `Drawflow не смог восстановить связь '${node.id}' → '${target.to}': ${connErr}`,
+            });
           }
         }
       }
 
       this.editor!.zoom_reset();
       this.resetHistory();
+      this.setYamlDiagnostics(diagnostics);
     } catch (e) {
       console.error("handleOpen error:", e);
       showToast(`Ошибка загрузки: ${e}`, "error");
@@ -204,6 +245,7 @@ export async function handleSave(this: GraphController): Promise<void> {
       const saveResult = await saveWorkflow(this.currentFilePath, workflow);
       void saveResult;
       this.pristineSnapshot = this.captureSnapshot();
+      this.setYamlDiagnostics([]);
       this.markClean();
       showToast("✅ Workflow сохранён", "success");
     } catch (e) {
