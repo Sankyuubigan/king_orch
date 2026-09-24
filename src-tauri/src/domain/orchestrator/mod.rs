@@ -10,6 +10,7 @@ pub(crate) mod spill;
 pub mod stream;
 pub(crate) mod text;
 pub(crate) mod todo;
+pub(crate) mod vram;
 pub(crate) use compaction::*;
 pub(crate) use consts::*;
 pub(crate) use grammar::*;
@@ -223,7 +224,32 @@ fn push_continuation_for_cutoff(
 }
 
 /// Завершающий user-ход, закрывающий Фазу 1 (размышления) перед Phase 2.
-const PHASE1_DONE_PROMPT: &str = "Размышления завершены. Теперь сформулируй финальный ответ.";
+const PHASE1_DONE_PROMPT: &str = "Выше — твой внутренний черновик. Пользователь его НЕ видел, ничего ещё НЕ выполнено и НЕ отправлено. Считай дело несделанным: выполни работу заново от начала до конца. Запрещено писать «готово», пересказывать черновик или выдумывать результаты. Теперь сформулируй финальный ответ.";
+
+/// Метки черновика Фазы 1: модель должна видеть, что assistant-текст выше —
+/// невидимые пользователю мысли, а не отправленный ответ.
+const PHASE1_DRAFT_OPEN: &str = "[МОЙ ЧЕРНОВИК — пользователь его НЕ видел, ничего НЕ выполнено]";
+const PHASE1_DRAFT_CLOSE: &str = "[КОНЕЦ ЧЕРНОВИКА]";
+
+/// Оборачивает черновик Фазы 1 в явные метки невидимости для пользователя.
+fn wrap_phase1_draft(text: &str) -> String {
+    format!(
+        "{}\n{}\n{}",
+        PHASE1_DRAFT_OPEN,
+        text.trim(),
+        PHASE1_DRAFT_CLOSE
+    )
+}
+
+/// Помечает уже лежащие в истории assistant-куски Фазы 1 как черновик.
+/// Идемпотентно: повторно не оборачивает. User-подсказки не трогает.
+fn mark_phase1_range_as_draft(messages: &mut [LlmMessage], start: usize) {
+    for m in messages.iter_mut().skip(start) {
+        if m.role == "assistant" && !m.content.contains(PHASE1_DRAFT_OPEN) {
+            m.content = wrap_phase1_draft(&m.content);
+        }
+    }
+}
 
 /// Закрывает Фазу 1 перед Phase 2.
 ///
@@ -245,9 +271,18 @@ fn finalize_phase1_context(
         if !tail.trim().is_empty() {
             messages.push(LlmMessage {
                 role: "assistant".to_string(),
-                content: tail,
+                content: wrap_phase1_draft(&tail),
                 ..Default::default()
             });
+        }
+    }
+    // Висящий assistant-хвост — черновик Фазы 1, а не отправленный ответ:
+    // помечаем метками, чтобы Phase 2 не приняла его за сделанное дело.
+    // Идемпотентно (повторная обёртка исключена проверкой).
+    if let Some(last) = messages.last_mut() {
+        if last.role == "assistant" && !last.content.contains(PHASE1_DRAFT_OPEN) {
+            let raw = std::mem::take(&mut last.content);
+            last.content = wrap_phase1_draft(&raw);
         }
     }
     let last_is_assistant = messages.last().map_or(false, |m| m.role == "assistant");
@@ -1312,6 +1347,9 @@ where
         ));
 
         let ctx_label_p1 = format!("{}:{}#phase1", mem_mode, agent.name);
+        // Начало диапазона Фазы 1: всё assistant-ниже — черновик, невидимый юзеру.
+        // Помечаем метками в финализации, чтобы Phase 2 не приняла его за ответ.
+        let phase1_start = ctx.llm_messages.len();
         // Докачка обрыва Фазы 1 (аналог основного цикла): если модель упёрлась в
         // лимит токенов (MAX_TOKENS), размышления продолжаются РОВНО с места обрыва,
         // а не режутся — иначе Фаза 2 дописывает JSON на глаз (баг e6=true у валидатора).
@@ -1423,9 +1461,13 @@ where
             if phase1_cont == 0 {
                 ctx.llm_messages.push(LlmMessage {
                     role: "assistant".to_string(),
-                    content: thinking_text.clone(),
+                    content: wrap_phase1_draft(&thinking_text),
                     ..Default::default()
                 });
+            } else {
+                // Докачки: оборванные куски уже в истории — помечаем весь
+                // диапазон Фазы 1 как черновик.
+                mark_phase1_range_as_draft(&mut ctx.llm_messages, phase1_start);
             }
             // Сохраняем размышления в сессию как thought (раскрытие в GUI).
             // Полный текст: лимит THOUGHT_STORE_MAX_CHARS не применяем — иначе
@@ -2526,7 +2568,8 @@ mod tests {
         assert!(added, "после докачек завершающий ход обязателен");
         assert_eq!(messages.len(), 5);
         assert_eq!(messages[3].role, "assistant");
-        assert_eq!(messages[3].content, "завершающий кусок размышлений");
+        assert_eq!(messages[3].content, wrap_phase1_draft("завершающий кусок размышлений"));
+        assert!(messages[3].content.contains(PHASE1_DRAFT_OPEN));
         assert_eq!(messages[4].role, "user");
         assert_eq!(messages[4].content, PHASE1_DONE_PROMPT);
     }
@@ -2549,6 +2592,7 @@ mod tests {
     #[test]
     fn finalize_phase1_closes_trailing_assistant_without_continuations() {
         // Обычная выдача: вся мысль уже в истории как assistant, докачек не было.
+        // Хвост помечается черновиком, чтобы Phase 2 не приняла его за ответ.
         let mut messages = vec![msg("system", "sys"), msg("assistant", "мысль целиком")];
         let added = finalize_phase1_context(&mut messages, None, false);
 
@@ -2557,6 +2601,7 @@ mod tests {
             "хвост-ассистент нужно закрыть user-ходом (prefill-guard)"
         );
         assert_eq!(messages.len(), 3);
+        assert_eq!(messages[1].content, wrap_phase1_draft("мысль целиком"));
         assert_eq!(messages.last().unwrap().content, PHASE1_DONE_PROMPT);
     }
 
@@ -2568,6 +2613,29 @@ mod tests {
 
         assert!(!added);
         assert_eq!(messages.len(), 2);
+    }
+
+    #[test]
+    fn mark_phase1_range_wraps_only_assistant_and_idempotent() {
+        let mut messages = vec![
+            msg("system", "sys"),
+            msg("user", "вопрос"),
+            msg("assistant", "кусок один"),
+            msg("user", "продолжи ровно с места обрыва"),
+            msg("assistant", "кусок два"),
+        ];
+        mark_phase1_range_as_draft(&mut messages, 2);
+        assert_eq!(messages[0].content, "sys");
+        assert_eq!(messages[1].content, "вопрос");
+        assert_eq!(messages[2].content, wrap_phase1_draft("кусок один"));
+        assert_eq!(messages[3].content, "продолжи ровно с места обрыва");
+        assert_eq!(messages[4].content, wrap_phase1_draft("кусок два"));
+        // Повторно — без двойной обёртки.
+        mark_phase1_range_as_draft(&mut messages, 2);
+        assert_eq!(
+            messages[2].content.matches(PHASE1_DRAFT_OPEN).count(),
+            1
+        );
     }
 
     #[test]

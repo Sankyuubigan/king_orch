@@ -285,6 +285,20 @@ where
         }
 
         if !tool_found || output.starts_with("Ошибка") {
+            // Ресурсная ошибка image-движка (нет памяти) — не «плохие аргументы»:
+            // повтор тем же способом бесполезен. Честный стоп сразу (§2.2, §1.7.1).
+            if super::vram::is_resource_error(&output)
+                && (tool_name == "generate_image" || tool_name == "edit_image")
+            {
+                self.tool_calls.push(ToolCallInfo {
+                    tool_name: tool_name.to_string(),
+                    arguments: args_str,
+                    result: output.clone(),
+                });
+                log::error!("Ресурсная ошибка image-тула '{}' (агент '{}'): {}", tool_name, self.agent.id, output);
+                self.final_response = super::vram::resource_error_fatal(&self.agent.id, tool_name, &output);
+                return Ok(DispatchCtl::Break);
+            }
             self.consecutive_failed_tools += 1;
             if self.consecutive_failed_tools >= 3 {
                 self.final_response = format!("{} Лимит неудачных вызовов инструмента ({}). Агент: '{}'. Инструмент: '{}'. Невозможно продолжить.", AGENT_ERROR_PREFIX, self.consecutive_failed_tools, self.agent.id, tool_name);
@@ -408,6 +422,9 @@ where
         } else if tool_name == "generate_image" || tool_name == "edit_image" {
             // 🖼 Инструменты изображений (SSOT — infra::tools::media): исполнение
             // через tauri-plugin-image-engine, референсы — аттачменты запроса.
+            // VRAM-очередь (§6.5): llama-server глушится ДО spawn sd-server
+            // (suspend_for_external_compute) и поднимается ПОСЛЕ — два движка
+            // в 16 ГБ не влезают. KV-кэш LLM при этом теряется (новый процесс).
             tool_found = true;
             let code_ctx = crate::infra::ToolCtx {
                 workspace_root: &self.workspace_root,
@@ -418,13 +435,31 @@ where
                 agent_id: &self.agent.id,
                 bins_dir: self.bins_dir,
             };
-            match crate::infra::execute_image_tool(
+            let was_suspended = self.engine.suspend_for_external_compute();
+            if was_suspended {
+                (self.log_cb)("⏸ LLM-движок выгружен из VRAM на время генерации изображения (KV-кэш будет потерян)".to_string());
+                log::info!("⏸ LLM suspend перед '{}' (агент '{}')", tool_name, self.agent.id);
+            }
+            let img_res = crate::infra::execute_image_tool(
                 tool_name,
                 arguments,
                 &code_ctx,
                 &self.request_attachments,
                 &self.session_id,
-            ) {
+            );
+            if was_suspended {
+                match self.engine.resume_after_external_compute() {
+                    Ok(()) => {
+                        (self.log_cb)("▶ LLM-движок перезапущен после генерации изображения".to_string());
+                        log::info!("▶ LLM resume после '{}' (агент '{}')", tool_name, self.agent.id);
+                    }
+                    Err(e) => {
+                        (self.log_cb)(format!("⚠️ Не удалось перезапустить LLM после генерации: {}", e));
+                        log::error!("LLM resume после '{}' не удался: {}", tool_name, e);
+                    }
+                }
+            }
+            match img_res {
                 Some(Ok(res)) => {
                     tool_output = Some(res);
                     crate::infra::event_bus::global_bus().publish(
@@ -435,7 +470,7 @@ where
                     );
                 }
                 Some(Err(e)) => {
-                    tool_output = Some(format!("Ошибка '{}': {}", tool_name, e));
+                    tool_output = Some(super::vram::tool_error_to_output(tool_name, e));
                 }
                 None => {
                     tool_output = Some(format!("Ошибка: Инструмент '{}' не найден.", tool_name));
@@ -538,6 +573,22 @@ where
             let (output, found) = self.run_tool_core(&call.name, &args);
             if found && !output.starts_with("Ошибка") {
                 any_success = true;
+            }
+            // Ресурсная ошибка image-движка в native-пути — честный стоп сразу,
+            // как в legacy-пути (ретраи бесполезны, §2.2).
+            if found
+                && super::vram::is_resource_error(&output)
+                && (call.name == "generate_image" || call.name == "edit_image")
+            {
+                self.tool_calls.push(ToolCallInfo {
+                    tool_name: call.name.clone(),
+                    arguments: args_str.clone(),
+                    result: output.clone(),
+                });
+                log::error!("Ресурсная ошибка image-тула '{}' (агент '{}'): {}", call.name, self.agent.id, output);
+                self.final_response =
+                    super::vram::resource_error_fatal(&self.agent.id, &call.name, &output);
+                return Ok(DispatchCtl::Break);
             }
             self.tool_calls.push(ToolCallInfo {
                 tool_name: call.name.clone(),
