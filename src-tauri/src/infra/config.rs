@@ -30,11 +30,11 @@ pub struct TabState {
     pub id: String,
     #[serde(rename = "type")]
     pub tab_type: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "sessionId")]
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none", alias = "customTitle")]
     pub custom_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
@@ -354,6 +354,22 @@ pub fn load_sampling_presets(project_dir: &Path) -> SamplingPresets {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_tab_state_accepts_camel_and_snake_case() {
+        let camel: TabState = serde_json::from_str(
+            r#"{"id":"t1","type":"chat","sessionId":"s1","customTitle":"My"}"#,
+        )
+        .unwrap();
+        assert_eq!(camel.session_id.as_deref(), Some("s1"));
+        assert_eq!(camel.custom_title.as_deref(), Some("My"));
+
+        let snake: TabState = serde_json::from_str(
+            r#"{"id":"t1","type":"chat","session_id":"s1","custom_title":"My"}"#,
+        )
+        .unwrap();
+        assert_eq!(snake, camel);
+    }
 
     #[test]
     fn test_save_config_file_preserves_external_fields() {

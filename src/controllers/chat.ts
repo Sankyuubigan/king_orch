@@ -2,8 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { store } from "../store";
 import { bus } from "../events";
-import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, showToast, showPermissionRequest, showVramRequest } from "../ui";
-import type { Role, MessageMenuCallbacks } from "../ui";
+import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, openImageViewer, showToast, showPermissionRequest, showVramRequest } from "../ui";
+import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, ChatMessage } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
@@ -26,6 +26,25 @@ const TRANSLATOR_LANGS: Record<string, { menu: string; footer: string }> = {
   ru: { menu: "Перевести на русский язык", footer: "перевод на русский язык:" },
   en: { menu: "Перевести на английский язык", footer: "перевод на английский язык:" },
 };
+
+const IMAGE_EXTENSIONS: Record<string, string[]> = {
+  "image/jpeg": ["jpg", "jpeg"],
+  "image/png": ["png"],
+  "image/webp": ["webp"],
+  "image/gif": ["gif"],
+  "image/bmp": ["bmp"],
+  "image/avif": ["avif"],
+  "image/svg+xml": ["svg"],
+  "image/tiff": ["tif", "tiff"],
+  "image/x-icon": ["ico"],
+};
+
+function imageExtensions(mimeType: string, fileName: string): string[] {
+  const known = IMAGE_EXTENSIONS[mimeType.toLowerCase()];
+  if (known) return known;
+  const fromName = fileName.match(/\.([a-z0-9]+)$/i)?.[1]?.toLowerCase();
+  return fromName ? [fromName] : ["png"];
+}
 
 async function renderMermaid() {
   try {
@@ -196,6 +215,7 @@ export class ChatController {
   private el: ChatElements;
   private hooks: ChatHooks;
   private menuCallbacks: MessageMenuCallbacks;
+  private imageCallbacks: ImageAttachmentCallbacks;
   private thoughtMenuCallbacks: ThoughtMenuCallbacks;
   private attachments: Attachment[] = [];
   private modelAudioCapable: boolean = false;
@@ -220,7 +240,10 @@ export class ChatController {
       onCopy: (uid) => this.onCopyMessage(uid),
       onEdit: (uid) => this.onEditMessage(uid),
       onTranslate: (uid) => this.onTranslateMessage(uid),
-      onSaveImage: (uid) => this.onSaveImageMessage(uid),
+    };
+    this.imageCallbacks = {
+      onPreview: (attachment) => this.onPreviewImage(attachment),
+      onSave: (attachment) => this.onSaveImage(attachment),
     };
     this.thoughtMenuCallbacks = {
       onDeleteThoughts: (uid, uids) => this.onDeleteThoughts(uid, uids),
@@ -510,29 +533,22 @@ export class ChatController {
     bus.emit("session:open", newId);
   }
 
-  private async onSaveImageMessage(uid: string) {
-    const idx = this.state.uidList.indexOf(uid);
-    if (idx === -1) return;
-    const msg = this.state.history[idx];
-    const images = (msg.attachments || []).filter((a) => a.mime_type?.startsWith("image/"));
-    if (images.length === 0) {
-      showToast("В сообщении нет изображений", "error");
-      return;
-    }
-    // Первое изображение — сразу в диалог, остальные — по очереди после сохранения.
-    for (const img of images) {
-      const ext = img.mime_type === "image/jpeg" ? "jpg" : img.mime_type === "image/webp" ? "webp" : "png";
-      const defName = (img.file_name || `image.${ext}`).replace(/\.[a-z0-9]+$/i, "") + `.${ext}`;
-      const savePath = await saveDialog({ defaultPath: defName, filters: [{ name: "Изображения", extensions: [ext] }] });
+  private onPreviewImage(attachment: Attachment) {
+    const dataUrl = `data:${attachment.mime_type};base64,${attachment.data_base64}`;
+    openImageViewer(dataUrl, attachment.file_name);
+  }
+
+  private async onSaveImage(img: Attachment) {
+    try {
+      const extensions = imageExtensions(img.mime_type, img.file_name);
+      const defName = (img.file_name || `image.${extensions[0]}`).replace(/\.[a-z0-9]+$/i, "") + `.${extensions[0]}`;
+      const savePath = await saveDialog({ defaultPath: defName, filters: [{ name: "Изображения", extensions }] });
       if (!savePath) return;
-      try {
-        await invoke("save_image_file", { path: savePath, dataBase64: img.data_base64 });
-        showToast(`Изображение сохранено: ${savePath}`, "success");
-      } catch (err) {
-        showToast(`Ошибка сохранения: ${err}`, "error");
-        void trackError("chat.saveImage", err);
-        return;
-      }
+      await invoke("save_image_file", { path: savePath, dataBase64: img.data_base64 });
+      showToast(`Изображение сохранено: ${savePath}`, "success");
+    } catch (err) {
+      showToast(`Ошибка сохранения: ${err}`, "error");
+      void trackError("chat.saveImage", err);
     }
   }
 
@@ -793,7 +809,7 @@ export class ChatController {
       this.el.chatHistory.appendChild(createThoughtsBlock(items, uid, this.thoughtMenuCallbacks, []));
     }
     const hasMenu = uid !== undefined && (role === 'user' || role === 'agent');
-    const msgEl = createMessageElement(role, content, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, attachments, this.translatorMenuLabel());
+    const msgEl = createMessageElement(role, content, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, attachments, this.translatorMenuLabel(), undefined, this.imageCallbacks);
     this.el.chatHistory.appendChild(msgEl); this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
   }
 
@@ -886,7 +902,7 @@ export class ChatController {
       const timeText = msg.time_sec ? `${msg.time_sec.toFixed(1)} сек` : undefined;
       // Скрываем служебные теги LLM в сохранённых ответах (defence in depth).
       const cleanContent = role === 'agent' ? stripStreamArtifacts(msg.content) : msg.content;
-      this.el.chatHistory.appendChild(createMessageElement(role, cleanContent, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, msg.attachments, this.translatorMenuLabel(), msg.model));
+      this.el.chatHistory.appendChild(createMessageElement(role, cleanContent, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, msg.attachments, this.translatorMenuLabel(), msg.model, this.imageCallbacks));
     }
     if (thoughtsItems.length > 0) this.el.chatHistory.appendChild(createThoughtsBlock(thoughtsItems, lastAssistantUid, this.thoughtMenuCallbacks, thoughtsUids));
     this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
@@ -1357,6 +1373,10 @@ export class ChatController {
   }
 
   private bindBusEvents() {
+    bus.on("model-catalog-changed", () => {
+      fillModelSelect(this.el.modelSelect);
+      fillAgentSelect(this.el.agentSelect);
+    });
     bus.on("config:loaded", (config: any) => {
       // Общие каталоги уже в store (заполнил SettingsController) — перерисовываем
       // селекты этой вкладки, сохраняя текущий выбор.

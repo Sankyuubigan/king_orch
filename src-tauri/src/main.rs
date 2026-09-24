@@ -231,6 +231,7 @@ async fn main() {
         .invoke_handler(tauri::generate_handler![
             api::config::get_config,
             api::config::set_config_value,
+            api::config::reset_max_gen_tokens,
             api::config::set_last_model,
             api::config::set_theme,
             api::config::set_tabs,

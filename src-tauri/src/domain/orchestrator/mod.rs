@@ -3541,4 +3541,125 @@ mod tests {
             failures
         );
     }
+
+    fn synthetic_text(length: usize) -> String {
+        "Проверка расчёта контекста с историей сообщений. "
+            .chars()
+            .cycle()
+            .take(length)
+            .collect()
+    }
+
+    #[test]
+    #[ignore]
+    fn startup_context_23513_reproduction() {
+        let model_path =
+            std::env::var("TEST_MODEL_PATH").expect("Set TEST_MODEL_PATH to a GGUF file path");
+        let project_dir = workspace_root();
+        let agents_dir = project_dir.join("agents");
+        let agents = load_agents(&agents_dir).expect("agents load");
+        let workflows = crate::domain::workflow_engine::parser::load_workflows(&agents_dir)
+            .expect("workflows load");
+        let workflow = workflows
+            .iter()
+            .find(|workflow| workflow.name == "Психотерапевт")
+            .expect("psychotherapist workflow");
+        let history = vec![ChatMessage {
+            id: Some("msg_0".to_string()),
+            msg_type: "message".to_string(),
+            content: synthetic_text(1177),
+            sub_calls: None,
+            author: Some("user".to_string()),
+            model: None,
+            time_sec: None,
+            attachments: None,
+            phase: None,
+        }];
+        let user_text = synthetic_text(1177);
+        let (with_history, has_tools) = build_worst_agent_prompt(&agents, workflow, &history);
+        let (without_history, _) = build_worst_agent_prompt(&agents, workflow, &[]);
+        let history_chars: usize = llm_history(&history)
+            .iter()
+            .map(|message| message.content.chars().count())
+            .sum();
+        let total_chars = with_history.chars().count() + history_chars + user_text.chars().count();
+        let chars_per_token = estimate_chars_per_token(&with_history, &history[0].content, &user_text);
+        let tool_budget = if has_tools { TOOL_WORKING_BUDGET } else { 0 };
+        let estimated_tokens = (total_chars / chars_per_token) as u32
+            + TOKEN_ESTIMATE_RESERVE
+            + tool_budget;
+        let expected_context = (estimated_tokens + 5632 + 128).min(28672).max(2048);
+        println!(
+            "CALC worst_with_history={} worst_without_history={} history_chars={} user_chars={} chars_per_token={} reserve={} tool_budget={} estimated_prompt={} expected_context={}",
+            with_history.chars().count(),
+            without_history.chars().count(),
+            history_chars,
+            user_text.chars().count(),
+            chars_per_token,
+            TOKEN_ESTIMATE_RESERVE,
+            tool_budget,
+            estimated_tokens,
+            expected_context
+        );
+
+        let cancel = Arc::new(AtomicBool::new(false));
+        let logs = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log_sink = logs.clone();
+        let cancel_for_log = cancel.clone();
+        let log_cb = move |message: String| {
+            println!("CONTEXT_RUN: {}", message);
+            if message.contains("Стартовый контекст движка") {
+                cancel_for_log.store(true, Ordering::SeqCst);
+            }
+            if let Ok(mut sink) = log_sink.lock() {
+                sink.push(message);
+            }
+        };
+        let result = run_chat(
+            log_cb,
+            |_, _| {},
+            |_| {},
+            |_| {},
+            agents_dir,
+            project_dir.join("src-tauri/mcp_servers"),
+            project_dir.join("src-tauri/bin"),
+            PathBuf::from(
+                crate::infra::load_config_early()
+                    .llamacpp_dir
+                    .expect("llamacpp_dir"),
+            ),
+            model_path,
+            "main_conversation_flow".to_string(),
+            user_text,
+            history,
+            Vec::new(),
+            28672,
+            5632,
+            false,
+            false,
+            1500,
+            ModelParams::default(),
+            "Auto".to_string(),
+            None,
+            cancel,
+            Arc::new(Mutex::new(StreamMeta::default())),
+            None,
+            "test-context-23513".to_string(),
+            Some(project_dir.join("test").to_string_lossy().to_string()),
+        );
+        println!("CONTEXT_RUN_RESULT: {:?}", result.as_ref().map(|_| "ok"));
+        let context_line = logs
+            .lock()
+            .expect("logs lock")
+            .iter()
+            .find(|line| line.contains("Стартовый контекст движка"))
+            .cloned()
+            .expect("context log");
+        println!("CONTEXT_CAPTURED: {}", context_line);
+        println!(
+            "MATCH_EXPECTED_23513={} EXPECTED_FROM_FORMULA={}",
+            context_line.contains("Стартовый контекст движка: 23513"),
+            expected_context
+        );
+    }
 }

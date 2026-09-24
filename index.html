@@ -288,10 +288,6 @@
             <label for="prespen-slider" style="min-width: 180px;">presence_penalty: <strong id="prespen-value">0.0</strong></label>
             <input type="range" id="prespen-slider" min="0.0" max="2.0" step="0.1" value="0.0" style="flex: 1;" />
           </div>
-          
-          <div style="margin-top: 15px; text-align: right;">
-            <button id="btn-reset-params" class="btn-secondary">Сбросить по умолчанию</button>
-          </div>
         </div>
 
         <div class="group-box">
@@ -306,6 +302,9 @@
           <div class="input-row" style="margin-top: 10px;">
             <label for="max-gen-slider" style="min-width: 250px;">Макс. токенов для ответа (Резерв): <strong id="max-gen-value">2048</strong></label>
             <input type="range" id="max-gen-slider" min="512" max="16384" step="512" value="2048" style="flex: 1;" />
+          </div>
+          <div style="margin-top: 15px; text-align: right;">
+            <button id="btn-reset-params" class="btn-secondary">Сбросить по умолчанию</button>
           </div>
           <div class="input-row" style="margin-top: 10px;">
             <label for="chat-font-slider" style="min-width: 250px;">Размер текста в чате: <strong id="chat-font-value">100%</strong></label>
@@ -429,6 +428,14 @@
       <div class="confirm-buttons">
         <button id="vram-btn-ok" class="btn-primary confirm-btn">ОК</button>
       </div>
+    </div>
+  </div>
+
+  <div id="image-viewer-overlay" class="image-viewer-overlay" role="dialog" aria-modal="true" aria-hidden="true">
+    <button id="image-viewer-close" class="image-viewer-close" type="button" title="Закрыть" aria-label="Закрыть">×</button>
+    <div class="image-viewer-stage">
+      <img id="image-viewer-image" class="image-viewer-image" alt="" draggable="false">
+      <div id="image-viewer-caption" class="image-viewer-caption" hidden></div>
     </div>
   </div>
 

@@ -108,6 +108,14 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
 }
 
 #[tauri::command]
+pub fn reset_max_gen_tokens(app: AppHandle) -> u32 {
+    let mut cfg = infra::load_config(&app);
+    cfg.max_gen_tokens = infra::AppConfig::default().max_gen_tokens;
+    infra::save_config(&app, &cfg);
+    cfg.max_gen_tokens
+}
+
+#[tauri::command]
 pub fn set_last_model(app: AppHandle, path: String) {
     let mut cfg = infra::load_config(&app);
     // 🛡 Проектор mmproj нельзя выбирать активной моделью (см. is_mmproj_file).

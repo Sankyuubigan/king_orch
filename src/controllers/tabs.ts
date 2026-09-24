@@ -144,8 +144,8 @@ export class TabController {
     if (this.entries.length === 0) {
       this.newMainTab(persist);
     } else {
-      // Активная вкладка восстановления: если ID пропал — берём первую.
-      const wanted = saved.some(t => t.id === store.activeTabId) ? store.activeTabId : null;
+      const savedActive = (config as any)?.active_tab ?? (config as any)?.activeTab ?? null;
+      const wanted = typeof savedActive === "string" && this.entries.some(t => t.id === savedActive) ? savedActive : null;
       this.activate(wanted ?? this.entries[0].id, persist);
     }
     this.renderStrip();
@@ -336,12 +336,18 @@ export class TabController {
       && this.entries.some(e => e.type === "section" && e.section === tab.section)) {
       return;
     }
+    const sessionId = (tab as any).sessionId ?? (tab as any).session_id ?? null;
+    const customTitle = (tab as any).customTitle ?? (tab as any).custom_title ?? null;
+    if (tab.type === "chat" && !sessionId) {
+      logFront(`[tabs] init: вкладка ${tab.id} помечена как чат, но диалог не указан — открыта как новая`);
+      tab = { ...tab, type: "main" };
+    }
     const entry: TabEntry = {
       id: tab.id,
       type: tab.type,
-      sessionId: tab.sessionId ?? null,
+      sessionId,
       section: tab.section ?? null,
-      customTitle: tab.customTitle ?? null,
+      customTitle,
       url: tab.url ?? null,
       viewEl: document.createElement("div"),
       stripEl: document.createElement("div"),
@@ -441,7 +447,7 @@ export class TabController {
   }
 
   private defaultTitle(tab: AppTab): string {
-    if (tab.type === "chat") return tab.customTitle || "Курсор…";
+    if (tab.type === "chat") return tab.customTitle || (tab as any).custom_title || "Курсор…";
     if (tab.type === "webview") return "Web UI 9Router";
     if (tab.type === "section") return this.sectionTitle(tab.section as TabSection);
     return "Новая сессия";

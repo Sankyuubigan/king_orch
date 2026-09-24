@@ -3,6 +3,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { showToast } from "../ui";
 import { store } from "../store";
+import { bus } from "../events";
 import { trackError } from "../telemetry";
 import type { TestCaseDef, SingleTestResult, PipelineTestInfo, PipelineTestResult } from "../types";
 
@@ -51,6 +52,10 @@ export class AgentTestController {
   constructor(el: AgentTestElements) {
     this.el = el;
     this.bindEvents();
+    bus.on("model-catalog-changed", () => {
+      this.agentsLoaded = false;
+      void this.loadAgents();
+    });
   }
 
   init(): void {

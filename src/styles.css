@@ -203,7 +203,11 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 
 /* Вложения пользовательских сообщений (изображения/файлы) */
 .msg-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.msg-attachment-img { max-width: 240px; max-height: 180px; border-radius: 6px; border: 1px solid var(--border); object-fit: cover; cursor: zoom-in; display: block; }
+.msg-attachment-image-wrap { position: relative; width: fit-content; max-width: 100%; }
+.msg-attachment-preview { display: block; padding: 0; border: none; background: none; border-radius: 6px; cursor: zoom-in; line-height: 0; max-width: 100%; }
+.msg-attachment-img { max-width: 240px; max-height: 180px; border-radius: 6px; border: 1px solid var(--border); object-fit: cover; display: block; }
+.msg-attachment-save { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; padding: 0; border: 1px solid rgba(255,255,255,0.7); border-radius: 50%; background: rgba(0,0,0,0.68); color: #fff; font-size: 18px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
+.msg-attachment-save:hover { background: rgba(0,0,0,0.86); transform: translateY(-1px); }
 .msg-attachment-file { font-size: 12px; color: var(--text); background: var(--bg-color); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .subcall-msg { background-color: transparent; box-shadow: none; padding: 0; margin: 2px 0; }
@@ -328,6 +332,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .result-toolbar { display: flex; justify-content: space-between; align-items: center; }
 .status-label { color: #888; font-size: 12px; }
 textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-family: 'Consolas', monospace; font-size: 12px; resize: none; box-sizing: border-box; background: #1e1e1e; color: #d4d4d4; }
+
+.image-viewer-overlay { position: fixed; inset: 0; z-index: 1000000; background: rgba(0,0,0,0.94); display: flex; align-items: center; justify-content: center; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.18s ease, visibility 0.18s ease; }
+.image-viewer-overlay.show { opacity: 1; visibility: visible; pointer-events: auto; }
+.image-viewer-stage { max-width: calc(100vw - 48px); max-height: calc(100vh - 48px); display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.image-viewer-image { display: block; max-width: calc(100vw - 48px); max-height: calc(100vh - 96px); object-fit: contain; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
+.image-viewer-close { position: fixed; top: 16px; right: 16px; width: 40px; height: 40px; padding: 0; border: 1px solid rgba(255,255,255,0.35); border-radius: 50%; background: rgba(0,0,0,0.65); color: #fff; font-size: 28px; font-weight: 400; line-height: 1; cursor: pointer; }
+.image-viewer-close:hover { background: rgba(0,0,0,0.9); }
+.image-viewer-caption { max-width: calc(100vw - 48px); color: #ddd; font-size: 13px; text-align: center; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.image-viewer-caption[hidden] { display: none; }
 
 .confirm-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 999999; display: flex; align-items: center; justify-content: center; opacity: 0; visibility: hidden; transition: opacity 0.2s ease, visibility 0.2s ease; }
 .confirm-overlay.show { opacity: 1; visibility: visible; }

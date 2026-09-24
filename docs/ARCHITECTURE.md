@@ -126,6 +126,8 @@ Module-scope helper'ы:
 Чистые функции. На входе — данные, на выходе — DOM-элементы.
 
 - **Render** (`src/ui/render.ts`) — сообщения, мысли, сабагенты, инструменты
+- **ImageAttachment** (`src/ui/image-attachment.ts`) — картинка сообщения, кнопка сохранения и открытие просмотра
+- **ImageViewer** (`src/ui/image-viewer.ts`) — полноэкранный просмотр картинки с закрытием по крестику, клику мимо и Esc
 - **MessageMenu** (`src/ui/message-menu.ts`) — контекстное меню
 - **ThoughtsBlock** (`src/ui/thoughts-block.ts`) — раскрывающийся блок мыслей
 - **Confirm** (`src/ui/confirm.ts`) — модал подтверждения

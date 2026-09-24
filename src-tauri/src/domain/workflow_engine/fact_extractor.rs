@@ -281,9 +281,117 @@ pub(crate) fn build_default_prompt(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::infra::{LlamaEngine, LlmMessage, ModelParams};
+    use crate::infra::{GrammarSpec, LlamaEngine, LlmMessage, ModelParams};
+    use std::path::PathBuf;
     use std::sync::atomic::AtomicBool;
     use std::sync::Arc;
+
+    fn engine_dir_from_app_config() -> PathBuf {
+        let config_path = std::env::var("APPDATA")
+            .expect("APPDATA")
+            .parse::<PathBuf>()
+            .expect("APPDATA path")
+            .join("com.kingorch.app")
+            .join("app_config.json");
+        let config: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(config_path).expect("app_config.json"),
+        )
+        .expect("app config json");
+        PathBuf::from(
+            config
+                .get("llamacpp_dir")
+                .and_then(|value| value.as_str())
+                .expect("llamacpp_dir"),
+        )
+    }
+
+    fn parse_generated_json(text: &str, reasoning: &str) -> Option<serde_json::Value> {
+        [text, reasoning].into_iter().find_map(|channel| {
+            let start = channel.find('{')?;
+            let end = channel.rfind('}')? + 1;
+            serde_json::from_str(&channel[start..end]).ok()
+        })
+    }
+
+    #[test]
+    #[ignore]
+    fn fact_extractor_hybrid_grammar_disable_reasoning_comparison() {
+        let model_path =
+            std::env::var("TEST_MODEL_PATH").expect("Set TEST_MODEL_PATH to a GGUF file path");
+        let workflow_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("workspace root")
+            .join("agents/psychotherapist/transitions");
+        let config = WorkflowConfig {
+            facts_file: Some("facts.yaml".into()),
+            ..Default::default()
+        };
+        let facts = resolve_facts(&config, Some(&workflow_dir));
+        let phases = resolve_phases(&config, Some(&workflow_dir));
+        let user_message = "User: в последнее время мне трудно поддерживать порядок в задачах.\nSession signals: []";
+        let prompt = build_default_prompt(&facts, &phases, &[], user_message, "[]", "");
+        let grammar = build_facts_grammar(&config, Some(&workflow_dir));
+        let engine = LlamaEngine::new(
+            &engine_dir_from_app_config(),
+            &model_path,
+            8192,
+            false,
+            false,
+            1500,
+            &|message| println!("ENGINE: {}", message),
+            |_| {},
+        )
+        .expect("engine start");
+        let messages = vec![
+            LlmMessage {
+                role: "system".to_string(),
+                content: prompt,
+                ..Default::default()
+            },
+            LlmMessage {
+                role: "user".to_string(),
+                content: user_message.to_string(),
+                ..Default::default()
+            },
+        ];
+
+        for disable_reasoning in [true, false] {
+            engine.set_grammar(Some(GrammarSpec {
+                gbnf: Some(grammar.clone()),
+                json_schema: None,
+            }));
+            let label = format!("disable_reasoning={}", disable_reasoning);
+            match engine.generate_chat(
+                &messages,
+                512,
+                &ModelParams::default(),
+                "Auto",
+                disable_reasoning,
+                Arc::new(AtomicBool::new(false)),
+                &format!("test:fact_extractor_comparison:{}", disable_reasoning),
+                None,
+                |_, _| {},
+                |message| println!("{}: {}", label, message),
+            ) {
+                Ok(result) => {
+                    let parsed = parse_generated_json(&result.text, &result.reasoning);
+                    println!(
+                        "RESULT {}: generation=ok json={} text_len={} reasoning_len={}",
+                        label,
+                        parsed.is_some(),
+                        result.text.len(),
+                        result.reasoning.len()
+                    );
+                    println!("TEXT {}: {}", label, result.text);
+                    println!("REASONING {}: {}", label, result.reasoning);
+                    println!("JSON {}: {}", label, parsed.unwrap_or(serde_json::Value::Null));
+                }
+                Err(error) => {
+                    println!("RESULT {}: generation=error error={}", label, error);
+                }
+            }
+        }
+    }
 
     #[test]
     #[ignore]

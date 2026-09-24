@@ -1,6 +1,8 @@
 import { renderMarkdown } from "../utils";
 import { createMessageMenu } from "./message-menu";
 import type { MessageMenuCallbacks } from "./message-menu";
+import { createImageAttachmentElement } from "./image-attachment";
+import type { ImageAttachmentCallbacks } from "./image-attachment";
 import type { Attachment } from "../types";
 
 
@@ -15,7 +17,8 @@ export function createMessageElement(
   menuCallbacks?: MessageMenuCallbacks,
   attachments?: Attachment[],
   translateLabel?: string,
-  modelName?: string
+  modelName?: string,
+  imageCallbacks?: ImageAttachmentCallbacks
 ): HTMLDivElement {
   const msgDiv = document.createElement("div");
   msgDiv.className = `message message-${role}`;
@@ -38,12 +41,7 @@ export function createMessageElement(
     attDiv.className = "msg-attachments";
     for (const att of attachments) {
       if (att.mime_type?.startsWith("image/")) {
-        const img = document.createElement("img");
-        img.className = "msg-attachment-img";
-        img.src = `data:${att.mime_type};base64,${att.data_base64}`;
-        img.alt = att.file_name || "вложение";
-        img.title = att.file_name || "вложение";
-        attDiv.appendChild(img);
+        attDiv.appendChild(createImageAttachmentElement(att, imageCallbacks));
       } else {
         const chip = document.createElement("div");
         chip.className = "msg-attachment-file";
@@ -71,8 +69,7 @@ export function createMessageElement(
   }
 
   if (msgUid && menuCallbacks && (role === 'user' || role === 'agent')) {
-    const hasImage = (attachments || []).some((a) => a.mime_type?.startsWith("image/"));
-    const menu = createMessageMenu(msgUid, menuCallbacks, role === 'agent' ? translateLabel : undefined, hasImage);
+    const menu = createMessageMenu(msgUid, menuCallbacks, role === 'agent' ? translateLabel : undefined);
     msgDiv.appendChild(menu);
   }
 

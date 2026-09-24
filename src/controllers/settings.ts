@@ -88,6 +88,28 @@ export class SettingsController {
     });
   }
 
+  private async resetDefaults() {
+    try {
+      const model = getActiveChatController()?.modelSelectValue ?? store.lastModel;
+      const modelReset = model && !model.startsWith(NINE_ROUTER_MODEL_PREFIX)
+        ? (async () => {
+            await resetModelParams(model);
+            await this.loadModelParams();
+          })()
+        : Promise.resolve();
+      const [_, maxGen] = await Promise.all([
+        modelReset,
+        invoke<number>("reset_max_gen_tokens"),
+      ]);
+      this.el.maxGenSlider.value = String(maxGen);
+      this.el.maxGenValue.innerText = String(maxGen);
+      showToast("Параметры сброшены.", "success");
+    } catch (e) {
+      showToast(`Не удалось сбросить параметры: ${e}`, "error");
+      void trackError("settings.resetDefaults", e);
+    }
+  }
+
   /// Загружает актуальные возможности всех моделей (живой
   /// `get_all_capabilities` плагина, единый источник правды) и пишет в Store —
   /// дропдауны всех чат-вкладок перерисовываются из store.capabilities.
@@ -221,7 +243,7 @@ export class SettingsController {
     this.el.themeSelect?.addEventListener("change", async () => { document.documentElement.setAttribute('data-theme', this.el.themeSelect.value); await invoke("set_theme", { theme: this.el.themeSelect.value }); });
     const sliders: [HTMLInputElement, HTMLElement][] = [[this.el.tempSlider, this.el.tempValue],[this.el.topkSlider, this.el.topkValue],[this.el.toppSlider, this.el.toppValue],[this.el.minpSlider, this.el.minpValue],[this.el.reppenSlider, this.el.reppenValue],[this.el.prespenSlider, this.el.prespenValue]];
     for (const [s, l] of sliders) s?.addEventListener("input", () => { l.innerText = s.value; this.saveModelParams(); });
-    this.el.btnResetParams?.addEventListener("click", async () => { const p = getActiveChatController()?.modelSelectValue ?? store.lastModel; if (!p) return; await resetModelParams(p); await this.loadModelParams(); showToast("Параметры сброшены.", "success"); });
+    this.el.btnResetParams?.addEventListener("click", () => { void this.resetDefaults(); });
     this.el.translatorModelSelect?.addEventListener("change", async () => {
       const v = this.el.translatorModelSelect.value || "";
       store.translatorModel = v || null;

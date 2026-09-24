@@ -16,3 +16,7 @@ export { initVramDialog, showVramRequest } from './vram'
 
 export { createMessageMenu } from './message-menu'
 export type { MessageMenuCallbacks } from './message-menu'
+
+export { initImageViewer, openImageViewer } from './image-viewer'
+export { createImageAttachmentElement } from './image-attachment'
+export type { ImageAttachmentCallbacks } from './image-attachment'
