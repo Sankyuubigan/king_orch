@@ -429,7 +429,7 @@ where
                 content: result.clone(),
                 sub_calls: node_sub_calls,
                 author: Some(agent_id.to_string()),
-                model: Some(extract_model_filename(&runner.engine.model_path)),
+                model: Some(extract_model_filename(runner.engine.model_path())),
                 time_sec: None,
                 attachments: None,
                 phase: Some(2),

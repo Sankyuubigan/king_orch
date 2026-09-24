@@ -17,7 +17,7 @@ use crate::domain::orchestrator;
 use crate::domain::orchestrator::RequestMedia;
 use crate::domain::parsers::clean_thought_tags;
 use crate::infra::{
-    build_json_only_grammar, ChatMessage, GrammarSpec, LlamaEngine, LlmMessage, ModelParams,
+    build_json_only_grammar, ChatMessage, GrammarSpec, LlmEngine, LlmMessage, ModelParams,
     SamplingPresets, SubCall,
 };
 use nodes::find_next_node;
@@ -28,7 +28,7 @@ use std::time::Instant;
 
 /// Общие ресурсы для выполнения workflow — пробрасываются во все узлы.
 pub struct WorkflowRunner<'a, L, S, C> {
-    pub engine: &'a LlamaEngine,
+    pub engine: &'a LlmEngine,
     pub agents: &'a [AgentProfile],
     pub workflows: &'a [WorkflowDef],
     pub log_cb: L,

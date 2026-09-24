@@ -99,7 +99,7 @@ pub async fn run_iterative_test(
     
     // Инициализация движка LLM (папка движка llama.cpp — рядом с exe)
     let engine_dir = crate::infra::get_engine_dir(&app);
-    let engine = infra::llm::LlamaEngine::new(
+    let engine = infra::LlmEngine::local(infra::llm::LlamaEngine::new(
         &engine_dir,
         &model_path,
         config.context_size,
@@ -108,7 +108,7 @@ pub async fn run_iterative_test(
         config.reasoning_budget,
         log_cb.clone(),
         stream_cb.clone(),
-    )?;
+    )?);
 
     let format_type = config.prompt_format.clone();
     let cancel_flag = state.cancel_flag.clone();
@@ -284,7 +284,7 @@ pub async fn run_pipeline_test_cmd(
         }
     };
 
-    let engine = infra::LlamaEngine::new(
+    let engine = infra::LlmEngine::local(infra::LlamaEngine::new(
         &engine_dir,
         &model_path,
         config.context_size,
@@ -293,7 +293,7 @@ pub async fn run_pipeline_test_cmd(
         config.reasoning_budget,
         log_cb.clone(),
         |_| {},
-    )?;
+    )?);
 
     let result = domain::pipeline_test::run_pipeline_test(
         &test_def,

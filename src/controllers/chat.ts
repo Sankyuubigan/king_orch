@@ -7,7 +7,6 @@ import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks } from "../ui
 import type { ThoughtMenuCallbacks, Attachment, ChatMessage } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
-import { chatCompletion as nineRouterChat } from "@my-tauri-plugins/plugin-9router";
 import { renderMarkdown, stripStreamArtifacts, extractChannelThought, NINE_ROUTER_MODEL_PREFIX, fillModelSelect, fillAgentSelect } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError } from "../telemetry";
@@ -713,24 +712,21 @@ export class ChatController {
 
       let mmprojPath: string | null = null; // этот путь всегда текстовый (без вложений) — mmproj не нужен
 
-      const isNineRouter = modelPath.startsWith(NINE_ROUTER_MODEL_PREFIX);
-      const response: any = isNineRouter
-        ? await this.nineRouterTurn(modelPath.slice(NINE_ROUTER_MODEL_PREFIX.length), activeAgent, "", allHistory)
-        : await invoke("chat_request", {
-            modelPath,
-            agentId: activeAgent,
-            message: "",
-            history: allHistory,
-            contextSize: store.contextSize,
-            promptTokens: this.lastPromptTokens,
-            maxGenTokens: parseInt(this.el.maxGenSlider.value, 10),
-            kvQuantKeys: false,
-            kvQuantValues: false,
-            modelParams: params,
-            attachments: [],
-            mmprojPath,
-            sessionId: this.state.sessionId ?? ""
-          });
+      const response: any = await invoke("chat_request", {
+        modelPath,
+        agentId: activeAgent,
+        message: "",
+        history: allHistory,
+        contextSize: store.contextSize,
+        promptTokens: this.lastPromptTokens,
+        maxGenTokens: parseInt(this.el.maxGenSlider.value, 10),
+        kvQuantKeys: false,
+        kvQuantValues: false,
+        modelParams: params,
+        attachments: [],
+        mmprojPath,
+        sessionId: this.state.sessionId ?? ""
+      });
 
       if (response?.has_error) {
         void trackError("chat.send.runFrom.outcome", response.has_error);
@@ -1189,23 +1185,21 @@ export class ChatController {
         try { mmprojPath = await getMmprojPath(modelPath); } catch (_) {}
       }
       const isNineRouter = modelPath.startsWith(NINE_ROUTER_MODEL_PREFIX);
-      const response: any = isNineRouter
-        ? await this.nineRouterTurn(modelPath.slice(NINE_ROUTER_MODEL_PREFIX.length), activeAgent, text, allHistory)
-        : await invoke("chat_request", {
-            modelPath,
-            agentId: activeAgent,
-            message: text,
-            history: allHistory,
-            contextSize: store.contextSize,
-            promptTokens: this.lastPromptTokens,
-            maxGenTokens: parseInt(this.el.maxGenSlider.value, 10),
-            kvQuantKeys: false,
-            kvQuantValues: false,
-            modelParams: params,
-            attachments,
-            mmprojPath,
-            sessionId: this.state.sessionId ?? ""
-        });
+      const response: any = await invoke("chat_request", {
+        modelPath,
+        agentId: activeAgent,
+        message: text,
+        history: allHistory,
+        contextSize: store.contextSize,
+        promptTokens: this.lastPromptTokens,
+        maxGenTokens: parseInt(this.el.maxGenSlider.value, 10),
+        kvQuantKeys: false,
+        kvQuantValues: false,
+        modelParams: params,
+        attachments: isNineRouter ? [] : attachments,
+        mmprojPath: isNineRouter ? null : mmprojPath,
+        sessionId: this.state.sessionId ?? ""
+      });
       if (response?.has_error) {
         void trackError("chat.send.outcome", response.has_error);
       }
@@ -1257,34 +1251,6 @@ export class ChatController {
         this.setProcessingState(false);
         this.triggerTokenCount();
     }
-  }
-
-  /**
-   * Облачный прогон комбо 9Router. История чата уже содержит сообщение
-   * пользователя; конвертируем её в OpenAI-формат и стримим ответ через
-   * плагин tauri-plugin-9router. Чанки приходят событием `9router-chunk`
-   * (переиспользует общий рендер handleStreamChunk). Возвращаем результат в
-   * форме, совместимой с локальным `chat_request` ({ text, messages }).
-   */
-  private async nineRouterTurn(
-    comboName: string,
-    activeAgent: string,
-    text: string,
-    history: any[],
-  ): Promise<{ text: string; messages: any[] }> {
-    const messages = history
-      .filter((m: any) => m.type === "message")
-      .map((m: any) => ({
-        role: m.author === "user" ? "user" : m.author === "system" ? "system" : "assistant",
-        content: typeof m.content === "string" ? m.content : "",
-      }))
-      .filter((m: any) => m.content);
-    if (!messages.length || messages[messages.length - 1].content !== text) {
-      messages.push({ role: "user", content: text });
-    }
-    bus.emit("log", `☁️ 9Router → комбо «${comboName}»`);
-    const full = (await nineRouterChat({ model: comboName, messages, author: activeAgent })) ?? "";
-    return { text: full, messages: [] };
   }
 
   private triggerDraftSave() {

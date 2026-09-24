@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::infra::{ChatMessage, LlamaEngine, ModelParams, SubCall};
+use crate::infra::{ChatMessage, LlmEngine, ModelParams, SubCall};
 use crate::domain::agent_manager::load_agents;
 use crate::domain::workflow_engine::{run_workflow, WorkflowRunner};
 use crate::domain::workflow_engine::context::WorkflowContext;
@@ -190,7 +190,7 @@ pub fn get_pipeline_test_infos(project_root: &Path) -> Result<Vec<PipelineTestIn
 
 pub fn run_pipeline_test(
     test: &PipelineTestDef,
-    engine: &LlamaEngine,
+    engine: &LlmEngine,
     agents_dir: &Path,
     project_root: &Path,
     log_cb: impl Fn(String) + Clone + Send + Sync + 'static,
@@ -629,11 +629,11 @@ pub fn run_pipeline_test_cli(
             .unwrap_or(engine_dir)
     };
 
-    let engine = LlamaEngine::new(
+    let engine = LlmEngine::local(crate::infra::llm::LlamaEngine::new(
         &engine_dir, model_path, crate::infra::config::load_config_early().context_size, false, false, 0,
         &|msg| { eprintln!("[LOG] {}", msg); },
         |_| {},
-    ).map_err(|e| format!("Ошибка запуска движка: {}", e))?;
+    ).map_err(|e| format!("Ошибка запуска движка: {}", e))?);
 
     run_pipeline_test(
         &test_def, &engine, &agents_dir, project_root,

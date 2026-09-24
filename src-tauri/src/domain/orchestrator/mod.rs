@@ -46,7 +46,8 @@ use crate::domain::workflow_engine::{
 use crate::infra::llm_types::GenerationResult;
 use crate::infra::{
     extract_model_filename, llm_history, ChatAttachment, ChatMessage, FunctionDef, GrammarSpec,
-    LlamaEngine, LlmMessage, ModelParams, SubCall, ToolDefinition, ImageArtifactRegistry,
+    CloudEndpoint, LlamaEngine, LlmEngine, LlmMessage, ModelParams, SubCall, ToolDefinition,
+    ImageArtifactRegistry,
 };
 use prompt::build_system_prompt;
 use std::collections::HashMap;
@@ -86,7 +87,7 @@ pub(crate) fn is_agent_error(text: &str) -> bool {
 fn push_continuation_for_cutoff(
     log_cb: &dyn Fn(String),
     agent_id: &str,
-    engine: &LlamaEngine,
+    engine: &LlmEngine,
     model_params: &ModelParams,
     format_type: &str,
     cancel_flag: Arc<AtomicBool>,
@@ -388,6 +389,7 @@ pub fn run_chat<L, S, C, ST>(
     stream_meta: Arc<Mutex<StreamMeta>>,
     prompt_log: Option<std::path::PathBuf>,
     session_id: String,
+    cloud_endpoint: Option<CloudEndpoint>,
     // Рабочая директория для инструментов кодера (bash/fs). None = корень проекта.
     workdir: Option<String>,
 ) -> Result<ChatRunResult, String>
@@ -397,7 +399,14 @@ where
     C: Fn(&SubCall) + Clone + Send + Sync + 'static,
     ST: Fn(String) + Clone + Send + Sync + 'static,
 {
-    status_cb("Загрузка модели в память...".to_string(), 10);
+    status_cb(
+        if cloud_endpoint.is_some() {
+            "Подключение к 9Router...".to_string()
+        } else {
+            "Загрузка модели в память...".to_string()
+        },
+        10,
+    );
     let agents = load_agents(&agents_dir)?;
     let max_gen_usize = max_gen_tokens as usize;
     let recent_history: Vec<ChatMessage> = history
@@ -521,8 +530,14 @@ where
         history_chars, image_catalog_chars, image_tokens, TOKEN_ESTIMATE_RESERVE, tool_budget, max_gen_tokens
     ));
 
-    let engine = if mmproj_path.is_some() {
-        LlamaEngine::new_with_mmproj(
+    let engine = if let Some(endpoint) = cloud_endpoint {
+        let model = model_path
+            .strip_prefix("9router:")
+            .ok_or_else(|| "Некорректный идентификатор модели 9Router".to_string())?
+            .to_string();
+        LlmEngine::cloud(endpoint, model, Arc::new(stream_cb))
+    } else if mmproj_path.is_some() {
+        LlmEngine::local(LlamaEngine::new_with_mmproj(
             &engine_dir,
             &model_path,
             mmproj_path.as_deref(),
@@ -532,9 +547,9 @@ where
             reasoning_budget,
             log_cb.clone(),
             stream_cb,
-        )?
+        )?)
     } else {
-        LlamaEngine::new(
+        LlmEngine::local(LlamaEngine::new(
             &engine_dir,
             &model_path,
             engine_ctx_limit,
@@ -543,7 +558,7 @@ where
             reasoning_budget,
             log_cb.clone(),
             stream_cb,
-        )?
+        )?)
     };
 
     let actual_user_text = if user_text.is_empty() {
@@ -775,7 +790,7 @@ where
             content: final_res.clone(),
             sub_calls: sub_calls_opt,
             author: Some(primary_agent.id.clone()),
-            model: Some(extract_model_filename(&engine.model_path)),
+            model: Some(extract_model_filename(engine.model_path())),
             time_sec: None,
             attachments: None,
             phase: Some(2),
@@ -873,7 +888,7 @@ pub(crate) fn run_agent_node<L, S, C>(
     log_cb: L,
     status_cb: S,
     subcall_cb: C,
-    engine: &LlamaEngine,
+    engine: &LlmEngine,
     agent: &AgentProfile,
     agents: &[AgentProfile],
     user_text: String,
@@ -1173,7 +1188,7 @@ where
     // РЕАЛЬНЫХ токенах, head/tail pruning результатов инструментов, LLM-саммари
     // старой истории, усечение и (край) жёсткий drop.
     let budget_tokens = engine
-        .global_ctx_limit
+        .global_ctx_limit()
         .saturating_sub(max_gen_tokens as u32) as usize;
     // Замыкание подсчёта токенов: точный tokenize движка, fallback — char/2.
     let token_count = |msgs: &[LlmMessage]| -> usize {
@@ -1393,8 +1408,8 @@ where
     // Размышления Phase 1 — внутренний контекст агента для ЕГО Phase 2:
     // в сессию кладутся как thought (юзер раскрывает в GUI), но НЕ попадают
     // в контекст других агентов (llm_history() фильтрует type != "message").
-    let two_phase_thinking =
-        two_phase_thinking || crate::infra::load_config_early().two_phase_default;
+    let two_phase_thinking = !engine.is_cloud()
+        && (two_phase_thinking || crate::infra::load_config_early().two_phase_default);
     // true, если Phase 1 прошла → Phase 2 отвечает БЕЗ думателя (enable_thinking=false)
     // для ЛЮБОЙ грамматики, включая freeform-агентов.
     let mut phase2_disable_reasoning = false;
@@ -1538,7 +1553,7 @@ where
                 content: thinking_text.clone(),
                 sub_calls: None,
                 author: Some(agent.id.clone()),
-                model: Some(extract_model_filename(&engine.model_path)),
+                model: Some(extract_model_filename(engine.model_path())),
                 time_sec: None,
                 attachments: None,
                 phase: Some(1),
@@ -1618,7 +1633,7 @@ where
                 .get_tokens_count(&ctx.llm_messages, format_type)
                 .unwrap_or(0);
             ideal_ctx =
-                (current_tokens as u32 + max_gen_tokens as u32 + 128).min(engine.global_ctx_limit);
+                (current_tokens as u32 + max_gen_tokens as u32 + 128).min(engine.global_ctx_limit());
 
             if current_tokens + max_gen_tokens <= ideal_ctx as usize || ctx.llm_messages.len() <= 2
             {
@@ -1755,7 +1770,7 @@ where
                             e
                         ));
                         let budget = engine
-                            .global_ctx_limit
+                            .global_ctx_limit()
                             .saturating_sub(max_gen_tokens as u32)
                             as usize;
                         let tc = |msgs: &[LlmMessage]| -> usize {
@@ -2107,7 +2122,7 @@ where
                     content: t.clone(),
                     sub_calls: None,
                     author: Some(agent.id.clone()),
-                    model: Some(extract_model_filename(&engine.model_path)),
+                    model: Some(extract_model_filename(engine.model_path())),
                     time_sec: None,
                     attachments: None,
                     phase: Some(1),
@@ -2131,7 +2146,7 @@ where
                         content: t.clone(),
                         sub_calls: None,
                         author: Some(agent.id.clone()),
-                        model: Some(extract_model_filename(&engine.model_path)),
+                        model: Some(extract_model_filename(engine.model_path())),
                         time_sec: None,
                         attachments: None,
                         phase: Some(1),
@@ -3496,7 +3511,7 @@ mod tests {
                     .filter(|p| p.join("backends").exists())
                     .unwrap_or(engine_dir)
             };
-            let engine = match LlamaEngine::new(
+            let engine = LlmEngine::local(match LlamaEngine::new(
                 &engine_dir,
                 model_path,
                 8192,
@@ -3512,7 +3527,7 @@ mod tests {
                     failures.push(model_path.clone());
                     continue;
                 }
-            };
+            });
 
             let project_dir = workspace_root();
             let sampling_presets = crate::infra::load_sampling_presets(&project_dir);
@@ -3706,6 +3721,7 @@ mod tests {
             Arc::new(Mutex::new(StreamMeta::default())),
             None,
             "test-context-23513".to_string(),
+            None,
             Some(project_dir.join("test").to_string_lossy().to_string()),
         );
         println!("CONTEXT_RUN_RESULT: {:?}", result.as_ref().map(|_| "ok"));

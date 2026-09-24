@@ -6,7 +6,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::api::AppState;
 use crate::domain;
 use crate::infra::{
-    self, llm_history, ChatAttachment, ChatMessage, LlmMessage, ModelParams, SubCall,
+    self, llm_history, ChatAttachment, ChatMessage, CloudEndpoint, LlmMessage, ModelParams, SubCall,
 };
 
 // ─── Лог-файл ───
@@ -228,17 +228,30 @@ pub async fn chat_request(
     let kv_quant_keys = false;
     let kv_quant_values = false;
 
-    // ── Проверка установки движка llama.cpp (llama-server) ──
-    // Новая архитектура: движок — ОТДЕЛЬНЫЙ процесс, инференс возможен ТОЛЬКО
-    // через него (нет встроенного CPU-фолбэка). Если движка нет — понятная ошибка.
+    let is_cloud = model_path.starts_with("9router:");
     let engine_dir = infra::get_engine_dir(&app);
-    if !infra::llamacpp_installer::has_any_installed(&engine_dir) {
-        let msg = "Движок llama.cpp не установлен (нет llama-server.exe).\n\
-             Откройте Настройки → «Движок запуска нейромоделей» и нажмите «Установить движок»."
-            .to_string();
-        log::warn!("{}", msg);
-        return Err(msg);
-    }
+    let cloud_endpoint = if is_cloud {
+        if !attachments.is_empty() {
+            return Err("9Router не поддерживает локальные вложения".to_string());
+        }
+        tauri_plugin_9router::commands::ensure_started(app.clone())
+            .await
+            .map_err(|error| format!("9Router недоступен: {}", error))?;
+        let config = tauri_plugin_9router::router::config::load_config(&app);
+        Some(CloudEndpoint {
+            base_url: config.base_url(),
+            api_key: config.api_key,
+        })
+    } else {
+        if !infra::llamacpp_installer::has_any_installed(&engine_dir) {
+            let msg = "Движок llama.cpp не установлен (нет llama-server.exe).\n\
+                 Откройте Настройки → «Движок запуска нейромоделей» и нажмите «Установить движок»."
+                .to_string();
+            log::warn!("{}", msg);
+            return Err(msg);
+        }
+        None
+    };
 
     let format_type = cfg.prompt_format.clone();
     state.cancel_flag.store(false, Ordering::SeqCst);
@@ -249,7 +262,7 @@ pub async fn chat_request(
     // запросе есть вложения — докачиваем по каталогу до запуска движка.
     let mmproj_path = match mmproj_path {
         Some(p) => Some(p),
-        None if !attachments.is_empty() => {
+        None if !is_cloud && !attachments.is_empty() => {
             match infra::ensure_mmproj_for_model(&app, &model_path).await {
                 Ok(Some(p)) => Some(p),
                 Ok(None) => {
@@ -351,29 +364,35 @@ pub async fn chat_request(
             .join(format!("{}_{}.prompt_log.jsonl", agent_id, prompt_log_ts))
     });
 
-    // ── Предварительный подсчёт памяти ДО запуска (цифра как внизу поля ввода) ──
-    // Точное число токенов присылает фронтенд (Xenova + get_prompt_preview) — логируем
-    // тот же прогноз VRAM, который юзер видит в UI под полем ввода.
-    let file_mb = std::fs::metadata(&model_path)
-        .map(|m| m.len() as f64 / (1024.0 * 1024.0))
-        .unwrap_or(0.0);
-    let effective_ctx = (prompt_tokens + max_gen_tokens + 128).min(context_size);
-    // estimate_vram_mb резолвит KV-spec по текущему engine_source
-    // (BeeLlama → kvarn5/kvarn4+tail1024, иначе legacy-флаги, всегда false).
-    let total_mb =
-        infra::estimate_vram_mb(&model_path, effective_ctx, kv_quant_keys, kv_quant_values);
-    let kv_mb = (total_mb - file_mb).max(0.0);
-    log_cb(format!(
-        "📐 Промпт: ~{} токенов, max_gen={}, ожидаемый финал: ~{}/{} (n_ctx)",
-        prompt_tokens,
-        max_gen_tokens,
-        prompt_tokens + max_gen_tokens,
-        context_size
-    ));
-    log_cb(format!(
-        "💾 Ожидаемое потребление VRAM (GPU): Модель ~{:.1} МБ + Кэш ~{:.1} МБ = Итого ~{:.1} МБ",
-        file_mb, kv_mb, total_mb
-    ));
+    if is_cloud {
+        log_cb(format!(
+            "📐 Промпт: ~{} токенов, max_gen={}, ожидаемый финал: ~{}/{} (n_ctx)",
+            prompt_tokens,
+            max_gen_tokens,
+            prompt_tokens + max_gen_tokens,
+            context_size
+        ));
+        log_cb("☁️ 9Router: VRAM приложения не используется".to_string());
+    } else {
+        let file_mb = std::fs::metadata(&model_path)
+            .map(|m| m.len() as f64 / (1024.0 * 1024.0))
+            .unwrap_or(0.0);
+        let effective_ctx = (prompt_tokens + max_gen_tokens + 128).min(context_size);
+        let total_mb =
+            infra::estimate_vram_mb(&model_path, effective_ctx, kv_quant_keys, kv_quant_values);
+        let kv_mb = (total_mb - file_mb).max(0.0);
+        log_cb(format!(
+            "📐 Промпт: ~{} токенов, max_gen={}, ожидаемый финал: ~{}/{} (n_ctx)",
+            prompt_tokens,
+            max_gen_tokens,
+            prompt_tokens + max_gen_tokens,
+            context_size
+        ));
+        log_cb(format!(
+            "💾 Ожидаемое потребление VRAM (GPU): Модель ~{:.1} МБ + Кэш ~{:.1} МБ = Итого ~{:.1} МБ",
+            file_mb, kv_mb, total_mb
+        ));
+    }
 
     let run_result = tokio::task::spawn_blocking(move || {
         // ── Контроль утечек: RSS приложения до и после запроса ──
@@ -406,6 +425,7 @@ pub async fn chat_request(
             stream_meta,
             prompt_log,
             session_id,
+            cloud_endpoint,
             cfg.workdir.clone(),
         );
         let app_rss_after = crate::infra::current_process_rss();
