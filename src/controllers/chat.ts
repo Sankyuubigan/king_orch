@@ -893,9 +893,9 @@ export class ChatController {
     let thoughtsItems: HTMLElement[] = []; let thoughtsUids: string[] = []; let lastAssistantUid: string | undefined;
     for (let i = 0; i < this.state.history.length; i++) {
       const msg = this.state.history[i]; const uid = this.state.uidList[i];
-      if (msg.type === 'thought') {
+      if (msg.type === 'thought' || msg.type === 'signal') {
         const content = msg.content;
-        const tool = this.parseToolThought(msg.content);
+        const tool = msg.type === 'thought' ? this.parseToolThought(msg.content) : null;
         if (tool) {
           thoughtsItems.push(createToolThoughtElement(msg.author || 'Система', tool.tool, tool.args, tool.result, true));
         } else {
@@ -908,7 +908,11 @@ export class ChatController {
         }
         continue;
       }
-      if (msg.type === 'message' && msg.author && msg.author !== 'user' && msg.author !== 'system' && msg.sub_calls && msg.sub_calls.length > 0) {
+      if (msg.type !== 'message') {
+        logFront(`[chat] Неизвестный тип сообщения "${String(msg.type)}" по индексу ${i}; сообщение пропущено.`);
+        continue;
+      }
+      if (msg.author && msg.author !== 'user' && msg.author !== 'system' && msg.sub_calls && msg.sub_calls.length > 0) {
         lastAssistantUid = uid;
         thoughtsUids = [];
         msg.sub_calls.forEach(call => thoughtsItems.push(createSubcallElement(call, (c) => this.showSubchat(c))));

@@ -1,6 +1,6 @@
 export interface ChatMessage {
     id?: string;
-    type: 'message' | 'thought';
+    type: 'message' | 'thought' | 'signal';
     content: string;
     sub_calls?: SubCall[];
     author?: string;
