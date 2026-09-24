@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
@@ -180,6 +182,34 @@ pub fn open_session_folder(app: &AppHandle, id: &str) -> Result<(), String> {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = std::process::Command::new("xdg-open").arg(dir).spawn();
+    }
+    Ok(())
+}
+
+pub fn reveal_path(path: &str) -> Result<(), String> {
+    let file_path = Path::new(path);
+    let metadata = fs::metadata(file_path).map_err(|error| {
+        log::error!("Не удалось открыть путь {:?}: {}", path, error);
+        format!("Путь недоступен: {}", path)
+    })?;
+    #[cfg(target_os = "windows")]
+    {
+        if metadata.is_dir() {
+            let mut command = std::process::Command::new("explorer");
+            command.arg(file_path);
+            command.creation_flags(0x08000000);
+            command.spawn().map_err(|error| {
+                log::error!("Не удалось открыть папку {:?}: {}", path, error);
+                format!("Не удалось открыть папку: {}", error)
+            })?;
+        } else {
+            open_in_explorer_and_select(file_path);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = metadata;
+        let _ = std::process::Command::new("xdg-open").arg(file_path).spawn();
     }
     Ok(())
 }

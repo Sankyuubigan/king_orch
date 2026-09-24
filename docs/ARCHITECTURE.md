@@ -128,7 +128,8 @@ Module-scope helper'ы:
 Чистые функции. На входе — данные, на выходе — DOM-элементы.
 
 - **Render** (`src/ui/render.ts`) — сообщения, мысли, сабагенты, инструменты
-- **ImageAttachment** (`src/ui/image-attachment.ts`) — картинка сообщения, кнопка сохранения и открытие просмотра
+- **ImageAttachment** (`src/ui/image-attachment.ts`) — картинка сообщения по сохранённому пути или legacy base64, кнопка сохранения и открытие просмотра
+- **File drop** (`src/controllers/chat-router.ts`, `src/controllers/chat.ts`) — нативный Tauri drag-and-drop из Проводника; файлы и папки сохраняются как прямые пути, картинки читаются для превью, а байты для LLM создаются на границе отправки
 - **ImageViewer** (`src/ui/image-viewer.ts`) — полноэкранный просмотр картинки с закрытием по крестику, клику мимо и Esc
 - **MessageMenu** (`src/ui/message-menu.ts`) — контекстное меню сообщения
 - **WorkspaceMenu** (`src/ui/workspace-menu.ts`) — глобальное меню кнопки `☰`, popup в `document.body`

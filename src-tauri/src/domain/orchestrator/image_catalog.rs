@@ -297,7 +297,7 @@ fn history_image_id(
         &attachment_index.to_string(),
         &attachment.file_name,
         &attachment.mime_type,
-        &attachment.data_base64,
+        attachment.file_path.as_deref().unwrap_or(&attachment.data_base64),
     ] {
         hasher.update((part.len() as u64).to_le_bytes());
         hasher.update(part.as_bytes());
@@ -322,6 +322,8 @@ mod tests {
             file_name: name.to_string(),
             mime_type: "image/png".to_string(),
             data_base64: data.to_string(),
+            file_path: None,
+            is_dir: Some(false),
         }
     }
 

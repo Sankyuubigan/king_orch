@@ -1,3 +1,4 @@
+use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -11,6 +12,54 @@ use tauri_plugin_llama_engine::engine::{
 pub struct CloudEndpoint {
     pub base_url: String,
     pub api_key: Option<String>,
+}
+
+fn attachment_data_url(attachment: &ChatAttachment) -> Result<String, String> {
+    if !attachment.data_base64.is_empty() {
+        return Ok(format!(
+            "data:{};base64,{}",
+            attachment.mime_type, attachment.data_base64
+        ));
+    }
+    if attachment.is_dir.unwrap_or(false) {
+        return Err(format!("Папку нельзя передать модели как файл: {}", attachment.file_name));
+    }
+    let path = attachment
+        .file_path
+        .as_deref()
+        .ok_or_else(|| format!("У вложения '{}' нет ни пути, ни данных", attachment.file_name))?;
+    let bytes = fs::read(path).map_err(|error| {
+        log::error!("Не удалось прочитать вложение {:?}: {}", path, error);
+        format!("Не удалось прочитать вложение '{}': {}", attachment.file_name, error)
+    })?;
+    if bytes.is_empty() {
+        return Err(format!("Вложение '{}' пустое", attachment.file_name));
+    }
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{};base64,{}", attachment.mime_type, encoded))
+}
+
+fn materialize_attachments(
+    attachments: Option<&[ChatAttachment]>,
+) -> Result<Option<Vec<ChatAttachment>>, String> {
+    let Some(items) = attachments else {
+        return Ok(None);
+    };
+    let mut materialized = Vec::with_capacity(items.len());
+    for item in items {
+        let mut copy = item.clone();
+        if copy.data_base64.is_empty() {
+            let data_url = attachment_data_url(item)?;
+            let encoded = data_url
+                .split_once(",")
+                .map(|(_, value)| value)
+                .ok_or_else(|| "Не удалось получить base64 вложения".to_string())?;
+            copy.data_base64 = encoded.to_string();
+        }
+        materialized.push(copy);
+    }
+    Ok(Some(materialized))
 }
 
 struct CloudEngine {
@@ -28,6 +77,7 @@ impl CloudEngine {
         params: &ModelParams,
         tool_choice: Option<&str>,
         tools: Option<Vec<ToolDefinition>>,
+        attachments: Option<&[ChatAttachment]>,
         mut progress_cb: F,
         log_cb: L,
     ) -> Result<GenerationResult, String>
@@ -45,15 +95,40 @@ impl CloudEngine {
             ),
             None => None,
         };
-        let messages = messages
+        let mut messages: Vec<ChatMessage> = messages
             .iter()
             .map(|message| ChatMessage {
                 role: message.role.clone(),
-                content: message.content.clone(),
+                content: serde_json::Value::String(message.content.clone()),
                 tool_calls: message.tool_calls.clone(),
                 tool_call_id: message.tool_call_id.clone(),
             })
             .collect();
+        if let Some(items) = attachments.filter(|items| !items.is_empty()) {
+            let mut parts = Vec::with_capacity(items.len() + 1);
+            let last_user = messages.iter().rposition(|message| message.role == "user");
+            if let Some(index) = last_user {
+                if let Some(text) = messages[index].content.as_str() {
+                    parts.push(serde_json::json!({"type": "text", "text": text}));
+                }
+            }
+            for attachment in items {
+                parts.push(serde_json::json!({
+                    "type": "image_url",
+                    "image_url": {"url": attachment_data_url(attachment)?}
+                }));
+            }
+            if let Some(index) = last_user {
+                messages[index].content = serde_json::Value::Array(parts);
+            } else {
+                messages.push(ChatMessage {
+                    role: "user".to_string(),
+                    content: serde_json::Value::Array(parts),
+                    tool_calls: None,
+                    tool_call_id: None,
+                });
+            }
+        }
         let request = ChatRequest {
             model: self.model.clone(),
             messages,
@@ -258,6 +333,7 @@ impl LlmEngine {
                     params,
                     tool_choice,
                     tools,
+                    None,
                     progress_cb,
                     log_cb,
                 )
@@ -285,10 +361,15 @@ impl LlmEngine {
         F: FnMut(f32, &str),
         L: Fn(String),
     {
+        let materialized_attachments = if matches!(self.backend, LlmBackend::Local(_)) {
+            materialize_attachments(attachments)?
+        } else {
+            None
+        };
         match &self.backend {
             LlmBackend::Local(engine) => engine.run_chat_completions(
                 messages,
-                attachments,
+                materialized_attachments.as_deref(),
                 max_tokens,
                 params,
                 stop_words,
@@ -302,9 +383,6 @@ impl LlmEngine {
                 log_cb,
             ),
             LlmBackend::Cloud(engine) => {
-                if attachments.is_some_and(|items| !items.is_empty()) {
-                    return Err("9Router не поддерживает локальные вложения".to_string());
-                }
                 if cancel_flag.load(Ordering::SeqCst) {
                     return Err("Прервано пользователем".to_string());
                 }
@@ -315,6 +393,7 @@ impl LlmEngine {
                     params,
                     tool_choice,
                     tools.map(|items| items.to_vec()),
+                    attachments,
                     progress_cb,
                     log_cb,
                 )
@@ -339,10 +418,11 @@ impl LlmEngine {
         F: FnMut(f32, &str),
         L: Fn(String),
     {
+        let materialized_attachments = materialize_attachments(Some(_attachments))?;
         match &self.backend {
             LlmBackend::Local(engine) => engine.generate_chat_multimodal(
                 _messages,
-                _attachments,
+                materialized_attachments.as_deref().unwrap_or_default(),
                 _max_tokens,
                 _params,
                 _format_type,
@@ -352,7 +432,23 @@ impl LlmEngine {
                 _progress_cb,
                 _log_cb,
             ),
-            LlmBackend::Cloud(_) => Err("9Router не поддерживает локальные вложения".to_string()),
+            LlmBackend::Cloud(engine) => {
+                let tools = engine
+                    .pending_tools
+                    .lock()
+                    .expect("9Router tools lock poisoned")
+                    .take();
+                engine.generate(
+                    _messages,
+                    _max_tokens,
+                    _params,
+                    _tool_choice,
+                    tools,
+                    Some(_attachments),
+                    _progress_cb,
+                    _log_cb,
+                )
+            }
         }
     }
 

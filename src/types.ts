@@ -107,7 +107,23 @@ export interface PipelineTestResult {
 export interface Attachment {
     file_name: string;
     mime_type: string;
-    data_base64: string;
+    data_base64?: string;
+    file_path?: string;
+    is_dir?: boolean;
+}
+
+export interface AttachmentMetadata {
+    file_name: string;
+    mime_type: string;
+    file_path: string;
+    is_dir: boolean;
+    size: number;
+}
+
+export interface DragDropPayload {
+    type: "enter" | "over" | "drop" | "leave";
+    paths?: string[];
+    position?: { x: number; y: number };
 }
 
 export interface CatalogEntry {

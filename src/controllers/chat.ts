@@ -4,7 +4,7 @@ import { store } from "../store";
 import { bus } from "../events";
 import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, openImageViewer, showToast, showPermissionRequest, showVramRequest } from "../ui";
 import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks } from "../ui";
-import type { ThoughtMenuCallbacks, Attachment, ChatMessage } from "../types";
+import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
 import { renderMarkdown, stripStreamArtifacts, extractChannelThought, NINE_ROUTER_MODEL_PREFIX, fillModelSelect, fillAgentSelect, getAgentDisplayName } from "../utils";
@@ -248,6 +248,8 @@ export class ChatController {
     this.imageCallbacks = {
       onPreview: (attachment) => this.onPreviewImage(attachment),
       onSave: (attachment) => this.onSaveImage(attachment),
+      loadPreview: (attachment, image) => this.loadAttachmentPreview(attachment, image),
+      onOpenPath: (attachment) => this.onOpenAttachmentPath(attachment),
     };
     this.thoughtMenuCallbacks = {
       onDeleteThoughts: (uid, uids) => this.onDeleteThoughts(uid, uids),
@@ -540,9 +542,16 @@ export class ChatController {
     bus.emit("session:open", newId);
   }
 
-  private onPreviewImage(attachment: Attachment) {
-    const dataUrl = `data:${attachment.mime_type};base64,${attachment.data_base64}`;
-    openImageViewer(dataUrl, attachment.file_name);
+  private async onPreviewImage(attachment: Attachment) {
+    try {
+      const dataUrl = attachment.data_base64
+        ? `data:${attachment.mime_type};base64,${attachment.data_base64}`
+        : await invoke<string>("get_image_data_url", { path: attachment.file_path });
+      openImageViewer(dataUrl, attachment.file_name);
+    } catch (error) {
+      showToast(`Не удалось открыть изображение: ${error}`, "error");
+      void trackError("chat.previewImage", error);
+    }
   }
 
   private async onSaveImage(img: Attachment) {
@@ -551,11 +560,37 @@ export class ChatController {
       const defName = (img.file_name || `image.${extensions[0]}`).replace(/\.[a-z0-9]+$/i, "") + `.${extensions[0]}`;
       const savePath = await saveDialog({ defaultPath: defName, filters: [{ name: "Изображения", extensions }] });
       if (!savePath) return;
-      await invoke("save_image_file", { path: savePath, dataBase64: img.data_base64 });
+      if (img.file_path) {
+        await invoke("save_image_from_path", { sourcePath: img.file_path, destinationPath: savePath });
+      } else if (img.data_base64) {
+        await invoke("save_image_file", { path: savePath, dataBase64: img.data_base64 });
+      } else {
+        throw new Error("У изображения нет ни пути, ни данных");
+      }
       showToast(`Изображение сохранено: ${savePath}`, "success");
     } catch (err) {
       showToast(`Ошибка сохранения: ${err}`, "error");
       void trackError("chat.saveImage", err);
+    }
+  }
+
+  private async loadAttachmentPreview(attachment: Attachment, image: HTMLImageElement) {
+    if (!attachment.file_path) return;
+    try {
+      image.src = await invoke<string>("get_image_data_url", { path: attachment.file_path });
+    } catch (error) {
+      showToast(`Не удалось загрузить миниатюру: ${error}`, "error");
+      void trackError("chat.loadImagePreview", error);
+    }
+  }
+
+  private async onOpenAttachmentPath(attachment: Attachment) {
+    if (!attachment.file_path) return;
+    try {
+      await invoke("reveal_path", { path: attachment.file_path });
+    } catch (error) {
+      showToast(`Не удалось открыть путь: ${error}`, "error");
+      void trackError("chat.openAttachmentPath", error);
     }
   }
 
@@ -1184,11 +1219,11 @@ export class ChatController {
       const _p2 = store.currentModelParams;
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value), dry_multiplier: _p2?.dry_multiplier ?? 0.0, dry_base: _p2?.dry_base ?? 1.75, dry_allowed_length: _p2?.dry_allowed_length ?? 2, dry_penalty_last_n: _p2?.dry_penalty_last_n ?? 0, xtc_probability: _p2?.xtc_probability ?? 0.0, xtc_threshold: _p2?.xtc_threshold ?? 0.1 };
       const allHistory = this.state.history.slice();
+      const isNineRouter = modelPath.startsWith(NINE_ROUTER_MODEL_PREFIX);
       let mmprojPath: string | null = null;
-      if (attachments && attachments.length > 0) {
+      if (!isNineRouter && attachments.length > 0) {
         try { mmprojPath = await getMmprojPath(modelPath); } catch (_) {}
       }
-      const isNineRouter = modelPath.startsWith(NINE_ROUTER_MODEL_PREFIX);
       const response: any = await invoke("chat_request", {
         modelPath,
         agentId: activeAgent,
@@ -1200,7 +1235,7 @@ export class ChatController {
         kvQuantKeys: false,
         kvQuantValues: false,
         modelParams: params,
-        attachments: isNineRouter ? [] : attachments,
+        attachments,
         mmprojPath: isNineRouter ? null : mmprojPath,
         sessionId: this.state.sessionId ?? ""
       });
@@ -1301,13 +1336,12 @@ export class ChatController {
     const btn = this.el.btnAttach;
     const modelPath = this.el.modelSelect?.value;
     if (!modelPath) { btn.disabled = true; this.modelAudioCapable = false; btn.classList.remove('btn-attach-active'); btn.classList.add('btn-attach-inactive'); btn.title = 'Сначала выберите модель'; return; }
-    // Облачные комбо 9Router не принимают локальные вложения (mmproj/аудио).
     if (modelPath.startsWith(NINE_ROUTER_MODEL_PREFIX)) {
-      btn.disabled = true;
-      this.modelAudioCapable = false;
-      btn.classList.remove('btn-attach-active');
-      btn.classList.add('btn-attach-inactive');
-      btn.title = 'Облачное комбо 9Router: вложения недоступны';
+      btn.disabled = false;
+      this.modelAudioCapable = true;
+      btn.classList.remove('btn-attach-inactive');
+      btn.classList.add('btn-attach-active');
+      btn.title = 'Прикрепить файл, папку или изображение';
       return;
     }
     let mmprojPath: string | null = null;
@@ -1354,11 +1388,47 @@ export class ChatController {
         continue;
       }
       const dataBase64 = await this.fileToBase64(file);
-      this.attachments.push({ file_name: file.name, mime_type: file.type, data_base64: dataBase64 });
-      this.addFilePreview(file.name, file.type, dataBase64);
+      const attachment: Attachment = { file_name: file.name, mime_type: file.type, data_base64: dataBase64 };
+      if (this.attachments.some((item) => this.attachmentKey(item) === this.attachmentKey(attachment))) continue;
+      this.attachments.push(attachment);
+      this.addFilePreview(attachment);
     }
     this.el.fileInput.value = '';
     this.triggerTokenCount();
+  }
+
+  private async handlePaths(paths: string[]) {
+    if (paths.length === 0 || store.isProcessing || this.state.isProcessing) return;
+    try {
+      const metadata = await invoke<AttachmentMetadata[]>("get_attachment_metadata", { paths });
+      for (const item of metadata) {
+        const attachment: Attachment = {
+          file_name: item.file_name,
+          mime_type: item.mime_type,
+          file_path: item.file_path,
+          is_dir: item.is_dir,
+        };
+        if (this.attachments.some((existing) => this.attachmentKey(existing) === this.attachmentKey(attachment))) continue;
+        this.attachments.push(attachment);
+        this.addFilePreview(attachment);
+      }
+      this.triggerTokenCount();
+    } catch (error) {
+      showToast(`Не удалось прикрепить путь: ${error}`, "error");
+      void trackError("chat.handlePaths", error);
+    }
+  }
+
+  onFileDragEvent(payload: DragDropPayload) {
+    if (store.isProcessing || this.state.isProcessing) return;
+    const isDragging = payload.type === "enter" || payload.type === "over";
+    this.el.viewChat.classList.toggle("drag-over", isDragging);
+    if (payload.type === "drop") {
+      this.el.viewChat.classList.remove("drag-over");
+      void this.handlePaths(payload.paths || []);
+    } else if (payload.type === "leave") {
+      this.el.viewChat.classList.remove("drag-over");
+    }
   }
 
   private fileToBase64(file: File): Promise<string> {
@@ -1373,24 +1443,34 @@ export class ChatController {
     });
   }
 
-  private addFilePreview(fileName: string, mimeType: string, dataBase64: string) {
+  private attachmentKey(attachment: Attachment) {
+    return attachment.file_path ? `path:${attachment.file_path}` : `data:${attachment.file_name}:${attachment.mime_type}`;
+  }
+
+  private addFilePreview(attachment: Attachment) {
     const div = document.createElement('div');
     div.className = 'file-preview-item';
-    const isImage = mimeType.startsWith('image/');
+    const isImage = attachment.mime_type.startsWith('image/');
     if (isImage) {
       const img = document.createElement('img');
-      img.src = `data:${mimeType};base64,${dataBase64}`;
+      img.alt = attachment.file_name;
+      if (attachment.data_base64) {
+        img.src = `data:${attachment.mime_type};base64,${attachment.data_base64}`;
+      } else if (attachment.file_path) {
+        void this.loadAttachmentPreview(attachment, img);
+      }
       div.appendChild(img);
     }
     const nameSpan = document.createElement('span');
     nameSpan.className = 'file-preview-name';
-    nameSpan.textContent = fileName;
+    nameSpan.textContent = attachment.file_name;
+    if (attachment.file_path) nameSpan.title = attachment.file_path;
     div.appendChild(nameSpan);
     const remove = document.createElement('span');
     remove.className = 'file-preview-remove';
     remove.textContent = '✕';
     remove.addEventListener('click', () => {
-      const idx = this.attachments.findIndex(a => a.file_name === fileName);
+      const idx = this.attachments.findIndex((item) => this.attachmentKey(item) === this.attachmentKey(attachment));
       if (idx !== -1) this.attachments.splice(idx, 1);
       div.remove();
       this.triggerTokenCount();
@@ -1411,7 +1491,18 @@ export class ChatController {
         this.triggerTokenCount();
     });
     this.el.chatInput.addEventListener("blur", () => { if (this.state.hasSession()) { clearTimeout(this.state.draftTimeout); this.persistSession(); } });
-    this.el.btnAttach?.addEventListener("click", () => { if (!this.el.btnAttach.disabled) this.el.fileInput.click(); });
+    this.el.btnAttach?.addEventListener("click", async () => {
+      if (this.el.btnAttach.disabled) return;
+      try {
+        const selected = await openDialog({ multiple: true });
+        if (!selected) return;
+        const paths = Array.isArray(selected) ? selected : [selected];
+        await this.handlePaths(paths);
+      } catch (error) {
+        showToast(`Не удалось открыть выбор файлов: ${error}`, "error");
+        void trackError("chat.openAttachDialog", error);
+      }
+    });
     this.el.fileInput?.addEventListener("change", (e) => this.handleFileSelect((e.target as HTMLInputElement).files));
     this.el.modelSelect?.addEventListener("change", () => {
       this.el.modelSelect.dataset.modelExplicit = "true";

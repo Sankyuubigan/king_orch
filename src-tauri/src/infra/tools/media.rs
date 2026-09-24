@@ -71,6 +71,48 @@ impl ImageArtifactRegistry {
 
 /// Сохранить base64-аттачменты во временные файлы (порядок Vec = порядок -r).
 /// Возвращает пути файлов. Папка: системный temp + session_id.
+pub fn resolve_ref_paths(
+    attachments: &[crate::infra::ChatAttachment],
+    session_id: &str,
+) -> Result<Vec<String>, String> {
+    let legacy: Vec<crate::infra::ChatAttachment> = attachments
+        .iter()
+        .filter(|attachment| attachment.file_path.is_none())
+        .cloned()
+        .collect();
+    let legacy_paths = if legacy.is_empty() {
+        Vec::new()
+    } else {
+        dump_attachments_to_refs(&legacy, session_id)?
+    };
+    let mut legacy_index = 0;
+    let mut paths = Vec::with_capacity(attachments.len());
+    for attachment in attachments {
+        if attachment.is_dir.unwrap_or(false) {
+            return Err(format!(
+                "Для edit_image прикрепите конкретный файл, а не папку: {}",
+                attachment.file_name
+            ));
+        }
+        if let Some(path) = attachment.file_path.as_deref() {
+            if !std::path::Path::new(path).is_file() {
+                return Err(format!("Файл изображения недоступен: {}", path));
+            }
+            paths.push(path.to_string());
+        } else {
+            let path = legacy_paths
+                .get(legacy_index)
+                .ok_or_else(|| "Не удалось подготовить legacy-вложение".to_string())?;
+            paths.push(path.clone());
+            legacy_index += 1;
+        }
+    }
+    if paths.is_empty() {
+        return Err("Для edit_image не выбрано изображение".to_string());
+    }
+    Ok(paths)
+}
+
 pub fn dump_attachments_to_refs(
     attachments: &[crate::infra::ChatAttachment],
     session_id: &str,
@@ -266,6 +308,8 @@ pub fn image_path_to_attachment(
         file_name,
         mime_type: "image/png".to_string(),
         data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        file_path: None,
+        is_dir: Some(false),
     })
 }
 
@@ -365,14 +409,9 @@ pub fn execute_image_tool(
                 return Some(Err(ToolError::Usage("prompt_en пуст".to_string())));
             }
             let refs = if name == "edit_image" {
-                match dump_attachments_to_refs(attachments, ctx.session_id) {
-                    Ok(refs) if !refs.is_empty() => refs,
-                    Ok(_) => {
-                        return Some(Err(ToolError::Usage(
-                            "Для edit_image не выбрано изображение".to_string(),
-                        )))
-                    }
-                    Err(error) => return Some(Err(ToolError::Io(error))),
+                match resolve_ref_paths(attachments, ctx.session_id) {
+                    Ok(refs) => refs,
+                    Err(error) => return Some(Err(ToolError::Usage(error))),
                 }
             } else {
                 Vec::new()

@@ -43,9 +43,14 @@ export function createMessageElement(
       if (att.mime_type?.startsWith("image/")) {
         attDiv.appendChild(createImageAttachmentElement(att, imageCallbacks));
       } else {
-        const chip = document.createElement("div");
+        const chip = document.createElement("button");
+        chip.type = "button";
         chip.className = "msg-attachment-file";
-        chip.textContent = `📎 ${att.file_name || "файл"}`;
+        chip.textContent = `${att.is_dir ? "📁" : "📎"} ${att.file_name || "файл"}`;
+        if (att.file_path) chip.title = att.file_path;
+        if (att.file_path && imageCallbacks?.onOpenPath) {
+          chip.addEventListener("click", () => imageCallbacks.onOpenPath?.(att));
+        }
         attDiv.appendChild(chip);
       }
     }

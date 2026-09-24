@@ -1722,7 +1722,7 @@ where
         };
         let attempt_generate = |msgs: &[LlmMessage]| -> Result<GenerationResult, String> {
             let disable_reasoning = force_no_thinking.get() || has_agent_grammar;
-            if !attachments.is_empty() && engine.is_multimodal() {
+            if !attachments.is_empty() && (engine.is_multimodal() || engine.is_cloud()) {
                 engine.generate_chat_multimodal(
                     msgs,
                     &attachments,

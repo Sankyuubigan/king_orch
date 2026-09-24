@@ -210,7 +210,8 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .msg-attachment-img { max-width: 240px; max-height: 180px; border-radius: 6px; border: 1px solid var(--border); object-fit: cover; display: block; }
 .msg-attachment-save { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; padding: 0; border: 1px solid rgba(255,255,255,0.7); border-radius: 50%; background: rgba(0,0,0,0.68); color: #fff; font-size: 18px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
 .msg-attachment-save:hover { background: rgba(0,0,0,0.86); transform: translateY(-1px); }
-.msg-attachment-file { font-size: 12px; color: var(--text); background: var(--bg-color); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-attachment-file { font-size: 12px; color: var(--text); background: var(--bg-color); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.msg-attachment-file:hover { background: var(--session-hover); }
 
 .subcall-msg { background-color: transparent; box-shadow: none; padding: 0; margin: 2px 0; }
 .btn-subcall { background-color: var(--subcall-btn); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 6px 10px; font-size: 12px; cursor: pointer; text-align: left; transition: background-color 0.2s; width: 100%; }
@@ -224,6 +225,9 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .subchat-title { font-weight: bold; font-size: 15px; color: var(--primary); }
 
 .chat-input-area { display: flex; flex-direction: column; gap: 10px; padding: 10px; background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px; flex: 0 0 auto; }
+.chat-main-page.drag-over .chat-input-area,
+.chat-main-page.drag-over .chat-history { outline: 2px dashed var(--primary); outline-offset: -3px; }
+.chat-main-page.drag-over .chat-input-area { background: color-mix(in srgb, var(--panel-bg) 92%, var(--primary)); }
 .chat-input-controls { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; }
 .chat-input-controls-left { display: flex; gap: 10px; align-items: center; flex: 1; min-width: 0; flex-wrap: wrap; }
 .chat-input-controls-right { display: flex; gap: 10px; flex-shrink: 0; margin-left: auto; align-items: center; }

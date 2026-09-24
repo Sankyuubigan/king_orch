@@ -95,6 +95,43 @@ fn edit_without_refs_is_usage_error() {
 }
 
 #[test]
+fn path_attachments_are_passed_to_edit_image_without_base64() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("manifest parent")
+        .join("test")
+        .join("media_path_attachment.png");
+    std::fs::write(&path, b"image").unwrap();
+    let attachment = crate::infra::ChatAttachment {
+        file_name: "media_path_attachment.png".to_string(),
+        mime_type: "image/png".to_string(),
+        data_base64: String::new(),
+        file_path: Some(path.to_string_lossy().to_string()),
+        is_dir: Some(false),
+    };
+    let refs = resolve_ref_paths(&[attachment], "path-test").unwrap();
+    assert_eq!(refs, vec![path.to_string_lossy().to_string()]);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn folder_attachment_is_rejected_for_edit_image() {
+    let folder = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("manifest parent")
+        .join("test");
+    let attachment = crate::infra::ChatAttachment {
+        file_name: "test".to_string(),
+        mime_type: "application/x-directory".to_string(),
+        data_base64: String::new(),
+        file_path: Some(folder.to_string_lossy().to_string()),
+        is_dir: Some(true),
+    };
+    let error = resolve_ref_paths(&[attachment], "folder-test").unwrap_err();
+    assert!(error.contains("конкретный файл"));
+}
+
+#[test]
 fn attach_saved_images_uses_only_current_subcalls() {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

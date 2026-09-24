@@ -231,9 +231,6 @@ pub async fn chat_request(
     let is_cloud = model_path.starts_with("9router:");
     let engine_dir = infra::get_engine_dir(&app);
     let cloud_endpoint = if is_cloud {
-        if !attachments.is_empty() {
-            return Err("9Router не поддерживает локальные вложения".to_string());
-        }
         tauri_plugin_9router::commands::ensure_started(app.clone())
             .await
             .map_err(|error| format!("9Router недоступен: {}", error))?;

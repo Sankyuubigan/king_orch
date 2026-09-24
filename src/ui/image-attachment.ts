@@ -3,6 +3,8 @@ import type { Attachment } from "../types";
 export interface ImageAttachmentCallbacks {
   onPreview: (attachment: Attachment) => void;
   onSave: (attachment: Attachment) => void;
+  loadPreview?: (attachment: Attachment, image: HTMLImageElement) => void;
+  onOpenPath?: (attachment: Attachment) => void;
 }
 
 export function createImageAttachmentElement(
@@ -12,7 +14,9 @@ export function createImageAttachmentElement(
   const wrapper = document.createElement("div");
   wrapper.className = "msg-attachment-image-wrap";
 
-  const dataUrl = `data:${attachment.mime_type};base64,${attachment.data_base64}`;
+  const dataUrl = attachment.data_base64
+    ? `data:${attachment.mime_type};base64,${attachment.data_base64}`
+    : null;
   const preview = document.createElement("button");
   preview.type = "button";
   preview.className = "msg-attachment-preview";
@@ -21,7 +25,7 @@ export function createImageAttachmentElement(
 
   const img = document.createElement("img");
   img.className = "msg-attachment-img";
-  img.src = dataUrl;
+  if (dataUrl) img.src = dataUrl;
   img.alt = attachment.file_name || "изображение";
   img.title = attachment.file_name || "изображение";
   img.draggable = false;
@@ -29,6 +33,9 @@ export function createImageAttachmentElement(
 
   if (callbacks) {
     preview.addEventListener("click", () => callbacks.onPreview(attachment));
+    if (!dataUrl && attachment.file_path) {
+      callbacks.loadPreview?.(attachment, img);
+    }
   }
 
   if (callbacks) {
