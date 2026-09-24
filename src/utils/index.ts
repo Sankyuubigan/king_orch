@@ -13,6 +13,7 @@ export {
   fillModelSelect,
   fillAgentSelect,
   renderNineRouterOptions,
+  getAgentDisplayName,
 } from './model-options'
 
 export function formatBytes(bytes: number): string {

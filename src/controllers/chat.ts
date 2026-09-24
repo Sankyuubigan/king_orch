@@ -7,7 +7,7 @@ import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks } from "../ui
 import type { ThoughtMenuCallbacks, Attachment, ChatMessage } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
-import { renderMarkdown, stripStreamArtifacts, extractChannelThought, NINE_ROUTER_MODEL_PREFIX, fillModelSelect, fillAgentSelect } from "../utils";
+import { renderMarkdown, stripStreamArtifacts, extractChannelThought, NINE_ROUTER_MODEL_PREFIX, fillModelSelect, fillAgentSelect, getAgentDisplayName } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError } from "../telemetry";
 
@@ -922,7 +922,7 @@ export class ChatController {
         thoughtsItems = []; thoughtsUids = []; lastAssistantUid = undefined;
       }
       const role = (msg.author && msg.author !== 'user') ? (msg.author === 'system' ? 'system' : 'agent') : 'user' as Role;
-      const agentName = (msg.author && msg.author !== 'user' && msg.author !== 'system') ? msg.author : undefined;
+      const agentName = (msg.author && msg.author !== 'user' && msg.author !== 'system') ? getAgentDisplayName(msg.author) : undefined;
       const hasMenu = uid && (role === 'user' || role === 'agent');
       const timeText = msg.time_sec ? `${msg.time_sec.toFixed(1)} сек` : undefined;
       // Скрываем служебные теги LLM в сохранённых ответах (defence in depth).

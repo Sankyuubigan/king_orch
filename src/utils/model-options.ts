@@ -1,5 +1,13 @@
 import { store } from "../store";
 
+/// Маппит сырой id/author агента в отображаемое имя из каталога (frontmatter `name`).
+/// Если агент не найден — возвращает входную строку как есть (совместимость).
+export function getAgentDisplayName(authorOrId?: string | null): string | undefined {
+  if (!authorOrId) return undefined;
+  const agent = store.agents.find(a => a.id === authorOrId);
+  return agent?.name || authorOrId;
+}
+
 /// Префикс значения комбо 9Router в списке моделей.
 /// Выбор с этим префиксом идёт в облачный шлюз 9Router (плагин
 /// tauri-plugin-9router), а НЕ в локальный llama-server.

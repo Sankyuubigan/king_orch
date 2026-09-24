@@ -2,7 +2,7 @@ import { store } from "../store";
 import { bus } from "../events";
 import { showToast, confirmDialog } from "../ui";
 import { fetchSessions, deleteSession, renameSession, openSessionFolder, loadSession } from "../services";
-import { copyMarkdownToClipboard, renderMarkdown, stripStreamArtifacts } from "../utils";
+import { copyMarkdownToClipboard, renderMarkdown, stripStreamArtifacts, getAgentDisplayName } from "../utils";
 import { trackError } from "../telemetry";
 import { getChatControllerForSession } from "./tabs";
 import type { SessionMeta, ChatMessage } from "../types";
@@ -402,7 +402,7 @@ export class SessionController {
       if (role === "agent" && msg.author) {
         const name = document.createElement("span");
         name.className = "preview-agent-name";
-        name.textContent = msg.author;
+        name.textContent = getAgentDisplayName(msg.author) ?? "";
         bubble.appendChild(name);
       }
       const content = document.createElement("div");
