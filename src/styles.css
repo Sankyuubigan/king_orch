@@ -1294,19 +1294,38 @@ body.edge-reconnecting {
    Браузерные вкладки рабочей области (TabController)
    ═══════════════════════════════════════════════════════════════════════════ */
 
-.workspace-tabs {
+.workspace-tabs-bar {
   display: flex;
   align-items: stretch;
-  gap: 4px;
+  min-width: 0;
   background-color: var(--panel-bg);
   border: 1px solid var(--border);
   border-bottom: none;
   border-radius: 6px 6px 0 0;
-  padding: 4px 6px 0 6px;
-  overflow-x: auto;
+  padding: 4px 6px 0;
   flex-shrink: 0;
+}
+
+.workspace-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 36px;
+  overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: thin;
+}
+
+.workspace-tab-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 46px;
+  min-height: 36px;
+  margin-left: 4px;
+  padding-left: 6px;
+  border-left: 1px solid var(--border);
 }
 
 .workspace-tab {
@@ -1367,15 +1386,6 @@ body.edge-reconnecting {
 }
 .workspace-tab-add:hover { background: var(--session-hover); }
 
-.workspace-tab-menu {
-  position: relative;
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  margin-left: auto;
-  padding-left: 4px;
-}
-
 .workspace-tab-menu-toggle {
   width: 32px;
   height: 28px;
@@ -1389,25 +1399,32 @@ body.edge-reconnecting {
   margin-bottom: 4px;
 }
 .workspace-tab-menu-toggle:hover { background: var(--session-hover); }
+.workspace-tab-menu-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 
 .workspace-tab-menu-dropdown {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 0;
-  z-index: 250;
-  display: none;
-  min-width: 190px;
-  padding: 5px 0;
+  position: fixed;
+  z-index: 1500;
+  display: flex;
+  flex-direction: column;
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
+  padding: 6px;
   background: var(--panel-bg);
+  color: var(--text);
   border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: 0 4px 8px rgba(0,0,0,0.3);
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.35);
 }
-.workspace-tab-menu-dropdown.show { display: flex; flex-direction: column; }
 
 .workspace-tab-menu-item {
-  padding: 8px 14px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 36px;
+  padding: 6px 10px;
   border: none;
+  border-radius: 4px;
   background: transparent;
   color: var(--text);
   cursor: pointer;
@@ -1415,7 +1432,11 @@ body.edge-reconnecting {
   white-space: nowrap;
   font-size: 13px;
 }
-.workspace-tab-menu-item:hover { background: var(--session-hover); color: var(--primary); }
+.workspace-tab-menu-item:hover,
+.workspace-tab-menu-item:focus-visible { background: var(--session-hover); color: var(--primary); outline: none; }
+.workspace-tab-menu-item:focus-visible { box-shadow: inset 0 0 0 2px var(--primary); }
+.workspace-tab-menu-item .menu-ico { width: 20px; flex: 0 0 20px; text-align: center; }
+.workspace-tab-menu-separator { height: 1px; margin: 5px 6px; background: var(--border); }
 
 .workspace-content {
   flex: 1;

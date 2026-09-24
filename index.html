@@ -32,7 +32,10 @@
 
     <main class="main-content">
 
-      <div class="workspace-tabs" id="workspace-tabs"></div>
+      <div class="workspace-tabs-bar">
+        <div class="workspace-tabs" id="workspace-tabs"></div>
+        <div class="workspace-tab-actions" id="workspace-tab-actions"></div>
+      </div>
 
       <div class="workspace-content" id="workspace-content">
         <div id="chat-tab-slot"></div>
@@ -252,15 +255,7 @@
           </div>
         </div>
 
-        <div class="group-box">
-          <div class="group-title">О приложении</div>
-          <about-updates-panel repo="Sankyuubigan/king_orch"></about-updates-panel>
-        </div>
-
-        <div class="group-box">
-          <div class="group-title">Облачные модели (9Router)</div>
-          <nine-router-panel></nine-router-panel>
-        </div>
+        <div data-lazy-content="settings"></div>
 
         <div class="group-box">
           <div class="group-title">Переводчик сообщений</div>
@@ -372,39 +367,11 @@
       </div>
 
       <div id="view-logs" class="view">
-        <logs-panel></logs-panel>
+        <div data-lazy-content="logs"></div>
       </div>
 
       <div id="view-engines" class="view" style="overflow-y: auto;" data-engines-src>
-        <div class="group-box">
-          <div class="group-title">Движок запуска нейромоделей</div>
-          <llama-engine-panel></llama-engine-panel>
-        </div>
-
-        <div class="group-box">
-          <div class="group-title">Скачать новую модель LLM</div>
-          <llama-download-panel></llama-download-panel>
-        </div>
-
-        <div class="group-box">
-          <div class="group-title">Локальные Модели LLM</div>
-          <llama-models-panel></llama-models-panel>
-        </div>
-
-        <div class="group-box">
-          <div class="group-title">Движок запуска ImageGEN моделей</div>
-          <image-engine-panel></image-engine-panel>
-        </div>
-
-        <div class="group-box">
-          <div class="group-title">Скачать новую модель ImageGEN</div>
-          <image-bundle-panel></image-bundle-panel>
-        </div>
-
-        <div class="group-box">
-          <div class="group-title">Локальные модели ImageGEN</div>
-          <image-models-panel></image-models-panel>
-        </div>
+        <div data-lazy-content="engines"></div>
       </div>
 
       </div><!-- /workspace-content -->
@@ -458,10 +425,50 @@
     </div>
   </div>
 
-  <!-- Контейнер для всплывающих уведомлений -->
   <div id="toast-container"></div>
 
-  <!-- Глобальный прогресс активных загрузок (единый движок tauri-plugin-downloader) -->
+  <template id="template-settings-lazy-panels">
+    <div class="group-box">
+      <div class="group-title">О приложении</div>
+      <about-updates-panel repo="Sankyuubigan/king_orch"></about-updates-panel>
+    </div>
+    <div class="group-box">
+      <div class="group-title">Облачные модели (9Router)</div>
+      <nine-router-panel></nine-router-panel>
+    </div>
+  </template>
+
+  <template id="template-logs-content">
+    <logs-panel></logs-panel>
+  </template>
+
+  <template id="template-engines-content">
+    <div class="group-box">
+      <div class="group-title">Движок запуска нейромоделей</div>
+      <llama-engine-panel></llama-engine-panel>
+    </div>
+    <div class="group-box">
+      <div class="group-title">Скачать новую модель LLM</div>
+      <llama-download-panel></llama-download-panel>
+    </div>
+    <div class="group-box">
+      <div class="group-title">Локальные Модели LLM</div>
+      <llama-models-panel></llama-models-panel>
+    </div>
+    <div class="group-box">
+      <div class="group-title">Движок запуска ImageGEN моделей</div>
+      <image-engine-panel></image-engine-panel>
+    </div>
+    <div class="group-box">
+      <div class="group-title">Скачать новую модель ImageGEN</div>
+      <image-bundle-panel></image-bundle-panel>
+    </div>
+    <div class="group-box">
+      <div class="group-title">Локальные модели ImageGEN</div>
+      <image-models-panel></image-models-panel>
+    </div>
+  </template>
+
   <downloader-widget></downloader-widget>
 
   <!-- Всплывающее окно проверки обновлений (показывается справа по центру высоты) -->

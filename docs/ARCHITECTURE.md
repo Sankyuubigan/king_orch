@@ -59,14 +59,16 @@
 
 ### TabController (`src/controllers/tabs.ts`)
 Браузерные вкладки рабочей области. Создание (кнопка «＋», main → chat при первом вводе),
-закрытие (**последняя вкладка → авто-новая `main`**), drag по оси X, ПКМ-меню, персист в
-`app_config.json` (`set_tabs`/`active_tab`). Разделы (История/Студия/Настройки/Логи) —
-singleton-вкладки (sessions/agent-studio/logs); settings/engines — дубли делят
-один живой DOM-узел (клонов нет, привязки контроллеров целы), навигация
-из «Настройки» — in-place (`openSectionInPlace`); инвариант видимости —
-`clearWorkspaceActive` гасит всё + поднимается ровно один (`activate`
-самопроверяется в лог); раздел «Движки» (`#view-engines`) — плашки
-llama/image-engine из настроек. webview-вкладка — iframe 9Router.
+закрытие (**последняя вкладка → авто-новая `main`**), drag по оси X, ПКМ-меню,
+глобальное меню по кнопке `☰` в отдельной правой зоне полосы (Новая вкладка, глобальные
+разделы приложения и Web UI 9Router), персист в `app_config.json` (`set_tabs`/`active_tab`).
+Разделы (История/Студия/Настройки/Логи) — singleton-вкладки (sessions/agent-studio/logs);
+settings/engines — дубли делят один живой DOM-узел (клонов нет, привязки контроллеров целы),
+навигация из «Настройки» — in-place (`openSectionInPlace`); инвариант видимости —
+`clearWorkspaceActive` гасит всё + поднимается ровно один (`activate` самопроверяется в лог).
+Раздел «Движки» (`#view-engines`) — плашки llama/image-engine из настроек. Восстановленные
+сессии загружаются лениво при активации вкладки, а тяжёлые web components материализуются
+при открытии раздела. webview-вкладка — iframe 9Router.
 Module-scope helper'ы:
 `getActiveChatController()` (активная чат-вкладка для других контроллеров) и
 `getChatControllerForSession(sessionId)` (для копирования живой истории).
@@ -128,7 +130,8 @@ Module-scope helper'ы:
 - **Render** (`src/ui/render.ts`) — сообщения, мысли, сабагенты, инструменты
 - **ImageAttachment** (`src/ui/image-attachment.ts`) — картинка сообщения, кнопка сохранения и открытие просмотра
 - **ImageViewer** (`src/ui/image-viewer.ts`) — полноэкранный просмотр картинки с закрытием по крестику, клику мимо и Esc
-- **MessageMenu** (`src/ui/message-menu.ts`) — контекстное меню
+- **MessageMenu** (`src/ui/message-menu.ts`) — контекстное меню сообщения
+- **WorkspaceMenu** (`src/ui/workspace-menu.ts`) — глобальное меню кнопки `☰`, popup в `document.body`
 - **ThoughtsBlock** (`src/ui/thoughts-block.ts`) — раскрывающийся блок мыслей
 - **Confirm** (`src/ui/confirm.ts`) — модал подтверждения
 - **Toast** (`src/ui/toast.ts`) — всплывающие уведомления
@@ -150,7 +153,7 @@ Module-scope helper'ы:
 
 | Файл | Команды | Зона ответственности |
 |------|---------|---------------------|
-| `config.rs` | `get_config`, `set_config_value`, `set_last_model`, `set_theme` | Чтение/запись конфигурации |
+| `config.rs` | `get_config`, `set_config_value`, `set_last_model`, `set_theme` | Чтение/запись конфигурации; `get_config` читает JSON через `spawn_blocking`, без анализа GGUF |
 | `sessions.rs` | `get_sessions`, `load_session`, `save_session`, `delete_session`, `rename_session`, `open_session_folder` | CRUD сессий |
 | `models.rs` | `get_models_catalog`, `get_model_params`, `set_model_params`, `reset_model_params`, `add_model` | Параметры моделей и каталог |
 | `agents.rs` | `get_agents` | Загрузка списка entry points (.md + YAML) |

@@ -220,6 +220,7 @@ async function initApp() {
   // ─── Контроллер вкладок рабочей области (браузерные вкладки) ───
   const tabCtrl = new TabController(
     $<HTMLElement>("workspace-tabs"),
+    $<HTMLElement>("workspace-tab-actions"),
     $<HTMLElement>("chat-tab-slot"),
     sharedSampling,
     {

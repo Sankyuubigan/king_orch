@@ -1,65 +1,20 @@
 use tauri::AppHandle;
+use std::time::Instant;
 
 use crate::infra;
 
 #[tauri::command]
-pub fn get_config(app: AppHandle) -> infra::AppConfig {
-    let mut cfg = infra::load_config(&app);
-    remove_mmproj_entries(&mut cfg);
-    backfill_model_meta(&app, &mut cfg);
-    cfg
-}
-
-fn remove_mmproj_entries(cfg: &mut infra::AppConfig) {
-    let removed: Vec<String> = cfg
-        .models
-        .iter()
-        .filter(|path| infra::is_mmproj_file(path))
-        .cloned()
-        .collect();
-    if removed.is_empty() {
-        return;
-    }
-    cfg.models.retain(|path| !infra::is_mmproj_file(path));
-    if cfg
-        .last_model
-        .as_deref()
-        .is_some_and(infra::is_mmproj_file)
-    {
-        cfg.last_model = None;
-    }
-    for path in &removed {
-        log::warn!("get_config: mmproj скрыт из списка моделей: {path} (файл не тронут)");
-    }
-}
-
-/// Дозаполняет `model_meta` для уже установленных моделей по сопоставлению
-/// имени файла с каталогом (чтобы иконки возможностей отображались без
-/// повторного скачивания). Vision также выводится из наличия mmproj.
-fn backfill_model_meta(app: &AppHandle, cfg: &mut infra::AppConfig) {
-    let catalog = infra::load_catalog(app);
-    let mut changed = false;
-    for model_path in &cfg.models {
-        if cfg.model_meta.contains_key(model_path) {
-            continue;
-        }
-        let mut meta = infra::ModelMeta::default();
-        if let Some(entry) = infra::find_catalog_entry_for_model(&catalog, model_path) {
-            meta.uncen = entry.uncen.unwrap_or(false);
-            meta.vision = entry.vision.unwrap_or(false);
-            meta.audio = entry.audio.unwrap_or(false);
-        }
-        if cfg.mmproj_files.contains_key(model_path) {
-            meta.vision = true;
-        }
-        if meta.uncen || meta.vision || meta.audio {
-            cfg.model_meta.insert(model_path.clone(), meta);
-            changed = true;
-        }
-    }
-    if changed {
-        log::info!("get_config: возможности моделей дополнены в ответе без записи конфига");
-    }
+pub async fn get_config(app: AppHandle) -> Result<infra::AppConfig, String> {
+    let started = Instant::now();
+    let config = tokio::task::spawn_blocking(move || infra::load_config(&app))
+        .await
+        .map_err(|error| error.to_string())?;
+    log::info!(
+        "[BOOT] get_config {}ms, models={}",
+        started.elapsed().as_millis(),
+        config.models.len()
+    );
+    Ok(config)
 }
 
 #[tauri::command]

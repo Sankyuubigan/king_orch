@@ -5,7 +5,8 @@ import type { AppTab, TabSection } from "../types";
 import { ChatController } from "./chat";
 import { buildChatPage, buildWebviewPage, copyMarkdownToClipboard, fillAgentSelect, fillModelSelect } from "../utils";
 import type { ChatPageElements, SharedChatControls } from "../utils";
-import { showToast, confirmDialog } from "../ui";
+import { showToast, confirmDialog, createWorkspaceMenu } from "../ui";
+import type { WorkspaceMenuController } from "../ui";
 import { deleteSession, openSessionFolder, fetchSessions } from "../services";
 import { trackError } from "../telemetry";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
@@ -28,6 +29,12 @@ const SECTION_ICONS: Record<TabSection, string> = {
 };
 
 const DUPLICABLE_SECTIONS: TabSection[] = ["settings", "engines"];
+
+const SECTION_LAZY_TEMPLATES: Partial<Record<TabSection, string>> = {
+  settings: "template-settings-lazy-panels",
+  logs: "template-logs-content",
+  engines: "template-engines-content",
+};
 
 const TAB_ICONS: Partial<Record<AppTab["type"], string>> = {
   main: "🏠",
@@ -59,6 +66,7 @@ interface TabEntry {
   labelEl: HTMLElement;
   ctrl: ChatController | null;
   title: string;
+  sessionLoadStarted: boolean;
 }
 
 /// Текущая активная chat-вкладка (фокус), не требующая обязательной обработки.
@@ -84,26 +92,37 @@ function genTabId(): string {
 
 export class TabController {
   private stripEl: HTMLElement;
+  private actionsEl: HTMLElement;
   private slotEl: HTMLElement;
   private shared: SharedChatControls;
   private hooks: TabControllerHooks;
+  private navigationMenu: WorkspaceMenuController | null = null;
   private entries: TabEntry[] = [];
   private persistTimer: number | null = null;
   private dragState: { id: string; index: number } | null = null;
 
   private onDocumentClick = (event: MouseEvent) => {
-    if (!this.stripEl.contains(event.target as Node)) this.closeNavigationMenu();
+    const target = event.target as Node;
+    if (!this.stripEl.contains(target) && !this.actionsEl.contains(target)) this.closeNavigationMenu();
   };
 
   private onDocumentKeydown = (event: KeyboardEvent) => {
     if (event.key === "Escape") this.closeNavigationMenu();
   };
 
-  constructor(stripEl: HTMLElement, slotEl: HTMLElement, shared: SharedChatControls, hooks?: TabControllerHooks) {
+  constructor(
+    stripEl: HTMLElement,
+    actionsEl: HTMLElement,
+    slotEl: HTMLElement,
+    shared: SharedChatControls,
+    hooks?: TabControllerHooks,
+  ) {
     this.stripEl = stripEl;
+    this.actionsEl = actionsEl;
     this.slotEl = slotEl;
     this.shared = shared;
     this.hooks = hooks || {};
+    this.setupNavigationMenu();
     document.addEventListener("click", this.onDocumentClick);
     document.addEventListener("keydown", this.onDocumentKeydown);
     this.bindStripEvents();
@@ -177,6 +196,21 @@ export class TabController {
     this.activate(tab.id, persist);
     if (persist) this.persistTabs();
     return tab;
+  }
+
+  private materializeSectionContent(section: TabSection) {
+    const templateId = SECTION_LAZY_TEMPLATES[section];
+    if (!templateId) return;
+    const target = document.querySelector<HTMLElement>(`${SECTION_VIEWS[section]} [data-lazy-content="${section}"]`);
+    if (!target || target.childElementCount > 0) return;
+    const template = document.getElementById(templateId) as HTMLTemplateElement | null;
+    if (!template) {
+      const error = `Не найден шаблон ленивого раздела ${section} (${templateId})`;
+      logFront(`[tabs] ${error}`);
+      void trackError("tabs.lazy-template", error);
+      return;
+    }
+    target.appendChild(template.content.cloneNode(true));
   }
 
   /** Оригинальный DOM-узел раздела. Узел один на приложение, клонов нет:
@@ -364,6 +398,7 @@ export class TabController {
       labelEl: document.createElement("span"),
       ctrl: null,
       title: this.defaultTitle(tab),
+      sessionLoadStarted: false,
     };
     switch (tab.type) {
       case "main": {
@@ -410,6 +445,7 @@ export class TabController {
         const wasMain = entry.type !== "chat";
         entry.type = "chat";
         entry.sessionId = sessionId;
+        entry.sessionLoadStarted = true;
         if (entry.ctrl) TAB_REGISTRY.set(sessionId, entry.ctrl);
         if (wasMain) {
           entry.viewEl.classList.remove("main-mode");
@@ -424,6 +460,7 @@ export class TabController {
         // Мain-вкладка накопила черновик: привязываем sessionId без конвертации.
         if (entry.type !== "main") return;
         entry.sessionId = sessionId;
+        entry.sessionLoadStarted = true;
         if (entry.ctrl) TAB_REGISTRY.set(sessionId, entry.ctrl);
         store.tabs = this.entries.map(t => this.tabToApp(t));
         this.persistTabs();
@@ -437,17 +474,7 @@ export class TabController {
     fillAgentSelect(page.agentSelect);
     // Кнопка «+» (добавить модель) открывает Настройки.
     page.pageRoot.querySelector?.(".btn-add-model")?.addEventListener("click", () => this.openSection("settings"));
-    if (isMain) {
-      page.viewChat.classList.add("main-mode");
-      if (entry.sessionId) {
-        // Мain-вкладка с ранее сохранённым черновиком: поднимаем текст БЕЗ
-        // конвертации в чат (welcome + прижатая плашка остаются на месте).
-        void ctrl.openSessionDraft(entry.sessionId);
-      }
-    } else if (entry.sessionId) {
-      // Ленивая загрузка сессии (восстановленные вкладки).
-      void ctrl.openSession(entry.sessionId);
-    }
+    if (isMain) page.viewChat.classList.add("main-mode");
   }
 
   private defaultTitle(tab: AppTab): string {
@@ -497,6 +524,20 @@ export class TabController {
     if (node.parentElement !== park) park.appendChild(node);
   }
 
+  private activateSession(entry: TabEntry) {
+    if (entry.sessionLoadStarted || !entry.sessionId || !entry.ctrl) return;
+    entry.sessionLoadStarted = true;
+    const sessionId = entry.sessionId;
+    const load = entry.type === "main"
+      ? entry.ctrl.openSessionDraft(sessionId)
+      : entry.ctrl.openSession(sessionId);
+    void Promise.resolve(load).catch((error) => {
+      entry.sessionLoadStarted = false;
+      logFront(`[tabs] не удалось загрузить сессию ${sessionId}: ${error}`);
+      void trackError("tabs.load-restored-session", error);
+    });
+  }
+
   activate(id: string, persist = true) {
     store.activeTabId = id;
     let nowFocus: ChatController | null = null;
@@ -506,6 +547,8 @@ export class TabController {
     }
     const active = this.entries.find(t => t.id === id);
     if (active) {
+      if (active.type === "section" && active.section) this.materializeSectionContent(active.section);
+      else this.activateSession(active);
       active.viewEl.classList.add("active");
       if (active.type === "chat" || active.type === "main") {
         nowFocus = active.ctrl;
@@ -548,11 +591,42 @@ export class TabController {
 
   // ── Полоса вкладок ──
 
+  private setupNavigationMenu() {
+    this.actionsEl.innerHTML = "";
+    const button = document.createElement("button");
+    button.className = "workspace-tab-menu-toggle";
+    button.type = "button";
+    button.title = "Главное меню";
+    button.setAttribute("aria-label", "Главное меню");
+    button.setAttribute("aria-haspopup", "menu");
+    button.setAttribute("aria-controls", "workspace-main-menu");
+    button.setAttribute("aria-expanded", "false");
+    button.textContent = "☰";
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      if (button.getAttribute("aria-expanded") === "true") this.closeNavigationMenu();
+      else this.navigationMenu?.open();
+    });
+    button.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        this.navigationMenu?.open(true);
+      }
+    });
+    this.actionsEl.appendChild(button);
+    this.navigationMenu = createWorkspaceMenu(button, [
+      { id: "new-tab", label: "Новая вкладка", icon: "＋", action: () => this.newMainTab() },
+      { id: "sessions", label: "История сессий", icon: "🕘", separatorBefore: true, action: () => this.openSection("sessions") },
+      { id: "agent-studio", label: "Студия агентов", icon: "🧪", action: () => this.openSection("agent-studio") },
+      { id: "engines", label: "Движки", icon: "🚂", action: () => this.openSection("engines") },
+      { id: "settings", label: "Настройки", icon: "⚙️", action: () => this.openSection("settings") },
+      { id: "logs", label: "Логи", icon: "📝", action: () => this.openSection("logs") },
+      { id: "nine-router", label: "Web UI 9Router", icon: "🌐", action: () => { void this.openWebview(); } },
+    ]);
+  }
+
   private closeNavigationMenu() {
-    const menu = this.stripEl.querySelector<HTMLElement>(".workspace-tab-menu");
-    const button = this.stripEl.querySelector<HTMLButtonElement>(".workspace-tab-menu-toggle");
-    menu?.classList.remove("show");
-    button?.setAttribute("aria-expanded", "false");
+    this.navigationMenu?.close();
   }
 
   private renderStrip() {
@@ -586,43 +660,6 @@ export class TabController {
     addBtn.textContent = "＋";
     addBtn.addEventListener("click", () => this.newMainTab());
     this.stripEl.appendChild(addBtn);
-
-    const nav = document.createElement("div");
-    nav.className = "workspace-tab-menu";
-    const menuButton = document.createElement("button");
-    menuButton.className = "workspace-tab-menu-toggle";
-    menuButton.type = "button";
-    menuButton.title = "Открыть меню";
-    menuButton.setAttribute("aria-label", "Открыть меню");
-    menuButton.setAttribute("aria-haspopup", "menu");
-    menuButton.setAttribute("aria-expanded", "false");
-    menuButton.textContent = "☰";
-    const menu = document.createElement("div");
-    menu.className = "workspace-tab-menu-dropdown";
-    menu.setAttribute("role", "menu");
-    const defs: [TabSection, string][] = [
-      ["sessions", "🕘 История чатов"],
-      ["settings", "⚙️ Настройки"],
-    ];
-    for (const [section, label] of defs) {
-      const item = document.createElement("button");
-      item.className = "workspace-tab-menu-item";
-      item.type = "button";
-      item.dataset.section = section;
-      item.textContent = label;
-      item.addEventListener("click", () => {
-        this.closeNavigationMenu();
-        this.openSection(section);
-      });
-      menu.appendChild(item);
-    }
-    menuButton.addEventListener("click", (e) => {
-      e.stopPropagation();
-      const open = menu.classList.toggle("show");
-      menuButton.setAttribute("aria-expanded", String(open));
-    });
-    nav.append(menuButton, menu);
-    this.stripEl.appendChild(nav);
   }
 
   private showContextMenu(entry: TabEntry, x: number, y: number) {
