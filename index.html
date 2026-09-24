@@ -1,16 +1,31 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-theme="dark" data-theme-cache-key="king-orch:theme">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>King Orch</title>
+  <style>
+    html { background: #0e1013; }
+    html[data-theme="light"] { background: #f5f5f5; }
+  </style>
+  <script>
+    try {
+      const key = document.documentElement.dataset.themeCacheKey;
+      const theme = key ? localStorage.getItem(key) : null;
+      if (theme === "light" || theme === "dark") {
+        document.documentElement.dataset.theme = theme;
+      }
+    } catch (error) {
+      document.documentElement.dataset.themeCacheError = String(error);
+    }
+  </script>
   <link rel="stylesheet" href="/src/styles.css" />
 </head>
 <body>
-  <div id="boot-screen" class="boot-screen" aria-label="Загрузка King Orch">
-    <div class="boot-card">
-      <div class="boot-title">King Orch</div>
-      <div class="boot-subtitle">Загрузка рабочего пространства…</div>
+  <div id="boot-screen" class="boot-screen" role="status" aria-label="Загрузка King Orch">
+    <div class="boot-logo-wrap">
+      <img class="boot-logo" src="/logo.svg" alt="King Orch" />
+      <span class="boot-spinner" aria-hidden="true"></span>
     </div>
   </div>
   <div class="app-container">

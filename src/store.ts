@@ -47,6 +47,7 @@ class Store {
   lastAgent: string | null = null;
   agents: any[] = [];
   capabilities: Record<string, { uncen: boolean; vision: boolean; audio: boolean }> = {};
+  agentsReady = false;
   nineRouterCombos: { name: string; models: string[] }[] = [];
 }
 

@@ -117,6 +117,7 @@ export class SettingsController {
     try {
       store.capabilities = await getAllCapabilities();
     } catch (_) { store.capabilities = {}; }
+    bus.emit("model-catalog-changed");
   }
 
   /// Ленивая подгрузка комбо 9Router: `get_combos` сам поднимает сервер по
@@ -163,11 +164,26 @@ export class SettingsController {
     }
   }
 
-  async loadConfig() {
-    bus.emit("log", "Загрузка конфигурации...");
+  private applyTheme(theme: string) {
+    const normalized = theme === "light" ? "light" : "dark";
+    this.el.themeSelect.value = normalized;
+    document.documentElement.setAttribute("data-theme", normalized);
+    const key = document.documentElement.dataset.themeCacheKey;
+    if (!key) {
+      void trackError("settings.theme-cache", new Error("Отсутствует ключ кэша темы"));
+      return;
+    }
+    try {
+      localStorage.setItem(key, normalized);
+    } catch (e) {
+      void trackError("settings.theme-cache", e);
+    }
+  }
+
+  async loadConfigCore() {
+    store.agentsReady = false;
     try {
       const config: any = await invoke("get_config");
-      // Общие каталоги моделей/агентов — SSOT в Store (селекты живут по-вкладке).
       store.models = Array.isArray(config.models) ? config.models : store.models;
       store.lastModel = config.last_model ?? null;
       if (config.translator_model) {
@@ -188,9 +204,8 @@ export class SettingsController {
         this.el.chatFontSlider.value = pct.toString();
         this.el.chatFontValue.innerText = `${pct}%`;
         this.applyChatFontScale(config.chat_font_scale);
-        store.workdir = store.workdir;
       }
-      if (config.theme) { this.el.themeSelect.value = config.theme; document.documentElement.setAttribute('data-theme', config.theme); }
+      if (config.theme) this.applyTheme(config.theme);
       if (config.show_advanced_features !== undefined) {
         this.el.chkShowAdvanced.checked = config.show_advanced_features;
         store.showAdvancedFeatures = config.show_advanced_features;
@@ -204,15 +219,29 @@ export class SettingsController {
         this.el.chkErrorReports.checked = config.allow_error_reports;
         setTelemetryEnabled(config.allow_error_reports);
       }
-      await Promise.all([
-        this.refreshCapabilities(),
-        this.loadAgents(config.last_agent),
-        this.loadModelParams(),
-      ]);
-      bus.emit("config:loaded", config);
-      void this.ensureNineRouterCombos();
       return config;
-    } catch(e) { showToast(`Ошибка: ${e}`, "error"); void trackError("settings.loadConfig", e); return null; }
+    } catch (e) {
+      showToast(`Ошибка: ${e}`, "error");
+      void trackError("settings.loadConfigCore", e);
+      return null;
+    }
+  }
+
+  async hydrateCatalogs(config: any) {
+    await Promise.all([
+      this.refreshCapabilities(),
+      this.loadAgents(config.last_agent),
+      this.loadModelParams(),
+    ]);
+    bus.emit("config:loaded", config);
+    void this.ensureNineRouterCombos();
+  }
+
+  async loadConfig() {
+    const config = await this.loadConfigCore();
+    if (!config) return null;
+    await this.hydrateCatalogs(config);
+    return config;
   }
 
   /** Применяет масштаб шрифта чата (1.0 = 100%) через CSS-переменную. */
@@ -225,6 +254,8 @@ export class SettingsController {
       const entries: any[] = await invoke("get_agents");
       store.agents = entries;
       store.lastAgent = lastAgent ?? null;
+      store.agentsReady = true;
+      bus.emit("model-catalog-changed");
     } catch(e) { void trackError("settings.loadAgents", e); }
   }
 
@@ -240,7 +271,7 @@ export class SettingsController {
         this.applyChatFontScale(scale);
         await invoke("set_config_value", { key: "chat_font_scale", value: scale });
     });
-    this.el.themeSelect?.addEventListener("change", async () => { document.documentElement.setAttribute('data-theme', this.el.themeSelect.value); await invoke("set_theme", { theme: this.el.themeSelect.value }); });
+    this.el.themeSelect?.addEventListener("change", async () => { this.applyTheme(this.el.themeSelect.value); await invoke("set_theme", { theme: this.el.themeSelect.value }); });
     const sliders: [HTMLInputElement, HTMLElement][] = [[this.el.tempSlider, this.el.tempValue],[this.el.topkSlider, this.el.topkValue],[this.el.toppSlider, this.el.toppValue],[this.el.minpSlider, this.el.minpValue],[this.el.reppenSlider, this.el.reppenValue],[this.el.prespenSlider, this.el.prespenValue]];
     for (const [s, l] of sliders) s?.addEventListener("input", () => { l.innerText = s.value; this.saveModelParams(); });
     this.el.btnResetParams?.addEventListener("click", () => { void this.resetDefaults(); });

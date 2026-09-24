@@ -55,24 +55,6 @@ async fn main() {
     // ── Системный прокси: детект до любых HTTP-запросов ──
     infra::system_proxy::detect_and_set_proxy();
 
-    let gpu = infra::gpu_detector::detect_gpu();
-    let required_variant = match infra::gpu_detector::required_cuda_gen(&gpu) {
-        Some(infra::gpu_detector::CudaGen::Cuda13) => infra::llamacpp_installer::VARIANT_CUDA13,
-        Some(infra::gpu_detector::CudaGen::Cuda12) => infra::llamacpp_installer::VARIANT_CUDA,
-        None => infra::llamacpp_installer::VARIANT_CPU,
-    };
-    tauri_plugin_logs::early_log(
-        "INFO",
-        &format!(
-            "GPU: {} | CUDA драйвер: {}.{} | compute: {}.{} | нужен вариант: {}",
-            if gpu.gpu_name.is_empty() { "не обнаружена" } else { &gpu.gpu_name },
-            gpu.cuda_major,
-            gpu.cuda_minor,
-            gpu.compute_major,
-            gpu.compute_minor,
-            required_variant,
-        ),
-    );
     tauri_plugin_logs::early_log("INFO", "Tauri: создание приложения…");
 
     // ── WebView2: программный рендер UI (без GPU-процесса) ──
@@ -132,6 +114,26 @@ async fn main() {
             log::info!("[BOOT] setup begin {}ms", process_started.elapsed().as_millis());
             let app_handle = app.handle();
 
+            std::thread::spawn(|| {
+                let detection_started = Instant::now();
+                let gpu = infra::gpu_detector::detect_gpu();
+                let required_variant = match infra::gpu_detector::required_cuda_gen(&gpu) {
+                    Some(infra::gpu_detector::CudaGen::Cuda13) => infra::llamacpp_installer::VARIANT_CUDA13,
+                    Some(infra::gpu_detector::CudaGen::Cuda12) => infra::llamacpp_installer::VARIANT_CUDA,
+                    None => infra::llamacpp_installer::VARIANT_CPU,
+                };
+                log::info!(
+                    "GPU: {} | CUDA драйвер: {}.{} | compute: {}.{} | нужен вариант: {} | detection {}ms",
+                    if gpu.gpu_name.is_empty() { "не обнаружена" } else { &gpu.gpu_name },
+                    gpu.cuda_major,
+                    gpu.cuda_minor,
+                    gpu.compute_major,
+                    gpu.compute_minor,
+                    required_variant,
+                    detection_started.elapsed().as_millis(),
+                );
+            });
+
             // 🔐 Форвардинг запросов разрешений в UI (плашка с 3 кнопками).
             api::permissions::init_permission_forwarding(&app_handle);
 
@@ -147,37 +149,6 @@ async fn main() {
 
             let _ = infra::session_manager::sessions_dir(&app_handle);
             log::info!("setup(): сессии и чат-лог готовы");
-
-            // Очистка старых mmproj-записей выполняется после setup, чтобы
-            // проверка GGUF-файлов не задерживала создание окна.
-            {
-                let cleanup_app = app_handle.clone();
-                std::thread::spawn(move || {
-                    let mut cfg = infra::load_config(&cleanup_app);
-                    let removed: Vec<String> = cfg
-                        .models
-                        .iter()
-                        .filter(|m| infra::is_mmproj_file(m))
-                        .cloned()
-                        .collect();
-                    if removed.is_empty() {
-                        return;
-                    }
-                    cfg.models.retain(|m| !infra::is_mmproj_file(m));
-                    if let Some(last) = &cfg.last_model {
-                        if infra::is_mmproj_file(last) {
-                            cfg.last_model = None;
-                        }
-                    }
-                    infra::save_config(&cleanup_app, &cfg);
-                    for m in &removed {
-                        log::warn!(
-                            "setup(): удалён mmproj из списка моделей: {} (файл не тронут)",
-                            m
-                        );
-                    }
-                });
-            }
 
             // ── Новая архитектура: движок llama.cpp — ОТДЕЛЬНЫЙ процесс ──
             // Приложение НЕ линкует llama.cpp нативно (нет PE-импортов и DLL

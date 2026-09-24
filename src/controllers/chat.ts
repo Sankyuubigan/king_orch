@@ -180,6 +180,8 @@ export class ChatTabState {
   rtThoughtBuffer: string = "";
   rtThoughtAuthor: string = "";
 
+  isRestoringSession = false;
+
   /** Идёт ли обработка ИМЕННО в этой вкладке. */
   isProcessing = false;
 
@@ -204,6 +206,7 @@ export class ChatTabState {
     this.rtThoughtUid = null;
     this.rtThoughtBuffer = "";
     this.rtThoughtAuthor = "";
+    this.isRestoringSession = false;
     this.isProcessing = false;
     this.processingStartedAt = 0;
     this.lastActivityAt = 0;
@@ -225,6 +228,8 @@ export class ChatController {
   /// Кэш каталога моделей плагина (для tokenizer_id в счётчике токенов).
   private catalogCache: CatalogEntry[] | null = null;
   private thoughtDedupSet = new Set<string>();
+  private pendingSessionModel: string | null = null;
+  private pendingSessionAgent: string | null = null;
 
   /// Публичные ссылки на страницы (для чужих контроллеров: вкладки, сессии).
   get mainView(): HTMLDivElement { return this.el.viewChat; }
@@ -251,10 +256,12 @@ export class ChatController {
     };
     this.bindDomEvents();
     this.bindBusEvents();
+    this.refreshSendAvailability();
     setTimeout(() => {
       this.updateAttachButtonState();
       this.triggerTokenCount();
       this.refreshEngineBadgeInit();
+      this.refreshSendAvailability();
     }, 100);
   }
 
@@ -675,12 +682,16 @@ export class ChatController {
 
   private async onRunFromMessage(uid: string) {
     if (store.isProcessing || this.state.isProcessing) return;
+    const readiness = this.sendReadiness();
+    if (!readiness.ready) {
+      showToast(readiness.reason || "Дождитесь готовности интерфейса", "error");
+      return;
+    }
     const idx = this.state.uidList.indexOf(uid);
     if (idx === -1) return;
 
     const activeAgent = this.el.agentSelect.value;
     const modelPath = this.el.modelSelect.value;
-    if (!modelPath) { showToast("Выберите модель!", "error"); return; }
 
     logFront(`[chat] Нажата кнопка 'Отправить и запустить' для сообщения: ${uid}`);
 
@@ -701,21 +712,24 @@ export class ChatController {
 
       let mmprojPath: string | null = null; // этот путь всегда текстовый (без вложений) — mmproj не нужен
 
-      const response: any = await invoke("chat_request", {
-        modelPath,
-        agentId: activeAgent,
-        message: "",
-        history: allHistory,
-        contextSize: store.contextSize,
-        promptTokens: this.lastPromptTokens,
-        maxGenTokens: parseInt(this.el.maxGenSlider.value, 10),
-        kvQuantKeys: false,
-        kvQuantValues: false,
-        modelParams: params,
-        attachments: [],
-        mmprojPath,
-        sessionId: this.state.sessionId ?? ""
-      });
+      const isNineRouter = modelPath.startsWith(NINE_ROUTER_MODEL_PREFIX);
+      const response: any = isNineRouter
+        ? await this.nineRouterTurn(modelPath.slice(NINE_ROUTER_MODEL_PREFIX.length), activeAgent, "", allHistory)
+        : await invoke("chat_request", {
+            modelPath,
+            agentId: activeAgent,
+            message: "",
+            history: allHistory,
+            contextSize: store.contextSize,
+            promptTokens: this.lastPromptTokens,
+            maxGenTokens: parseInt(this.el.maxGenSlider.value, 10),
+            kvQuantKeys: false,
+            kvQuantValues: false,
+            modelParams: params,
+            attachments: [],
+            mmprojPath,
+            sessionId: this.state.sessionId ?? ""
+          });
 
       if (response?.has_error) {
         void trackError("chat.send.runFrom.outcome", response.has_error);
@@ -739,6 +753,16 @@ export class ChatController {
 
         this.state.history = [...oldHistory, ...afterOldHistory];
         this.state.uidList = [...oldUids, ...newUids];
+      }
+
+      const lastMessage = [...this.state.history].reverse().find(message => message.type === "message");
+      if (response.text && lastMessage?.author !== activeAgent) {
+        this.state.history.push({
+          type: "message",
+          author: activeAgent,
+          content: response.text,
+        });
+        this.state.uidList.push(this.state.nextUid());
       }
 
       this.renderChatFromHistory();
@@ -937,9 +961,44 @@ export class ChatController {
     this.appendMessageToContainer(this.el.subchatHistory, 'agent', subCall.response, subCall.agent_name, `${subCall.time_sec.toFixed(1)} сек`);
   }
 
+  private sendReadiness(): { ready: boolean; reason: string } {
+    const model = this.el.modelSelect.value;
+    const cloudModelAvailable = (value: string) => store.nineRouterCombos
+      .some(combo => `${NINE_ROUTER_MODEL_PREFIX}${combo.name}` === value);
+    const savedCloudPending = this.el.modelSelect.dataset.modelExplicit !== "true"
+      && !!store.lastModel?.startsWith(NINE_ROUTER_MODEL_PREFIX)
+      && !cloudModelAvailable(store.lastModel);
+    const modelReady = !savedCloudPending && (model.startsWith(NINE_ROUTER_MODEL_PREFIX)
+      ? cloudModelAvailable(model)
+      : store.models.includes(model));
+    let reason = "";
+    if (this.state.isRestoringSession) reason = "Восстановление сессии…";
+    else if (!store.agentsReady) reason = "Загрузка каталога агентов…";
+    else if (this.pendingSessionModel || this.pendingSessionAgent) reason = "Восстановление модели или агента сессии…";
+    else if (savedCloudPending) reason = "Загрузка сохранённой облачной модели…";
+    else if (!modelReady) reason = "Выберите установленную модель";
+    else if (!this.el.agentSelect.value) reason = "Выберите агента";
+    const ready = !reason
+      && !this.state.isProcessing
+      && !this.state.isRestoringSession;
+    return { ready, reason };
+  }
+
+  private refreshSendAvailability() {
+    const readiness = this.sendReadiness();
+    this.el.btnSend.disabled = !readiness.ready;
+    this.el.btnSend.title = readiness.reason;
+  }
+
+  private setSessionRestoreState(restoring: boolean) {
+    this.state.isRestoringSession = restoring;
+    this.el.chatInput.disabled = restoring;
+    this.refreshSendAvailability();
+  }
+
   setProcessingState(state: boolean) {
     this.state.isProcessing = state;
-    this.el.modelSelect.disabled = this.el.agentSelect.disabled = this.el.btnSend.disabled = state;
+    this.el.modelSelect.disabled = this.el.agentSelect.disabled = state;
     this.el.btnStop.disabled = !state;
     if (state) {
         this.state.processingStartedAt = Date.now();
@@ -970,6 +1029,7 @@ export class ChatController {
         this.el.progressBar.style.width = "0%";
         this.el.statusLabel.innerText = "Обработка...";
     }
+    this.refreshSendAvailability();
     bus.emit("processing:changed", state);
   }
 
@@ -1015,6 +1075,44 @@ export class ChatController {
     return Array.from(select.options).some(o => o.value === value);
   }
 
+  private restoreSessionSelection(model?: string, agent?: string) {
+    this.pendingSessionModel = null;
+    this.pendingSessionAgent = null;
+    if (model) {
+      if (this.hasOption(this.el.modelSelect, model)) {
+        this.el.modelSelect.value = model;
+        this.el.modelSelect.dataset.modelExplicit = "true";
+        bus.emit("model:changed", model);
+      } else {
+        this.pendingSessionModel = model;
+      }
+    }
+    if (agent) {
+      if (this.hasOption(this.el.agentSelect, agent)) {
+        this.el.agentSelect.value = agent;
+      } else {
+        this.pendingSessionAgent = agent;
+      }
+    }
+  }
+
+  private applyPendingSessionSelection(): boolean {
+    const model = this.pendingSessionModel;
+    const agent = this.pendingSessionAgent;
+    let modelRestored = false;
+    if (model && this.hasOption(this.el.modelSelect, model)) {
+      this.el.modelSelect.value = model;
+      this.el.modelSelect.dataset.modelExplicit = "true";
+      this.pendingSessionModel = null;
+      modelRestored = true;
+    }
+    if (agent && this.hasOption(this.el.agentSelect, agent)) {
+      this.el.agentSelect.value = agent;
+      this.pendingSessionAgent = null;
+    }
+    return modelRestored;
+  }
+
   /// Гарантирует наличие ID сессии (создаёт при первом обращении).
   private ensureSessionId(): string {
     if (!this.state.sessionId) {
@@ -1034,16 +1132,11 @@ export class ChatController {
   /// конвертирует вкладку в чат (welcome + прижатая плашка остаются).
   async openSessionDraft(id: string) {
     if (this.state.isProcessing) return;
+    this.setSessionRestoreState(true);
     try {
       const session = await loadSession(id);
       this.state.sessionId = session.id ?? id;
-      if (session.model && this.hasOption(this.el.modelSelect, session.model)) {
-        this.el.modelSelect.value = session.model;
-        bus.emit("model:changed", session.model);
-      }
-      if (session.agent && this.hasOption(this.el.agentSelect, session.agent)) {
-        this.el.agentSelect.value = session.agent;
-      }
+      this.restoreSessionSelection(session.model, session.agent);
       if (session.draft) {
         this.el.chatInput.value = session.draft;
         this.el.chatInput.style.height = "auto";
@@ -1053,12 +1146,19 @@ export class ChatController {
       this.triggerTokenCount();
     } catch (e) {
       void trackError("chat.openSessionDraft", e);
+    } finally {
+      this.setSessionRestoreState(false);
     }
   }
 
   async handleSend() {
-    const text = this.el.chatInput.value.trim(); if (!text && this.attachments.length === 0) return;
-    if (store.isProcessing || this.state.isProcessing) return;
+    const text = this.el.chatInput.value.trim();     if (!text && this.attachments.length === 0) return;
+    if (store.isProcessing || this.state.isProcessing || this.state.isRestoringSession) return;
+    const readiness = this.sendReadiness();
+    if (!readiness.ready) {
+      showToast(readiness.reason || "Дождитесь готовности интерфейса", "error");
+      return;
+    }
     const activeAgent = this.el.agentSelect.value; const modelPath = this.el.modelSelect.value;
     if (!modelPath) { showToast("Выберите модель!", "error"); return; }
     const userUid = this.state.nextUid(); this.state.uidList.push(userUid);
@@ -1203,6 +1303,7 @@ export class ChatController {
   /// Открыть существующую сессию в ЧАТ-вкладке (с конвертацией в чат-режим).
   async openSession(id: string) {
     if (this.state.isProcessing) return;
+    this.setSessionRestoreState(true);
     try {
       const session = await loadSession(id);
       // Единый источник правды: ID сессии из файла (совпадает с ключом вкладки).
@@ -1211,13 +1312,7 @@ export class ChatController {
       this.state.uidCounter = 0; this.state.uidList = this.state.history.map(() => this.state.nextUid());
       this.el.chatInput.value = session.draft || "";
       setTimeout(() => { this.el.chatInput.style.height = "auto"; this.el.chatInput.style.height = `${this.el.chatInput.scrollHeight}px`; }, 0);
-      if (session.model && this.hasOption(this.el.modelSelect, session.model)) {
-        this.el.modelSelect.value = session.model;
-        bus.emit("model:changed", session.model);
-      }
-      if (session.agent && this.hasOption(this.el.agentSelect, session.agent)) {
-        this.el.agentSelect.value = session.agent;
-      }
+      this.restoreSessionSelection(session.model, session.agent);
       this.renderChatFromHistory();
       bus.emit("session:changed");
       this.becomeChatTab();
@@ -1226,6 +1321,8 @@ export class ChatController {
     } catch(e) {
       showToast(`Ошибка: ${e}`, "error");
       void trackError("chat.openSession", e);
+    } finally {
+      this.setSessionRestoreState(false);
     }
   }
 
@@ -1346,14 +1443,18 @@ export class ChatController {
     this.el.btnAttach?.addEventListener("click", () => { if (!this.el.btnAttach.disabled) this.el.fileInput.click(); });
     this.el.fileInput?.addEventListener("change", (e) => this.handleFileSelect((e.target as HTMLInputElement).files));
     this.el.modelSelect?.addEventListener("change", () => {
+      this.el.modelSelect.dataset.modelExplicit = "true";
+      this.pendingSessionModel = null;
       bus.emit("model:changed", this.el.modelSelect.value);
-      this.updateAttachButtonState(); this.triggerTokenCount();
+      this.updateAttachButtonState(); this.triggerTokenCount(); this.refreshSendAvailability();
       const v = this.el.modelSelect.value;
       void invoke("set_last_model", { path: v }).catch(() => {});
       if (this.state.hasSession()) this.persistSession();
     });
     this.el.agentSelect?.addEventListener("change", () => {
+      this.pendingSessionAgent = null;
       this.triggerTokenCount();
+      this.refreshSendAvailability();
       const v = this.el.agentSelect.value;
       void invoke("set_config_value", { key: "last_agent", value: v }).catch(() => {});
       if (this.state.hasSession()) this.persistSession();
@@ -1376,12 +1477,16 @@ export class ChatController {
     bus.on("model-catalog-changed", () => {
       fillModelSelect(this.el.modelSelect);
       fillAgentSelect(this.el.agentSelect);
+      if (this.applyPendingSessionSelection()) bus.emit("model:changed", this.el.modelSelect.value);
+      this.refreshSendAvailability();
     });
     bus.on("config:loaded", (config: any) => {
       // Общие каталоги уже в store (заполнил SettingsController) — перерисовываем
       // селекты этой вкладки, сохраняя текущий выбор.
       fillModelSelect(this.el.modelSelect);
       fillAgentSelect(this.el.agentSelect);
+      if (this.applyPendingSessionSelection()) bus.emit("model:changed", this.el.modelSelect.value);
+      this.refreshSendAvailability();
       this.updateAttachButtonState();
       this.triggerTokenCount();
       if (config.workdir) {

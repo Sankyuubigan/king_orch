@@ -13,11 +13,16 @@ function capabilityIcons(meta?: { uncen?: boolean; vision?: boolean; audio?: boo
   return out.join(" ");
 }
 
+function applyModelValue(select: HTMLSelectElement, value: string): boolean {
+  if (!Array.from(select.options).some(option => option.value === value)) return false;
+  select.value = value;
+  return true;
+}
+
 /// Заполняет select моделей (локальные .gguf + optgroup «9Router (облако)»)
 /// из общих каталогов Store. Сохраняет текущий выбор, если он ещё валиден.
 export function fillModelSelect(select: HTMLSelectElement | null) {
   if (!select) return;
-  const prev = select.value;
   select.innerHTML = "";
   for (const m of store.models) {
     const o = document.createElement("option");
@@ -28,15 +33,17 @@ export function fillModelSelect(select: HTMLSelectElement | null) {
     select.appendChild(o);
   }
   renderNineRouterOptions(select);
-  if (prev && store.models.includes(prev)) select.value = prev;
-  else if (store.lastModel && store.models.includes(store.lastModel)) select.value = store.lastModel;
+  if (select.dataset.modelExplicit !== "true" && store.lastModel) {
+    applyModelValue(select, store.lastModel);
+  }
 }
 
 /// Рисует optgroup «9Router (облако)» поверх локальных моделей.
 /// Сохраняет текущий выбор (может быть облачным комбо).
 export function renderNineRouterOptions(select: HTMLSelectElement | null) {
   if (!select) return;
-  const prev = select.value;
+  const explicit = select.dataset.modelExplicit === "true";
+  const current = select.value;
   select.querySelector('optgroup[label="9Router (облако)"]')?.remove();
   if (!store.nineRouterCombos.length) return;
   const group = document.createElement("optgroup");
@@ -48,7 +55,8 @@ export function renderNineRouterOptions(select: HTMLSelectElement | null) {
     group.appendChild(o);
   }
   select.appendChild(group);
-  if (prev) select.value = prev;
+  if (explicit) applyModelValue(select, current);
+  else if (store.lastModel) applyModelValue(select, store.lastModel);
 }
 
 /// Заполняет select агентов из каталога Store (уважает showFolderAgents).

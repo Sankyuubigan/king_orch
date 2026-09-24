@@ -233,12 +233,11 @@ async function initApp() {
     },
   );
 
-  // ─── Старт: сначала показываем рабочую оболочку, затем восстанавливаем конфиг ───
-  tabCtrl.init({}, false);
-  revealBootScreen();
-  const config = await settingsCtrl.loadConfig();
+  const config = await settingsCtrl.loadConfigCore();
   tabCtrl.init(config ?? {}, false);
-  logFront(`[BOOT] initApp ready ${Math.round(performance.now() - bootStartedAt)}ms`);
+  revealBootScreen();
+  if (config) void settingsCtrl.hydrateCatalogs(config);
+  logFront(`[BOOT] first UI ready ${Math.round(performance.now() - bootStartedAt)}ms`);
 
   // ——— Быстрая навигация по разделам (открытие в той же вкладке) ———
   // Делегирование на document: клоны settings/engines (дубли вкладок) id не
