@@ -1,10 +1,11 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use crate::infra::{ChatMessage, LlmEngine, ModelParams, SubCall};
 use crate::domain::agent_manager::load_agents;
-use crate::domain::workflow_engine::{run_workflow, WorkflowRunner};
+use crate::domain::workflow_engine::{parse_workflow_file, run_workflow, WorkflowRunner};
 use crate::domain::workflow_engine::context::WorkflowContext;
 use crate::domain::workflow_engine::parser::load_workflows;
 use crate::domain::StreamMeta;
@@ -26,6 +27,12 @@ pub struct ValidationRules {
     /// Куда копировать plan_file (по умолчанию None — план не копируется).
     #[serde(default)]
     pub plan_target: Option<String>,
+    #[serde(default)]
+    pub workflow_file: Option<String>,
+    #[serde(default)]
+    pub expected_signals: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
+    pub result_file: Option<String>,
     pub levels: ValidationLevels,
 }
 
@@ -207,12 +214,29 @@ pub fn run_pipeline_test(
 
     let agents = load_agents(agents_dir)
         .map_err(|e| format!("Ошибка загрузки агентов: {}", e))?;
-    let workflows = load_workflows(agents_dir)
-        .map_err(|e| format!("Ошибка загрузки workflow: {}", e))?;
 
-    let workflow = workflows.iter()
-        .find(|w| w.name == test.validation.workflow_name)
-        .ok_or_else(|| format!("Workflow '{}' не найден", test.validation.workflow_name))?;
+    let custom_wf_path = if let Some(wf_file) = &test.validation.workflow_file {
+        Some(test.dir.join(wf_file))
+    } else if test.dir.join("workflow.yaml").exists() {
+        Some(test.dir.join("workflow.yaml"))
+    } else {
+        None
+    };
+
+    let workflow_owned: WorkflowDef;
+    let workflow: &WorkflowDef = if let Some(path) = custom_wf_path {
+        workflow_owned = parse_workflow_file(&path)
+            .map_err(|e| format!("Ошибка загрузки локального workflow {}: {}", path.display(), e))?;
+        &workflow_owned
+    } else {
+        let workflows = load_workflows(agents_dir)
+            .map_err(|e| format!("Ошибка загрузки workflow: {}", e))?;
+        let found = workflows.into_iter()
+            .find(|w| w.name == test.validation.workflow_name)
+            .ok_or_else(|| format!("Workflow '{}' не найден", test.validation.workflow_name))?;
+        workflow_owned = found;
+        &workflow_owned
+    };
 
     // Копируем исходный файл в .agents_workspace
     let target_dir = project_root.join(
@@ -311,8 +335,27 @@ pub fn run_pipeline_test(
         }
     }).collect();
 
-    // Уровень 1: Структура
-    let level1 = validate_structure(&workflow_result, &ctx, &test.validation.levels.structure);
+    let signals = collect_latest_signals(&ctx)?;
+    if let Some(result_file) = &test.validation.result_file {
+        let result_path = project_root.join(result_file);
+        if let Some(parent) = result_path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Ошибка создания {}: {}", parent.display(), e))?;
+        }
+        let result = serde_json::json!({
+            "test_id": test.id,
+            "workflow_name": test.validation.workflow_name,
+            "model_path": test.validation.model_path,
+            "signals": signals,
+        });
+        std::fs::write(&result_path, serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?)
+            .map_err(|e| format!("Ошибка записи {}: {}", result_path.display(), e))?;
+    }
+
+    let mut level1 = validate_structure(&workflow_result, &ctx, &test.validation.levels.structure);
+    let signal_validation = validate_expected_signals(&signals, &test.validation.expected_signals);
+    level1.passed = level1.passed && signal_validation.passed;
+    level1.details.extend(signal_validation.details);
 
     // Уровень 2: Файл
     let level2 = validate_file_change(project_root, &test.validation);
@@ -353,6 +396,54 @@ pub fn run_pipeline_test(
 }
 
 // ─── Валидация ───
+
+fn collect_latest_signals(ctx: &WorkflowContext) -> Result<BTreeMap<String, serde_json::Value>, String> {
+    let mut signals = BTreeMap::new();
+    for message in ctx.messages.iter().filter(|message| message.msg_type == "signal") {
+        let value = serde_json::from_str::<serde_json::Value>(&message.content)
+            .map_err(|e| format!("Некорректный сигнал от '{}': {}", message.author.as_deref().unwrap_or("unknown"), e))?;
+        let object = value.as_object().ok_or_else(|| {
+            format!("Сигнал от '{}' не является JSON-объектом", message.author.as_deref().unwrap_or("unknown"))
+        })?;
+        for (key, value) in object {
+            signals.insert(key.clone(), value.clone());
+        }
+    }
+    Ok(signals)
+}
+
+fn validate_expected_signals(
+    actual: &BTreeMap<String, serde_json::Value>,
+    expected: &BTreeMap<String, serde_json::Value>,
+) -> LevelResult {
+    if expected.is_empty() {
+        return LevelResult {
+            passed: true,
+            details: vec!["Ожидаемые сигналы не заданы".to_string()],
+        };
+    }
+    let mut passed = true;
+    let mut details = Vec::new();
+    for (key, expected_value) in expected {
+        match actual.get(key) {
+            Some(actual_value) if actual_value == expected_value => {
+                details.push(format!("✅ Сигнал '{}' совпал с эталоном", key));
+            }
+            Some(actual_value) => {
+                details.push(format!(
+                    "❌ Сигнал '{}': ожидалось {}, получено {}",
+                    key, expected_value, actual_value
+                ));
+                passed = false;
+            }
+            None => {
+                details.push(format!("❌ Сигнал '{}' не найден", key));
+                passed = false;
+            }
+        }
+    }
+    LevelResult { passed, details }
+}
 
 fn validate_structure(
     workflow_result: &Result<String, (String, Vec<ChatMessage>)>,
@@ -641,6 +732,9 @@ pub fn run_pipeline_test_cli(
         |msg, pct| { eprintln!("[STATUS {}%] {}", pct, msg); },
     )
 }
+
+#[cfg(test)]
+mod psych_validator_e2e;
 
 #[cfg(test)]
 mod tests {

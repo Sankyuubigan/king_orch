@@ -1,0 +1,41 @@
+{
+  "workflow_name": "Психотерапевт — тест валидатора",
+  "model_path": "D:\\nn\\models\\llm\\uncen\\gemma-4-12B\\gemma-4-12B-it-qat-q4_0-unquantized-heretic-ja-v2.i1-IQ4_NL.gguf",
+  "timeout_sec": 900,
+  "source_file": "task.md",
+  "target_path": ".agents_workspace/psychotherapist_validator_e1_e9/task.md",
+  "expected_signals": {
+    "validator_report": {
+      "e1": true,
+      "e2": false,
+      "e3": false,
+      "e4": false,
+      "e5": false,
+      "e6": false,
+      "e7": false,
+      "e8": false,
+      "e9": false
+    }
+  },
+  "result_file": "test/laya_probe/results/gemma_e1_e9.json",
+  "priority_false_elements": [
+    "e3",
+    "e6"
+  ],
+  "levels": {
+    "structure": {
+      "required_agents": [
+        "validator"
+      ],
+      "forbidden_paths": []
+    },
+    "file_change": {
+      "must_contain": [],
+      "must_not_contain": []
+    },
+    "functional": {
+      "run_cmd": "echo PASS",
+      "expected_stdout_contains": "PASS"
+    }
+  }
+}

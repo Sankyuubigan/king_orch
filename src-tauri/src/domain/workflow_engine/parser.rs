@@ -356,7 +356,7 @@ fn collect_yaml_files(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
-fn parse_workflow_file(path: &Path) -> Result<WorkflowDef, String> {
+pub fn parse_workflow_file(path: &Path) -> Result<WorkflowDef, String> {
     let content = fs::read_to_string(path)
         .map_err(|e| format!("Не удалось прочитать {}: {}", path.display(), e))?;
     let file_stem = path

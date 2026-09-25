@@ -13,7 +13,7 @@ pub use context::WorkflowContext;
 pub use editor_fidelity::{analyze_workflow_fidelity, GraphDiagnostic};
 pub use parser::WorkflowConfig;
 pub use parser::{
-    find_workflow_by_stem, load_workflows, separate_top_level_fields, EdgeDef, FactsFile,
+    find_workflow_by_stem, load_workflows, parse_workflow_file, separate_top_level_fields, EdgeDef, FactsFile,
     NodeDef, NodeType, WorkflowDef,
 };
 

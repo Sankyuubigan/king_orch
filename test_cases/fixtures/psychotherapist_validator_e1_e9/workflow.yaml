@@ -1,0 +1,29 @@
+name: Психотерапевт — тест валидатора
+
+visible: false
+
+config:
+  default_llm_params: strict
+
+nodes:
+
+- id: call_validator
+  type: llm_worker
+  agent: validator
+  llm_params: strict
+  ui_pos:
+    x: 0
+    y: 0
+
+- id: done
+  type: note
+  input: тест валидатора завершён
+  system_message: Тест валидатора завершён.
+  ui_pos:
+    x: 300
+    y: 0
+
+edges:
+
+- from: call_validator
+  to: done
