@@ -101,7 +101,7 @@ async fn main() {
         .plugin(tauri_plugin_llama_engine::init())
         // Шлюз облачных LLM через 9Router (SSOT). Регистрирует команды
         // get_status/install_or_update/ensure_started/get_combos/chat_completion
-        // и owns процесс node.exe (ленивый старт, kill на выходе).
+        // и процесс node.exe (ленивый старт, переживает закрытие приложения).
         .plugin(tauri_plugin_9router::init())
         // Движок изображений stable-diffusion.cpp (SSOT). Регистрирует
         // команды движка/бандла/генерации, owns процесс sd-server (kill на выходе).
