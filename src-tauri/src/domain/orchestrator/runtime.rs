@@ -450,6 +450,7 @@ mod tests {
             tools: tools.iter().map(|s| s.to_string()).collect(),
             current_date: false,
             temperature: None,
+            vision: false,
         }
     }
 

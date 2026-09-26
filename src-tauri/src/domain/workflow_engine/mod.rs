@@ -537,6 +537,7 @@ mod tests {
             tools: Vec::new(),
             current_date: false,
             temperature: temp,
+            vision: false,
         }
     }
 

@@ -2,6 +2,7 @@
 name: Универсальный ИИ Агент
 visible: true
 current_date: true
+vision: true
 mode: primary
 subagents: ["coder", "therapist_lead", "search-specialist"]
 mcp_servers: ["time"]

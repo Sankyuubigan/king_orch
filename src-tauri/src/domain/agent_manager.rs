@@ -27,6 +27,14 @@ pub struct AgentProfile {
     pub current_date: bool,
     #[serde(default)]
     pub temperature: Option<f32>,
+    /// Зрение: агент получает изображения текущего запроса в LLM-вызов.
+    /// Дефолт `false` — vision не включается неявно «просто потому что прикрепили
+    /// файл»: это поднимает расход VRAM, роняет llama-server на не-vision моделях
+    /// и неявно связывает LLM-вызов с наличием вложений. Включается вручную
+    /// во frontmatter (`vision: true`) только тем агентам, которым пиксели
+    /// действительно нужны.
+    #[serde(default)]
+    pub vision: bool,
 }
 
 /// Единая точка входа в UI — может быть .md агентом или YAML графом
@@ -105,6 +113,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             let mut replace_report = false;
             let mut current_date = false;
             let mut temperature: Option<f32> = None;
+            let mut vision = false;
             let mut mcp_servers = Vec::new();
             let mut tools = Vec::new();
             let frontmatter_lines: Vec<&str> = frontmatter.lines().collect();
@@ -119,6 +128,9 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 else if line.starts_with("current_date:") { current_date = line["current_date:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("temperature:") {
                     temperature = line["temperature:".len()..].trim().parse::<f32>().ok();
+                }
+                else if line.starts_with("vision:") {
+                    vision = line["vision:".len()..].trim().parse().unwrap_or(false);
                 }
                 else if line.starts_with("mcp_servers:") {
                     if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["mcp_servers:".len()..].trim()) { mcp_servers = parsed; }
@@ -153,7 +165,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 }
                 i += 1;
             }
-            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date, temperature }); }
+            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date, temperature, vision }); }
         }
     }
     None
@@ -221,6 +233,20 @@ mod tests {
         let a = parse("---\nname: Test\ntools:\n  read: true\ndescription: d\n---\nbody\n");
         assert_eq!(a.tools, vec!["code_read"]);
         assert_eq!(a.description, "d");
+    }
+
+        #[test]
+    fn vision_defaults_to_false_and_is_opt_in() {
+        // Дефолт OFF: зрение не должно включаться неявно «просто потому что
+        // юзер прикрепил файл» (это роняло llama-server на не-vision моделях).
+        let default_agent = parse("---\nname: Default Agent\n---\nbody\n");
+        assert!(!default_agent.vision, "зрение по умолчанию должно быть выключено");
+
+        let explicit_off = parse("---\nname: Off\nvision: false\n---\nbody\n");
+        assert!(!explicit_off.vision);
+
+        let vision_agent = parse("---\nname: Vision Agent\nvision: true\n---\nbody\n");
+        assert!(vision_agent.vision, "vision: true должен включать зрение");
     }
 
     #[test]

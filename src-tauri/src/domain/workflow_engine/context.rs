@@ -1,6 +1,8 @@
 use crate::domain::orchestrator::prompt::sanitize_model_visible_text;
+use crate::domain::orchestrator::RequestMedia;
 use crate::infra::{llm_history, ChatMessage};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Контекст выполнения workflow — передаётся между узлами
 #[derive(Debug, Clone)]
@@ -21,6 +23,7 @@ pub struct WorkflowContext {
     /// SSOT для SignalRouter/ConditionRouter и {{ signals }} шаблона.
     pub signals: HashMap<String, serde_json::Value>,
     pub image_candidates: String,
+    pub request_media: Arc<RequestMedia>,
 }
 
 impl WorkflowContext {
@@ -37,11 +40,17 @@ impl WorkflowContext {
             output_emitted: false,
             signals: HashMap::new(),
             image_candidates: String::new(),
+            request_media: Arc::new(RequestMedia::empty()),
         }
     }
 
     pub fn with_image_candidates(mut self, candidates: String) -> Self {
         self.image_candidates = candidates;
+        self
+    }
+
+    pub fn with_request_media(mut self, rm: Arc<RequestMedia>) -> Self {
+        self.request_media = rm;
         self
     }
 

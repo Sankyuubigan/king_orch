@@ -435,6 +435,14 @@ where
                     tool_name, self.agent.id
                 ));
             }
+            if tool_output.is_none() && tool_name == "generate_image" && !self.request_media.current_attachments().is_empty() {
+                tool_output = Some(super::vram::tool_error_to_output(
+                    tool_name,
+                    crate::infra::ToolError::Usage(
+                        "К текущему запросу прикреплены изображения. Используйте 'edit_image' с указанием 'source_image_ids' вместо генерации с нуля.".to_string()
+                    ),
+                ));
+            }
             let mut selected_attachments = Vec::new();
             if tool_output.is_none() && tool_name == "edit_image" {
                 let requested_ids = arguments

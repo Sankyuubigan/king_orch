@@ -708,6 +708,28 @@ where
                     })
                 }
 
+                "media_state" => {
+                    let has_current = !context.request_media.current_attachments().is_empty();
+                    let candidate_ids = context.request_media.candidate_ids();
+                    let has_candidates = !candidate_ids.is_empty();
+                    let status = if has_current {
+                        "has_current_images"
+                    } else if has_candidates {
+                        "has_history_images"
+                    } else {
+                        "no_images"
+                    };
+                    Ok(NodeResult {
+                        output: serde_json::json!({
+                            "status": status,
+                            "has_current_images": has_current,
+                            "has_candidates": has_candidates,
+                        }),
+                        next_node: None,
+                        next_nodes: vec![],
+                    })
+                }
+
                 _ => Err(format!("Неизвестное действие system_condition: {}", action)),
             }
         }
@@ -740,7 +762,8 @@ where
                 context.messages.clone(),
                 context.history.clone(),
             )
-            .with_image_candidates(context.image_candidates.clone());
+            .with_image_candidates(context.image_candidates.clone())
+            .with_request_media(context.request_media.clone());
 
             let sub_result = match super::run_workflow(sub_wf, &mut sub_ctx, runner) {
                 Ok(r) => r,

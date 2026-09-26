@@ -244,15 +244,55 @@ where
 }
 
 /// Детект переполнения контекста по тексту ошибки генерации (llama-server / HTTP).
+///
+/// ВАЖНО: матчинг должен быть ТОЧНЫМ, а не «похожее слово». Диагностика
+/// `STREAM_DIAGNOSTIC` всегда содержит безобидную строку `n_ctx_slot = 12800`
+/// (размер слота), поэтому голый `contains("n_ctx")` ловил ЛЮБУЮ ошибку —
+/// включая падение/обрыв сервера. Раньше это давало ложное «переполнение» →
+/// `truncate_largest` резал текст на 22 символа → повтор в мёртвый сервер →
+/// бесконечный цикл с вечным прогрессбаром (инцидент media-flow, 24.09.2026).
+///
+/// Признаки переполнения (сервер жив и сказал «не влезает»):
+/// - `"prompt is too long"` / `"context length exceeded"`
+/// - `"the request exceeds the available context size"`
+/// - `"n_ctx: N" в паре с exceed/too long`
+/// - `"kv cache" + full/размер`
+/// - HTTP 400 с текстом про context/length
 pub(crate) fn is_context_overflow(err: &str) -> bool {
     let e = err.to_lowercase();
-    e.contains("context length")
-        || e.contains("exceed")
-        || e.contains("n_ctx")
-        || e.contains("too long")
-        || e.contains("http 400")
-        || e.contains("kv cache")
+    if e.contains("prompt is too long")
+        || e.contains("context length")
+        || e.contains("exceeds the available context")
+        || e.contains("exceed context")
+        || e.contains("too many tokens")
         || e.contains("sliding window")
+        || (e.contains("kv cache") && (e.contains("full") || e.contains("size")))
+    {
+        return true;
+    }
+    // `n_ctx` — только рядом со словом переполнения; голое `n_ctx_slot = 12800`
+    // из диагностики НЕ является переполнением.
+    e.contains("n_ctx")
+        && (e.contains("exceed")
+            || e.contains("too long")
+            || e.contains("exceed context")
+            || e.contains("full"))
+}
+
+/// Детект «сервер недоступен» (процесс упал / соединение отвергнуто / оборвался
+/// стрим). Это НЕ переполнение контекста: повторять такой запрос после обрезки
+/// текста бессмысленно — надо либо перезапустить движок, либо честно упасть.
+pub(crate) fn is_server_unavailable(err: &str) -> bool {
+    let e = err.to_lowercase();
+    e.contains("os error 10061")
+        || e.contains("os error 10054")
+        || e.contains("os error 10052")
+        || e.contains("connection refused")
+        || e.contains("connection reset")
+        || e.contains("health_failed")
+        || e.contains("server_exited")
+        || e.contains("server_missing")
+        || (e.contains("tcp connect error") && e.contains("10061"))
 }
 
 #[cfg(test)]
@@ -403,5 +443,28 @@ mod tests {
         assert!(!rep.history_summarized);
         assert!(rep.history_truncated > 0, "ожидаем усечение head/tail");
         assert!(char_tokens(&msgs) <= budget + 1);
+    }
+
+    #[test]
+    fn test_is_context_overflow_does_not_false_positive_on_diagnostics() {
+        // Диагностическая строка из стрима содержит `n_ctx_slot = 12800`,
+        // но НЕ является ошибкой переполнения!
+        let diag = "STREAM_DIAGNOSTIC: n_ctx_slot = 12800, n_keep = 400";
+        assert!(!is_context_overflow(diag), "диагностика n_ctx_slot не должна считать переполнением");
+
+        // Настоящие ошибки переполнения
+        assert!(is_context_overflow("prompt is too long for context size"));
+        assert!(is_context_overflow("context length exceeded"));
+        assert!(is_context_overflow("request exceeds the available context size"));
+        assert!(is_context_overflow("n_ctx exceeded"));
+    }
+
+    #[test]
+    fn test_is_server_unavailable_detects_network_and_process_failures() {
+        assert!(is_server_unavailable("os error 10061"));
+        assert!(is_server_unavailable("os error 10054"));
+        assert!(is_server_unavailable("connection refused"));
+        assert!(is_server_unavailable("health_failed"));
+        assert!(!is_server_unavailable("prompt is too long"));
     }
 }

@@ -504,7 +504,32 @@ where
         + history_chars
         + image_catalog_chars
         + user_text.chars().count();
-    let image_tokens = request_media.current_attachments().len() as u32 * 2048;
+    // Токены изображений входят в бюджет контекста ТОЛЬКО если вложения реально
+    // поедут в LLM — то есть если какой-то агент графа объявил `vision: true`.
+    // Иначе (все агенты без зрения) движок стартует без mmproj и картинки в
+    // контексте не существует. Раньше здесь всегда считалось 2048/фото, из-за
+    // чего --ctx-size раздувался впустую.
+    let any_vision_agent = match &workflow_match {
+        Some(wf) => wf
+            .nodes
+            .iter()
+            .filter(|node| node.node_type == NodeType::LlmWorker)
+            .any(|node| {
+                node.agent
+                    .as_deref()
+                    .and_then(|id| agents.iter().find(|a| a.id == id))
+                    .is_some_and(|agent| agent.vision)
+            }),
+        None => agents
+            .iter()
+            .find(|a| a.id == agent_id)
+            .is_some_and(|agent| agent.vision),
+    };
+    let image_tokens = if any_vision_agent {
+        request_media.current_attachments().len() as u32 * 2048
+    } else {
+        0
+    };
     let token_estimate_history = format!("{history_text}{image_catalog_text}");
     let chars_per_token = estimate_chars_per_token(
         &worst_system_prompt,
@@ -536,7 +561,11 @@ where
             .ok_or_else(|| "Некорректный идентификатор модели 9Router".to_string())?
             .to_string();
         LlmEngine::cloud(endpoint, model, Arc::new(stream_cb))
-    } else if mmproj_path.is_some() {
+    } else if any_vision_agent && mmproj_path.is_some() {
+        // Проектор поднимаем ТОЛЬКО когда в графе есть агент со зрением: иначе
+        // mmproj занимает ~2.4 ГБ VRAM впустую (в логе: прирост 8862 МБ с
+        // проектором против 6424 МБ без него) и добавляет роняющий сервер
+        // non-causal путь, который в этом прогоне никто не использует.
         LlmEngine::local(LlamaEngine::new_with_mmproj(
             &engine_dir,
             &model_path,
@@ -639,7 +668,8 @@ where
             messages_store.clone(),
             recent_history.clone(),
         )
-        .with_image_candidates(request_media.candidate_prompt());
+        .with_image_candidates(request_media.candidate_prompt())
+        .with_request_media(request_media.clone());
         let mut runner = WorkflowRunner {
             engine: &engine,
             agents: &agents,
@@ -949,7 +979,23 @@ where
     } else {
         model_params
     };
-    let attachments = request_media.current_attachments().to_vec();
+    // Зрение — явная способность агента (frontmatter `vision: true`), а не следствие
+    // «юзер что-то прикрепил». Без этого LLM-вызов молча уезжал в мультимодальный
+    // режим, что роняло llama-server (GGML_ASSERT n_ubatch на не-vision моделях)
+    // и переводилось в ложное «переполнение контекста» → бесконечный retry.
+    // Инструментам медиа это не мешает: `edit_image` получает файлы напрямую
+    // из `request_media` (dispatch.rs), минуя LLM-вызов.
+    let attachments = if agent.vision {
+        request_media.current_attachments().to_vec()
+    } else {
+        if !request_media.current_attachments().is_empty() {
+            log_cb(format!(
+                "👁 Агент '{}': вложения НЕ переданы в LLM (vision: false) — агент работает по каталогу ID",
+                agent.name
+            ));
+        }
+        Vec::new()
+    };
 
     // ── Определяем signal_contract РАНЬШЕ — нужен для корректного промпта (Method 3). ──
     let signal_contract: Option<SignalContract> = {
@@ -1760,11 +1806,61 @@ where
                 )
             }
         };
+        fn first_line(s: &str) -> &str {
+            s.lines().next().unwrap_or(s).trim()
+        }
+
+        // Повторять генерацию при переполнении контекста бессмысленно: вложения
+        // мы не обрезаем (их нельзя), а обрезка текста на десятки символов не
+        // меняет картину. Поэтому ограничиваем число попыток (иначе был
+        // бесконечный цикл с вечным прогрессбаром).
+        const MAX_OVERFLOW_RETRIES: u32 = 2;
+        let mut overflow_retries: u32 = 0;
         let gen: GenerationResult = loop {
             match attempt_generate(&ctx.llm_messages) {
                 Ok(g) => break g,
                 Err(e) => {
+                    // Сервер упал/оборвался — обрезка текста тут не поможет.
+                    // Повторяем только если движок снова здоров (это может быть
+                    // краш конкретного запроса), иначе падаем сразу.
+                    if is_server_unavailable(&e) {
+                        if !engine.is_alive() {
+                            log_cb(format!("✖️ Движок LLM недоступен: {}", e));
+                            log::error!(
+                                "[{}] LLM-вызов провален: движок недоступен: {}",
+                                ctx_label,
+                                e
+                            );
+                            return Err(format!(
+                                "Движок LLM недоступен ({}). Перезапустите чат или выберите другую модель.",
+                                first_line(&e)
+                            ));
+                        }
+                        if overflow_retries >= MAX_OVERFLOW_RETRIES {
+                            log::error!("[{}] Сервер недоступен после попыток: {}", ctx_label, e);
+                            return Err(format!("Движок LLM потерял связь: {}", first_line(&e)));
+                        }
+                        overflow_retries += 1;
+                        log_cb(format!(
+                            "🔄 Движок LLM ответил не с первого раза (попытка {}/{}) — повторяю.",
+                            overflow_retries,
+                            MAX_OVERFLOW_RETRIES
+                        ));
+                        continue;
+                    }
                     if is_context_overflow(&e) {
+                        if overflow_retries >= MAX_OVERFLOW_RETRIES {
+                            log::error!(
+                                "[{}] Переполнение контекста не устраняется обрезкой: {}",
+                                ctx_label,
+                                e
+                            );
+                            return Err(format!(
+                                "Запрос не помещается в контекст модели: {}. Сократите текст запроса или уменьшите число изображений.",
+                                first_line(&e)
+                            ));
+                        }
+                        overflow_retries += 1;
                         log_cb(format!(
                             "⚠️ Переполнение контекста при генерации ({}). Усечение крупнейшего сообщения и повтор.",
                             e
@@ -2595,6 +2691,7 @@ mod tests {
             tools: Vec::new(),
             current_date: false,
             temperature: None,
+            vision: false,
         }
     }
 

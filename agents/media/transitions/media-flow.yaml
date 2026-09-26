@@ -7,7 +7,20 @@ config:
   default_llm_params: creative
 
 nodes:
-  # ── Классификация и маршрутизация ──
+  # ── Детерминированная проверка свежих вложений (без LLM) ──
+  - id: check_attachments
+    type: system_condition
+    action: media_state
+
+  - id: route_media_state
+    type: switch
+    input_object: "{{ nodes.check_attachments.output }}"
+    cases_priority:
+      - key: has_current_images
+        to: edit_image
+    default: extract_facts
+
+  # ── Классификация через LLM (для текста и истории) ──
 
   - id: extract_facts
     type: llm_fact_extractor
@@ -32,10 +45,9 @@ nodes:
     type: llm_worker
     agent: image_editor
     task: |
-      Отредактируй изображение, на который пользователь указал в переписке.
+      Отредактируй изображение, на которое пользователь указал в переписке или прикрепил к сообщению.
 
-      Правка (переписанная, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
-      Исходная просьба пользователя: {{ user_message }}
+      Правка: {{ user_message }}
     output_type: message
 
   # ── Ветка генерации (терминальная) ──
@@ -46,7 +58,7 @@ nodes:
     task: |
       Сгенерируй изображение с нуля.
 
-      Описание (переписанное, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
+      Описание (переписанное, приоритет): {{ nodes.extract_facts.output.rewritten_query if nodes.extract_facts is defined else user_message }}
       Исходная просьба пользователя: {{ user_message }}
     output_type: message
 
@@ -62,6 +74,9 @@ nodes:
     output_type: message
 
 edges:
+  - from: check_attachments
+    to: route_media_state
+
   - from: extract_facts
     to: route
 

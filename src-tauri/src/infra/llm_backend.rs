@@ -266,6 +266,13 @@ impl LlmEngine {
         }
     }
 
+    pub fn is_alive(&self) -> bool {
+        match &self.backend {
+            LlmBackend::Local(engine) => engine.is_alive(),
+            LlmBackend::Cloud(_) => true,
+        }
+    }
+
     pub fn is_multimodal(&self) -> bool {
         match &self.backend {
             LlmBackend::Local(engine) => engine.is_multimodal(),
