@@ -150,7 +150,12 @@ impl RequestMedia {
                 candidate.context
             ));
         }
-        out.push_str("Выбирай только существующие id. Файловые пути не используй.");
+        out.push_str(
+            "Выбирай только существующие id. Файловые пути не используй.\n\
+             Порядок source_image_ids = роли картинок: первый id — холст (<image1>, \
+             его композиция/поза/фон сохраняются), дальше — источники материала \
+             (<image2>, ...). В промпте адресуй картинки тегами <image1>, <image2>.",
+        );
         out
     }
 
@@ -433,6 +438,19 @@ mod tests {
             .collect::<Vec<_>>();
         let media = RequestMedia::build(&[], &messages);
         assert_eq!(media.candidate_ids().len(), 25);
+    }
+
+    #[test]
+    fn candidate_prompt_explains_reference_roles() {
+        let messages = vec![message(
+            "msg_1",
+            "user",
+            "source",
+            vec![attachment("one.png", "one"), attachment("two.png", "two")],
+        )];
+        let prompt = RequestMedia::build(&[], &messages).candidate_prompt();
+        assert!(prompt.contains("<image1>"), "роль холста: {}", prompt);
+        assert!(prompt.contains("<image2>"), "роль источника: {}", prompt);
     }
 
     #[test]

@@ -31,6 +31,23 @@ fn schemas_only_for_declared_tools() {
 }
 
 #[test]
+fn edit_image_schema_documents_reference_roles() {
+    let tool = EditImage;
+    let description = tool.description();
+    assert!(description.contains("<image1>"), "{}", description);
+    assert!(description.contains("<image2>"), "{}", description);
+    let prompt_hint = tool
+        .parameters()
+        .get("properties")
+        .and_then(|props| props.get("prompt_en"))
+        .and_then(|value| value.get("description"))
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
+    assert!(prompt_hint.contains("<image1>"), "{}", prompt_hint);
+}
+
+#[test]
 fn image_result_uses_opaque_artifact_id() {
     let registry = ImageArtifactRegistry::new();
     let ctx = ToolCtx {
