@@ -121,18 +121,31 @@ edges: []
 }
 
 #[test]
-fn detects_current_psychotherapist_dynamic_edge() {
-    let source: Value = serde_yaml::from_str(include_str!(
-        "../../../../agents/psychotherapist/transitions/main_conversation_flow.yaml"
-    ))
-    .expect("psychotherapist workflow YAML");
-    let workflow = serde_yaml::from_value(source.clone()).expect("psychotherapist workflow");
+fn detects_dynamic_source_edge_warning() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+visible: true
+nodes:
+  - id: router
+    type: signal_router
+    cases_priority:
+      - key: A
+        to: node_a
+  - id: node_a
+    type: note
+edges:
+  - from: router
+    to: node_a
+"#,
+    );
+
     let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
 
     assert!(diagnostics.iter().any(|diagnostic| {
         diagnostic.code == "DYNAMIC_EDGE_NOT_RENDERED"
-            && diagnostic.message.contains("check_need_handedness")
-            && diagnostic.message.contains("call_focus_keeper")
+            && diagnostic.message.contains("router")
+            && diagnostic.message.contains("node_a")
     }));
 }
 

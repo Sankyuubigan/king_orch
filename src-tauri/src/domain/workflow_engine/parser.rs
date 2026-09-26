@@ -309,6 +309,8 @@ pub enum NodeType {
     #[serde(rename = "condition_router")]
     ConditionRouter,
     Note,
+    #[serde(rename = "system1_validator")]
+    System1Validator,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

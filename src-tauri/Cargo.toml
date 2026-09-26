@@ -56,6 +56,9 @@ flate2 = "1.0"
 url = "2"
 log = "0.4"
 base64 = "0.22"
+ort = { version = "2.0.0-rc.9", features = ["download-binaries", "ndarray"] }
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+ndarray = "0.16"
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Networking_WinHttp", "Win32_Foundation"] }
 

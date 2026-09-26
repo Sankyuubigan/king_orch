@@ -170,6 +170,61 @@ where
     C: Fn(&SubCall) + Clone + Send + Sync + 'static,
 {
     match node.node_type {
+        NodeType::System1Validator => {
+            let workflow_dir = std::path::Path::new(&workflow.parent_dir);
+            let rules_path = workflow_dir.join("../database/element_validation_rules_prod_noul.yaml");
+            let rules_path = if rules_path.exists() {
+                rules_path
+            } else {
+                std::path::Path::new("agents/psychotherapist/database/element_validation_rules_prod_noul.yaml").to_path_buf()
+            };
+
+            let model_dir = std::path::Path::new("test/laya_probe/models/laya-multilingual-onnx");
+            let validator = crate::domain::system1_validator::LayaValidator::load(model_dir)
+                .map_err(|e| format!("Failed to load Laya validator ONNX: {}", e))?;
+
+            let rules = crate::domain::system1_validator::LayaValidator::load_rules(&rules_path)
+                .map_err(|e| format!("Failed to load rules for system1_validator: {}", e))?;
+
+            let text_to_validate = if let Some(msg) = context.messages.iter().rev().find(|m| m.author.as_deref() == Some("fact_consolidator") || m.author.as_deref() == Some("fact_consolidator")) {
+                msg.content.clone()
+            } else {
+                context.messages.iter()
+                    .filter(|m| m.msg_type == "message" && !m.content.trim().is_empty())
+                    .map(|m| format!("[{}]: {}", m.author.as_deref().unwrap_or("user"), m.content))
+                    .collect::<Vec<_>>()
+                    .join("\n\n")
+            };
+
+            let report = validator.validate(&text_to_validate, &rules)
+                .map_err(|e| format!("System1Validator inference error: {}", e))?;
+
+            let output_value = serde_json::to_value(&report).unwrap_or_default();
+            let report_json = serde_json::json!({
+                "e1": report.e1,
+                "e2": report.e2,
+                "e3": report.e3,
+                "e4": report.e4,
+                "e5": report.e5,
+                "e6": report.e6,
+                "e7": report.e7,
+                "e8": report.e8,
+                "e9": report.e9,
+            });
+
+            context.signals.insert("validator_report".to_string(), report_json.clone());
+
+            (runner.log_cb)(format!(
+                "[system1_validator] Validated in {}ms. Report: {}",
+                report.elapsed_ms, report_json
+            ));
+
+            Ok(NodeResult {
+                output: output_value,
+                next_node: None,
+                next_nodes: Vec::new(),
+            })
+        }
         NodeType::LlmFactExtractor => {
             let config = workflow
                 .config

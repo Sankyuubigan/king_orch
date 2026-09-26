@@ -20,6 +20,7 @@ DEFAULT_MODEL_ID = "convaiinnovations/laya-multilingual"
 DEFAULT_MODEL_REVISION = "e4e9ddf21a7b1903b7acffd8814ad4307bf63a67"
 ALFRED_MODEL_ID = "alfred361/laya-multilingual-typed-decisions"
 ALFRED_MODEL_REVISION = "60ce5be491a7723df937b757e43b254a08898f8e"
+ONNX_MODEL_ID = "mizchi/laya-multilingual-onnx"
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -299,6 +300,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--rules", type=Path, default=None, help="Путь к файлу критериев (по умолчанию test или orig)")
     parser.add_argument("--use-original-rules", action="store_true", help="Использовать оригинальный element_validation_rules.yaml")
     parser.add_argument("--alfred", action="store_true", help="Использовать alfred361/laya-multilingual-typed-decisions")
+    parser.add_argument("--onnx", action="store_true", help="Использовать ONNX модель mizchi/laya-multilingual-onnx")
     parser.add_argument("--model-dir", type=Path, default=None)
     parser.add_argument("--device", default="cuda")
     parser.add_argument(
@@ -319,7 +321,12 @@ def main() -> int:
     args = parse_args()
     project_root = Path(__file__).resolve().parent.parent
     
-    if args.alfred:
+    if args.onnx:
+        model_id = ONNX_MODEL_ID
+        model_revision = None
+        model_dir = args.model_dir or (project_root / "test/laya_probe/models/laya-multilingual-onnx")
+        tag = "onnx"
+    elif args.alfred:
         model_id = ALFRED_MODEL_ID
         model_revision = ALFRED_MODEL_REVISION
         model_dir = args.model_dir or (project_root / "test/laya_probe/models/laya-multilingual-alfred")
@@ -338,7 +345,12 @@ def main() -> int:
         rules_path = args.fixture_dir / "element_validation_rules_test.yaml"
 
     try:
-        download_model(model_dir, model_id, model_revision)
+        if args.onnx:
+            from huggingface_hub import snapshot_download
+            if not (model_dir / "model.onnx").exists():
+                snapshot_download(repo_id=model_id, local_dir=model_dir)
+        else:
+            download_model(model_dir, model_id, model_revision)
 
         if args.tokens_only:
             from transformers import AutoTokenizer
@@ -350,10 +362,15 @@ def main() -> int:
             report_option_lengths(tok, probe_questions)
             return 0
 
-        import laya
-        
         started = time.perf_counter()
-        agent = laya.load(str(model_dir), device=args.device)
+        if args.onnx:
+            import laya.onnx_agent
+            onnx_file = model_dir / "model.onnx"
+            agent = laya.onnx_agent.ONNXAgent(str(model_dir), onnx_path=str(onnx_file))
+            agent.device = "onnx"
+        else:
+            import laya
+            agent = laya.load(str(model_dir), device=args.device)
         load_ms = round((time.perf_counter() - started) * 1000)
         print(f"Модель {model_id} загружена за {load_ms} мс (устройство: {agent.device})")
 
@@ -364,7 +381,12 @@ def main() -> int:
         rules_tag = rules_path.stem.replace("element_validation_rules", "").strip("_-") or "prod"
         out_tag = f"{tag}_{rules_tag}_{args.labels}"
 
-        for task_num in (1, 2):
+        tasks_to_run = []
+        for t in range(1, 10):
+            if (args.fixture_dir / f"task{t}.md").exists():
+                tasks_to_run.append(t)
+
+        for task_num in tasks_to_run:
             out_file = project_root / f"test/laya_probe/results/laya_{out_tag}_task{task_num}.json"
             gemma_file = project_root / f"test/laya_probe/results/gemma_task{task_num}.json"
             evaluate_task(
