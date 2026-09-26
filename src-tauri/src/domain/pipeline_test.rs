@@ -5,7 +5,7 @@ use std::time::Instant;
 
 use crate::infra::{ChatMessage, LlmEngine, ModelParams, SubCall};
 use crate::domain::agent_manager::load_agents;
-use crate::domain::workflow_engine::{parse_workflow_file, run_workflow, WorkflowRunner};
+use crate::domain::workflow_engine::{parse_workflow_file, run_workflow, WorkflowDef, WorkflowRunner};
 use crate::domain::workflow_engine::context::WorkflowContext;
 use crate::domain::workflow_engine::parser::load_workflows;
 use crate::domain::StreamMeta;
@@ -129,8 +129,8 @@ pub fn load_pipeline_tests(project_root: &Path) -> Result<Vec<PipelineTestDef>, 
         if !path.is_dir() {
             continue;
         }
-        match load_single_test(&path) {
-            Ok(test) => tests.push(test),
+        match load_dir_tests(&path) {
+            Ok(mut defs) => tests.append(&mut defs),
             Err(e) => {
                 eprintln!("⚠️ Пропуск fixture {}: {}", path.display(), e);
             }
@@ -141,29 +141,83 @@ pub fn load_pipeline_tests(project_root: &Path) -> Result<Vec<PipelineTestDef>, 
     Ok(tests)
 }
 
-pub fn load_single_test(dir: &Path) -> Result<PipelineTestDef, String> {
-    let id = dir.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("unknown")
-        .to_string();
+/// Загружает все тесты из fixture-папки.
+/// Поддерживает два режима:
+/// - классический: `task.md` + `validation.json` → один тест с id = имя папки;
+/// - мульти-кейс: `task<N>.md` + `validation<N>.json` → по тесту на пару,
+///   id = `<имя папки>::task<N>` (промты и эталоны в таких файлах фиксированы).
+pub fn load_dir_tests(dir: &Path) -> Result<Vec<PipelineTestDef>, String> {
+    let legacy_task = dir.join("task.md");
+    let legacy_val = dir.join("validation.json");
+    if legacy_task.exists() && legacy_val.exists() {
+        return Ok(vec![load_test_files(
+            dir,
+            dir.file_name().and_then(|n| n.to_str()).unwrap_or("unknown").to_string(),
+            &legacy_task,
+            &legacy_val,
+        )?]);
+    }
 
-    // Читаем task.md
-    let task_path = dir.join("task.md");
+    let mut validation_files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| format!("Ошибка чтения {}: {}", dir.display(), e))?
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|p| {
+            p.is_file()
+                && p.extension().map_or(false, |e| e == "json")
+                && p.file_stem().and_then(|s| s.to_str())
+                    .map_or(false, |s| s.starts_with("validation"))
+        })
+        .collect();
+    validation_files.sort();
+
+    if validation_files.is_empty() {
+        return Err(format!(
+            "В {} нет ни validation.json, ни validation<N>.json",
+            dir.display()
+        ));
+    }
+
+    let folder = dir.file_name().and_then(|n| n.to_str()).unwrap_or("unknown");
+    let mut defs = Vec::new();
+    for val_path in validation_files {
+        let stem = val_path.file_stem().and_then(|s| s.to_str()).unwrap_or_default().to_string();
+        let suffix = stem.trim_start_matches("validation");
+        let task_path = dir.join(format!("task{}.md", suffix));
+        if !task_path.exists() {
+            return Err(format!("Для {} не найден {}", val_path.display(), task_path.display()));
+        }
+        let id = if suffix.is_empty() {
+            folder.to_string()
+        } else {
+            format!("{}::task{}", folder, suffix)
+        };
+        defs.push(load_test_files(dir, id, &task_path, &val_path)?);
+    }
+    Ok(defs)
+}
+
+fn load_test_files(
+    dir: &Path,
+    id: String,
+    task_path: &Path,
+    validation_path: &Path,
+) -> Result<PipelineTestDef, String> {
+    // Читаем task
     if !task_path.exists() {
-        return Err(format!("task.md не найден в {}", dir.display()));
+        return Err(format!("{} не найден в {}", task_path.display(), dir.display()));
     }
-    let task_prompt = std::fs::read_to_string(&task_path)
-        .map_err(|e| format!("Ошибка чтения task.md: {}", e))?;
+    let task_prompt = std::fs::read_to_string(task_path)
+        .map_err(|e| format!("Ошибка чтения {}: {}", task_path.display(), e))?;
 
-    // Читаем validation.json
-    let validation_path = dir.join("validation.json");
+    // Читаем validation
     if !validation_path.exists() {
-        return Err(format!("validation.json не найден в {}", dir.display()));
+        return Err(format!("{} не найден в {}", validation_path.display(), dir.display()));
     }
-    let validation_str = std::fs::read_to_string(&validation_path)
-        .map_err(|e| format!("Ошибка чтения validation.json: {}", e))?;
+    let validation_str = std::fs::read_to_string(validation_path)
+        .map_err(|e| format!("Ошибка чтения {}: {}", validation_path.display(), e))?;
     let validation: ValidationRules = serde_json::from_str(&validation_str)
-        .map_err(|e| format!("Ошибка парсинга validation.json: {}", e))?;
+        .map_err(|e| format!("Ошибка парсинга {}: {}", validation_path.display(), e))?;
 
     // Читаем исходный файл
     let source_path = dir.join(&validation.source_file);
@@ -171,7 +225,7 @@ pub fn load_single_test(dir: &Path) -> Result<PipelineTestDef, String> {
         return Err(format!("Исходный файл {} не найден", validation.source_file));
     }
     let source_file_content = std::fs::read_to_string(&source_path)
-        .map_err(|e| format!("Ошибка чтения {}: {}", validation.source_file, e))?;
+        .map_err(|e| format!("Ошибка чтения {}: {}", source_path.display(), e))?;
 
     Ok(PipelineTestDef {
         id,
@@ -180,6 +234,18 @@ pub fn load_single_test(dir: &Path) -> Result<PipelineTestDef, String> {
         validation,
         source_file_content,
     })
+}
+
+pub fn load_single_test(dir: &Path) -> Result<PipelineTestDef, String> {
+    let mut defs = load_dir_tests(dir)?;
+    if defs.len() != 1 {
+        return Err(format!(
+            "В {} найдено {} тестов — запускайте по id через load_pipeline_tests",
+            dir.display(),
+            defs.len()
+        ));
+    }
+    defs.pop().ok_or_else(|| "нет тестов".to_string())
 }
 
 pub fn get_pipeline_test_infos(project_root: &Path) -> Result<Vec<PipelineTestInfo>, String> {
@@ -223,20 +289,18 @@ pub fn run_pipeline_test(
         None
     };
 
-    let workflow_owned: WorkflowDef;
-    let workflow: &WorkflowDef = if let Some(path) = custom_wf_path {
-        workflow_owned = parse_workflow_file(&path)
-            .map_err(|e| format!("Ошибка загрузки локального workflow {}: {}", path.display(), e))?;
-        &workflow_owned
+    let workflows_owned: Vec<WorkflowDef> = if let Some(path) = custom_wf_path {
+        vec![parse_workflow_file(&path)
+            .map_err(|e| format!("Ошибка загрузки локального workflow {}: {}", path.display(), e))?]
     } else {
-        let workflows = load_workflows(agents_dir)
-            .map_err(|e| format!("Ошибка загрузки workflow: {}", e))?;
-        let found = workflows.into_iter()
-            .find(|w| w.name == test.validation.workflow_name)
-            .ok_or_else(|| format!("Workflow '{}' не найден", test.validation.workflow_name))?;
-        workflow_owned = found;
-        &workflow_owned
+        load_workflows(agents_dir)
+            .map_err(|e| format!("Ошибка загрузки workflow: {}", e))?
     };
+    let workflow: &WorkflowDef = workflows_owned
+        .iter()
+        .find(|w| w.name == test.validation.workflow_name)
+        .or_else(|| workflows_owned.first())
+        .ok_or_else(|| format!("Workflow '{}' не найден", test.validation.workflow_name))?;
 
     // Копируем исходный файл в .agents_workspace
     let target_dir = project_root.join(
@@ -293,7 +357,7 @@ pub fn run_pipeline_test(
     let mut runner = WorkflowRunner {
         engine,
         agents: &agents,
-        workflows: &workflows,
+        workflows: &workflows_owned,
         log_cb: log_cb.clone(),
         status_cb: status_cb.clone(),
         subcall_cb: |_: &SubCall| {},
@@ -688,15 +752,11 @@ pub fn run_pipeline_test_cli(
     model_path: &str,
     project_root: &Path,
 ) -> Result<PipelineTestResult, String> {
+    let tests = load_pipeline_tests(project_root)?;
+    let test_def = tests.into_iter()
+        .find(|t| t.id == test_id)
+        .ok_or_else(|| format!("Тест '{}' не найден в fixtures", test_id))?;
     let agents_dir = project_root.join("agents");
-    let fixtures_dir = find_fixtures_dir(project_root);
-    let test_dir = fixtures_dir.join(test_id);
-
-    if !test_dir.exists() {
-        return Err(format!("Fixture '{}' не найден: {}", test_id, test_dir.display()));
-    }
-
-    let test_def = load_single_test(&test_dir)?;
 
     // Перезаписываем model_path из CLI-аргумента
     let mut test_def = test_def;
@@ -734,11 +794,35 @@ pub fn run_pipeline_test_cli(
 }
 
 #[cfg(test)]
-mod psych_validator_e2e;
-
-#[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Запуск любого fixture-теста по id из окружения (без хардкода кейсов в коде):
+    ///   PIPELINE_TEST_ID=psychotherapist_validator_e1_e9::task1
+    ///   TEST_MODEL_PATH=<путь к .gguf>
+    #[test]
+    #[ignore]
+    fn pipeline_e2e_by_env() {
+        let id = std::env::var("PIPELINE_TEST_ID")
+            .expect("Задайте PIPELINE_TEST_ID (id теста из fixtures)");
+        let model_path = std::env::var("TEST_MODEL_PATH")
+            .expect("Задайте TEST_MODEL_PATH");
+        let project_root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+
+        let result = run_pipeline_test_cli(&id, &model_path, project_root)
+            .expect("pipeline test упал");
+
+        println!(
+            "[{}] duration_ms={} passed={}",
+            id, result.duration_ms, result.overall_passed
+        );
+        assert!(
+            result.overall_passed,
+            "pipeline test '{}' НЕ пройден: {:?}",
+            id,
+            result.level1_structure.details
+        );
+    }
 
     #[test]
     fn test_load_coding_team_fixtures() {

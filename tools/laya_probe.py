@@ -9,6 +9,13 @@ from typing import Any
 
 import yaml
 
+if sys.stdout.encoding != "utf-8":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 DEFAULT_MODEL_ID = "convaiinnovations/laya-multilingual"
 DEFAULT_MODEL_REVISION = "e4e9ddf21a7b1903b7acffd8814ad4307bf63a67"
 ALFRED_MODEL_ID = "alfred361/laya-multilingual-typed-decisions"
@@ -22,23 +29,19 @@ def load_json(path: Path) -> dict[str, Any]:
         raise RuntimeError(f"Не удалось прочитать {path}: {error}") from error
 
 
-def load_definitions(arch_path: Path) -> dict[int, str]:
-    try:
-        text = arch_path.read_text(encoding="utf-8")
-    except OSError as error:
-        raise RuntimeError(f"Не удалось прочитать {arch_path}: {error}") from error
-    definitions: dict[int, str] = {}
-    for line in text.splitlines():
-        line = line.strip()
-        for number in range(1, 10):
-            if line.startswith(f"{number}."):
-                definitions[number] = line[len(str(number)) + 1:].strip()
-    if len(definitions) < 9:
-        raise RuntimeError(f"В {arch_path} найдены не все 9 определений элементов")
-    return definitions
+def build_questions(
+    rules_path: Path,
+    labels: str = "both",
+) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+    """Собирает 9 вопросов из файла критериев.
 
+    `labels` управляет подписями вариантов (документированная грабли #156):
+      - `bool`       — подписи `true`/`false` (запрещены моделью, оставлено для контроля);
+      - `neutral`    — подписи `A`/`B`, где A = «да»;
+      - `neutral_rev`— подписи `A`/`B`, где A = «нет» (проверка на позиционное смещение).
 
-def build_questions(rules_path: Path, arch_path: Path) -> dict[str, dict[str, Any]]:
+    Возвращает (вопросы, qid -> подпись, означающая «да»).
+    """
     try:
         document = yaml.safe_load(rules_path.read_text(encoding="utf-8"))
     except (OSError, yaml.YAMLError) as error:
@@ -47,58 +50,70 @@ def build_questions(rules_path: Path, arch_path: Path) -> dict[str, dict[str, An
     elements = document.get("elements") if isinstance(document, dict) else None
     if not isinstance(elements, dict):
         raise RuntimeError(f"В {rules_path} отсутствует раздел elements")
-    definitions = load_definitions(arch_path)
 
     questions: dict[str, dict[str, Any]] = {}
+    true_labels: dict[str, str] = {}
     for number in range(1, 10):
         element = elements.get(number)
         if not isinstance(element, dict):
             raise RuntimeError(f"Нет правил для элемента e{number}")
-        must_not = element.get("must_not_be") or []
-        if isinstance(must_not, str):
-            must_not = [must_not]
-        
-        parts = [
-            f"Элемент {number} ({element.get('name', '')}): {element.get('evidence_test', '')}",
-        ]
-        must_have = element.get("must_have")
-        if must_have:
-            parts.append(f"Обязательно: {must_have}")
-        if number == 3:
-            formula = element.get("formula")
-            if formula:
-                parts.append(str(formula))
-        if must_not:
-            parts.append("Запрещено для true: " + "; ".join(map(str, must_not)) + ".")
-        parts.append("Доказательство — только прямые слова пользователя. Если сомневаешься или данных нет — ответ false.")
 
-        questions[f"e{number}"] = {
-            "type": "noul",
-            "instructions": " ".join(parts),
-            "criteria": {
-                "true": "Пользователь прямо и недвусмысленно подтвердил это своими словами.",
-                "false": "В словах пользователя нет прямого подтверждения, есть запрет или это фоновый дискомфорт.",
-            },
+        name = element.get("name", "")
+
+        if "question" in element and "true_criteria" in element:
+            ins = element["question"]
+            crit_true = element["true_criteria"]
+            crit_false = element["false_criteria"]
+        else:
+            must_not = element.get("must_not_be") or []
+            if isinstance(must_not, str):
+                must_not = [must_not]
+            must_not_str = "; ".join(map(str, must_not)) if must_not else ""
+            evidence = element.get("evidence_test", "")
+            if must_not_str:
+                ins = f"Описан ли в тексте элемент «{name}»? Исключения (НЕ является данным элементом): {must_not_str}."
+            else:
+                ins = f"Описан ли в тексте элемент «{name}»?"
+            crit_true = evidence
+            crit_false = "Признак отсутствует или нет прямого подтверждения"
+
+        qid = f"e{number}"
+        qtype = element.get("question_type", "choice")
+        if qtype == "noul":
+            # Штатное решение авторов для ловушки #156 (docs §4.1): смысл остаётся
+            # в ключах true/false, но модели показываются нейтральные подписи.
+            # Режим both = перестановка этих подписей.
+            if labels in ("bool",):
+                raise RuntimeError(
+                    "noul с булевыми подписями — это задокументированная ловушка (#156); "
+                    "используй --labels neutral/neutral_rev/both"
+                )
+            noul_labels = {"true": "A", "false": "B"} if labels in ("neutral", "both") else {"true": "B", "false": "A"}
+            questions[qid] = {
+                "type": "noul",
+                "instructions": ins,
+                "criteria": {"true": crit_true, "false": crit_false},
+                "labels": noul_labels,
+            }
+            true_labels[qid] = "true"
+            continue
+
+        if labels == "bool":
+            criteria, true_label = {"true": crit_true, "false": crit_false}, "true"
+        elif labels == "neutral":
+            criteria, true_label = {"A": crit_true, "B": crit_false}, "A"
+        elif labels == "neutral_rev":
+            criteria, true_label = {"A": crit_false, "B": crit_true}, "B"
+        else:
+            raise RuntimeError(f"Неизвестный режим подписей: {labels}")
+
+        questions[qid] = {
+            "type": element.get("question_type", "choice"),
+            "instructions": ins,
+            "criteria": criteria,
         }
-    return questions
-
-
-def check_budgets(agent: Any, questions: dict[str, dict[str, Any]], state: str, max_len: int, head_max_len: int) -> None:
-    from laya.agent import Agent
-    from laya.common import build_sequence
-
-    problems = []
-    for qid, qdef in questions.items():
-        internal = Agent._to_internal(qdef)
-        ids, markers = build_sequence(agent.tok, state, internal, max_len, head_max_len)
-        full = agent.tok("choice question: " + internal["ins"], add_special_tokens=False)["input_ids"]
-        kept = len(ids[1:markers[0] - 1])
-        dropped = len(full) - kept
-        print(f"{qid}: инструкция {len(full)} токенов, влезло {kept}, отрезано {dropped}")
-        if dropped > 0:
-            problems.append(qid)
-    if problems:
-        raise RuntimeError(f"Инструкции обрезаны токенизатором: {', '.join(problems)}. Укороти вопросы.")
+        true_labels[qid] = true_label
+    return questions, true_labels
 
 
 def download_model(model_dir: Path, model_id: str, model_revision: str) -> None:
@@ -122,79 +137,130 @@ def download_model(model_dir: Path, model_id: str, model_revision: str) -> None:
     )
 
 
-def evaluate(
+OPTION_TOKEN_LIMIT = 48
+
+
+def report_option_lengths(tok: Any, questions: dict[str, dict[str, Any]]) -> int:
+    """Печатает текст вариантов ровно в том виде, в каком его увидит модель.
+
+    Библиотека молча режет каждый вариант до лимита токенов
+    (docs/LAYA_MODEL.md §2.1), поэтому обрезанный вариант — это не тот текст,
+    который мы написали в критериях. Возвращает число перерезанных вариантов.
+    """
+    from laya.agent import Agent
+    from laya.common import render_options
+
+    cut = 0
+    for qid, qdef in questions.items():
+        for opt in render_options(Agent._to_internal(qdef)):
+            full = tok(opt, add_special_tokens=False)["input_ids"]
+            n = len(full)
+            if n > OPTION_TOKEN_LIMIT:
+                cut += 1
+                seen = tok(opt, add_special_tokens=False, truncation=True,
+                           max_length=OPTION_TOKEN_LIMIT)["input_ids"]
+                print(f"  {qid}: {n:>3} токенов -> модель видит {len(seen)} "
+                      f"(обрезано {n - len(seen)})")
+                print(f"        ВИДИТ: {tok.decode(seen)}")
+                print(f"        ПОТЕРЯНО: {tok.decode(full[len(seen):])}")
+            else:
+                print(f"  {qid}: {n:>3} токенов (целиком)")
+    return cut
+
+
+def evaluate_task(
+    agent: Any,
+    task_num: int,
     fixture_dir: Path,
     rules_path: Path,
-    arch_path: Path,
-    model_dir: Path,
     model_id: str,
     model_revision: str,
-    gemma_result_path: Path,
-    device: str,
+    gemma_result_path: Path | None,
     output_path: Path,
-) -> int:
-    import laya
-
-    validation = load_json(fixture_dir / "validation.json")
-    try:
-        state = (fixture_dir / "task.md").read_text(encoding="utf-8").strip()
-    except OSError as error:
-        raise RuntimeError(f"Не удалось прочитать вход из {fixture_dir / 'task.md'}: {error}") from error
+    labels: str = "bool",
+) -> dict[str, Any]:
+    task_file = fixture_dir / f"task{task_num}.md"
+    val_file = fixture_dir / f"validation{task_num}.json"
+    
+    validation = load_json(val_file)
+    state = task_file.read_text(encoding="utf-8").strip()
     expected = validation["expected_signals"]["validator_report"]
+    priority_false = set(validation.get("priority_false_elements", ["e3", "e6"]))
+    
     gemma = None
-    if gemma_result_path.exists():
+    if gemma_result_path and gemma_result_path.exists():
         gemma = load_json(gemma_result_path).get("signals", {}).get("validator_report")
-    priority_false = set(validation["priority_false_elements"])
-    questions = build_questions(rules_path, arch_path)
 
+    orders = ("neutral", "neutral_rev") if labels == "both" else (labels,)
+    if not getattr(agent, "_lengths_printed", False):
+        probe_questions, _ = build_questions(rules_path, labels=orders[0])
+        print(f"\n--- Тексты вариантов как их видит модель (лимит {OPTION_TOKEN_LIMIT} токенов) ---")
+        report_option_lengths(agent.tok, probe_questions)
+        agent._lengths_printed = True
     started = time.perf_counter()
-    agent = laya.load(str(model_dir), device=device)
-    actual_device = str(agent.device)
-    load_ms = round((time.perf_counter() - started) * 1000)
-
-    try:
-        check_budgets(agent, questions, state, max_len=2048, head_max_len=512)
-    except Exception as e:
-        print(f"ВНИМАНИЕ: {e}")
-
-    started = time.perf_counter()
-    result = agent.predict(state, questions, max_len=2048, head_max_len=512)
+    runs: list[dict[str, Any]] = []
+    for order in orders:
+        questions, true_labels = build_questions(rules_path, labels=order)
+        result = agent.predict(state, questions, max_len=2048, head_max_len=512)
+        per_order: dict[str, Any] = {}
+        for number in range(1, 10):
+            key = f"e{number}"
+            answer = result["answers"][key]
+            true_label = true_labels[key]
+            # answer_confidence = max(вероятности) — единственная откалиброванная
+            # метрика (docs/LAYA_MODEL.md §4.7). `confidence` у choice — это
+            # 1 - энтропия/log(k), с другим масштабом; для маршрутизации не годится.
+            confidence = answer.get("answer_confidence")
+            if confidence is None:
+                confidence = answer.get("confidence", 0.0)
+            if "noul" in answer:
+                prob = answer["noul"]
+                per_order[key] = {"p_true": prob, "ans_conf": confidence, "raw": answer.get("noul")}
+            else:
+                probs = answer.get("probabilities", {})
+                prob = float(probs.get(true_label, 0.0))
+                per_order[key] = {"p_true": prob, "ans_conf": confidence, "raw": answer.get("choice")}
+        runs.append(per_order)
     inference_ms = round((time.perf_counter() - started) * 1000)
 
     actual: dict[str, bool] = {}
     report_questions: dict[str, Any] = {}
     for number in range(1, 10):
         key = f"e{number}"
-        answer = result["answers"][key]
-        if "noul" in answer:
-            prob = answer["noul"]
-            actual[key] = prob >= 0.5
-            confidence = answer.get("confidence", abs(prob - 0.5) * 2)
-            probabilities = {"true": prob, "false": 1.0 - prob}
-        else:
-            actual[key] = answer.get("choice") == "true"
-            confidence = answer.get("confidence", 0.0)
-            probabilities = answer.get("probabilities", {})
+        # Усреднение по перестановкам снимает позиционное смещение (docs §4.2):
+        # порядок вариантов меняет до 6 из 9 ответов, поэтому один проход не доверяем.
+        samples = [run[key]["p_true"] for run in runs]
+        prob_true = sum(samples) / len(samples)
+        confidence = max(samples + [1.0 - s for s in samples])
+        actual[key] = prob_true >= 0.5
+        probabilities = {"true": prob_true, "false": 1.0 - prob_true}
+        verdicts = [run[key]["raw"] for run in runs]
+        stable = len(set(str(v) for v in verdicts)) == 1
 
         report_questions[key] = {
             "actual": actual[key],
             "expected": expected[key],
             "probabilities": probabilities,
-            "confidence": confidence,
+            "answer_confidence": confidence,
+            "choice": verdicts[0],
+            "per_order": [
+                {"labels": order, "p_true": run[key]["p_true"], "raw": run[key]["raw"]}
+                for order, run in zip(orders, runs)
+            ],
+            "order_stable": stable,
         }
 
     matches = [key for key in actual if actual[key] == expected[key]]
     mismatches = [key for key in actual if actual[key] != expected[key]]
     priority_mismatches = sorted(priority_false.intersection(mismatches))
-    gemma_mismatches = None
-    if gemma is not None:
-        gemma_mismatches = [key for key in actual if gemma.get(key) != expected[key]]
+    
     payload = {
         "model_id": model_id,
         "model_revision": model_revision,
-        "device": actual_device,
-        "fixture": fixture_dir.name,
-        "load_ms": load_ms,
+        "device": str(agent.device),
+        "task": f"task{task_num}",
+        "rules_file": rules_path.name,
+        "labels": labels,
         "inference_ms": inference_ms,
         "expected": expected,
         "gemma_12b": gemma,
@@ -205,79 +271,118 @@ def evaluate(
         "mismatches": mismatches,
         "priority_false_elements": sorted(priority_false),
         "priority_mismatches": priority_mismatches,
-        "gemma_mismatches": gemma_mismatches,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"Модель: {model_id}@{model_revision}")
-    print(f"Устройство: {actual_device}; загрузка: {load_ms} мс; проверка: {inference_ms} мс")
-    print("элемент  ожидалось  Laya   Gemma-12B")
+    print(f"\n=================== ТЕСТ task{task_num} ({rules_path.name}, labels={labels}) ===================")
+    print(f"Инференс Laya: {inference_ms} мс | Точность: {len(matches)}/9 ({len(matches)/9*100:.1f}%)")
+    print("Элемент  Ожидалось  Laya (prob)      ans_conf  Match")
     for number in range(1, 10):
         key = f"e{number}"
-        gemma_value = "—" if gemma is None else str(gemma.get(key)).lower()
-        print(
-            f"{key:<7} {str(expected[key]).lower():<9} "
-            f"{str(actual[key]).lower():<6} {gemma_value}"
-        )
-    print(f"Совпало с эталоном: {len(matches)}/9")
-    print(f"Ошибки Laya: {', '.join(mismatches) if mismatches else 'нет'}")
-    if gemma_mismatches is None:
-        print("Ошибки Gemma-12B: ещё нет результата нового прогона")
-    else:
-        print(f"Ошибки Gemma-12B: {', '.join(gemma_mismatches) if gemma_mismatches else 'нет'}")
-    print(f"Приоритетные ошибки Laya e3/e6: {', '.join(priority_mismatches) if priority_mismatches else 'нет'}")
-    print(f"Отчёт: {output_path}")
-    return 1 if priority_mismatches else 0
+        exp_str = str(expected[key]).lower()
+        act_str = str(actual[key]).lower()
+        prob_true = report_questions[key]["probabilities"]["true"]
+        conf = report_questions[key]["answer_confidence"]
+        status = "OK " if actual[key] == expected[key] else "ERR"
+        print(f"{key:<8} {exp_str:<10} {act_str:<5} (p={prob_true:.3f})   {conf:.3f}     {status}")
+    print(f"Совпадения: {', '.join(matches) if matches else 'нет'}")
+    print(f"Ошибки: {', '.join(mismatches) if mismatches else 'нет'}")
+
+    return payload
 
 
 def parse_args() -> argparse.Namespace:
     project_root = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser()
     parser.add_argument("--fixture-dir", type=Path, default=project_root / "test_cases/fixtures/psychotherapist_validator_e1_e9")
-    parser.add_argument("--rules", type=Path, default=project_root / "agents/psychotherapist/database/element_validation_rules.yaml")
-    parser.add_argument("--arch", type=Path, default=project_root / "agents/psychotherapist/database/neurosis_architecture.md")
-    parser.add_argument("--alfred", action="store_true", help="Использовать alfred361/laya-multilingual-typed-decisions вместо базовой Laya")
+    parser.add_argument("--rules", type=Path, default=None, help="Путь к файлу критериев (по умолчанию test или orig)")
+    parser.add_argument("--use-original-rules", action="store_true", help="Использовать оригинальный element_validation_rules.yaml")
+    parser.add_argument("--alfred", action="store_true", help="Использовать alfred361/laya-multilingual-typed-decisions")
     parser.add_argument("--model-dir", type=Path, default=None)
-    parser.add_argument("--gemma-result", type=Path, default=project_root / "test/laya_probe/results/gemma_e1_e9.json")
-    parser.add_argument("--output", type=Path, default=None)
     parser.add_argument("--device", default="cuda")
-    parser.add_argument("--download-only", action="store_true")
+    parser.add_argument(
+        "--tokens-only",
+        action="store_true",
+        help="Печатает только отчёт по длинам вариантов, без инференса и записи JSON",
+    )
+    parser.add_argument(
+        "--labels",
+        choices=("bool", "neutral", "neutral_rev", "both"),
+        default="both",
+        help="Подписи вариантов: bool (true/false — перехватывают ответ, только для контроля), neutral (A=да), neutral_rev (перестановка), both (усреднение по двум перестановкам)",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
     project_root = Path(__file__).resolve().parent.parent
+    
     if args.alfred:
         model_id = ALFRED_MODEL_ID
         model_revision = ALFRED_MODEL_REVISION
         model_dir = args.model_dir or (project_root / "test/laya_probe/models/laya-multilingual-alfred")
-        output_path = args.output or (project_root / "test/laya_probe/results/laya_alfred_e1_e9.json")
+        tag = "alfred"
     else:
         model_id = DEFAULT_MODEL_ID
         model_revision = DEFAULT_MODEL_REVISION
         model_dir = args.model_dir or (project_root / "test/laya_probe/models/laya-multilingual-base")
-        output_path = args.output or (project_root / "test/laya_probe/results/laya_base_e1_e9.json")
+        tag = "base"
+
+    if args.rules:
+        rules_path = args.rules
+    elif args.use_original_rules:
+        rules_path = project_root / "agents/psychotherapist/database/element_validation_rules.yaml"
+    else:
+        rules_path = args.fixture_dir / "element_validation_rules_test.yaml"
 
     try:
         download_model(model_dir, model_id, model_revision)
-        if args.download_only:
-            print(f"Модель скачана: {model_dir}")
+
+        if args.tokens_only:
+            from transformers import AutoTokenizer
+            tok_dir = model_dir / "tokenizer" if (model_dir / "tokenizer").exists() else model_dir
+            tok = AutoTokenizer.from_pretrained(tok_dir)
+            orders = ("neutral", "neutral_rev") if args.labels == "both" else (args.labels,)
+            probe_questions, _ = build_questions(rules_path, labels=orders[0])
+            print(f"\n--- Тексты вариантов как их видит модель (лимит {OPTION_TOKEN_LIMIT} токенов) ---")
+            report_option_lengths(tok, probe_questions)
             return 0
-        return evaluate(
-            args.fixture_dir,
-            args.rules,
-            args.arch,
-            model_dir,
-            model_id,
-            model_revision,
-            args.gemma_result,
-            args.device,
-            output_path,
-        )
+
+        import laya
+        
+        started = time.perf_counter()
+        agent = laya.load(str(model_dir), device=args.device)
+        load_ms = round((time.perf_counter() - started) * 1000)
+        print(f"Модель {model_id} загружена за {load_ms} мс (устройство: {agent.device})")
+
+        # slug из имени файла: element_validation_rules[_variant].yaml
+        # Раньше тег определялся по подстроке "test" в имени, из-за чего файлы
+        # вроде element_validation_rules_noul.yaml помечались как "orig" и
+        # перезаписывали результаты друг друга.
+        rules_tag = rules_path.stem.replace("element_validation_rules", "").strip("_-") or "prod"
+        out_tag = f"{tag}_{rules_tag}_{args.labels}"
+
+        for task_num in (1, 2):
+            out_file = project_root / f"test/laya_probe/results/laya_{out_tag}_task{task_num}.json"
+            gemma_file = project_root / f"test/laya_probe/results/gemma_task{task_num}.json"
+            evaluate_task(
+                agent,
+                task_num,
+                args.fixture_dir,
+                rules_path,
+                model_id,
+                model_revision,
+                gemma_file if gemma_file.exists() else None,
+                out_file,
+                labels=args.labels,
+            )
+        return 0
     except Exception as error:
         print(f"ОШИБКА: {error}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
         return 2
 
 

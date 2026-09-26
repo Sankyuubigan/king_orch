@@ -259,10 +259,11 @@ pub async fn run_pipeline_test_cmd(
 
     let agents_dir = infra::find_agents_dir(&app);
     let project_root = agents_dir.parent().unwrap_or(&agents_dir).to_path_buf();
-    let fixtures_dir = domain::pipeline_test::find_fixtures_dir(&project_root);
-    let test_dir = fixtures_dir.join(&test_id);
 
-    let mut test_def = domain::pipeline_test::load_single_test(&test_dir)?;
+    let mut test_def = domain::pipeline_test::load_pipeline_tests(&project_root)?
+        .into_iter()
+        .find(|t| t.id == test_id)
+        .ok_or_else(|| format!("Тест '{}' не найден в fixtures", test_id))?;
     test_def.validation.model_path = model_path.clone();
 
     let engine_dir = crate::infra::get_engine_dir(&app);
