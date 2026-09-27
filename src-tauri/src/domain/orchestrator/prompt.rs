@@ -55,6 +55,7 @@ pub fn build_system_prompt(
     uses_method_3: bool,
     is_native: bool,
     is_hybrid: bool,
+    is_cloud: bool,
 ) -> String {
     let mut sp = agent.system_prompt.clone();
 
@@ -83,6 +84,10 @@ pub fn build_system_prompt(
     // Для Method 3-агентов грамматика сама принуждает JSON через emit_signal,
     // поэтому секции [ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ] и [ДОСТУПНЫЕ ИНСТРУМЕНТЫ]
     // не добавляются — они противоречат грамматике и тратят когнитивную энергию модели.
+    if uses_method_3 && is_cloud {
+        sp.push_str("\n\n[ТРЕБОВАНИЕ СИГНАЛА (CLOUD MODEL)]\nТы — сигнальный агент. Поскольку облачные модели не поддерживают локальные грамматики, в конце своего ответа ты ОБЯЗАН вернуть результат в виде точного JSON-вызова инструмента emit_signal:\n```json\n{\n  \"tool\": \"emit_signal\",\n  \"arguments\": {\n    \"key\": \"<сигнальный_ключ>\",\n    \"value\": { ... }\n  }\n}\n```\nБез этого сигнала работа графа будет остановлена с ошибкой.");
+    }
+
     if has_tools && !uses_method_3 && !is_native {
         sp.push_str("\n\n[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]\nЕсли нужен инструмент — верни ОДИН JSON-блок (```json ... ```).\nВ JSON обязательно поле \"thought\".\n\n⚠️ ВАЖНО: Если задача ВЫПОЛНЕНА — пиши ОБЫЧНЫЙ ТЕКСТ без JSON!\n");
     }

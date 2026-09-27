@@ -327,7 +327,7 @@ pub fn build_worst_agent_prompt(
             tools.extend(crate::infra::image_tool_schemas(&agent.tools));
             let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
             let mut sp =
-                build_system_prompt(agent, history, has_tools, &tools, 2048, false, false, false);
+                build_system_prompt(agent, history, has_tools, &tools, 2048, false, false, false, false);
             sp.push_str("\n\n");
             sp.push_str(prompt::CRITICAL_LIMIT_BLOCK);
             (sp, has_tools)
@@ -464,6 +464,7 @@ where
                         has_tools,
                         &tools,
                         max_gen_usize,
+                        false,
                         false,
                         false,
                         false,
@@ -1157,6 +1158,7 @@ where
         None
     };
 
+    let is_cloud = engine.is_cloud();
     let mut system_prompt = build_system_prompt(
         agent,
         messages,
@@ -1166,6 +1168,7 @@ where
         uses_method_3,
         is_native,
         is_hybrid,
+        is_cloud,
     );
     if agent.tools.iter().any(|tool| tool == "edit_image") {
         let image_candidates = request_media.candidate_prompt();
@@ -2523,11 +2526,14 @@ where
         {
             ctx.llm_messages.push(LlmMessage {
                 role: "user".to_string(),
-                content: "Размышления завершены. Теперь сформулируй финальный ответ.".to_string(),
+                content: format!(
+                    "Размышления завершены. Теперь вызови инструмент emit_signal для ключа '{}' в строгом формате JSON: {{\"tool\": \"emit_signal\", \"arguments\": {{\"key\": \"{}\", \"value\": <значение>}}}}.",
+                    contract.key, contract.key
+                ),
                 ..Default::default()
             });
             log_cb(format!(
-                "🎯 [{}] Phase 2 fallback: хвост запроса завершён user-ролью (фикс prefill-assistant)",
+                "🎯 [{}] Phase 2 fallback: хвост запроса завершён explicit emit_signal инструкцией",
                 agent.name
             ));
         }
@@ -3079,7 +3085,7 @@ mod tests {
         let mut agent = make_agent("search", "ты поисковик");
         agent.mcp_servers = vec!["web_search".to_string()];
         let tools = runtime::builtin_tools();
-        let sp = build_system_prompt(&agent, &[], true, &tools, 2048, false, false, false);
+        let sp = build_system_prompt(&agent, &[], true, &tools, 2048, false, false, false, false);
         assert!(
             sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"),
             "legacy-ветка: агент с mcp_servers обязан получать список инструментов"
@@ -3091,7 +3097,7 @@ mod tests {
     #[test]
     fn legacy_agent_without_tools_has_no_tools_section() {
         let agent = make_agent("plain", "просто агент");
-        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false, false, false);
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false, false, false, false);
         assert!(!sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"));
         assert!(!sp.contains("[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]"));
     }
@@ -3105,7 +3111,7 @@ mod tests {
             "emit_signal".to_string(),
             serde_json::json!({"description": "Save signal"}),
         )];
-        let sp = build_system_prompt(&agent, &[], true, &tools, 2048, true, false, false);
+        let sp = build_system_prompt(&agent, &[], true, &tools, 2048, true, false, false, false);
         assert!(
             !sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"),
             "Method 3-агент НЕ должен получать [ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"
@@ -3120,7 +3126,7 @@ mod tests {
     fn agent_with_current_date_flag_gets_date_block() {
         let mut agent = make_agent("dated", "поисковый агент");
         agent.current_date = true;
-        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false, false, false);
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false, false, false, false);
         assert!(
             sp.contains("[ТЕКУЩАЯ ДАТА]"),
             "агент с current_date: true обязан получать блок даты"
@@ -3143,7 +3149,7 @@ mod tests {
     #[test]
     fn agent_without_current_date_flag_has_no_date_block() {
         let agent = make_agent("plain", "обычный агент");
-        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false, false, false);
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048, false, false, false, false);
         assert!(
             !sp.contains("[ТЕКУЩАЯ ДАТА]"),
             "агент без флага не должен получать блок даты"
@@ -3244,7 +3250,7 @@ mod tests {
         let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
         all_tools.extend(tools_of_server_as_all_tools("web_search"));
         all_tools.extend(runtime::builtin_tools());
-        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048, false, false, false);
+        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048, false, false, false, false);
 
         for t in [
             "WebFetch",
@@ -3273,7 +3279,7 @@ mod tests {
         let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
         all_tools.extend(tools_of_server_as_all_tools("web_search"));
         all_tools.extend(runtime::builtin_tools());
-        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048, false, false, false);
+        let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048, false, false, false, false);
         assert!(
             sp.contains("WebFetch"),
             "промпт web_researcher не содержит WebFetch"
@@ -3295,7 +3301,7 @@ mod tests {
         all_tools.extend(tools_of_server_as_all_tools("web_search"));
         all_tools.extend(runtime::builtin_tools());
         let mut system_prompt =
-            build_system_prompt(&agent, &[], true, &all_tools, 2048, false, false, false);
+            build_system_prompt(&agent, &[], true, &all_tools, 2048, false, false, false, false);
         system_prompt.push_str("\n\n[КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ]\n");
         system_prompt.push_str(prompt::CRITICAL_LIMIT_BLOCK);
 

@@ -56,17 +56,17 @@ pub fn condition_rule_matches(
     equals: &serde_json::Value,
     signals: &std::collections::HashMap<String, serde_json::Value>,
     messages: &[ChatMessage],
-) -> bool {
+) -> Result<bool, String> {
     if let Some(agent_id) = field
         .strip_prefix("reports.")
         .or_else(|| field.strip_prefix("report."))
     {
-        return match equals {
+        return Ok(match equals {
             serde_json::Value::Bool(expected) => {
                 has_agent_report(messages, agent_id) == *expected
             }
             _ => false,
-        };
+        });
     }
 
     if field.contains('.') {
@@ -75,10 +75,10 @@ pub fn condition_rule_matches(
 
     // Поле без точки: значение факта/сигнала из signal bus
     if let Some(signal) = signals.get(field) {
-        return value_equals(signal, equals);
+        return Ok(value_equals(signal, equals));
     }
 
-    false
+    Ok(false)
 }
 
 /// Типизированное сравнение значения из signal bus с ожидаемым `equals`.
@@ -102,22 +102,27 @@ fn match_signal_path(
     field: &str,
     equals: &serde_json::Value,
     signals: &std::collections::HashMap<String, serde_json::Value>,
-) -> bool {
+) -> Result<bool, String> {
     let mut parts = field.splitn(2, '.');
     let signal_key = parts.next().unwrap_or("");
     let rest = parts.next().unwrap_or("");
-    let signal = signals
-        .get(signal_key)
-        .cloned()
-        .unwrap_or(serde_json::Value::Null);
+    let signal = match signals.get(signal_key) {
+        Some(val) if !val.is_null() => val.clone(),
+        _ => {
+            return Err(format!(
+                "Отсутствует обязательный сигнал '{}' в signal bus (проверялось условие '{}'). Агент-производитель не выдал сигнал.",
+                signal_key, field
+            ));
+        }
+    };
     let mut current = signal;
     for part in rest.split('.') {
         match current.get(part) {
             Some(next) => current = next.clone(),
-            None => return false,
+            None => return Ok(false),
         }
     }
-    value_equals(&current, equals)
+    Ok(value_equals(&current, equals))
 }
 
 /// Рекурсивно вычисляет условие condition_router (лист `Rule` или группа `Group`).
@@ -126,7 +131,7 @@ pub fn condition_node_matches(
     node: &ConditionNode,
     signals: &std::collections::HashMap<String, serde_json::Value>,
     messages: &[ChatMessage],
-) -> bool {
+) -> Result<bool, String> {
     match node {
         ConditionNode::Rule { field, equals } => {
             condition_rule_matches(field, equals, signals, messages)
@@ -134,13 +139,15 @@ pub fn condition_node_matches(
         ConditionNode::Group { logic, conditions } => {
             let mode = logic.as_deref().unwrap_or("any");
             let total = conditions.len();
-            let matched = conditions
-                .iter()
-                .filter(|c| condition_node_matches(c, signals, messages))
-                .count();
+            let mut matched = 0;
+            for c in conditions {
+                if condition_node_matches(c, signals, messages)? {
+                    matched += 1;
+                }
+            }
             match mode {
-                "all" => total > 0 && matched == total,
-                _ => matched > 0,
+                "all" => Ok(total > 0 && matched == total),
+                _ => Ok(matched > 0),
             }
         }
     }
@@ -1081,10 +1088,17 @@ where
             let logic = node.logic.as_deref().unwrap_or("any");
 
             let total = conditions.len() as u32;
-            let matched_count = conditions
-                .iter()
-                .filter(|c| condition_node_matches(c, &context.signals, &context.messages))
-                .count() as u32;
+            let mut matched_count = 0;
+            for c in conditions {
+                match condition_node_matches(c, &context.signals, &context.messages) {
+                    Ok(true) => matched_count += 1,
+                    Ok(false) => {}
+                    Err(e) => {
+                        (runner.log_cb)(format!("[condition_router] ❌ Ошибка: {}", e));
+                        return Err(e);
+                    }
+                }
+            }
 
             let condition_met = match logic {
                 "all" => matched_count == total && total > 0,
@@ -1603,7 +1617,7 @@ mod tests {
         signals: &std::collections::HashMap<String, serde_json::Value>,
         messages: &[ChatMessage],
     ) -> bool {
-        condition_rule_matches(field, &equals, signals, messages)
+        condition_rule_matches(field, &equals, signals, messages).unwrap_or(false)
     }
 
     fn msg(author: &str) -> ChatMessage {
@@ -1663,12 +1677,25 @@ mod tests {
             &signals,
             &messages
         ));
-        assert!(!leaf_matches(
+        assert!(condition_rule_matches(
             "missing_signal.e1",
-            serde_json::json!(false),
+            &serde_json::json!(false),
             &signals,
             &messages
-        ));
+        ).is_err());
+    }
+
+    #[test]
+    fn condition_router_fails_on_missing_signal() {
+        let signals = signal_map(&[]);
+        let messages = vec![];
+        let res = condition_rule_matches(
+            "validator_report.e1",
+            &serde_json::json!(false),
+            &signals,
+            &messages,
+        );
+        assert!(res.is_err());
     }
 
     #[test]
@@ -1838,25 +1865,25 @@ mod tests {
             &node,
             &signal_map(&[("somatic_presence", serde_json::json!("new"))]),
             &messages_empty
-        ));
+        ).unwrap());
         // history + нет отчёта сомы → true (вложенная AND-группа)
         assert!(condition_node_matches(
             &node,
             &signal_map(&[("somatic_presence", serde_json::json!("history"))]),
             &messages_empty
-        ));
+        ).unwrap());
         // history + отчёт сомы уже есть → false
         assert!(!condition_node_matches(
             &node,
             &signal_map(&[("somatic_presence", serde_json::json!("history"))]),
             &vec![msg("soma_translator")]
-        ));
+        ).unwrap());
         // none → false
         assert!(!condition_node_matches(
             &node,
             &signal_map(&[("somatic_presence", serde_json::json!("none"))]),
             &messages_empty
-        ));
+        ).unwrap());
     }
 
     #[test]
@@ -1866,7 +1893,7 @@ mod tests {
             &node,
             &signal_map(&[]),
             &vec![]
-        ));
+        ).unwrap());
     }
 
     #[test]
@@ -2021,7 +2048,7 @@ mod tests {
             ],
         );
         assert!(
-            condition_node_matches(&node, &signals, &vec![]),
+            condition_node_matches(&node, &signals, &vec![]).unwrap(),
             "check_somatic (any) должен сматчиться на somatic_presence='history' без отчёта сомы → call_soma_translator"
         );
     }

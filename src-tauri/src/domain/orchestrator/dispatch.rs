@@ -890,6 +890,7 @@ where
             }
 
             let uses_method_3 = self.signal_contract.is_some();
+            let is_cloud = self.engine.is_cloud();
             let mut new_sys = build_system_prompt(
                 *agent,
                 &**messages,
@@ -899,6 +900,7 @@ where
                 uses_method_3,
                 self.native_tools.is_some(),
                 self.hybrid_gbnf.is_some(),
+                is_cloud,
             );
             if let Some(f) = llm_messages.first_mut() {
                 if f.role == "system" {
