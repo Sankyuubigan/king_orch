@@ -19,7 +19,10 @@ pub struct WorkflowContext {
     /// Флаг: финальный узел workflow уже сохранил результат как message
     pub output_emitted: bool,
     /// Явный signal bus: ключ сигнала → JSON значение.
-    /// Заполняется из messages[] при создании контекста и при каждом emit_signal.
+    /// Заполняется ТОЛЬКО из pending_signal вызывающего (нативный emit_signal,
+    /// сигнал сабагента, текстовый fallback — nodes.rs:518 / dispatch.rs:887).
+    /// При создании контекста ПУСТОЙ: сигналы прошлых ходов из messages[] сюда
+    /// не гидрируются (это не SSOT-заявление про messages, а про доставку).
     /// SSOT для SignalRouter/ConditionRouter и {{ signals }} шаблона.
     pub signals: HashMap<String, serde_json::Value>,
     pub image_candidates: String,

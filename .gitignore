@@ -29,3 +29,6 @@ build_rb2.log
 /Projectsking_orch_3
 test_cases/fixtures/*/report_*.md
 __pycache__
+build_out.txt
+test_gr.txt
+test_out.txt

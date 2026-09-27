@@ -41,8 +41,20 @@ export class SettingsController {
     this.bindDomEvents();
     this.bindBusEvents();
     // Панель 9Router (настройки) сообщает об изменении комбо (кнопки
-    // «Обновить комбо»/установка/смена пути) — перечитываем дропдаун хоста.
-    window.addEventListener("9router:combos-changed", () => { void this.refreshNineRouterCombos(); });
+    // «Обновить комбо»/установка/смена пути/остановка). Если панель прислала
+    // актуальный массив комбо в detail — применяем его напрямую, БЕЗ запроса
+    // к серверу: при «Остановить» приходит пустой массив, и повторный запрос
+    // get_combos немедленно поднял бы сервер обратно (цикл остановки).
+    window.addEventListener("9router:combos-changed", (e) => {
+      const detail = (e as CustomEvent<{ combos?: ComboInfo[] }>).detail;
+      if (detail && Array.isArray(detail.combos)) {
+        this.nineRouterCombos = detail.combos;
+        store.nineRouterCombos = detail.combos.map(c => ({ name: c.name, models: c.models || [] }));
+        bus.emit("model-catalog-changed");
+        return;
+      }
+      void this.refreshNineRouterCombos();
+    });
   }
 
   /**
@@ -123,8 +135,8 @@ export class SettingsController {
     bus.emit("model-catalog-changed");
   }
 
-  /// Ленивая подгрузка комбо 9Router: `get_combos` сам поднимает сервер по
-  /// требованию (шлюз ленивый), результат кэшируем — повторно не дёргаем.
+  /// Ленивая подгрузка комбо 9Router: запрашиваем с сервера (поднимает его,
+  /// только если включён автозапуск nine_router.auto_start). Результат кэшируем.
   private async ensureNineRouterCombos() {
     if (this.nineRouterCombosRequested) return;
     await this.refreshNineRouterCombos();

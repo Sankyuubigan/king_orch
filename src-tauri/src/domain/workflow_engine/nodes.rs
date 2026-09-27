@@ -157,6 +157,41 @@ fn sequential_after_branch(
     }
 }
 
+/// Чистая маршрутизация `signal_router`: значение сигнала из bus → target по
+/// `cases_priority`/`default`. Возвращает `(matched_value, target)`.
+/// Вынесена из `execute_node` — SSOT роутинга, покрывается юнит-тестом без LLM.
+pub fn resolve_signal_route(
+    node: &NodeDef,
+    signals: &std::collections::HashMap<String, serde_json::Value>,
+) -> (String, Option<String>) {
+    let signal_name = node.signal_name.as_deref().unwrap_or("");
+    let field = node.field.as_deref().unwrap_or("");
+
+    let field_val: Option<String> = signals.get(signal_name).and_then(|signal| {
+        if field.is_empty() {
+            signal.as_str().map(|s| s.to_string())
+        } else {
+            signal.get(field).and_then(|nested| {
+                nested
+                    .as_str()
+                    .map(|s| s.to_string())
+                    .or_else(|| nested.as_bool().map(|b| b.to_string()))
+            })
+        }
+    });
+
+    let matched = field_val.unwrap_or_default();
+
+    let target = node
+        .cases_priority
+        .as_ref()
+        .and_then(|cp| cp.iter().find(|pc| pc.key == matched).map(|pc| &pc.to))
+        .cloned()
+        .or_else(|| node.default.clone());
+
+    (matched, target)
+}
+
 /// Выполняет один узел графа и возвращает результат + id следующего узла
 pub fn execute_node<L, S, C>(
     node: &NodeDef,
@@ -1007,39 +1042,26 @@ where
             let signal_name = node.signal_name.as_deref().unwrap_or("");
             let field = node.field.as_deref().unwrap_or("");
 
-            // Читаем из signal bus (context.signals) — SSOT, а не сканирование messages
-            let field_val: Option<String> = context.signals.get(signal_name).and_then(|signal| {
-                if field.is_empty() {
-                    signal.as_str().map(|s| s.to_string())
-                } else {
-                    signal.get(field).and_then(|nested| {
-                        nested
-                            .as_str()
-                            .map(|s| s.to_string())
-                            .or_else(|| nested.as_bool().map(|b| b.to_string()))
-                    })
-                }
-            });
-
-            let matched = field_val.as_deref().unwrap_or("");
+            // Чистая маршрутизация (SSOT) — см. resolve_signal_route.
+            let (matched, target) = resolve_signal_route(node, &context.signals);
 
             (runner.log_cb)(format!(
                 "[signal_router] signal '{}' field '{}' = '{}'",
                 signal_name, field, matched
             ));
 
-            // Поиск по cases_priority
-            let target = node
-                .cases_priority
-                .as_ref()
-                .and_then(|cp| cp.iter().find(|pc| pc.key == matched).map(|pc| &pc.to))
-                .cloned()
-                .or_else(|| node.default.clone());
-
             if let Some(ref t) = target {
                 (runner.log_cb)(format!("[signal_router] → {}", t));
             } else {
                 (runner.log_cb)("[signal_router] → нет target".to_string());
+                // Честная видимость тупика: без default граф завершится на этом узле
+                // (docs/SIGNAL_CONTRACTS.md:91 — default не добавляем).
+                if node.default.is_none() {
+                    (runner.log_cb)(format!(
+                        "[signal_router] ⚠️ нет target (signal='{}', field='{}', value='{}') и default не задан — workflow завершится здесь",
+                        signal_name, field, matched
+                    ));
+                }
             }
 
             Ok(NodeResult {
@@ -1488,6 +1510,7 @@ fn fallback_facts_json(expected: &[String]) -> serde_json::Value {
 mod tests {
     use super::*;
     use crate::domain::workflow_engine::fact_extractor::bool_fact_ids;
+    use crate::domain::workflow_engine::parser::PriorityCase;
 
     #[test]
     fn parse_fact_json_accepts_logged_valid_output() {
@@ -2001,5 +2024,77 @@ mod tests {
             condition_node_matches(&node, &signals, &vec![]),
             "check_somatic (any) должен сматчиться на somatic_presence='history' без отчёта сомы → call_soma_translator"
         );
+    }
+
+    fn signal_router_node(
+        cases: Vec<(&str, &str)>,
+        default: Option<&str>,
+    ) -> NodeDef {
+        NodeDef {
+            id: "check_signal".to_string(),
+            node_type: NodeType::SignalRouter,
+            signal_name: Some("focus_keeper".to_string()),
+            cases_priority: Some(
+                cases
+                    .into_iter()
+                    .map(|(key, to)| PriorityCase {
+                        key: key.to_string(),
+                        to: to.to_string(),
+                    })
+                    .collect(),
+            ),
+            default: default.map(|d| d.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn signal_router_routes_enum_signal_from_bus() {
+        // Ровно сценарий бага 27.09: fallback положил focus_keeper="Конкретная проблема"
+        // в bus, роутер без field должен уйти в note_1782220193985.
+        let node = signal_router_node(
+            vec![
+                ("Конкретная проблема", "note_1782220193985"),
+                ("Кластер", "call_decomposer"),
+                ("НУЖЕН ВЫБОР МИШЕНИ", "note_ask_target"),
+            ],
+            None,
+        );
+        let signals = signal_map(&[(
+            "focus_keeper",
+            serde_json::json!("Конкретная проблема"),
+        )]);
+        let (matched, target) = resolve_signal_route(&node, &signals);
+        assert_eq!(matched, "Конкретная проблема");
+        assert_eq!(target.as_deref(), Some("note_1782220193985"));
+    }
+
+    #[test]
+    fn signal_router_empty_bus_is_no_target() {
+        // Регрессия бага: bus пуст → matched="" → ни один case не совпал → None.
+        let node = signal_router_node(vec![("Конкретная проблема", "note_x")], None);
+        let (matched, target) = resolve_signal_route(&node, &signal_map(&[]));
+        assert_eq!(matched, "");
+        assert_eq!(target, None);
+    }
+
+    #[test]
+    fn signal_router_unknown_value_falls_back_to_default() {
+        let node = signal_router_node(vec![("Конкретная проблема", "note_x")], Some("call_validator"));
+        let signals = signal_map(&[("focus_keeper", serde_json::json!("Чего-то ещё"))]);
+        let (_, target) = resolve_signal_route(&node, &signals);
+        assert_eq!(target.as_deref(), Some("call_validator"));
+    }
+
+    #[test]
+    fn signal_router_object_signal_with_field() {
+        // Контракт-объект (validator_report): field="e1" читается вложенно.
+        let mut node = signal_router_node(vec![("true", "go"), ("false", "stop")], None);
+        node.signal_name = Some("validator_report".to_string());
+        node.field = Some("e1".to_string());
+        let signals = signal_map(&[("validator_report", serde_json::json!({"e1": true}))]);
+        let (matched, target) = resolve_signal_route(&node, &signals);
+        assert_eq!(matched, "true");
+        assert_eq!(target.as_deref(), Some("go"));
     }
 }

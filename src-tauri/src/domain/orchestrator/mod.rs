@@ -764,6 +764,10 @@ where
                 crate::infra::mcp_client::SharedMcpClient,
             >::new()));
 
+        // Сигнал агента (нативный emit_signal или текстовый fallback) сохраняем в
+        // сессию — иначе он теряется: run_agent_node отдаёт его только через этот
+        // out-параметр (единый канал с workflow-режимом).
+        let mut pending_signal = None;
         let final_res = run_agent_node(
             log_cb.clone(),
             status_cb,
@@ -796,7 +800,7 @@ where
             tools_root.clone(),
             write_root.clone(),
             write_outside,
-            &mut None,
+            &mut pending_signal,
             false, // two_phase_thinking — только для signal-агентов из workflow
         )?;
 
@@ -835,6 +839,10 @@ where
             log_cb(format!("🖼 Прикреплено изображений к ответу: {}", attached));
         }
         messages_store.push(final_message);
+        // Сигнал агента — ПОСЛЕ его ответа (как в nodes.rs:517-528).
+        if let Some(signal) = pending_signal.take() {
+            messages_store.push(signal);
+        }
         Ok(ChatRunResult {
             text: final_res,
             sub_calls: all_sub_calls,
@@ -1351,7 +1359,13 @@ where
             gbnf: Some(grammar),
             json_schema: None,
         }));
-        log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены)", agent.id));
+        if engine.is_cloud() {
+            // Честный лог: для облака set_grammar — no-op (llm_backend.rs:283),
+            // контракт сигнала держится на системном промпте + native tools.
+            log_cb(format!("🎯 Агент '{}': облако — грамматика не поддерживается, сигнал по промпту + native tools", agent.id));
+        } else {
+            log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены)", agent.id));
+        }
     } else {
         engine.set_grammar(None);
         log_cb(format!(
@@ -2625,8 +2639,12 @@ where
                     attachments: None,
                     phase: Some(2),
                 };
-                ctx.messages.push(signal_msg);
+                // Сигнал отдаём через pending_signal — единый канал доставки в
+                // signal bus + messages[] (nodes.rs:518 для воркера, dispatch.rs:887
+                // для сабагента). Прямой push в messages оставлял сигнал невидимым
+                // для SignalRouter/ConditionRouter (баг «тихий обрыв графа»).
                 *ctx.msg_counter += 1;
+                ctx.pending_signal = Some(signal_msg);
                 ctx.signal_saved = true;
                 log_cb(format!(
                     "📡 Сигнал '{}' извлечён из текста ответа (fallback): {}",

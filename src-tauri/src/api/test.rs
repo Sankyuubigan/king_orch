@@ -141,9 +141,10 @@ pub async fn run_iterative_test(
         let mut succeeded = false;
         let mut error_msg: Option<String> = None;
 
-        let mut current_chat_messages: Vec<ChatMessage> = Vec::new(); 
-        let mut msg_counter = 0; 
-        let mut all_sub_calls = Vec::new(); 
+        let mut current_chat_messages: Vec<ChatMessage> = Vec::new();
+        let mut msg_counter = 0;
+        let mut all_sub_calls = Vec::new();
+        let mut pending_signal = None;
 
         let mcp_pool: crate::infra::mcp_client::McpPool = std::sync::Arc::new(std::sync::Mutex::new(
             std::collections::HashMap::<String, crate::infra::mcp_client::SharedMcpClient>::new(),
@@ -181,12 +182,15 @@ pub async fn run_iterative_test(
             agents_dir.parent().unwrap_or(&agents_dir).to_path_buf(),
             agents_dir.parent().unwrap_or(&agents_dir).to_path_buf(), // write_root
             crate::infra::WriteOutside::Prompt,
-            &mut None,
+            &mut pending_signal,
             false, // two_phase_thinking
         ) {
             Ok(response) => {
                 append_test_log(&format!("✅ Ответ LLM: {}", response));
                 responses.push(response.clone());
+                if let Some(signal) = pending_signal.take() {
+                    current_chat_messages.push(signal);
+                }
                 // Проверка на вхождение "правильного ответа" в сгенерированный
                 if response
                     .to_lowercase()
