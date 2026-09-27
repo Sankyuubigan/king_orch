@@ -153,7 +153,7 @@ function renderRuleRow(c: CondRule, path: number[], depth: number, opts: CondRen
   }
 
   let html = `<div class="ge-cond-row" data-path="${pathAttr}" style="padding-left:${Math.min(depth * 6, 36)}px;">`;
-  html += `<input class="ge-input ge-cond-field" data-path="${pathAttr}" value="${opts.esc(field)}" placeholder="агент, факт или signal.field" list="ge-cond-fields-list" title="${opts.esc(valueHint)}" />`;
+  html += `<input class="ge-input ge-cond-field" data-path="${pathAttr}" value="${opts.esc(field)}" placeholder="агент, факт или signal.field" list="ge-cond-fields-list" title="${opts.esc(field || valueHint)}" />`;
   html += `<span class="ge-cond-eq">=</span>`;
   html += valueHtml;
   html += `<button class="ge-cond-up" data-path="${pathAttr}" title="Вверх">⬆</button>`;

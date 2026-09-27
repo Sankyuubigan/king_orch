@@ -11,10 +11,20 @@ export function rebuildSwitchOutputs(this: GraphController, nodeId: string): voi
 
   // Сохраняем данные ДО удаления, т.к. connectionRemoved занулит их
   const targets: string[] = [];
-  if (data.cases_priority) {
-    for (const cp of data.cases_priority) targets.push(cp.to);
+  if (data.type === "condition_router") {
+    if (data.true_to) targets.push(data.true_to);
+    if (data.false_to) targets.push(data.false_to);
+    if (data.sequential_to) targets.push(data.sequential_to);
+  } else if (data.type === "condition_check") {
+    if (data.true_to) targets.push(data.true_to);
+    if (data.false_to) targets.push(data.false_to);
+    if (data.sequential_to) targets.push(data.sequential_to);
+  } else {
+    if (data.cases_priority) {
+      for (const cp of data.cases_priority) targets.push(cp.to);
+    }
+    if (data.default) targets.push(data.default);
   }
-  if (data.default) targets.push(data.default);
   const savedDefault = data.default;
 
   const oldKeys = Object.keys(dn.outputs)

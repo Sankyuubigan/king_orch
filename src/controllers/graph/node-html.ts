@@ -38,13 +38,15 @@ export function buildNodeInnerHtml(this: GraphController, data: any, fallbackId:
   if (data.type === "condition_router") {
     const conds = Array.isArray(data.conditions) ? data.conditions : [];
     const parts: string[] = [];
+    let fullExpr = "";
     if (conds.length > 0) {
-      parts.push(renderConditionExpression(conds, data.logic === "all" ? "all" : "any", (s) => this.esc(s)));
+      fullExpr = renderConditionExpression(conds, data.logic === "all" ? "all" : "any", (s) => this.esc(s), 999999);
+      parts.push(fullExpr.length > 120 ? fullExpr.slice(0, 120) + "…" : fullExpr);
     }
     if (data.sequential_to) parts.push(`→ ${this.esc(data.sequential_to)}`);
     if (data.true_to) parts.push(`✓ ${this.esc(data.true_to)}`);
     if (data.false_to) parts.push(`✗ ${this.esc(data.false_to)}`);
-    signalLine = `<div class="gn-agent" style="color:#5c6bc0">🔀 ${parts.join(" | ")}</div>`;
+    signalLine = `<div class="gn-agent" style="color:#5c6bc0" title="${this.esc(fullExpr)}">🔀 ${parts.join(" | ")}</div>`;
   }
   let casesLine = "";
   if (isDynamicNode(data.type)) {

@@ -290,8 +290,6 @@ nodes:
     equals: true
   - field: validator_report.e7
     equals: true
-  - field: validator_report.e9
-    equals: true
   logic: all
   ui_pos:
     y: -283
