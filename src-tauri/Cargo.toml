@@ -1,6 +1,6 @@
 [package]
 name = "king_orch"
-version = "26.9.190"
+version = "26.9.194"
 description = "Local LLM Multi-Agent Studio"
 authors = ["You"]
 edition = "2021"
@@ -37,6 +37,8 @@ tauri-plugin-downloader = { path = "../../my-tauri-plugins/tauri-plugin-download
 # Движок изображений stable-diffusion.cpp (SSOT): установка бекендов sd-server,
 # бандл Qwen Image 2.1, VRAM-preflight, generate/edit по HTTP.
 tauri-plugin-image-engine = { path = "../../my-tauri-plugins/tauri-plugin-image-engine" }
+# Атомарные записи JSON (app_config.json, sessions/): tmp->rename + sidecar lock.
+ko-json-store = { path = "../../my-tauri-plugins/ko-json-store" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["full"] }

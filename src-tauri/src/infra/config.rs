@@ -232,27 +232,25 @@ fn sanitize_retired_fields(cfg: &mut AppConfig) {
     cfg.prompt_format = "Auto".to_string();
 }
 
-pub fn save_config(app: &AppHandle, config: &AppConfig) {
+pub fn save_config(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
     let path = get_config_path(app);
-    save_config_file(&path, config);
+    save_config_file(&path, config)
 }
 
-pub fn save_config_file(path: &Path, config: &AppConfig) {
-    let mut root: serde_json::Value = fs::read_to_string(path)
-        .ok()
-        .and_then(|d| serde_json::from_str(&d).ok())
-        .unwrap_or_else(|| serde_json::json!({}));
-    let host_value = serde_json::to_value(config).unwrap_or_else(|_| serde_json::json!({}));
-    if let (serde_json::Value::Object(root_map), serde_json::Value::Object(host_map)) =
-        (&mut root, host_value)
-    {
-        for (k, v) in host_map {
-            root_map.insert(k, v);
+pub fn save_config_file(path: &Path, config: &AppConfig) -> Result<(), String> {
+    let host_value = serde_json::to_value(config).map_err(|e| e.to_string())?;
+    ko_json_store::update_json(path, move |root: &mut serde_json::Value| {
+        if !root.is_object() {
+            *root = serde_json::json!({});
         }
-    }
-    if let Ok(data) = serde_json::to_string_pretty(&root) {
-        let _ = fs::write(path, data);
-    }
+        if let (serde_json::Value::Object(root_map), serde_json::Value::Object(host_map)) =
+            (root, host_value)
+        {
+            for (k, v) in host_map {
+                root_map.insert(k, v);
+            }
+        }
+    })
 }
 
 pub fn find_agents_dir(app: &AppHandle) -> PathBuf {
@@ -378,7 +376,7 @@ mod tests {
         fs::write(&tmp, initial_json).unwrap();
 
         let cfg = AppConfig::default();
-        save_config_file(&tmp, &cfg);
+        save_config_file(&tmp, &cfg).unwrap();
 
         let saved = fs::read_to_string(&tmp).unwrap();
         let val: serde_json::Value = serde_json::from_str(&saved).unwrap();

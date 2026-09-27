@@ -223,7 +223,8 @@ pub async fn chat_request(
     cfg.kv_quant_values = false;
     // Формат промпта всегда Auto (UI-селект убран).
     cfg.prompt_format = "Auto".to_string();
-    infra::save_config(&app, &cfg);
+    infra::save_config(&app, &cfg)
+        .map_err(|e| format!("Ошибка сохранения конфига: {}", e))?;
     let reasoning_budget = cfg.reasoning_budget;
     let kv_quant_keys = false;
     let kv_quant_values = false;

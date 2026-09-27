@@ -148,7 +148,8 @@ pub fn delete_session(app: &AppHandle, id: &str) -> Result<(), String> {
 fn save_session_raw(path: &PathBuf, session: &ChatSession) -> Result<(), String> {
     let content =
         serde_json::to_string_pretty(&session).map_err(|e| e.to_string())?;
-    fs::write(path, content).map_err(|e| format!("Ошибка сохранения сессии: {}", e))
+    ko_json_store::write_atomic(path, &content)
+        .map_err(|e| format!("Ошибка сохранения сессии: {}", e))
 }
 
 pub fn rename_session(app: &AppHandle, id: &str, new_title: &str) -> Result<(), String> {
@@ -156,20 +157,17 @@ pub fn rename_session(app: &AppHandle, id: &str, new_title: &str) -> Result<(), 
     if !path.exists() {
         return Err("Сессия не найдена".to_string());
     }
-    let (mut value, _) = load_session(&path)?;
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert("title".to_string(), Value::String(new_title.to_string()));
-        // Пользователь поставил имя вручную — авто-переименование больше
-        // не должно трогать title при последующих save_session.
-        obj.insert(
-            "title_manual".to_string(),
-            Value::Bool(!new_title.trim().is_empty()),
-        );
-    }
-    let content =
-        serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
-    fs::write(path, content).map_err(|e| e.to_string())?;
-    Ok(())
+    ko_json_store::update_json(&path, |value: &mut serde_json::Value| {
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("title".to_string(), Value::String(new_title.to_string()));
+            // Пользователь поставил имя вручную — авто-переименование больше
+            // не должно трогать title при последующих save_session.
+            obj.insert(
+                "title_manual".to_string(),
+                Value::Bool(!new_title.trim().is_empty()),
+            );
+        }
+    })
 }
 
 pub fn open_session_folder(app: &AppHandle, id: &str) -> Result<(), String> {

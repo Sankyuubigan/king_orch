@@ -83,14 +83,18 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
         }
         _ => {}
     }
-    infra::save_config(&app, &cfg);
+    if let Err(e) = infra::save_config(&app, &cfg) {
+        log::error!("set_config_value: ошибка сохранения конфига: {}", e);
+    }
 }
 
 #[tauri::command]
 pub fn reset_max_gen_tokens(app: AppHandle) -> u32 {
     let mut cfg = infra::load_config(&app);
     cfg.max_gen_tokens = infra::AppConfig::default().max_gen_tokens;
-    infra::save_config(&app, &cfg);
+    if let Err(e) = infra::save_config(&app, &cfg) {
+        log::error!("reset_max_gen_tokens: ошибка сохранения конфига: {}", e);
+    }
     cfg.max_gen_tokens
 }
 
@@ -104,7 +108,9 @@ pub fn set_last_model(app: AppHandle, path: String) {
         return;
     }
     cfg.last_model = Some(path);
-    infra::save_config(&app, &cfg);
+    if let Err(e) = infra::save_config(&app, &cfg) {
+        log::error!("set_last_model: ошибка сохранения конфига: {}", e);
+    }
 }
 
 #[tauri::command]
@@ -112,12 +118,16 @@ pub fn set_tabs(app: AppHandle, tabs: Vec<infra::TabState>, active_tab: Option<S
     let mut cfg = infra::load_config(&app);
     cfg.tabs = tabs;
     cfg.active_tab = active_tab;
-    infra::save_config(&app, &cfg);
+    if let Err(e) = infra::save_config(&app, &cfg) {
+        log::error!("set_tabs: ошибка сохранения конфига: {}", e);
+    }
 }
 
 #[tauri::command]
 pub fn set_theme(app: AppHandle, theme: String) {
     let mut cfg = infra::load_config(&app);
     cfg.theme = theme;
-    infra::save_config(&app, &cfg);
+    if let Err(e) = infra::save_config(&app, &cfg) {
+        log::error!("set_theme: ошибка сохранения конфига: {}", e);
+    }
 }
