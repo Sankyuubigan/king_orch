@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getAllCapabilities, getModelParams, resetModelParams, setModelParams } from "@my-tauri-plugins/plugin-llama-engine";
 import { getCombos as getNineRouterCombos, type ComboInfo } from "@my-tauri-plugins/plugin-9router";
 import { store } from "../store";
@@ -25,6 +26,8 @@ export interface SettingsElements {
   translatorLangSelect: HTMLSelectElement;
   chatFontSlider: HTMLInputElement;
   chatFontValue: HTMLElement;
+  dataDirDisplay: HTMLElement;
+  btnChangeDataDir: HTMLButtonElement;
 }
 
 export class SettingsController {
@@ -219,6 +222,7 @@ export class SettingsController {
         this.el.chkErrorReports.checked = config.allow_error_reports;
         setTelemetryEnabled(config.allow_error_reports);
       }
+      void this.loadDataDir();
       return config;
     } catch (e) {
       showToast(`Ошибка: ${e}`, "error");
@@ -304,6 +308,36 @@ export class SettingsController {
       setTelemetryEnabled(val);
       await invoke("set_config_value", { key: "allow_error_reports", value: val });
     });
+    this.el.btnChangeDataDir?.addEventListener("click", () => { void this.onChangeDataDir(); });
+  }
+
+  /** Загружает текущий путь общего хранилища (`KingOrchData`) в плашку. */
+  private async loadDataDir() {
+    try {
+      const dir = await invoke<string>("get_data_dir");
+      this.el.dataDirDisplay.textContent = dir || "не выбрано";
+    } catch (e) {
+      this.el.dataDirDisplay.textContent = "ошибка загрузки";
+      void trackError("settings.loadDataDir", e);
+    }
+  }
+
+  /** Диалог выбора папки → set_data_dir → обновление плашки. */
+  private async onChangeDataDir() {
+    try {
+      const sel = await openDialog({ directory: true });
+      if (!sel) return;
+      const path = Array.isArray(sel) ? sel[0] : sel;
+      if (!path) return;
+      const saved = await invoke<string>("set_data_dir", { path });
+      this.el.dataDirDisplay.textContent = saved;
+      showToast("Путь хранилища изменён. Движки обновят его после переоткрытия вкладки «Движки».", "success");
+      bus.emit("model-catalog-changed");
+      window.dispatchEvent(new CustomEvent("9router:combos-changed"));
+    } catch (e) {
+      showToast(`Ошибка смены пути: ${e}`, "error");
+      void trackError("settings.onChangeDataDir", e);
+    }
   }
 
   private bindBusEvents() {

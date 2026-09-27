@@ -114,6 +114,8 @@ async function initApp() {
     chkErrorReports: $<HTMLInputElement>("chk-error-reports"),
     translatorModelSelect: $<HTMLSelectElement>("translator-model-select"),
     translatorLangSelect: $<HTMLSelectElement>("translator-lang-select"),
+    dataDirDisplay: $<HTMLElement>("data-dir-display"),
+    btnChangeDataDir: $<HTMLButtonElement>("btn-change-data-dir"),
   });
 
   // ─── Контроллер графа (суб-вкладка 🔀 в студии агентов) ───

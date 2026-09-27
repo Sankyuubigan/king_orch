@@ -2,6 +2,7 @@ use tauri::AppHandle;
 use std::time::Instant;
 
 use crate::infra;
+use crate::infra::data_dir;
 
 #[tauri::command]
 pub async fn get_config(app: AppHandle) -> Result<infra::AppConfig, String> {
@@ -86,6 +87,21 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
     if let Err(e) = infra::save_config(&app, &cfg) {
         log::error!("set_config_value: ошибка сохранения конфига: {}", e);
     }
+}
+
+/// Текущий путь общего хранилища (`KingOrchData`). Если в конфиге пусто —
+/// вычисляется автоматом (диск с макс. свободным местом). Папка не создаётся.
+#[tauri::command]
+pub fn get_data_dir(app: AppHandle) -> String {
+    data_dir::resolve(&app).to_string_lossy().to_string()
+}
+
+/// Устанавливает путь общего хранилища: нормализует (приклеивает
+/// `KingOrchData` если в конце его нет), создаёт папку, пишет `data_dir`
+/// и все производные подпапки в конфиг одной записью.
+#[tauri::command]
+pub fn set_data_dir(app: AppHandle, path: String) -> Result<String, String> {
+    data_dir::apply(&app, &path).map(|p| p.to_string_lossy().to_string())
 }
 
 #[tauri::command]

@@ -114,6 +114,20 @@ pub struct AppConfig {
     /// Рабочая директория для кодера (bash tool current_dir).
     #[serde(default)]
     pub workdir: Option<String>,
+    /// Корень общего хранилища данных (`KingOrchData`): движки (llamacpp,
+    /// 9router, sdcpp), бандлы и новые модели. None = вычисляется автоматом
+    /// (диск с макс. свободным местом, см. infra::data_dir).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_dir: Option<String>,
+    /// Папка движка stable-diffusion.cpp (ключ плагина image-engine).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sdcpp_dir: Option<String>,
+    /// Папка бандла весов ImageGEN (ключ плагина image-engine).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_bundle_dir: Option<String>,
+    /// Папка установки 9Router (ключ секции `nine_router` плагина 9router).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub nine_router_dir: Option<String>,
     /// Двухфазный режим генерации по умолчанию (для ВСЕХ агентов, а не только
     /// signal-агентов с YAML-флагом two_phase_thinking): Phase 1 — свободные
     /// размышления без грамматики, Phase 2 — ответ с enable_thinking=false
@@ -171,6 +185,10 @@ impl Default for AppConfig {
             translator_model: None,
             translator_lang: default_translator_lang(),
             workdir: None,
+            data_dir: None,
+            sdcpp_dir: None,
+            image_bundle_dir: None,
+            nine_router_dir: None,
             two_phase_default: default_two_phase_default(),
         }
     }

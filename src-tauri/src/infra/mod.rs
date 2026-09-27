@@ -8,6 +8,7 @@
 //! `AppConfig`, сессии, MCP, инструменты и пр.
 
 pub mod config;
+pub mod data_dir;
 pub mod llm_backend;
 pub mod event_bus;
 pub mod session_manager;
@@ -24,6 +25,7 @@ pub mod network_diagnostics;
 // Движок llama.cpp — переиспользуемый плагин (SSOT). Глоб-реэкспорт тенят
 // явные `pub use`/`pub mod` хоста ниже (explicit item > glob import).
 pub use tauri_plugin_llama_engine::engine::*;
+pub use tauri_plugin_image_engine::engine::models_catalog::default_bundle_entry;
 
 // Хелпер хоста (setup): папка движка `<exe>/llamacpp` (или из конфига).
 pub use tauri_plugin_llama_engine::get_engine_dir;
