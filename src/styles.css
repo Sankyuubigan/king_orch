@@ -1454,6 +1454,15 @@ body.edge-reconnecting {
   background: var(--bg-color);
 }
 
+#view-logs > [data-lazy-content="logs"],
+#view-logs logs-panel {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+}
+
 #chat-tab-slot { display: none; }
 /* Слот растягивается только когда в нём активна страница вкладки (main/chat/webview);
    при активной статической секции скрыт, чтобы не съедать половину высоты. */

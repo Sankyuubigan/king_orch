@@ -58,8 +58,8 @@ nodes:
     task: |
       Сгенерируй изображение с нуля.
 
-      Описание (переписанное, приоритет): {{ nodes.extract_facts.output.rewritten_query if nodes.extract_facts is defined else user_message }}
-      Исходная просьба пользователя: {{ user_message }}
+      Описание задачи: {{ nodes.extract_facts.output.rewritten_query }}
+      Исходный текст пользователя: {{ user_message }}
     output_type: message
 
   # ── Не image-запрос: честный выход ──
