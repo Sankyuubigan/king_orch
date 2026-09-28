@@ -3,6 +3,7 @@ import { relaunch } from "@tauri-apps/plugin-process";
 import { invoke } from "@tauri-apps/api/core";
 import { showToast } from "../ui";
 import { trackError } from "../telemetry";
+import { bus } from "../events";
 
 export interface UpdatePopupElements {
   container: HTMLElement;
@@ -28,7 +29,7 @@ export class UpdatePopupController {
   }
 
   /** Проверка при старте приложения. Показывает попап, если есть новая версия. */
-  async checkOnStartup() {
+  async checkOnStartup(): Promise<boolean> {
     this.hide();
     // 1. Основной путь: tauri-plugin-updater (raw.githubusercontent.com).
     try {
@@ -36,7 +37,8 @@ export class UpdatePopupController {
       if (update) {
         this.pendingUpdate = update;
         this.show();
-        return;
+        bus.emit("app:update-available", true);
+        return true;
       }
     } catch (e: any) {
       // Проверка при старте не должна мешать работе; идём в fallback.
@@ -48,10 +50,14 @@ export class UpdatePopupController {
       if (info) {
         this.pendingGithub = info;
         this.show();
+        bus.emit("app:update-available", true);
+        return true;
       }
     } catch (e: any) {
       void trackError("updatePopup.checkOnStartup.github", e);
     }
+    bus.emit("app:update-available", false);
+    return false;
   }
 
   private show() {

@@ -1245,6 +1245,17 @@ body.edge-reconnecting {
   width: 100%;
 }
 
+.update-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #4caf50;
+  margin-left: 6px;
+  box-shadow: 0 0 6px #4caf50;
+  flex-shrink: 0;
+}
+
 /* ─── Кодинг тест LLM ─── */
 .inline-label {
   display: flex;

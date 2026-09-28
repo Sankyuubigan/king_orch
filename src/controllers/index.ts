@@ -7,7 +7,7 @@ export {
 } from './chat'
 export type { ChatElements, ChatHooks } from './chat'
 export { initChatEventRouter } from './chat-router'
-export { TabController } from './tabs'
+export { TabController, getTabNavigationMenu } from './tabs'
 
 export { SessionController } from './sessions'
 export type { SessionElements } from './sessions'
@@ -29,3 +29,5 @@ export type { CodingTestElements } from './coding-test'
 
 export { UpdatePopupController } from './update_popup'
 export type { UpdatePopupElements } from './update_popup'
+
+export { initUpdateBadgeTargets, initUpdateWatchers } from './update_badges'

@@ -77,9 +77,12 @@ export function getActiveChatController(): ChatController | null {
   return activeChatController;
 }
 
-/** Контроллер чат-вкладки, в которой открыта сессия `sessionId` (если открыта). */
 export function getChatControllerForSession(sessionId: string): ChatController | null {
   return TAB_REGISTRY.get(sessionId) ?? null;
+}
+
+export function getTabNavigationMenu(tabCtrl: TabController): { setBadge: (id: string, visible: boolean) => void } | null {
+  return (tabCtrl as any).navigationMenu ?? null;
 }
 
 // Сессия → контроллер (для «Копировать в буфер» живым стейтом).
@@ -180,6 +183,7 @@ export class TabController {
     this.renderStrip();
     this.updateStudioVisibility(!!config?.show_advanced_features);
     if (persist) this.persistTabsImmediate();
+    void this.refreshLabels();
   }
 
   /** Скрывает/показывает кнопку «Студия агентов» в Настройках. */
@@ -211,6 +215,7 @@ export class TabController {
       return;
     }
     target.appendChild(template.content.cloneNode(true));
+    bus.emit("updates:render");
   }
 
   /** Оригинальный DOM-узел раздела. Узел один на приложение, клонов нет:
@@ -478,7 +483,7 @@ export class TabController {
   }
 
   private defaultTitle(tab: AppTab): string {
-    if (tab.type === "chat") return tab.customTitle || (tab as any).custom_title || "Курсор…";
+    if (tab.type === "chat") return tab.customTitle || (tab as any).custom_title || (tab as any).title || "Новая сессия";
     if (tab.type === "webview") return "Web UI 9Router";
     if (tab.type === "section") return this.sectionTitle(tab.section as TabSection);
     return "Новая сессия";
@@ -502,6 +507,7 @@ export class TabController {
       section: t.section,
       customTitle: t.customTitle,
       url: t.url,
+      title: t.title,
     };
   }
 
@@ -576,6 +582,7 @@ export class TabController {
     } else if (tab) {
       this.hooks.onTabActivated?.(this.tabToApp(tab));
     }
+    bus.emit("updates:render");
   }
 
   /** При смене активации: сверить активный .view внутри страниц чата. */
@@ -616,11 +623,11 @@ export class TabController {
     this.actionsEl.appendChild(button);
     this.navigationMenu = createWorkspaceMenu(button, [
       { id: "new-tab", label: "Новая вкладка", icon: "＋", action: () => this.newMainTab() },
-      { id: "sessions", label: "История сессий", icon: "🕘", separatorBefore: true, action: () => this.openSection("sessions") },
-      { id: "agent-studio", label: "Студия агентов", icon: "🧪", action: () => this.openSection("agent-studio") },
-      { id: "engines", label: "Движки", icon: "🚂", action: () => this.openSection("engines") },
-      { id: "settings", label: "Настройки", icon: "⚙️", action: () => this.openSection("settings") },
-      { id: "logs", label: "Логи", icon: "📝", action: () => this.openSection("logs") },
+      { id: "sessions", label: "История сессий", icon: "🕘", separatorBefore: true, action: () => { this.openSection("sessions"); } },
+      { id: "agent-studio", label: "Студия агентов", icon: "🧪", action: () => { this.openSection("agent-studio"); } },
+      { id: "engines", label: "Движки", icon: "🚂", badge: true, action: () => { this.openSection("engines"); } },
+      { id: "settings", label: "Настройки", icon: "⚙️", badge: true, action: () => { this.openSection("settings"); } },
+      { id: "logs", label: "Логи", icon: "📝", action: () => { this.openSection("logs"); } },
       { id: "cloud-routers", label: "Web UI облачных роутеров", icon: "🌐", action: () => { void this.openWebview(); } },
     ]);
   }

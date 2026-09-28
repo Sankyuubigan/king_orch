@@ -147,4 +147,5 @@ export interface AppTab {
     section?: TabSection | null;
     customTitle?: string | null;
     url?: string | null;
+    title?: string | null;
 }

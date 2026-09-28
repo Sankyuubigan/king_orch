@@ -38,6 +38,8 @@ pub struct TabState {
     pub custom_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]

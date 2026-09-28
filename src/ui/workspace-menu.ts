@@ -2,14 +2,16 @@ export interface WorkspaceMenuAction {
   id: string;
   label: string;
   icon: string;
-  action: () => void | Promise<void>;
+  action: () => void | Promise<void> | Promise<unknown>;
   separatorBefore?: boolean;
+  badge?: boolean;
 }
 
 export interface WorkspaceMenuController {
   element: HTMLElement;
   open: (focusFirst?: boolean) => void;
   close: (restoreFocus?: boolean) => void;
+  setBadge: (actionId: string, visible: boolean) => void;
 }
 
 export function createWorkspaceMenu(
@@ -40,6 +42,12 @@ export function createWorkspaceMenu(
     const label = document.createElement("span");
     label.textContent = action.label;
     item.append(icon, label);
+    if (action.badge) {
+      const dot = document.createElement("span");
+      dot.className = "update-dot";
+      dot.style.display = "none";
+      item.appendChild(dot);
+    }
     item.addEventListener("click", () => {
       close(false);
       void action.action();
@@ -119,5 +127,18 @@ export function createWorkspaceMenu(
     restoreFocusOnClose = false;
   }
 
-  return { element: menu, open, close };
+  function setBadge(actionId: string, visible: boolean) {
+    const item = menu.querySelector<HTMLButtonElement>(`[data-action-id="${actionId}"]`);
+    if (!item) return;
+    let dot = item.querySelector<HTMLElement>('.update-dot');
+    if (visible && !dot) {
+      dot = document.createElement('span');
+      dot.className = 'update-dot';
+      item.appendChild(dot);
+    } else if (!visible && dot) {
+      dot.remove();
+    }
+  }
+
+  return { element: menu, open, close, setBadge };
 }

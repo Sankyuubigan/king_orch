@@ -14,10 +14,13 @@ import "@my-tauri-plugins/plugin-image-engine";
 import "@my-tauri-plugins/plugin-cloud-routers";
 // Регистрирует <downloader-widget> / <downloader-progress> (единый прогресс загрузок).
 import "@my-tauri-plugins/plugin-downloader";
+import { initUpdateWatcher as initLlamaUpdateWatcher } from "@my-tauri-plugins/plugin-llama-engine";
+import { initUpdateWatcher as initImageUpdateWatcher } from "@my-tauri-plugins/plugin-image-engine";
+import { initUpdateWatcher as initRoutersUpdateWatcher } from "@my-tauri-plugins/plugin-cloud-routers";
 import {
   SessionController, SettingsController, AgentTestController,
   CodingTestController, UpdatePopupController, TabController, initChatEventRouter,
-  loadGraphController,
+  loadGraphController, initUpdateBadgeTargets, initUpdateWatchers, getTabNavigationMenu,
 } from "./controllers";
 import type { GraphController } from "./controllers";
 import type { SharedChatControls } from "./utils";
@@ -269,6 +272,14 @@ async function initApp() {
     btnLater: $<HTMLButtonElement>("btn-update-later"),
   });
   void updatePopupCtrl.checkOnStartup();
+
+  // ─── Бейджи обновлений на кнопках меню и настройках ───
+  const navMenu = getTabNavigationMenu(tabCtrl);
+  initUpdateBadgeTargets({ menuEngines: navMenu });
+  initLlamaUpdateWatcher();
+  initImageUpdateWatcher();
+  initRoutersUpdateWatcher();
+  initUpdateWatchers();
 }
 
 document.addEventListener("DOMContentLoaded", () => {
