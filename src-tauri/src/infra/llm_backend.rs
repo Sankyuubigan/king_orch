@@ -2,7 +2,7 @@ use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tauri_plugin_9router::router::client::{self, ChatMessage, ChatRequest};
+use tauri_plugin_cloud_routers::router::client::{self, ChatMessage, ChatRequest};
 use tauri_plugin_llama_engine::engine::llm_types::GenerationResult;
 use tauri_plugin_llama_engine::engine::{
     ChatAttachment, GrammarSpec, LlmMessage, LlamaEngine, ModelParams, ToolCall, ToolDefinition,

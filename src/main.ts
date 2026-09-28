@@ -10,8 +10,8 @@ import "@my-tauri-plugins/plugin-logs";
 import "@my-tauri-plugins/plugin-llama-engine";
 // Регистрирует <image-engine-panel> / <image-bundle-panel> (движок изображений + бандл Qwen Image 2.1).
 import "@my-tauri-plugins/plugin-image-engine";
-// Регистрирует <nine-router-panel> (облачный шлюз 9Router: комбо + дашборд).
-import "@my-tauri-plugins/plugin-9router";
+// Регистрирует <cloud-routers-panel> (облачный шлюз: 9Router, ExtremeRouter, OmniRoute).
+import "@my-tauri-plugins/plugin-cloud-routers";
 // Регистрирует <downloader-widget> / <downloader-progress> (единый прогресс загрузок).
 import "@my-tauri-plugins/plugin-downloader";
 import {

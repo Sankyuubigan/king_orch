@@ -48,7 +48,7 @@ class Store {
   agents: any[] = [];
   capabilities: Record<string, { uncen: boolean; vision: boolean; audio: boolean }> = {};
   agentsReady = false;
-  nineRouterCombos: { name: string; models: string[] }[] = [];
+  cloudRouterCombos: Record<string, { name: string; models: string[] }[]> = {};
 }
 
 /** Глобальный синглтон стора. Импортируется контроллерами. */

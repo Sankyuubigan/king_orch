@@ -18,7 +18,7 @@
     "shell:allow-open",
     "logs:default",
     "llama-engine:default",
-    "9router:default",
+    "cloud-routers:default",
     "image-engine:default",
     "downloader:default"
   ]

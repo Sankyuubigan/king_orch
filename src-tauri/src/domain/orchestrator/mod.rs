@@ -557,10 +557,15 @@ where
     ));
 
     let engine = if let Some(endpoint) = cloud_endpoint {
-        let model = model_path
-            .strip_prefix("9router:")
-            .ok_or_else(|| "Некорректный идентификатор модели 9Router".to_string())?
-            .to_string();
+        let model = if model_path.starts_with("9router:") {
+            model_path.strip_prefix("9router:").unwrap()
+        } else if model_path.starts_with("extremerouter:") {
+            model_path.strip_prefix("extremerouter:").unwrap()
+        } else if model_path.starts_with("omniroute:") {
+            model_path.strip_prefix("omniroute:").unwrap()
+        } else {
+            return Err("Некорректный идентификатор модели облачного роутера".to_string());
+        }.to_string();
         LlmEngine::cloud(endpoint, model, Arc::new(stream_cb))
     } else if any_vision_agent && mmproj_path.is_some() {
         // Проектор поднимаем ТОЛЬКО когда в графе есть агент со зрением: иначе

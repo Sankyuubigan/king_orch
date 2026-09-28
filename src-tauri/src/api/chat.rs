@@ -229,15 +229,24 @@ pub async fn chat_request(
     let kv_quant_keys = false;
     let kv_quant_values = false;
 
-    let is_cloud = model_path.starts_with("9router:");
+    let is_cloud = model_path.starts_with("9router:")
+        || model_path.starts_with("extremerouter:")
+        || model_path.starts_with("omniroute:");
     let engine_dir = infra::get_engine_dir(&app);
     let cloud_endpoint = if is_cloud {
-        tauri_plugin_9router::commands::ensure_started(app.clone())
+        let router_id = if model_path.starts_with("9router:") {
+            tauri_plugin_cloud_routers::RouterId::NineRouter
+        } else if model_path.starts_with("extremerouter:") {
+            tauri_plugin_cloud_routers::RouterId::ExtremeRouter
+        } else {
+            tauri_plugin_cloud_routers::RouterId::OmniRoute
+        };
+        tauri_plugin_cloud_routers::commands::ensure_started(app.clone(), router_id.to_string())
             .await
-            .map_err(|error| format!("9Router недоступен: {}", error))?;
-        let config = tauri_plugin_9router::router::config::load_config(&app);
+            .map_err(|error| format!("Облачный роутер недоступен: {}", error))?;
+        let config = tauri_plugin_cloud_routers::router::config::load_config(&app, router_id);
         Some(CloudEndpoint {
-            base_url: config.base_url(),
+            base_url: config.base_url(router_id),
             api_key: config.api_key,
         })
     } else {

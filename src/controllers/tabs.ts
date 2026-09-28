@@ -10,7 +10,7 @@ import type { WorkspaceMenuController } from "../ui";
 import { deleteSession, openSessionFolder, fetchSessions } from "../services";
 import { trackError } from "../telemetry";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
-import { ensureStarted } from "@my-tauri-plugins/plugin-9router";
+import { ensureStarted } from "@my-tauri-plugins/plugin-cloud-routers";
 
 const SECTION_VIEWS: Record<TabSection, string> = {
   sessions: "#view-sessions",
@@ -307,12 +307,12 @@ export class TabController {
     return tab;
   }
 
-  /** Открыть вкладку веб-страницы (iframe 9Router Web UI). */
+  /** Открыть вкладку веб-страницы (iframe Web UI облачного роутера). */
   async openWebview(): Promise<AppTab | null> {
     try {
-      const status = await ensureStarted();
+      const status = await ensureStarted("9router");
       const base = status?.base_url;
-      if (!base) throw new Error("9Router сервер не поднят");
+      if (!base) throw new Error("Облачный роутер не поднят");
       const existing = this.entries.find(t => t.type === "webview");
       if (existing) { this.activate(existing.id); return this.tabToApp(existing); }
       const tab: AppTab = { id: genTabId(), type: "webview", sessionId: null, section: null, customTitle: null, url: `${base}/dashboard` };
@@ -322,9 +322,9 @@ export class TabController {
       this.persistTabs();
       return tab;
     } catch (e) {
-      showToast(`Не удалось открыть Web UI 9Router: ${e}`, "error");
+      showToast(`Не удалось открыть Web UI облачного роутера: ${e}`, "error");
       void trackError("tabs.openWebview", e);
-      // 9Router не установлен — ведём на честную панель в Настройках.
+      // Роутер не установлен — ведём на честную панель в Настройках.
       this.openSection("settings");
       return null;
     }
@@ -621,7 +621,7 @@ export class TabController {
       { id: "engines", label: "Движки", icon: "🚂", action: () => this.openSection("engines") },
       { id: "settings", label: "Настройки", icon: "⚙️", action: () => this.openSection("settings") },
       { id: "logs", label: "Логи", icon: "📝", action: () => this.openSection("logs") },
-      { id: "nine-router", label: "Web UI 9Router", icon: "🌐", action: () => { void this.openWebview(); } },
+      { id: "cloud-routers", label: "Web UI облачных роутеров", icon: "🌐", action: () => { void this.openWebview(); } },
     ]);
   }
 

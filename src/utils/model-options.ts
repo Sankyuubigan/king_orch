@@ -8,10 +8,12 @@ export function getAgentDisplayName(authorOrId?: string | null): string | undefi
   return agent?.name || authorOrId;
 }
 
-/// Префикс значения комбо 9Router в списке моделей.
-/// Выбор с этим префиксом идёт в облачный шлюз 9Router (плагин
-/// tauri-plugin-9router), а НЕ в локальный llama-server.
-export const NINE_ROUTER_MODEL_PREFIX = "9router:";
+/// Префиксы значений комбо облачных роутеров в списке моделей.
+export const CLOUD_ROUTER_PREFIXES: Record<string, string> = {
+  "9router": "9router:",
+  "extremerouter": "extremerouter:",
+  "omniroute": "omniroute:",
+};
 
 function capabilityIcons(meta?: { uncen?: boolean; vision?: boolean; audio?: boolean }): string {
   const out: string[] = [];
@@ -27,7 +29,7 @@ function applyModelValue(select: HTMLSelectElement, value: string): boolean {
   return true;
 }
 
-/// Заполняет select моделей (локальные .gguf + optgroup «9Router (облако)»)
+/// Заполняет select моделей (локальные .gguf + optgroup «Облачные роутеры»)
 /// из общих каталогов Store. Сохраняет текущий выбор, если он ещё валиден.
 export function fillModelSelect(select: HTMLSelectElement | null) {
   if (!select) return;
@@ -40,26 +42,30 @@ export function fillModelSelect(select: HTMLSelectElement | null) {
     o.text = fileName + (badges ? `  ${badges}` : "");
     select.appendChild(o);
   }
-  renderNineRouterOptions(select);
+  renderCloudRouterOptions(select);
   if (select.dataset.modelExplicit !== "true" && store.lastModel) {
     applyModelValue(select, store.lastModel);
   }
 }
 
-/// Рисует optgroup «9Router (облако)» поверх локальных моделей.
-/// Сохраняет текущий выбор (может быть облачным комбо).
-export function renderNineRouterOptions(select: HTMLSelectElement | null) {
+/// Рисует optgroup «Облачные роутеры» поверх локальных моделей.
+export function renderCloudRouterOptions(select: HTMLSelectElement | null) {
   if (!select) return;
   const explicit = select.dataset.modelExplicit === "true";
   const current = select.value;
-  select.querySelector('optgroup[label="9Router (облако)"]')?.remove();
-  if (!store.nineRouterCombos.length) return;
+  select.querySelector('optgroup[label="Облачные роутеры"]')?.remove();
+  
+  const allCombos = Object.entries(store.cloudRouterCombos).flatMap(([router, combos]) =>
+    combos.map(c => ({ ...c, router }))
+  );
+  if (!allCombos.length) return;
+  
   const group = document.createElement("optgroup");
-  group.label = "9Router (облако)";
-  for (const c of store.nineRouterCombos) {
+  group.label = "Облачные роутеры";
+  for (const c of allCombos) {
     const o = document.createElement("option");
-    o.value = `${NINE_ROUTER_MODEL_PREFIX}${c.name}`;
-    o.text = `☁️ ${c.name}`;
+    o.value = `${CLOUD_ROUTER_PREFIXES[c.router]}${c.name}`;
+    o.text = `☁️ [${c.router}] ${c.name}`;
     group.appendChild(o);
   }
   select.appendChild(group);

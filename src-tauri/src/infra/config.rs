@@ -125,9 +125,9 @@ pub struct AppConfig {
     /// Папка бандла весов ImageGEN (ключ плагина image-engine).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_bundle_dir: Option<String>,
-    /// Папка установки 9Router (ключ секции `nine_router` плагина 9router).
+    /// Папка установки облачных роутеров (ключ секции `cloud_routers` плагина cloud-routers).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub nine_router_dir: Option<String>,
+    pub cloud_routers_dir: Option<String>,
     /// Двухфазный режим генерации по умолчанию (для ВСЕХ агентов, а не только
     /// signal-агентов с YAML-флагом two_phase_thinking): Phase 1 — свободные
     /// размышления без грамматики, Phase 2 — ответ с enable_thinking=false
@@ -188,7 +188,7 @@ impl Default for AppConfig {
             data_dir: None,
             sdcpp_dir: None,
             image_bundle_dir: None,
-            nine_router_dir: None,
+            cloud_routers_dir: None,
             two_phase_default: default_two_phase_default(),
         }
     }
@@ -390,7 +390,7 @@ mod tests {
     #[test]
     fn test_save_config_file_preserves_external_fields() {
         let tmp = std::env::temp_dir().join(format!("king_orch_cfg_test_{}.json", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
-        let initial_json = r#"{"nine_router":{"dir":"D:\\custom\\9router","port":20128}}"#;
+        let initial_json = r#"{"cloud_routers":{"9router":{"dir":"D:\\custom\\9router","port":20128}}}"#;
         fs::write(&tmp, initial_json).unwrap();
 
         let cfg = AppConfig::default();
@@ -401,7 +401,10 @@ mod tests {
         let _ = fs::remove_file(&tmp);
 
         assert_eq!(
-            val.get("nine_router").and_then(|nr| nr.get("dir")).and_then(|d| d.as_str()),
+            val.get("cloud_routers")
+                .and_then(|cr| cr.get("9router"))
+                .and_then(|nr| nr.get("dir"))
+                .and_then(|d| d.as_str()),
             Some("D:\\custom\\9router")
         );
     }

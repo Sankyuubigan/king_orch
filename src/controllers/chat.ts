@@ -7,7 +7,7 @@ import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks } from "../ui
 import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
-import { renderMarkdown, stripStreamArtifacts, extractChannelThought, NINE_ROUTER_MODEL_PREFIX, fillModelSelect, fillAgentSelect, getAgentDisplayName } from "../utils";
+import { renderMarkdown, stripStreamArtifacts, extractChannelThought, CLOUD_ROUTER_PREFIXES, fillModelSelect, fillAgentSelect, getAgentDisplayName } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError } from "../telemetry";
 
@@ -461,8 +461,8 @@ export class ChatController {
       return;
     }
     if (!modelPath || !agentId) return;
-    // Облачные комбо 9Router: локальный счётчик токенов/VRAM неприменим.
-    if (modelPath.startsWith(NINE_ROUTER_MODEL_PREFIX)) {
+    // Облачные комбо роутеров: локальный счётчик токенов/VRAM неприменим.
+    if (Object.values(CLOUD_ROUTER_PREFIXES).some(p => modelPath.startsWith(p))) {
       if (this.el.tokenCounter) this.el.tokenCounter.innerText = "";
       return;
     }
@@ -999,12 +999,15 @@ export class ChatController {
 
   private sendReadiness(): { ready: boolean; reason: string } {
     const model = this.el.modelSelect.value;
-    const cloudModelAvailable = (value: string) => store.nineRouterCombos
-      .some(combo => `${NINE_ROUTER_MODEL_PREFIX}${combo.name}` === value);
+    const cloudModelAvailable = (value: string) => {
+      const router = Object.entries(CLOUD_ROUTER_PREFIXES).find(([_, p]) => value.startsWith(p));
+      if (!router) return false;
+      return store.cloudRouterCombos[router[0]]?.some(combo => `${router[1]}${combo.name}` === value) ?? false;
+    };
     const savedCloudPending = this.el.modelSelect.dataset.modelExplicit !== "true"
-      && !!store.lastModel?.startsWith(NINE_ROUTER_MODEL_PREFIX)
+      && !!store.lastModel && Object.values(CLOUD_ROUTER_PREFIXES).some(p => store.lastModel!.startsWith(p))
       && !cloudModelAvailable(store.lastModel);
-    const modelReady = !savedCloudPending && (model.startsWith(NINE_ROUTER_MODEL_PREFIX)
+    const modelReady = !savedCloudPending && (Object.values(CLOUD_ROUTER_PREFIXES).some(p => model.startsWith(p))
       ? cloudModelAvailable(model)
       : store.models.includes(model));
     let reason = "";
@@ -1219,9 +1222,9 @@ export class ChatController {
       const _p2 = store.currentModelParams;
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value), dry_multiplier: _p2?.dry_multiplier ?? 0.0, dry_base: _p2?.dry_base ?? 1.75, dry_allowed_length: _p2?.dry_allowed_length ?? 2, dry_penalty_last_n: _p2?.dry_penalty_last_n ?? 0, xtc_probability: _p2?.xtc_probability ?? 0.0, xtc_threshold: _p2?.xtc_threshold ?? 0.1 };
       const allHistory = this.state.history.slice();
-      const isNineRouter = modelPath.startsWith(NINE_ROUTER_MODEL_PREFIX);
+      const isCloudRouter = Object.values(CLOUD_ROUTER_PREFIXES).some(p => modelPath.startsWith(p));
       let mmprojPath: string | null = null;
-      if (!isNineRouter && attachments.length > 0) {
+      if (!isCloudRouter && attachments.length > 0) {
         try { mmprojPath = await getMmprojPath(modelPath); } catch (_) {}
       }
       const response: any = await invoke("chat_request", {
@@ -1336,7 +1339,7 @@ export class ChatController {
     const btn = this.el.btnAttach;
     const modelPath = this.el.modelSelect?.value;
     if (!modelPath) { btn.disabled = true; this.modelAudioCapable = false; btn.classList.remove('btn-attach-active'); btn.classList.add('btn-attach-inactive'); btn.title = 'Сначала выберите модель'; return; }
-    if (modelPath.startsWith(NINE_ROUTER_MODEL_PREFIX)) {
+    if (Object.values(CLOUD_ROUTER_PREFIXES).some(p => modelPath.startsWith(p))) {
       btn.disabled = false;
       this.modelAudioCapable = true;
       btn.classList.remove('btn-attach-inactive');

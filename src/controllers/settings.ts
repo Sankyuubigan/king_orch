@@ -1,12 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { getAllCapabilities, getModelParams, resetModelParams, setModelParams } from "@my-tauri-plugins/plugin-llama-engine";
-import { getCombos as getNineRouterCombos, type ComboInfo } from "@my-tauri-plugins/plugin-9router";
+import { getCombos as getCloudRouterCombos, type ComboInfo } from "@my-tauri-plugins/plugin-cloud-routers";
 import { store } from "../store";
 import { bus } from "../events";
 import { showToast } from "../ui";
 import { setTelemetryEnabled, trackError } from "../telemetry";
-import { NINE_ROUTER_MODEL_PREFIX } from "../utils";
+import { CLOUD_ROUTER_PREFIXES } from "../utils";
 import { getActiveChatController } from "./tabs";
 
 export interface SettingsElements {
@@ -32,28 +32,23 @@ export interface SettingsElements {
 
 export class SettingsController {
   private el: SettingsElements;
-  /// Кэш комбо 9Router (облачные модели) — пишем в store.nineRouterCombos.
-  private nineRouterCombos: ComboInfo[] = [];
-  private nineRouterCombosRequested = false;
+  /// Кэш комбо облачных роутеров — пишем в store.cloudRouterCombos.
+  private cloudRouterCombos: Record<string, ComboInfo[]> = {};
+  private cloudRouterCombosRequested = false;
 
   constructor(el: SettingsElements) {
     this.el = el;
     this.bindDomEvents();
     this.bindBusEvents();
-    // Панель 9Router (настройки) сообщает об изменении комбо (кнопки
-    // «Обновить комбо»/установка/смена пути/остановка). Если панель прислала
-    // актуальный массив комбо в detail — применяем его напрямую, БЕЗ запроса
-    // к серверу: при «Остановить» приходит пустой массив, и повторный запрос
-    // get_combos немедленно поднял бы сервер обратно (цикл остановки).
-    window.addEventListener("9router:combos-changed", (e) => {
-      const detail = (e as CustomEvent<{ combos?: ComboInfo[] }>).detail;
-      if (detail && Array.isArray(detail.combos)) {
-        this.nineRouterCombos = detail.combos;
-        store.nineRouterCombos = detail.combos.map(c => ({ name: c.name, models: c.models || [] }));
+    window.addEventListener("cloud-routers:combos-changed", (e) => {
+      const detail = (e as CustomEvent<{ router?: string; combos?: ComboInfo[] }>).detail;
+      if (detail && detail.router && Array.isArray(detail.combos)) {
+        this.cloudRouterCombos[detail.router] = detail.combos;
+        store.cloudRouterCombos[detail.router] = detail.combos.map(c => ({ name: c.name, models: c.models || [] }));
         bus.emit("model-catalog-changed");
         return;
       }
-      void this.refreshNineRouterCombos();
+      void this.refreshCloudRouterCombos();
     });
   }
 
@@ -64,8 +59,8 @@ export class SettingsController {
   async loadModelParams() {
     const p = getActiveChatController()?.modelSelectValue ?? store.lastModel;
     if (!p) return;
-    // Комбо 9Router — облачная модель: локальные параметры сэмплинга не храним.
-    if (p.startsWith(NINE_ROUTER_MODEL_PREFIX)) return;
+    // Комбо облачных роутеров — облачная модель: локальные параметры сэмплинга не храним.
+    if (Object.values(CLOUD_ROUTER_PREFIXES).some(prefix => p.startsWith(prefix))) return;
     let params: any;
     try {
       params = await getModelParams(p);
@@ -85,7 +80,7 @@ export class SettingsController {
   private async saveModelParams() {
     const p = getActiveChatController()?.modelSelectValue ?? store.lastModel;
     if (!p) return;
-    if (p.startsWith(NINE_ROUTER_MODEL_PREFIX)) return;
+    if (Object.values(CLOUD_ROUTER_PREFIXES).some(prefix => p.startsWith(prefix))) return;
     const base = store.currentModelParams;
     await setModelParams(p, {
       temperature: parseFloat(this.el.tempSlider.value),
@@ -106,7 +101,7 @@ export class SettingsController {
   private async resetDefaults() {
     try {
       const model = getActiveChatController()?.modelSelectValue ?? store.lastModel;
-      const modelReset = model && !model.startsWith(NINE_ROUTER_MODEL_PREFIX)
+      const modelReset = model && !Object.values(CLOUD_ROUTER_PREFIXES).some(prefix => model.startsWith(prefix))
         ? (async () => {
             await resetModelParams(model);
             await this.loadModelParams();
@@ -135,31 +130,32 @@ export class SettingsController {
     bus.emit("model-catalog-changed");
   }
 
-  /// Ленивая подгрузка комбо 9Router: запрашиваем с сервера (поднимает его,
-  /// только если включён автозапуск nine_router.auto_start). Результат кэшируем.
-  private async ensureNineRouterCombos() {
-    if (this.nineRouterCombosRequested) return;
-    await this.refreshNineRouterCombos();
+  /// Ленивая подгрузка комбо облачных роутеров: запрашиваем с сервера (поднимает его,
+  /// только если включён автозапуск). Результат кэшируем.
+  private async ensureCloudRouterCombos() {
+    if (this.cloudRouterCombosRequested) return;
+    await this.refreshCloudRouterCombos();
   }
 
-  /// Перечитывает комбо 9Router и пишет в store.nineRouterCombos.
-  /// При ошибке/пустом списке НЕ защёлкивает флаг — даёт повторную попытку.
-  private async refreshNineRouterCombos() {
-    this.nineRouterCombosRequested = true;
+  /// Перечитывает комбо облачных роутеров и пишет в store.cloudRouterCombos.
+  private async refreshCloudRouterCombos() {
+    this.cloudRouterCombosRequested = true;
     try {
-      this.nineRouterCombos = await getNineRouterCombos();
+      const routers = ["9router", "extremerouter", "omniroute"];
+      for (const router of routers) {
+        try {
+          const combos = await getCloudRouterCombos(router as any);
+          this.cloudRouterCombos[router] = combos;
+          store.cloudRouterCombos[router] = combos.map(c => ({ name: c.name, models: c.models || [] }));
+        } catch (_) {
+          this.cloudRouterCombos[router] = [];
+          store.cloudRouterCombos[router] = [];
+        }
+      }
     } catch (_) {
-      this.nineRouterCombos = [];
-      this.nineRouterCombosRequested = false;
-      store.nineRouterCombos = [];
+      this.cloudRouterCombosRequested = false;
       return;
     }
-    if (!this.nineRouterCombos.length) {
-      this.nineRouterCombosRequested = false;
-      store.nineRouterCombos = [];
-      return;
-    }
-    store.nineRouterCombos = this.nineRouterCombos.map(c => ({ name: c.name, models: c.models || [] }));
     bus.emit("model-catalog-changed");
   }
 
@@ -345,7 +341,7 @@ export class SettingsController {
       this.el.dataDirDisplay.textContent = saved;
       showToast("Путь хранилища изменён. Движки обновят его после переоткрытия вкладки «Движки».", "success");
       bus.emit("model-catalog-changed");
-      window.dispatchEvent(new CustomEvent("9router:combos-changed"));
+      window.dispatchEvent(new CustomEvent("cloud-routers:combos-changed"));
     } catch (e) {
       showToast(`Ошибка смены пути: ${e}`, "error");
       void trackError("settings.onChangeDataDir", e);

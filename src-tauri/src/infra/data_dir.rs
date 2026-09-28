@@ -124,7 +124,7 @@ pub fn apply(app: &AppHandle, raw_path: &str) -> Result<PathBuf, String> {
             .to_string_lossy()
             .to_string(),
     );
-    cfg.nine_router_dir = Some(dir.join("9router").to_string_lossy().to_string());
+    cfg.cloud_routers_dir = Some(dir.join("cloud_routers").to_string_lossy().to_string());
     infra::save_config(app, &cfg)?;
     Ok(dir)
 }

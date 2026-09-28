@@ -9,10 +9,10 @@ export { buildSessionMarkdown, copyMarkdownToClipboard } from './session-clipboa
 // ./model-options (чтобы не тянуть store в leaf-утилиту), ре-экспортируются
 // отсюда для обратной совместимости.
 export {
-  NINE_ROUTER_MODEL_PREFIX,
+  CLOUD_ROUTER_PREFIXES,
   fillModelSelect,
   fillAgentSelect,
-  renderNineRouterOptions,
+  renderCloudRouterOptions,
   getAgentDisplayName,
 } from './model-options'
 

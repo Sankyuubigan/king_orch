@@ -85,7 +85,7 @@ Module-scope helper'ы:
 Регистрирует глобальные Tauri-события (`listen(...)`) ОДИН раз: `progress`, `status`,
 `stream_chunk`, `subcall_done`, `agent_thought`, `agent_tool_call`, `engine_mode`,
 `tool_permission_request`, `vram_notice`, `download_progress` (логируется глобально),
-`9router-chunk`. Передаёт в активную обрабатывающую вкладку.
+`cloud-routers-chunk`. Передаёт в активную обрабатывающую вкладку.
 
 ### SettingsController (`src/controllers/settings.ts`)
 Конфигурация, параметры моделей, скачивание. Читает активную вкладку через

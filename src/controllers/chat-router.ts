@@ -1,6 +1,6 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { onChunk as onNineRouterChunk } from "@my-tauri-plugins/plugin-9router";
+import { onChunk as onCloudRouterChunk } from "@my-tauri-plugins/plugin-cloud-routers";
 import { formatSpeed } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import type { DragDropPayload } from "../types";
@@ -23,9 +23,9 @@ export function initChatEventRouter(): void {
 
   listen("stream_chunk", (e) => active()?.onStreamChunk(e.payload as any));
 
-  // Стриминг облачных комбо 9Router: плагин шлёт { text, author, kind } —
+  // Стриминг облачных комбо: плагин шлёт { router, text, author, kind } —
   // приводим к формату stream_chunk и переиспользуем общий рендер.
-  void onNineRouterChunk((c) => active()?.onStreamChunk({ kind: c.kind, author: c.author, text: c.text }));
+  void onCloudRouterChunk((c) => active()?.onStreamChunk({ kind: c.kind, author: c.author, text: c.text }));
 
   void getCurrentWebview().onDragDropEvent((event) => {
     getActiveChatController()?.onFileDragEvent(event.payload as DragDropPayload);
