@@ -33,3 +33,4 @@ build_out.txt
 test_gr.txt
 test_out.txt
 build_output.txt
+src-tauri/tauri-dev-override.json

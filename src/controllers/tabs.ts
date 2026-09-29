@@ -11,6 +11,7 @@ import { deleteSession, openSessionFolder, fetchSessions } from "../services";
 import { trackError } from "../telemetry";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { ensureStarted } from "@my-tauri-plugins/plugin-cloud-routers";
+import { computeTargetIndex, computeShifts } from "../utils/drag";
 
 const SECTION_VIEWS: Record<TabSection, string> = {
   sessions: "#view-sessions",
@@ -102,7 +103,6 @@ export class TabController {
   private navigationMenu: WorkspaceMenuController | null = null;
   private entries: TabEntry[] = [];
   private persistTimer: number | null = null;
-  private dragState: { id: string; index: number } | null = null;
 
   private onDocumentClick = (event: MouseEvent) => {
     const target = event.target as Node;
@@ -724,51 +724,87 @@ export class TabController {
     return btn;
   }
 
-  // ── Перетаскивание по оси X (mousedown/mousemove) ──
+  // ── Перетаскивание по оси X (Pointer Events + transform, без перерисовки DOM) ──
 
   private bindStripEvents() {
-    this.stripEl.addEventListener("mousedown", (e) => {
+    this.stripEl.addEventListener("pointerdown", (e) => {
       const target = (e.target as HTMLElement).closest(".workspace-tab") as HTMLElement | null;
       if (!target || (e.target as HTMLElement).closest(".workspace-tab-close")) return;
       const id = target.dataset.tabId!;
       const idx = this.entries.findIndex(t => t.id === id);
       if (idx === -1) return;
-      this.dragState = { id, index: idx };
-      let moved = false;
-      const move = (ev: MouseEvent) => {
-        if (!this.dragState) return;
-        const el = this.entries.find(t => t.id === this.dragState!.id);
-        if (!el) return;
-        if (!moved) {
-          moved = true;
-          el.stripEl.classList.add("dragging");
+
+      const startX = e.clientX;
+      const startY = e.clientY;
+      let dragging = false;
+      let startIdx = idx;
+      let targetIdx = idx;
+      let centers: number[] = [];
+      let step = 0;
+      let tabEls: HTMLElement[] = [];
+
+      const onMove = (ev: PointerEvent) => {
+        if (!dragging) {
+          const dx = ev.clientX - startX;
+          const dy = ev.clientY - startY;
+          if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
+          dragging = true;
+
+          tabEls = Array.from(this.stripEl.querySelectorAll<HTMLElement>(".workspace-tab"));
+          const rects = tabEls.map(el => el.getBoundingClientRect());
+          centers = rects.map(r => r.left + r.width / 2);
+          step = tabEls.length > 1 ? rects[1].left - rects[0].left : rects[0].width + 4;
+
+          target.setPointerCapture(ev.pointerId);
+          target.classList.add("dragging");
+          target.style.zIndex = "100";
+          target.style.transition = "none";
+          for (const el of tabEls) {
+            if (el !== target) el.style.transition = "transform 0.18s cubic-bezier(0.2, 0, 0, 1)";
+          }
         }
-        // Горизонтальный обход полосы: смещаем вкладку к месту курсора.
-        const tabs = Array.from(this.stripEl.querySelectorAll<HTMLElement>(".workspace-tab"));
-        let over = -1;
-        for (let i = 0; i < tabs.length; i++) {
-          const r = tabs[i].getBoundingClientRect();
-          if (ev.clientX < r.left + r.width / 2) { over = i; break; }
+
+        const dx = ev.clientX - startX;
+        target.style.transform = `translateX(${dx}px)`;
+
+        const currentCenter = centers[startIdx] + dx;
+        const newTarget = computeTargetIndex(centers, currentCenter);
+
+        if (newTarget !== targetIdx) {
+          targetIdx = newTarget;
+          const shifts = computeShifts(tabEls.length, startIdx, targetIdx, step);
+          for (let i = 0; i < tabEls.length; i++) {
+            if (i === startIdx) continue;
+            tabEls[i].style.transform = `translateX(${shifts[i]}px)`;
+          }
         }
-        if (over === -1) over = tabs.length;
-        const curIdx = this.entries.findIndex(t => t.id === this.dragState!.id);
-        if (over !== curIdx && over !== curIdx + 1) {
-          const [movedEntry] = this.entries.splice(curIdx, 1);
-          this.entries.splice(Math.max(0, over - (over > curIdx ? 1 : 0)), 0, movedEntry);
-          store.tabs = this.entries.map(t => this.tabToApp(t));
+      };
+
+      const onUp = () => {
+        this.stripEl.removeEventListener("pointermove", onMove);
+        this.stripEl.removeEventListener("pointerup", onUp);
+        this.stripEl.removeEventListener("pointercancel", onUp);
+
+        if (dragging) {
+          for (const el of tabEls) {
+            el.classList.remove("dragging");
+            el.style.transform = "";
+            el.style.transition = "";
+            el.style.zIndex = "";
+          }
+          if (targetIdx !== startIdx) {
+            const [moved] = this.entries.splice(startIdx, 1);
+            this.entries.splice(targetIdx, 0, moved);
+            store.tabs = this.entries.map(t => this.tabToApp(t));
+          }
           this.renderStrip();
+          this.persistTabs();
         }
       };
-      const up = () => {
-        const st = this.dragState;
-        this.dragState = null;
-        this.entries.forEach(t => t.stripEl.classList.remove("dragging"));
-        document.removeEventListener("mousemove", move);
-        document.removeEventListener("mouseup", up);
-        if (st) { this.persistTabs(); }
-      };
-      document.addEventListener("mousemove", move);
-      document.addEventListener("mouseup", up);
+
+      this.stripEl.addEventListener("pointermove", onMove);
+      this.stripEl.addEventListener("pointerup", onUp);
+      this.stripEl.addEventListener("pointercancel", onUp);
     });
   }
 
