@@ -44,7 +44,7 @@ cases:
       e3: true
       e4: false
       e5: false
-      e6: true
+      e6: false
       e7: true
       e8: true
       e9: false

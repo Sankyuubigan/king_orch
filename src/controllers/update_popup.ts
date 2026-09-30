@@ -75,8 +75,12 @@ export class UpdatePopupController {
       // Резервный путь установки (GitHub Releases API).
       if (this.pendingGithub) {
         this.el.btnUpdate.innerText = "Скачивание...";
-        await invoke("install_update_from_github", { url: this.pendingGithub.url });
-        // Процесс завершится самим установщиком (exit(0)) — сюда не возвращаемся.
+        await invoke("install_update_from_github", {
+          url: this.pendingGithub.url,
+          version: this.pendingGithub.version,
+        });
+        // Приложение закрывается само (install_update_from_github → app.exit(0)),
+        // перезапуск выполняет NSIS-инсталлер. Сюда не возвращаемся.
         return;
       }
 

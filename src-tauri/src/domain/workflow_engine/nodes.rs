@@ -214,11 +214,13 @@ where
     match node.node_type {
         NodeType::System1Validator => {
             let workflow_dir = std::path::Path::new(&workflow.parent_dir);
-            let rules_path = workflow_dir.join("../database/element_validation_rules_prod_noul.yaml");
+            // Критерии System-1 живут рядом с кейсами, на которых они настроены
+            // (tools/laya_probe.py — тот же файл, SSOT текстов вопросов e1..e9).
+            let rules_path = workflow_dir.join("../../../test_cases/new_tests_for_validator/element_validation_rules_prod_noul.yaml");
             let rules_path = if rules_path.exists() {
                 rules_path
             } else {
-                std::path::Path::new("agents/psychotherapist/database/element_validation_rules_prod_noul.yaml").to_path_buf()
+                std::path::Path::new("test_cases/new_tests_for_validator/element_validation_rules_prod_noul.yaml").to_path_buf()
             };
 
             let model_dir = std::path::Path::new("test/laya_probe/models/laya-multilingual-onnx");

@@ -400,7 +400,7 @@ mod tests {
         }
 
         let validator = LayaValidator::load(model_dir).expect("load validator");
-        let rules_path = Path::new("test_cases/fixtures/psychotherapist_validator_e1_e9/element_validation_rules_prod_noul.yaml");
+        let rules_path = Path::new("test_cases/new_tests_for_validator/element_validation_rules_prod_noul.yaml");
         let rules = LayaValidator::load_rules(rules_path).expect("load rules");
 
         // Test task1

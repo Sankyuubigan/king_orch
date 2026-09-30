@@ -25,9 +25,10 @@ ONNX_MODEL_ID = "mizchi/laya-multilingual-onnx"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CASES = PROJECT_ROOT / "test_cases/new_tests_for_validator/cases.yaml"
-# Критерии (тексты вопросов e1..e9) живут отдельно от кейсов: docs/LAYA_MODEL.md §6.1.
+# Критерии (тексты вопросов e1..e9) живут отдельно от кейсов, но рядом с ними:
+# docs/LAYA_MODEL.md §6.1.
 DEFAULT_RULES = (
-    PROJECT_ROOT / "test_cases/fixtures/psychotherapist_validator_e1_e9"
+    PROJECT_ROOT / "test_cases/new_tests_for_validator"
     / "element_validation_rules_prod_noul.yaml"
 )
 PROD_RULES = PROJECT_ROOT / "agents/psychotherapist/database/element_validation_rules.yaml"

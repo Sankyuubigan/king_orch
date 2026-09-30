@@ -9,9 +9,6 @@
 use serde::Serialize;
 use tauri::AppHandle;
 
-#[cfg(windows)]
-use std::os::windows::process::CommandExt;
-
 #[derive(Serialize)]
 pub struct GithubUpdateInfo {
     pub version: String,
@@ -99,45 +96,28 @@ pub async fn check_github_release_update(app: AppHandle) -> Result<Option<Github
 }
 
 #[tauri::command]
-pub async fn install_update_from_github(url: String, app: AppHandle) -> Result<(), String> {
-    // Бэкап пользовательских данных (best-effort), как при откате версий.
-    let _ = crate::infra::updater_rollback::backup_before_rollback(&app);
+pub async fn install_update_from_github(
+    app: AppHandle,
+    url: String,
+    version: String,
+) -> Result<(), String> {
+    log::info!("[updater] резервная установка релиза {} из {}", version, url);
 
-    let tmp = std::env::temp_dir().join(format!(
-        "king_orch_update_{}.exe",
-        chrono::Local::now().timestamp()
-    ));
+    // Бэкап пользовательских данных. Для обновления это best-effort (схема
+    // данных не меняется), но ошибку не глотаем молча — пишем в лог (core §2.2).
+    if let Err(e) = tauri_plugin_about_updates::backup_before_rollback(&app) {
+        log::error!("[updater] бэкап перед обновлением не удался: {}", e);
+    }
 
-    // Скачивание единым движком (6 уровней, прогресс, без лишних окон).
-    tauri_plugin_downloader::download(
+    // Скачивание, запуск NSIS (/P /UPDATE /R), перезапуск приложения и выход —
+    // ровно тот же конвейер, что у отката версий (SSOT, tauri-plugin-about-updates).
+    // Раньше здесь был второй, отдельный вызов установщика без `/R`:
+    // после резервного обновления приложение не перезапускалось вообще.
+    tauri_plugin_about_updates::installer::run_install(
+        &app,
+        tauri_plugin_about_updates::install_report::InstallKind::Update,
+        &version,
         &url,
-        &tmp,
-        tauri_plugin_downloader::DownloadOptions {
-            label: "Обновление приложения".into(),
-            kind: "app".into(),
-            ..Default::default()
-        },
-        Some(&|msg: String| {
-            eprintln!("[updater] {}", msg);
-            log::info!("[updater] {}", msg);
-        }),
     )
     .await
-    .map_err(|e| format!("Ошибка скачивания установщика: {}", e))?;
-
-    // Тихая установка NSIS; после запуска освобождаем свои файлы (exit),
-    // чтобы инсталлер мог перезаписать exe приложения.
-    #[cfg(windows)]
-    let mut cmd = std::process::Command::new(&tmp);
-    #[cfg(windows)]
-    cmd.args(["/S"]).creation_flags(0x08000000);
-    #[cfg(not(windows))]
-    let mut cmd = std::process::Command::new(&tmp);
-
-    match cmd.spawn() {
-        Ok(_) => {
-            std::process::exit(0);
-        }
-        Err(e) => Err(format!("Не удалось запустить установщик: {}", e)),
-    }
 }

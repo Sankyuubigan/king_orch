@@ -9,15 +9,15 @@
 
 ## Решение (Вариант A — прямая установка из GitHub Releases)
 1. `get_release_history()` — список релизов через GitHub Releases REST API. Отдаёт
-   реальный `download_url` установщика (`-setup.exe`) для каждой версии. Это и есть
+   реальный `download_url` установщика (`-setup.exe`) и версию для каждого релиза. Это и есть
    единственный источник правды.
-2. Backend (Rust): `install_release(download_url)` — бэкап данных, скачивание установщика
-   по переданному `download_url` (без всяких `manifest.json`) и запуск NSIS-инсталлера
-   (`/S`). Даунгрейд разрешён (`allowDowngrades: true`). После запуска приложение
-   завершается, чтобы не держать заблокированным свой exe.
+2. Backend (Rust, `tauri-plugin-about-updates`): `install_release(download_url, version)` —
+   бэкап данных, скачивание установщика по переданному `download_url` и запуск NSIS-инсталлера.
+   Даунгрейд разрешён (`allowDowngrades: true`). После запуска приложение закрывается, чтобы не
+   держать заблокированным свой exe.
 3. Авто-бэкап `app_config.json` + `sessions/` в `rollback_backup/` перед откатом.
 4. Frontend: секция «История версий» в настройках; кнопка «Откатить» передаёт
-   `download_url` выбранного релиза.
+   `download_url` и `version` выбранного релиза.
 5. `tauri.conf.json`: `bundle.windows.allowDowngrades: true`.
 
 > Примечание по безопасности: откат доверяет GitHub Releases как единому источнику
@@ -25,35 +25,114 @@
 > tauri в ветке отката не выполняется — инсталлер качается напрямую из официального
 > релиза. При необходимости строгой проверки подписи см. Вариант B.
 
+## Запуск инсталлера: почему НЕ `cmd /c` (инцидент 01.10.2026)
+
+Прежняя реализация запускала установщик так:
+
+```
+cmd /c "start \"\" /wait \"<installer>\" /S & start \"\" \"<app.exe>\""
+```
+
+Это **не работает**, и это была первая настоящая причина отказа отката
+(симптом: окно Windows «Не найден сетевой путь», логов нет):
+
+- `std::process::Command` экранирует кавычки по правилам C-runtime (`\"`), а `cmd.exe`
+  по этим правилам не разбирает (задокументировано в `CommandExt::raw_arg`);
+- `start` получает вместо пути имя файла `\`; путь, начинающийся с `\`, Windows
+  трактует как UNC-путь → `ERROR_BAD_NETPATH` (53). Воспроизводится:
+  `cmd /c "start \"\" /wait \"x.exe\" /S"` → `Не удается найти файл \\.`;
+- оболочка здесь вообще не нужна: NSIS-шаблон Tauri (начиная с 2.0.0) умеет всё сам.
+
+**Правильный запуск** (`installer::nsis_launch_plan` + `installer::spawn_installer`):
+
+```
+<installer>.exe /P /UPDATE /R
+```
+
+| Флаг | Что делает в шаблоне `installer.nsi` |
+|------|--------------------------------------|
+| `/P` | passive: окно прогресса, авто-убийство ещё живой копии приложения, **видимые** ошибки (в `/S` неудачное убийство заканчивается тихим `Abort`) |
+| `/UPDATE` | установка поверх: без uninstall-диалога и без удаления данных приложения |
+| `/R` | `.onInstSuccess` → `nsis_tauri_utils::RunAsUser "$INSTDIR\<app>.exe"` — **инсталлер сам перезапускает приложение** |
+
+Приложение закрывается через `app.exit(0)` (штатный выход: `ExitRequested` → убийство
+движков, flush отчётов, строка «Приложение закрыто» в логе). Эталон — официальный
+`tauri-plugin-updater`: `ShellExecuteW(installer, "/P /UPDATE /R")` + выход.
+
+`/ARGS` намеренно не передаётся: у King Orch нет значимых CLI-аргументов, а
+экранирование аргументов для NSIS — отдельные грабли (`escape_nsis_current_exe_arg`
+в `tauri-plugin-updater`).
+
+## Отчёт об установке: почему «сработало / не сработало» — факт, а не надежда
+
+После выхода приложения записать в лог «чем закончилось» некому, а на следующем
+старте `king_orch.log` обнуляется (core rules §2.5.1). Поэтому:
+
+1. **До запуска** инсталлера пишется `app_data_dir/install_report.json`
+   (`kind`, `target_version`, `previous_version`, `installer`, размер, аргументы NSIS,
+   `started_at`, `state: pending`) — атомарно, через `ko-json-store`.
+2. **На старте следующей сессии** плагин в фоновой задаче сверяет отчёт с
+   **фактически установленной** версией (`app.package_info().version`):
+   - совпало → `state: done` + `log::info!("... откат завершён: версия 26.9.177")`;
+   - не совпало → `state: failed` + `log::error!("... откат НЕ завершён: запрошена
+     26.9.177, работает 26.9.224")`.
+
+Вердикт попадает и в `king_orch.log`, и во вкладку «Логи» — автоматически, без
+действий пользователя. Команда `get_install_report` отдаёт тот же отчёт по запросу.
+
+Проверка идёт именно в фоновой задаче, а не в `setup` плагина: глобальный логгер
+хоста поднимается в `setup` плагина логов, который регистрируется позже, и запись
+из `setup` about-updates ушла бы в никуда.
+
 ## Почему это работает (и почему сломалось раньше)
-- Раньше `install_release` брал `manifest.json` ассет релиза и передавал плагину
+- Раньше `install_release` брал `manifest.json` ассета релиза и передавал плагину
   `tauri-plugin-updater`. Эти `manifest.json` оказались битыми/устаревшими (в `url`
   указывался несуществующий установщик, напр. `King.Orch_26.8.87_x64-setup.exe` вместо
   реального) → `download_and_install` падал с `HTTP 404`.
 - Теперь источник — реальный ассет релиза из GitHub API (`download_url`), который
   всегда корректен. Зависимость от хрупких статичных `manifest.json` полностью убрана.
+- Запуск инсталлера и перезапуск приложения — на стороне NSIS (см. выше), а не в
+  собственной оболочке приложения.
+
+## Единый путь установки (SSOT)
+
+Резервное обновление из GitHub API (`api::updater::install_update_from_github`) и откат
+версии используют **один и тот же** конвейер в `tauri-plugin-about-updates`:
+
+```
+installer::run_install(app, kind, version, download_url)
+  → download_installer → install_report::begin → spawn_installer → app.exit(0)
+```
+
+Раньше это были две разные реализации в двух слоях, и во второй не было `/R` —
+после резервного обновления приложение не перезапускалось вообще. Копия
+`backup_before_rollback` в `infra/updater_rollback.rs` тоже удалена: бэкап берётся
+из плагина (`tauri_plugin_about_updates::backup_before_rollback`).
 
 ## Риски (требуют эмпирической проверки тестовым релизом)
-1. **NSIS-установщик при даунгрейде в пассивном режиме** — читался шаблон `dev`-ветки Tauri
-   (update-режим `/UPDATE` идёт в `reinst_done`, блокировка только при `allowDowngrades=false`
-   + silent). Но проект собирается CLI 2.0.0, и именно его шаблон стоит на старых
-   установщиках; шаблон вшит в бинарник (не читается). Проверяется только тестовым
-   релизом N → N-1. Fallback: NSIS-hook (`installer_hooks`) или Вариант B (ручная установка).
-2. **Нормализация имён ассетов** — больше не актуально: откат качает реальный ассет
+1. **NSIS-установщик при даунгрейде** — `/P` выбран сознательно: в silent-режиме
+   установщик, собранный с `allowDowngrades: false`, тихо делает `Abort`
+   (`Section EarlyChecks` → `${If} ${Silent}`), а в passive — нет. Проверяется
+   тестовым откатом N → N-1. Fallback: NSIS-hook (`installer_hooks`) или Вариант B.
+2. **Нормализация имён ассетов** — больше не актуальна: откат качает реальный ассет
    напрямую по `browser_download_url` из GitHub API (имя уже корректное, `King.Orch_...`).
 3. **Откат на любую версию** — работает для ВСЕХ релизов, у которых есть `-setup.exe`
    ассет (т.е. практически всех), независимо от наличия `manifest.json`.
 4. **Совместимость схемы данных** — старая версия может не прочитать конфиг/сессии новее.
    Авто-бэкап сохраняет, но НЕ восстанавливает автоматически (ручной возврат файлов).
-5. Мелочи: обрезка истории при >100 релизов (пагинация per_page=100); движок llama.cpp
+5. **Elevation** — установка currentUser (`RequestExecutionLevel user`), поэтому
+   `CreateProcess` достаточно. При переходе на perMachine потребуется запуск
+   через ShellExecute/`runas`.
+6. Мелочи: обрезка истории при >100 релизов (пагинация per_page=100); движок llama.cpp
    при откате остаётся новый (не ломает, но может предлагать «обновить движок»).
 
 ## Порядок реализации
 1. `tauri-build-toolkit` (шаг release) — НЕ генерирует `manifest.json` (убрано: было источником бага);
    `latest.json` для обычных обновлений остаётся.
-2. `src-tauri/src/infra/updater_rollback.rs` — `backup_before_rollback`.
-3. `src-tauri/src/api/updater.rs` — `get_release_history`, `install_release(download_url)`.
-4. Регистрация: `infra/mod.rs`, `api/mod.rs`, `main.rs` (invoke_handler).
+2. `my-tauri-plugins/tauri-plugin-about-updates` — `installer.rs` (запуск инсталлера),
+   `install_report.rs` (отчёт), `commands.rs` (`install_release`, `get_install_report`).
+3. `src-tauri/src/api/updater.rs` — резервная установка через тот же лаунчер.
+4. Регистрация команд плагина: `build.rs`, `lib.rs`, `permissions/default.toml`.
 5. `tauri.conf.json` — `bundle.windows.allowDowngrades: true`.
 6. Frontend: `index.html` (блок «История версий»), `settings.ts` (логика), `main.ts` (элементы).
 7. `build.bat` — проверка компиляции.

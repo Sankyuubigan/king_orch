@@ -18,7 +18,6 @@ pub mod bin_downloader;
 pub mod tools;
 pub mod permissions;
 pub mod lsp;
-pub mod updater_rollback;
 pub mod system_proxy;
 pub mod network_diagnostics;
 
