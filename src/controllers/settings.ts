@@ -141,8 +141,7 @@ export class SettingsController {
   private async refreshCloudRouterCombos() {
     this.cloudRouterCombosRequested = true;
     try {
-      const routers = ["9router", "extremerouter", "omniroute"];
-      for (const router of routers) {
+      for (const router of Object.keys(CLOUD_ROUTER_PREFIXES)) {
         try {
           const combos = await getCloudRouterCombos(router as any);
           this.cloudRouterCombos[router] = combos;
@@ -246,7 +245,7 @@ export class SettingsController {
       this.loadModelParams(),
     ]);
     bus.emit("config:loaded", config);
-    void this.ensureNineRouterCombos();
+    void this.ensureCloudRouterCombos();
   }
 
   async loadConfig() {

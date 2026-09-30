@@ -1239,7 +1239,7 @@ export class ChatController {
         kvQuantValues: false,
         modelParams: params,
         attachments,
-        mmprojPath: isNineRouter ? null : mmprojPath,
+        mmprojPath,
         sessionId: this.state.sessionId ?? ""
       });
       if (response?.has_error) {
