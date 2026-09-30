@@ -34,3 +34,4 @@ test_gr.txt
 test_out.txt
 build_output.txt
 src-tauri/tauri-dev-override.json
+/test_cases/new_tests_for_validator/raw

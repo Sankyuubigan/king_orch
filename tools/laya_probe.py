@@ -4,6 +4,7 @@ import argparse
 import json
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,12 +23,146 @@ ALFRED_MODEL_ID = "alfred361/laya-multilingual-typed-decisions"
 ALFRED_MODEL_REVISION = "60ce5be491a7723df937b757e43b254a08898f8e"
 ONNX_MODEL_ID = "mizchi/laya-multilingual-onnx"
 
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DEFAULT_CASES = PROJECT_ROOT / "test_cases/new_tests_for_validator/cases.yaml"
+# Критерии (тексты вопросов e1..e9) живут отдельно от кейсов: docs/LAYA_MODEL.md §6.1.
+DEFAULT_RULES = (
+    PROJECT_ROOT / "test_cases/fixtures/psychotherapist_validator_e1_e9"
+    / "element_validation_rules_prod_noul.yaml"
+)
+PROD_RULES = PROJECT_ROOT / "agents/psychotherapist/database/element_validation_rules.yaml"
+
+ELEMENTS = tuple(f"e{number}" for number in range(1, 10))
+DEFAULT_PRIORITY_FALSE = ("e3", "e6")
+
+# Человеческие записи вместо true/false — YAML их не булев, приводим сами.
+TRUTHY = {"да", "yes", "y", "true", "1", "истина"}
+FALSY = {"нет", "no", "n", "false", "0", "ложь"}
+
 
 def load_json(path: Path) -> dict[str, Any]:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise RuntimeError(f"Не удалось прочитать {path}: {error}") from error
+
+
+def as_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in TRUTHY:
+            return True
+        if text in FALSY:
+            return False
+    raise RuntimeError(f"Ожидалось true/false (или да/нет), получено: {value!r}")
+
+
+@dataclass
+class Case:
+    """Кейс из cases.yaml.
+
+    `skip` непустой -> кейс не заполнен и в прогон не идёт (см. load_cases).
+    """
+
+    id: str
+    prompt: str
+    note: str
+    expected: dict[str, bool]
+    priority_false: set[str]
+    skip: str = ""
+
+    @property
+    def ready(self) -> bool:
+        return not self.skip
+
+
+def load_cases(path: Path) -> list[Case]:
+    """Читает единый файл кейсов.
+
+    Пустой prompt или неполный expected — это не ошибка, а «кейс ещё не заполнен»:
+    такой кейс пропускается, чтобы можно было держать в файле заготовки. Ошибками
+    считаем только битый YAML, отсутствие файла и неуникальные id.
+    """
+    try:
+        document = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as error:
+        raise RuntimeError(f"Не удалось прочитать {path}: {error}") from error
+
+    if not isinstance(document, dict):
+        raise RuntimeError(f"{path.name}: ожидался словарь с ключом cases")
+    raw_cases = document.get("cases")
+    if not isinstance(raw_cases, list):
+        raise RuntimeError(f"{path.name}: нет списка cases")
+    if not raw_cases:
+        raise RuntimeError(f"{path.name}: список cases пуст")
+
+    cases: list[Case] = []
+    seen: set[str] = set()
+    for position, raw in enumerate(raw_cases, start=1):
+        if not isinstance(raw, dict):
+            raise RuntimeError(f"{path.name}: кейс #{position} — не словарь")
+
+        case_id = str(raw.get("id") or "").strip()
+        if not case_id:
+            raise RuntimeError(f"{path.name}: у кейса #{position} нет id")
+        if case_id in seen:
+            raise RuntimeError(f"{path.name}: повторяющийся id '{case_id}'")
+        seen.add(case_id)
+
+        prompt = str(raw.get("prompt") or "").strip()
+        note = str(raw.get("note") or "").strip()
+
+        priority_raw = raw.get("priority_false_elements")
+        if priority_raw is None:
+            priority_false = set(DEFAULT_PRIORITY_FALSE)
+        else:
+            if not isinstance(priority_raw, list):
+                raise RuntimeError(
+                    f"{path.name}: priority_false_elements у '{case_id}' — не список"
+                )
+            unknown = {str(item) for item in priority_raw} - set(ELEMENTS)
+            if unknown:
+                raise RuntimeError(
+                    f"{path.name}: неизвестные элементы в priority_false_elements "
+                    f"у '{case_id}': {sorted(unknown)}"
+                )
+            priority_false = {str(item) for item in priority_raw}
+
+        expected: dict[str, bool] = {}
+        expected_raw = raw.get("expected")
+        if isinstance(expected_raw, dict) and expected_raw:
+            try:
+                expected = {
+                    key: as_bool(expected_raw[key])
+                    for key in ELEMENTS
+                    if key in expected_raw
+                }
+            except RuntimeError as error:
+                raise RuntimeError(f"{path.name}: '{case_id}' — {error}") from error
+
+        skip = ""
+        if not prompt:
+            skip = "prompt пустой"
+        elif not expected:
+            skip = "expected не заполнен"
+        else:
+            missing = [key for key in ELEMENTS if key not in expected]
+            if missing:
+                skip = f"expected заполнен не полностью (нет {', '.join(missing)})"
+
+        cases.append(
+            Case(
+                id=case_id,
+                prompt=prompt,
+                note=note,
+                expected=expected,
+                priority_false=priority_false,
+                skip=skip,
+            )
+        )
+    return cases
 
 
 def build_questions(
@@ -169,25 +304,19 @@ def report_option_lengths(tok: Any, questions: dict[str, dict[str, Any]]) -> int
     return cut
 
 
-def evaluate_task(
+def evaluate_case(
     agent: Any,
-    task_num: int,
-    fixture_dir: Path,
+    case: Case,
     rules_path: Path,
     model_id: str,
-    model_revision: str,
+    model_revision: str | None,
     gemma_result_path: Path | None,
     output_path: Path,
     labels: str = "bool",
 ) -> dict[str, Any]:
-    task_file = fixture_dir / f"task{task_num}.md"
-    val_file = fixture_dir / f"validation{task_num}.json"
-    
-    validation = load_json(val_file)
-    state = task_file.read_text(encoding="utf-8").strip()
-    expected = validation["expected_signals"]["validator_report"]
-    priority_false = set(validation.get("priority_false_elements", ["e3", "e6"]))
-    
+    expected = case.expected
+    priority_false = case.priority_false
+
     gemma = None
     if gemma_result_path and gemma_result_path.exists():
         gemma = load_json(gemma_result_path).get("signals", {}).get("validator_report")
@@ -202,10 +331,9 @@ def evaluate_task(
     runs: list[dict[str, Any]] = []
     for order in orders:
         questions, true_labels = build_questions(rules_path, labels=order)
-        result = agent.predict(state, questions, max_len=2048, head_max_len=512)
+        result = agent.predict(case.prompt, questions, max_len=2048, head_max_len=512)
         per_order: dict[str, Any] = {}
-        for number in range(1, 10):
-            key = f"e{number}"
+        for key in ELEMENTS:
             answer = result["answers"][key]
             true_label = true_labels[key]
             # answer_confidence = max(вероятности) — единственная откалиброванная
@@ -226,8 +354,7 @@ def evaluate_task(
 
     actual: dict[str, bool] = {}
     report_questions: dict[str, Any] = {}
-    for number in range(1, 10):
-        key = f"e{number}"
+    for key in ELEMENTS:
         # Усреднение по перестановкам снимает позиционное смещение (docs §4.2):
         # порядок вариантов меняет до 6 из 9 ответов, поэтому один проход не доверяем.
         samples = [run[key]["p_true"] for run in runs]
@@ -254,12 +381,12 @@ def evaluate_task(
     matches = [key for key in actual if actual[key] == expected[key]]
     mismatches = [key for key in actual if actual[key] != expected[key]]
     priority_mismatches = sorted(priority_false.intersection(mismatches))
-    
+
     payload = {
         "model_id": model_id,
         "model_revision": model_revision,
         "device": str(agent.device),
-        "task": f"task{task_num}",
+        "case": case.id,
         "rules_file": rules_path.name,
         "labels": labels,
         "inference_ms": inference_ms,
@@ -276,11 +403,10 @@ def evaluate_task(
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
-    print(f"\n=================== ТЕСТ task{task_num} ({rules_path.name}, labels={labels}) ===================")
+    print(f"\n=================== КЕЙС {case.id} ({rules_path.name}, labels={labels}) ===================")
     print(f"Инференс Laya: {inference_ms} мс | Точность: {len(matches)}/9 ({len(matches)/9*100:.1f}%)")
     print("Элемент  Ожидалось  Laya (prob)      ans_conf  Match")
-    for number in range(1, 10):
-        key = f"e{number}"
+    for key in ELEMENTS:
         exp_str = str(expected[key]).lower()
         act_str = str(actual[key]).lower()
         prob_true = report_questions[key]["probabilities"]["true"]
@@ -289,15 +415,57 @@ def evaluate_task(
         print(f"{key:<8} {exp_str:<10} {act_str:<5} (p={prob_true:.3f})   {conf:.3f}     {status}")
     print(f"Совпадения: {', '.join(matches) if matches else 'нет'}")
     print(f"Ошибки: {', '.join(mismatches) if mismatches else 'нет'}")
+    if priority_mismatches:
+        print(f"Ошибки в приоритетных элементах: {', '.join(priority_mismatches)}")
 
     return payload
 
 
+def print_summary(payloads: list[dict[str, Any]], skipped: list[Case]) -> None:
+    if not payloads:
+        print("\nНи один кейс не прогнан: проверь, что в cases.yaml заполнены prompt и expected")
+        return
+    total_matches = sum(len(payload["matches"]) for payload in payloads)
+    total_elements = 9 * len(payloads)
+
+    print("\n=================== ИТОГ ПО ФАЙЛУ КЕЙСОВ ===================")
+    print("Кейс     Точность   Время   Ошибки                        Приоритетные")
+    for payload in payloads:
+        accuracy = len(payload["matches"])
+        errors = ", ".join(payload["mismatches"]) or "-"
+        priority = ", ".join(payload["priority_mismatches"]) or "-"
+        print(f"{payload['case']:<8} {accuracy}/9       {payload['inference_ms']:>5} мс  "
+              f"{errors:<30} {priority}")
+    print(f"\nВсего: {total_matches}/{total_elements} "
+          f"({total_matches / total_elements * 100:.1f}%) на {len(payloads)} кейсах")
+
+    # Как часто ошибаемся по каждому элементу — видно слабые критерии.
+    per_element = {
+        key: sum(1 for payload in payloads if key in payload["mismatches"]) for key in ELEMENTS
+    }
+    worst = sorted(per_element.items(), key=lambda item: -item[1])
+    print("Ошибки по элементам: " + ", ".join(f"{key}={count}" for key, count in worst))
+
+    if skipped:
+        print("\nПропущено (кейс не заполнен):")
+        for case in skipped:
+            print(f"  {case.id}: {case.skip}")
+
+
 def parse_args() -> argparse.Namespace:
-    project_root = Path(__file__).resolve().parent.parent
     parser = argparse.ArgumentParser()
-    parser.add_argument("--fixture-dir", type=Path, default=project_root / "test_cases/fixtures/psychotherapist_validator_e1_e9")
-    parser.add_argument("--rules", type=Path, default=None, help="Путь к файлу критериев (по умолчанию test или orig)")
+    parser.add_argument(
+        "--cases",
+        type=Path,
+        default=DEFAULT_CASES,
+        help="Единый YAML-файл с кейсами (по умолчанию test_cases/new_tests_for_validator/cases.yaml)",
+    )
+    parser.add_argument(
+        "--case",
+        default="",
+        help="Прогнать только перечисленные кейсы через запятую (по умолчанию — все)",
+    )
+    parser.add_argument("--rules", type=Path, default=None, help="Путь к файлу критериев (по умолчанию noul-критерии)")
     parser.add_argument("--use-original-rules", action="store_true", help="Использовать оригинальный element_validation_rules.yaml")
     parser.add_argument("--alfred", action="store_true", help="Использовать alfred361/laya-multilingual-typed-decisions")
     parser.add_argument("--onnx", action="store_true", help="Использовать ONNX модель mizchi/laya-multilingual-onnx")
@@ -319,32 +487,46 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    project_root = Path(__file__).resolve().parent.parent
-    
+
     if args.onnx:
         model_id = ONNX_MODEL_ID
         model_revision = None
-        model_dir = args.model_dir or (project_root / "test/laya_probe/models/laya-multilingual-onnx")
+        model_dir = args.model_dir or (PROJECT_ROOT / "test/laya_probe/models/laya-multilingual-onnx")
         tag = "onnx"
     elif args.alfred:
         model_id = ALFRED_MODEL_ID
         model_revision = ALFRED_MODEL_REVISION
-        model_dir = args.model_dir or (project_root / "test/laya_probe/models/laya-multilingual-alfred")
+        model_dir = args.model_dir or (PROJECT_ROOT / "test/laya_probe/models/laya-multilingual-alfred")
         tag = "alfred"
     else:
         model_id = DEFAULT_MODEL_ID
         model_revision = DEFAULT_MODEL_REVISION
-        model_dir = args.model_dir or (project_root / "test/laya_probe/models/laya-multilingual-base")
+        model_dir = args.model_dir or (PROJECT_ROOT / "test/laya_probe/models/laya-multilingual-base")
         tag = "base"
 
     if args.rules:
         rules_path = args.rules
     elif args.use_original_rules:
-        rules_path = project_root / "agents/psychotherapist/database/element_validation_rules.yaml"
+        rules_path = PROD_RULES
     else:
-        rules_path = args.fixture_dir / "element_validation_rules_test.yaml"
+        rules_path = DEFAULT_RULES
 
     try:
+        cases = load_cases(args.cases)
+        wanted = {item.strip() for item in args.case.split(",") if item.strip()}
+        if wanted:
+            unknown = wanted - {case.id for case in cases}
+            if unknown:
+                raise RuntimeError(
+                    f"В {args.cases.name} нет кейсов: {', '.join(sorted(unknown))}"
+                )
+            cases = [case for case in cases if case.id in wanted]
+        ready = [case for case in cases if case.ready]
+        skipped = [case for case in cases if not case.ready]
+        for case in skipped:
+            print(f"SKIP {case.id}: {case.skip}")
+        print(f"Кейсов в файле: {len(cases)} | к прогону: {len(ready)} | пропущено: {len(skipped)}")
+
         if args.onnx:
             from huggingface_hub import snapshot_download
             if not (model_dir / "model.onnx").exists():
@@ -381,25 +563,59 @@ def main() -> int:
         rules_tag = rules_path.stem.replace("element_validation_rules", "").strip("_-") or "prod"
         out_tag = f"{tag}_{rules_tag}_{args.labels}"
 
-        tasks_to_run = []
-        for t in range(1, 10):
-            if (args.fixture_dir / f"task{t}.md").exists():
-                tasks_to_run.append(t)
-
-        for task_num in tasks_to_run:
-            out_file = project_root / f"test/laya_probe/results/laya_{out_tag}_task{task_num}.json"
-            gemma_file = project_root / f"test/laya_probe/results/gemma_task{task_num}.json"
-            evaluate_task(
-                agent,
-                task_num,
-                args.fixture_dir,
-                rules_path,
-                model_id,
-                model_revision,
-                gemma_file if gemma_file.exists() else None,
-                out_file,
-                labels=args.labels,
+        results_dir = PROJECT_ROOT / "test/laya_probe/results"
+        payloads: list[dict[str, Any]] = []
+        for case in ready:
+            out_file = results_dir / f"laya_{out_tag}_{case.id}.json"
+            gemma_file = results_dir / f"gemma_{case.id}.json"
+            payloads.append(
+                evaluate_case(
+                    agent,
+                    case,
+                    rules_path,
+                    model_id,
+                    model_revision,
+                    gemma_file if gemma_file.exists() else None,
+                    out_file,
+                    labels=args.labels,
+                )
             )
+
+        print_summary(payloads, skipped)
+        if payloads:
+            summary = {
+                "model_id": model_id,
+                "model_revision": model_revision,
+                "device": str(agent.device),
+                "cases_file": args.cases.relative_to(PROJECT_ROOT).as_posix(),
+                "rules_file": rules_path.name,
+                "labels": args.labels,
+                "cases_total": len(cases),
+                "cases_run": len(payloads),
+                "cases_skipped": [case.id for case in skipped],
+                "total_matches": sum(len(payload["matches"]) for payload in payloads),
+                "total_elements": 9 * len(payloads),
+                "errors_per_element": {
+                    key: sum(1 for payload in payloads if key in payload["mismatches"])
+                    for key in ELEMENTS
+                },
+                "results": [
+                    {
+                        "case": payload["case"],
+                        "accuracy": payload["accuracy"],
+                        "matches": payload["matches"],
+                        "mismatches": payload["mismatches"],
+                        "priority_mismatches": payload["priority_mismatches"],
+                        "inference_ms": payload["inference_ms"],
+                    }
+                    for payload in payloads
+                ],
+            }
+            summary_path = results_dir / f"summary_{out_tag}.json"
+            summary_path.write_text(
+                json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            print(f"Сводка: {summary_path.relative_to(PROJECT_ROOT)}")
         return 0
     except Exception as error:
         print(f"ОШИБКА: {error}", file=sys.stderr)
