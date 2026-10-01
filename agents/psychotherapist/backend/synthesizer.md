@@ -1,6 +1,5 @@
 ---
 name: Объединение мишеней
-visible: true
 replace_report: true
 tools: ["emit_signal"]
 ---

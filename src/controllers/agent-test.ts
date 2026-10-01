@@ -5,7 +5,7 @@ import { showToast } from "../ui";
 import { store } from "../store";
 import { bus } from "../events";
 import { trackError } from "../telemetry";
-import type { TestCaseDef, SingleTestResult, PipelineTestInfo, PipelineTestResult } from "../types";
+import type { AgentEntry, TestCaseDef, SingleTestResult, PipelineTestInfo, PipelineTestResult } from "../types";
 
 export interface AgentTestElements {
   testFilePath: HTMLInputElement;
@@ -85,13 +85,21 @@ export class AgentTestController {
 
   // ─── YAML test mode (existing) ───
 
+  /**
+   * Список для тестов НЕ ограничен выбором пользователя в чате: это
+   * диагностический инструмент, и проверять надо всё, что лежит в `agents/`.
+   * Раньше здесь стоял предикат `is_hidden`/`showFolderAgents`, продублированный
+   * с дропдауном чата — теперь единственный источник правды (`store.agents`)
+   * отдаёт весь каталог, и фильтровать его нечем и незачем.
+   */
   async loadAgents(): Promise<void> {
     try {
-      const agents: any[] = await invoke("get_agents");
+      const agents: AgentEntry[] = await invoke("get_agents");
+      store.agents = agents;
       this.el.testAgentList.innerHTML = "";
       for (const a of agents) {
-        if (a.is_hidden || (a.folder !== null && !store.showFolderAgents)) continue;
         const label = document.createElement("label");
+        label.className = "test-agent-row";
         const cb = document.createElement("input");
         cb.type = "checkbox";
         cb.value = a.id;
@@ -102,7 +110,8 @@ export class AgentTestController {
           this.updateRunButton();
         });
         label.appendChild(cb);
-        label.appendChild(document.createTextNode(` ${a.name} (${a.id})`));
+        const icon = a.entry_type === "workflow" ? "📁" : "📊";
+        label.appendChild(document.createTextNode(` ${icon} ${a.name} (${a.id})`));
         this.el.testAgentList.appendChild(label);
       }
       this.agentsLoaded = true;

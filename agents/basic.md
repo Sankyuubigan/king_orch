@@ -1,6 +1,5 @@
 ---
-name: Универсальный ИИ Агент
-visible: true
+name: Базовый ИИ Агент
 current_date: true
 vision: true
 mode: primary

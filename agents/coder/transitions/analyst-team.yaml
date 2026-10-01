@@ -1,6 +1,5 @@
 name: Аналитик кода
-
-visible: true
+description: Детектив багов, картограф проекта и объяснятель кода — разбор чужого/своего кода без правок.
 
 config:
   facts_file: facts.yaml

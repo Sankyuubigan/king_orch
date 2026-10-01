@@ -56,6 +56,14 @@ pub struct AppConfig {
     pub last_model: Option<String>,
     #[serde(default)]
     pub last_agent: Option<String>,
+    /// Какие entry points показывать в выпадающем списке агентов.
+    ///
+    /// ЕДИНСТВЕННЫЙ источник правды о видимости: `visible` во frontmatter агентов
+    /// и в корне YAML-workflow УДАЛЁН. Список хранит ПОРЯДОК показа (сверху вниз
+    /// как в чате), поэтому сортировать его где-либо ещё нельзя. Пустой массив —
+    /// валидное состояние «юзер ничего не выбрал».
+    #[serde(default = "default_agent_visibility")]
+    pub agent_visibility: Vec<String>,
     #[serde(default)]
     pub models_dir: Option<String>,
     #[serde(default)]
@@ -86,8 +94,6 @@ pub struct AppConfig {
     pub confidence_threshold: f32,
     #[serde(default = "default_show_advanced_features")]
     pub show_advanced_features: bool,
-    #[serde(default = "default_show_folder_agents")]
-    pub show_folder_agents: bool,
     #[serde(default)]
     pub mmproj_files: HashMap<String, String>,
     #[serde(default)]
@@ -152,7 +158,9 @@ fn default_theme() -> String { "dark".to_string() }
 fn default_prompt_format() -> String { "Auto".to_string() }
 fn default_confidence_threshold() -> f32 { 0.8 }
 fn default_show_advanced_features() -> bool { false }
-fn default_show_folder_agents() -> bool { false }
+/// Новому пользователю показываем только базового агента: остальное он
+/// добавляет сам в Настройках → «Агенты в чате».
+fn default_agent_visibility() -> Vec<String> { vec!["basic".to_string()] }
 fn default_allow_error_reports() -> bool { true }
 fn default_chat_font_scale() -> f32 { 1.0 }
 fn default_two_phase_default() -> bool { true }
@@ -165,6 +173,7 @@ impl Default for AppConfig {
             models: Vec::new(),
             last_model: None,
             last_agent: None,
+            agent_visibility: default_agent_visibility(),
             models_dir: None,
             model_params: HashMap::new(),
             context_size: default_context_size(),
@@ -176,7 +185,6 @@ impl Default for AppConfig {
             prompt_format: default_prompt_format(),
             confidence_threshold: default_confidence_threshold(),
             show_advanced_features: default_show_advanced_features(),
-            show_folder_agents: default_show_folder_agents(),
             mmproj_files: HashMap::new(),
             model_meta: HashMap::new(),
             llamacpp_dir: None,

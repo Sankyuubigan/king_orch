@@ -18,7 +18,7 @@ import { initUpdateWatcher as initLlamaUpdateWatcher } from "@my-tauri-plugins/p
 import { initUpdateWatcher as initImageUpdateWatcher } from "@my-tauri-plugins/plugin-image-engine";
 import { initUpdateWatcher as initRoutersUpdateWatcher } from "@my-tauri-plugins/plugin-cloud-routers";
 import {
-  SessionController, SettingsController, AgentTestController,
+  SessionController, SettingsController, AgentTestController, AgentPickerController,
   CodingTestController, UpdatePopupController, TabController, initChatEventRouter,
   loadGraphController, initUpdateBadgeTargets, initUpdateWatchers, getTabNavigationMenu,
 } from "./controllers";
@@ -27,6 +27,7 @@ import type { SharedChatControls } from "./utils";
 import type { TabSection } from "./types";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { initTelemetry, trackError } from "./telemetry";
+import { bus } from "./events";
 
 const $ = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const bootStartedAt = performance.now();
@@ -113,12 +114,28 @@ async function initApp() {
     prespenSlider: $<HTMLInputElement>("prespen-slider"), prespenValue: $<HTMLElement>("prespen-value"),
     btnResetParams: $<HTMLButtonElement>("btn-reset-params"),
     chkShowAdvanced: $<HTMLInputElement>("chk-show-advanced"),
-    chkShowFolderAgents: $<HTMLInputElement>("chk-show-folder-agents"),
     chkErrorReports: $<HTMLInputElement>("chk-error-reports"),
     translatorModelSelect: $<HTMLSelectElement>("translator-model-select"),
     translatorLangSelect: $<HTMLSelectElement>("translator-lang-select"),
     dataDirDisplay: $<HTMLElement>("data-dir-display"),
     btnChangeDataDir: $<HTMLButtonElement>("btn-change-data-dir"),
+  });
+
+  // ─── Панель «Агенты в чате» (две колонки в Настройках) ───
+  // Контроллер сам подписан на `model-catalog-changed`, поэтому перерисовывается
+  // и после загрузки конфига, и после правки выбора — держим только в шине.
+  new AgentPickerController({
+    root: $<HTMLElement>("group-box-chat-agents"),
+    selectedTitle: $<HTMLElement>("agent-picker-selected-title"),
+    selectedList: $<HTMLUListElement>("agent-picker-selected-list"),
+    selectedEmpty: $<HTMLElement>("agent-picker-selected-empty"),
+    clearBtn: $<HTMLButtonElement>("agent-picker-clear"),
+    search: $<HTMLInputElement>("agent-picker-search"),
+    addGraphsBtn: $<HTMLButtonElement>("agent-picker-add-graphs"),
+    addAgentsBtn: $<HTMLButtonElement>("agent-picker-add-agents"),
+    resetBtn: $<HTMLButtonElement>("agent-picker-reset"),
+    catalogGroups: $<HTMLElement>("agent-picker-catalog-groups"),
+    catalogEmpty: $<HTMLElement>("agent-picker-catalog-empty"),
   });
 
   // ─── Контроллер графа (суб-вкладка 🔀 в студии агентов) ───
@@ -246,6 +263,17 @@ async function initApp() {
   revealBootScreen();
   if (config) void settingsCtrl.hydrateCatalogs(config);
   logFront(`[BOOT] first UI ready ${Math.round(performance.now() - bootStartedAt)}ms`);
+
+  // Кнопка ⚙ рядом со списком агентов в чате: открываем раздел Настроек и
+  // подсвечиваем панель, чтобы юзер не искал её глазами.
+  bus.on("agents:pick-requested", () => {
+    tabCtrl.openSectionInPlace("settings");
+    const box = $<HTMLElement>("group-box-chat-agents");
+    if (!box) return;
+    box.scrollIntoView({ behavior: "smooth", block: "center" });
+    box.classList.add("is-highlighted");
+    window.setTimeout(() => box.classList.remove("is-highlighted"), 1600);
+  });
 
   // ——— Быстрая навигация по разделам (открытие в той же вкладке) ———
   // Делегирование на document: клоны settings/engines (дубли вкладок) id не

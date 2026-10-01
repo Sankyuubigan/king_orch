@@ -40,13 +40,22 @@ export interface ModelParams {
     xtc_threshold: number;
 }
 
+/**
+ * Запись каталога entry points (результат команды `get_agents`).
+ * Каталог возвращает ВСЁ, что лежит в `agents/` — без фильтрации по видимости:
+ * что показывать пользователю решает `store.agentVisibility`.
+ */
 export interface AgentEntry {
     id: string;
     name: string;
     description: string;
     entry_type: 'agent' | 'workflow';
-    is_hidden: boolean;
-    folder?: string;
+    /** Папка-команда верхнего уровня (`coder`, `psychotherapist`…) или null для корня. */
+    folder?: string | null;
+    /** Путь относительно `agents/`, например `coder/primary_coder.md`. */
+    rel_path: string;
+    /** `graph` — узел workflow-графа, `agent` — самостоятельный legacy-агент. */
+    role: 'graph' | 'agent';
 }
 
 export interface ChatResponse {

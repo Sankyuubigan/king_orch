@@ -42,9 +42,20 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
                 cfg.show_advanced_features = v;
             }
         }
-        "show_folder_agents" => {
-            if let Some(v) = value.as_bool() {
-                cfg.show_folder_agents = v;
+        "agent_visibility" => {
+            // Порядок элементов = порядок в выпадающем списке чата, поэтому
+            // массив сохраняем как есть, без сортировки и без дедупликации
+            // (последнее сделает фронт — там единственная копия состояния).
+            if let Some(v) = value.as_array() {
+                cfg.agent_visibility = v
+                    .iter()
+                    .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                    .collect();
+            } else {
+                log::warn!(
+                    "set_config_value: agent_visibility ожидает массив строк, получен {} — значение проигнорировано",
+                    value
+                );
             }
         }
         "last_agent" => {
@@ -82,7 +93,11 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
                 cfg.workdir = Some(v.to_string());
             }
         }
-        _ => {}
+        other => {
+            // Молчаливый no-op на неизвестном ключе — ложь (§2.2 core/rules):
+            // опечатка в интерфейсе выглядела бы как «сохранилось».
+            log::warn!("set_config_value: неизвестный ключ конфига «{}» — значение проигнорировано", other);
+        }
     }
     if let Err(e) = infra::save_config(&app, &cfg) {
         log::error!("set_config_value: ошибка сохранения конфига: {}", e);

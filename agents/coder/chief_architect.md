@@ -1,7 +1,6 @@
 ---
 name: Chief Architect
 description: Твой ИИ-Тимлид. Главное "лицо" системы. Принимает запросы и запускает граф команды кодеров.
-visible: true
 mode: primary
 temperature: 0.3
 ---

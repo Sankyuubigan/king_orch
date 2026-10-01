@@ -1,4 +1,4 @@
-import type { AppTab, ModelParams } from "./types";
+import type { AgentEntry, AppTab, ModelParams } from "./types";
 
 /**
  * Центральное хранилище состояния приложения.
@@ -21,8 +21,10 @@ class Store {
   // Продвинутые функции
   showAdvancedFeatures = false;
 
-  // Командные агенты (из подпапок)
-  showFolderAgents = false;
+  // Какие entry points показывать в списке агентов чата.
+  // ЕДИНСТВЕННЫЙ источник правды о видимости (в фронтматтере `visible` удалён).
+  // Порядок массива = порядок в выпадающем списке, поэтому не сортировать.
+  agentVisibility: string[] = ["basic"];
 
   // Тестирование агентов
   testFileContent: any[] | null = null;
@@ -45,7 +47,7 @@ class Store {
   models: string[] = [];
   lastModel: string | null = null;
   lastAgent: string | null = null;
-  agents: any[] = [];
+  agents: AgentEntry[] = [];
   capabilities: Record<string, { uncen: boolean; vision: boolean; audio: boolean }> = {};
   agentsReady = false;
   cloudRouterCombos: Record<string, { name: string; models: string[] }[]> = {};

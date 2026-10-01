@@ -1,7 +1,6 @@
 ---
 name: Редактор изображений
 description: Редактирует прикреплённые изображения по текстовому описанию (Qwen Image 2.1)
-visible: false
 mode: worker
 subagents: []
 tools:

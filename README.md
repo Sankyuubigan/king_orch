@@ -26,11 +26,11 @@ The current architecture has two entry-point modes and structural agent roles. T
 
 ### Workflow mode
 
-A visible YAML workflow is the entry point. The workflow engine executes graph nodes such as LLM workers, fact extractors, switches, conditions, and sub-workflows. Routing is controlled by the graph rather than by instructions hidden in an agent prompt.
+A YAML workflow is the entry point. The workflow engine executes graph nodes such as LLM workers, fact extractors, switches, conditions, and sub-workflows. Routing is controlled by the graph rather than by instructions hidden in an agent prompt.
 
 ### Direct Markdown agent mode
 
-When no matching visible YAML workflow exists, King Orch runs the matching visible Markdown agent through the legacy orchestrator. The `.md` file contains the agent's business and communication logic, while the orchestrator handles the execution loop.
+When no YAML workflow matches the selected ID, King Orch runs the matching Markdown agent through the legacy orchestrator. The `.md` file contains the agent's business and communication logic, while the orchestrator handles the execution loop. Which workflows and agents appear in the chat dropdown is chosen by the user (Settings → "Agents in chat"), not by the agent files.
 
 ### Agent roles
 
@@ -55,7 +55,7 @@ When no matching visible YAML workflow exists, King Orch runs the matching visib
 
 1. Download a compatible `.gguf` model, such as a Llama, Gemma, or ChatML-based model.
 2. Open King Orch and add the model through the local models panel.
-3. Select the model and a visible workflow or Markdown agent from the interface.
+3. Select the model, then pick the agents to show via the ⚙ button next to the agent dropdown (or Settings → "Agents in chat").
 4. Start chatting.
 
 For agent creation and workflow authoring, see [`docs/AGENT_CREATION_GUIDE.md`](docs/AGENT_CREATION_GUIDE.md).

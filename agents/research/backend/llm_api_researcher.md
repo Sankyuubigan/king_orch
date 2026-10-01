@@ -1,7 +1,6 @@
 ---
 name: Free LLM API Researcher
 description: Актуальные бесплатные LLM API. Держит курируемый топ-репозиториев и каждый раз перепроверяет их живость через GitHub API, выдаёт данные только со свежими датами.
-visible: true
 current_date: true
 replace_report: true
 mcp_servers: ["docs_fetcher", "github_search", "time"]

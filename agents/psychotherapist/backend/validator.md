@@ -1,6 +1,5 @@
 ---
 name: Валидатор данных
-visible: true
 replace_report: true
 tools: ["emit_signal"]
 ---

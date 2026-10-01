@@ -1,6 +1,5 @@
 name: Поисковый специалист
-
-visible: true
+description: "Исследовательская команда: веб, GitHub, документация, академические источники и YouTube."
 
 config:
   facts_file: facts.yaml

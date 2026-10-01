@@ -7,7 +7,7 @@ import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks } from "../ui
 import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
-import { renderMarkdown, stripStreamArtifacts, extractChannelThought, CLOUD_ROUTER_PREFIXES, fillModelSelect, fillAgentSelect, getAgentDisplayName } from "../utils";
+import { renderMarkdown, stripStreamArtifacts, extractChannelThought, CLOUD_ROUTER_PREFIXES, fillModelSelect, fillAgentSelect, getAgentDisplayName, getSelectedAgentName, isGraphAgent } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError } from "../telemetry";
 
@@ -110,6 +110,7 @@ export interface ChatElements {
   progressBar: HTMLDivElement;
   statusLabel: HTMLDivElement;
   agentSelect: HTMLSelectElement;
+  btnAgentSettings: HTMLButtonElement;
   modelSelect: HTMLSelectElement;
   subchatHistory: HTMLDivElement;
   subchatTitle: HTMLSpanElement;
@@ -341,7 +342,7 @@ export class ChatController {
       this.state.rtStreamUid = this.state.nextUid();
       const displayName = (author && author.trim())
         ? author
-        : this.el.agentSelect.options[this.el.agentSelect.selectedIndex].text.replace(/^[📁📊]\s*/, '');
+        : getSelectedAgentName(this.el.agentSelect);
       this.appendMessage('agent', '', displayName, undefined, undefined, false, this.state.rtStreamUid);
     }
 
@@ -497,7 +498,7 @@ export class ChatController {
         const vram = await estimatePromptMemory(modelPath, contextSize, kvQuantKeys, kvQuantValues, tokens, maxGen);
 
         if (this.el.tokenCounter) {
-            const isGraph = this.el.agentSelect.options[this.el.agentSelect.selectedIndex]?.text.startsWith("📁") ?? false;
+            const isGraph = isGraphAgent(this.el.agentSelect.value);
             const graphHint = isGraph ? " Оценка по самому тяжёлому агенту графа." : "";
             // Формат: (расчётная потребность + уже занятая VRAM) / точный объём VRAM в MiB.
             const memStr = vram && vram.vram_used_mb > 0 && vram.vram_total_mb > 0
@@ -1523,6 +1524,9 @@ export class ChatController {
       const v = this.el.agentSelect.value;
       void invoke("set_config_value", { key: "last_agent", value: v }).catch(() => {});
       if (this.state.hasSession()) this.persistSession();
+    });
+    this.el.btnAgentSettings?.addEventListener("click", () => {
+      bus.emit("agents:pick-requested");
     });
     this.el.btnSetWorkdir?.addEventListener("click", async () => {
       try {

@@ -12,7 +12,6 @@ fn detects_dynamic_source_edge() {
     let (source, workflow) = parse(
         r#"
 name: test
-visible: true
 nodes:
   - id: router
     type: signal_router
@@ -41,7 +40,6 @@ fn detects_edge_metadata_and_missing_endpoint() {
     let (source, workflow) = parse(
         r#"
 name: test
-visible: true
 nodes:
   - id: worker
     type: llm_worker
@@ -68,7 +66,6 @@ fn detects_fields_dropped_by_typed_parser() {
     let (source, workflow) = parse(
         r#"
 name: test
-visible: true
 custom_top_level: value
 nodes:
   - id: worker
@@ -94,7 +91,6 @@ fn detects_missing_condition_router_sequential_target() {
     let (source, workflow) = parse(
         r#"
 name: test
-visible: true
 nodes:
   - id: router
     type: condition_router
@@ -125,7 +121,6 @@ fn detects_dynamic_source_edge_warning() {
     let (source, workflow) = parse(
         r#"
 name: test
-visible: true
 nodes:
   - id: router
     type: signal_router
@@ -154,7 +149,6 @@ fn accepts_canonical_workflow() {
     let (source, workflow) = parse(
         r#"
 name: test
-visible: true
 config: null
 nodes:
   - id: worker

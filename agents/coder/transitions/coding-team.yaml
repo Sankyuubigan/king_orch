@@ -1,6 +1,5 @@
 name: Кодер
-
-visible: true
+description: Команда кодеров King Orch — архитектор, планировщик, разработчик, QA и ревьюер.
 
 config:
   facts_file: facts.yaml

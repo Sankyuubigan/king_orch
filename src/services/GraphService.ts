@@ -42,8 +42,8 @@ export interface GraphEdgeDef {
 export interface WorkflowGraphDef {
   team?: string;
   name: string;
+  description?: string | null;
   file_stem?: string;
-  visible: boolean;
   config?: any;
   nodes: GraphNodeDef[];
   edges: GraphEdgeDef[];

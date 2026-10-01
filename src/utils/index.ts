@@ -16,6 +16,16 @@ export {
   getAgentDisplayName,
 } from './model-options'
 
+// Единственный источник правды о видимости entry points.
+export {
+  isAgentVisible,
+  isGraphAgent,
+  findAgentEntry,
+  visibleAgentEntries,
+  agentOptionLabel,
+  getSelectedAgentName,
+} from './agent-visibility'
+
 export function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;

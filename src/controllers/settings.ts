@@ -20,7 +20,6 @@ export interface SettingsElements {
   prespenSlider: HTMLInputElement; prespenValue: HTMLElement;
   btnResetParams: HTMLButtonElement;
   chkShowAdvanced: HTMLInputElement;
-  chkShowFolderAgents: HTMLInputElement;
   chkErrorReports: HTMLInputElement;
   translatorModelSelect: HTMLSelectElement;
   translatorLangSelect: HTMLSelectElement;
@@ -221,9 +220,10 @@ export class SettingsController {
         store.showAdvancedFeatures = config.show_advanced_features;
         bus.emit("advanced:visibility", config.show_advanced_features);
       }
-      if (config.show_folder_agents !== undefined) {
-        this.el.chkShowFolderAgents.checked = config.show_folder_agents;
-        store.showFolderAgents = config.show_folder_agents;
+      // Единственный источник правды о видимости агентов (в фронтматтере
+      // `visible` удалён). Отсутствие ключа = дефолт из бэкенда.
+      if (Array.isArray(config.agent_visibility)) {
+        store.agentVisibility = config.agent_visibility;
       }
       if (config.allow_error_reports !== undefined) {
         this.el.chkErrorReports.checked = config.allow_error_reports;
@@ -301,13 +301,6 @@ export class SettingsController {
       store.showAdvancedFeatures = val;
       await invoke("set_config_value", { key: "show_advanced_features", value: val });
       bus.emit("advanced:visibility", val);
-    });
-    this.el.chkShowFolderAgents?.addEventListener("change", async () => {
-      const val = this.el.chkShowFolderAgents.checked;
-      store.showFolderAgents = val;
-      await invoke("set_config_value", { key: "show_folder_agents", value: val });
-      await this.loadAgents();
-      bus.emit("model-catalog-changed");
     });
     this.el.chkErrorReports?.addEventListener("change", async () => {
       const val = this.el.chkErrorReports.checked;

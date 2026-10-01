@@ -15,6 +15,9 @@ export type { SessionElements } from './sessions'
 export { SettingsController } from './settings'
 export type { SettingsElements } from './settings'
 
+export { AgentPickerController } from './agent-picker'
+export type { AgentPickerElements } from './agent-picker'
+
 export type { GraphController, GraphElements } from './graph'
 
 export async function loadGraphController(): Promise<typeof import('./graph').GraphController> {

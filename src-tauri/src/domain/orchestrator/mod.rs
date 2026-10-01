@@ -420,7 +420,11 @@ where
     }
 
     let workflows = load_workflows(&agents_dir).unwrap_or_default();
-    let workflow_match = find_workflow_by_stem(&workflows, &agent_id).filter(|wf| wf.visible);
+    // Режим запуска определяется ТОЛЬКО фактом существования workflow с таким
+    // file_stem. Флага `visible` больше нет: он смешивал две разные ответственности
+    // (рантайм-гейт и UI-видимость) и делал графы неисполняемыми без явного
+    // разрешения в frontmatter. Что показывать пользователю — решает конфиг.
+    let workflow_match = find_workflow_by_stem(&workflows, &agent_id);
     let mut messages_store = history.clone();
     for (index, message) in messages_store.iter_mut().enumerate() {
         if message.id.is_none() {
@@ -2711,7 +2715,6 @@ mod tests {
             name: id.to_string(),
             description: String::new(),
             system_prompt: system_prompt.to_string(),
-            is_hidden: false,
             mode: "worker".to_string(),
             mcp_servers: Vec::new(),
             subagents: Vec::new(),

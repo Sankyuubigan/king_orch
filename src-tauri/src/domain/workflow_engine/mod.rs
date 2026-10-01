@@ -528,7 +528,6 @@ mod tests {
             name: id.to_string(),
             description: String::new(),
             system_prompt: String::new(),
-            is_hidden: false,
             mode: "worker".to_string(),
             mcp_servers: Vec::new(),
             subagents: Vec::new(),

@@ -441,7 +441,6 @@ mod tests {
             name: "Agent X".to_string(),
             description: String::new(),
             system_prompt: String::new(),
-            is_hidden: false,
             mode: "worker".to_string(),
             mcp_servers: mcp.iter().map(|s| s.to_string()).collect(),
             subagents: subs.iter().map(|s| s.to_string()).collect(),

@@ -242,7 +242,7 @@ export async function handleSave(this: GraphController): Promise<void> {
         config.facts = [];
       }
 
-      const workflow: WorkflowGraphDef = { name: this.currentWorkflowName, visible: true, config, nodes, edges };
+      const workflow: WorkflowGraphDef = { name: this.currentWorkflowName, config, nodes, edges };
       const saveResult = await saveWorkflow(this.currentFilePath, workflow);
       void saveResult;
       this.pristineSnapshot = this.captureSnapshot();

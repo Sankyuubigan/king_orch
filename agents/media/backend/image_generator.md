@@ -1,7 +1,6 @@
 ---
 name: Генератор изображений
 description: Генерирует изображение с нуля по текстовому описанию (Qwen Image 2.1)
-visible: false
 mode: worker
 subagents: []
 tools:

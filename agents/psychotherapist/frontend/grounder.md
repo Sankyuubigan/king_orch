@@ -1,7 +1,6 @@
 ---
 name: Поиск сценариев
 destiny: Найти реальный конкретный кейс в жизни юзера и избавиться от абстракций
-visible: false
 tools:
   write: false
   bash: false

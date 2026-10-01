@@ -33,6 +33,7 @@ export interface ChatPageElements extends SharedChatControls {
   progressBar: HTMLDivElement;
   statusLabel: HTMLDivElement;
   agentSelect: HTMLSelectElement;
+  btnAgentSettings: HTMLButtonElement;
   modelSelect: HTMLSelectElement;
   subchatHistory: HTMLDivElement;
   subchatTitle: HTMLSpanElement;
@@ -137,6 +138,13 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
   const agentSelect = document.createElement("select");
   agentSelect.className = "agent-select";
   agentSelect.title = "Выбор агента";
+  // Шестерёнка рядом со списком: выбор набора агентов живёт в Настройках,
+  // и кнопка — короткий путь туда из чата.
+  const btnAgentSettings = document.createElement("button");
+  btnAgentSettings.className = "btn-icon";
+  btnAgentSettings.title = "Настроить список агентов (Настройки)";
+  btnAgentSettings.textContent = "⚙";
+  btnAgentSettings.dataset.action = "open-agent-picker";
   const modelSelect = document.createElement("select");
   modelSelect.className = "model-select";
   modelSelect.title = "Выбор модели GGUF";
@@ -151,7 +159,7 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
   engineBadge.textContent = "…";
   engineBadge.title = "Режим движка (GPU/CPU)";
 
-  left.append(btnAttach, fileInput, btnSetWorkdir, currentWorkdir, agentSelect, modelSelect, btnAddModel, tokenCounter, engineBadge);
+  left.append(btnAttach, fileInput, btnSetWorkdir, currentWorkdir, agentSelect, btnAgentSettings, modelSelect, btnAddModel, tokenCounter, engineBadge);
 
   const right = py("div", "chat-input-controls-right");
   const btnStop = document.createElement("button");
@@ -202,6 +210,7 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
     progressBar,
     statusLabel,
     agentSelect,
+    btnAgentSettings,
     modelSelect,
     subchatHistory,
     subchatTitle,

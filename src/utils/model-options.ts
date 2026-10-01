@@ -1,4 +1,5 @@
 import { store } from "../store";
+import { agentOptionLabel, visibleAgentEntries } from "./agent-visibility";
 
 /// Маппит сырой id/author агента в отображаемое имя из каталога (frontmatter `name`).
 /// Если агент не найден — возвращает входную строку как есть (совместимость).
@@ -73,21 +74,35 @@ export function renderCloudRouterOptions(select: HTMLSelectElement | null) {
   else if (store.lastModel) applyModelValue(select, store.lastModel);
 }
 
-/// Заполняет select агентов из каталога Store (уважает showFolderAgents).
+/// Заполняет select агентов по выбору пользователя (`store.agentVisibility`).
+/// Порядок пунктов = порядок в конфиге, поэтому НЕ сортируем (SSOT).
 export function fillAgentSelect(select: HTMLSelectElement | null) {
   if (!select) return;
   const prev = select.value;
   select.innerHTML = "";
-  for (const e of store.agents) {
-    if (!e.is_hidden && (e.folder === null || store.showFolderAgents)) {
-      const o = document.createElement("option");
-      o.value = e.id;
-      const prefix = e.entry_type === 'workflow' ? '📁' : '📊';
-      const folderPart = e.folder ? `${e.folder} - ` : '';
-      o.text = `${prefix} ${folderPart}${e.name} (${e.id})`;
-      select.appendChild(o);
-    }
+
+  const entries = visibleAgentEntries();
+  if (entries.length === 0) {
+    // Честное пустое состояние вместо молчаливо неработающего select.
+    const hint = document.createElement("option");
+    hint.value = "";
+    hint.textContent = "⚠️ Агенты не выбраны — настройте в Настройках";
+    hint.disabled = true;
+    select.appendChild(hint);
+    select.value = "";
+    return;
+  }
+
+  for (const e of entries) {
+    const o = document.createElement("option");
+    o.value = e.id;
+    o.text = agentOptionLabel(e);
+    select.appendChild(o);
   }
   if (prev && Array.from(select.options).some(o => o.value === prev)) select.value = prev;
   else if (store.lastAgent && Array.from(select.options).some(o => o.value === store.lastAgent)) select.value = store.lastAgent;
+  else if (prev) {
+    // Выбранный агент исчез из списка (пользователь убрал его в настройках).
+    console.warn(`[fillAgentSelect] Агент «${prev}» больше не выбран — переключение на первый доступный`);
+  }
 }

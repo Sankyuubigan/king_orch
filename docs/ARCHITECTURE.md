@@ -142,7 +142,8 @@ Module-scope helper'ы:
 ## 🛠 СЛОЙ 4: УТИЛИТЫ
 
 - **Markdown** (`src/utils/markdown.ts`) — конвертация MD → HTML
-- **Types** (`src/types.ts`) — глобальные TypeScript-интерфейсы, включая `AgentEntry` (id, name, description, entry_type, is_hidden)
+- **Types** (`src/types.ts`) — глобальные TypeScript-интерфейсы, включая `AgentEntry` (id, name, description, entry_type, folder, rel_path, role)
+- **Agent visibility** (`src/utils/agent-visibility.ts`) — единственный источник правды о том, какие entry points показывать: `store.agentVisibility` (порядок = порядок в списке чата). Панель выбора — `src/controllers/agent-picker.ts`
 
 ---
 
@@ -177,7 +178,7 @@ Module-scope helper'ы:
 | `workflow_engine/context.rs` | Контекст выполнения: проход `{{ template }}` переменных, хранение outputs узлов |
 | `workflow_engine/fact_extractor.rs` | **Built-in** fact-экстрактор (не требует отдельного .md файла). Факты инжектятся runtime из YAML |
 | `parsers.rs` | Распаковка JSON от LLM, очистка think-тегов |
-| `agent_manager.rs` | Парсинг .md файлов агентов, обработка INCLUDE, загрузка entry points (`load_entry_points`) через `visible` поле. Парсит `replace_report` (только последний отчёт агента в сессии, legacy `single_report` тоже распознаётся) в `AgentProfile` |
+| `agent_manager.rs` | Парсинг .md файлов агентов, обработка INCLUDE, каталог entry points (`load_entry_points`: id, name, description, entry_type, folder, rel_path, role). Исключает `archive/` на уровне сканера. Парсит `replace_report` (только последний отчёт агента в сессии, legacy `single_report` тоже распознаётся) в `AgentProfile` |
 
 ### Подслой 5.3: Инфраструктура (`src-tauri/src/infra/`)
 
@@ -204,7 +205,7 @@ main.rs
   └→ api/ (дверь: api/mod.rs)
        ├→ domain/ (дверь: domain/mod.rs)
          │    ├→ workflow_engine/ (YAML графы — маршрутизация)
-         │    │    ├→ parser.rs          — парсинг YAML, visible/find_workflow_by_stem
+          │    │    ├→ parser.rs          — парсинг YAML, find_workflow_by_stem
          │    │    ├→ nodes.rs           — типы узлов (llm_worker, switch, ...)
          │    │    ├→ context.rs         — контекст, template-переменные
          │    │    ├→ fact_extractor.rs  — built-in экстрактор фактов (без .md)
@@ -232,7 +233,7 @@ main.ts
 
 **Поток выполнения:**
 ```
-User → Entry point (выбор в UI: .md с visible: true или YAML с visible: true)
+User → Entry point (выбор пользователя в Настройках → «Агенты в чате»)
          ↓
     run_chat() проверяет: есть ли YAML workflow с file_stem == agent_id?
          ↓

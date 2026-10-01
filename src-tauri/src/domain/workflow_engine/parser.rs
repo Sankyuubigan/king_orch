@@ -28,8 +28,9 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WorkflowDef {
     pub name: String,
-    #[serde(default)]
-    pub visible: bool,
+    /// Описание графа для UI (карточка в выборе агентов).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(skip)]
     pub file_stem: String,
     #[serde(skip)]
@@ -329,10 +330,10 @@ pub fn load_workflows(agents_dir: &Path) -> Result<Vec<WorkflowDef>, String> {
     let mut workflows = Vec::new();
     let mut yaml_files = Vec::new();
     collect_yaml_files(agents_dir, &mut yaml_files);
-    for path in yaml_files {
+        for path in yaml_files {
         match parse_workflow_file(&path) {
             Ok(wf) => workflows.push(wf),
-            Err(e) => eprintln!(
+            Err(e) => log::error!(
                 "[workflow_engine] Ошибка загрузки {}: {}",
                 path.display(),
                 e
@@ -347,6 +348,10 @@ fn collect_yaml_files(dir: &Path, files: &mut Vec<PathBuf>) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
+                if crate::domain::agent_manager::is_archive_dir(&path) {
+                    log::info!("[workflow_engine] Пропущен архив: {}", path.display());
+                    continue;
+                }
                 collect_yaml_files(&path, files);
             } else if path
                 .extension()
@@ -735,7 +740,6 @@ edges: []
         assert!(path.exists(), "Файл не найден: {:?}", path);
         let wf = parse_workflow_file(path).expect("Парсинг YAML не удался");
         assert_eq!(wf.name, "Психотерапевт");
-        assert!(wf.visible);
         assert!(wf.nodes.len() > 0, "узлы должны быть");
         assert!(wf.edges.len() > 0, "рёбра должны быть");
 
@@ -842,10 +846,6 @@ edges: []
         // Сравниваем ключевые поля
         assert_eq!(wf.name, wf2.name, "name различается после round-trip");
         assert_eq!(
-            wf.visible, wf2.visible,
-            "visible различается после round-trip"
-        );
-        assert_eq!(
             wf.nodes.len(),
             wf2.nodes.len(),
             "количество nodes различается"
@@ -904,7 +904,6 @@ edges: []
     fn condition_router_sequential_target_survives_roundtrip() {
         let source = r#"
 name: router
-visible: true
 nodes:
   - id: route
     type: condition_router
@@ -1027,7 +1026,7 @@ edges: []
         };
         let wf = WorkflowDef {
             name: "Test Freeform".to_string(),
-            visible: true,
+            description: None,
             file_stem: String::new(),
             parent_dir: String::new(),
             config: None,
@@ -1066,7 +1065,7 @@ edges: []
         };
         let wf = WorkflowDef {
             name: "Test Freeform".to_string(),
-            visible: true,
+            description: None,
             file_stem: String::new(),
             parent_dir: String::new(),
             config: None,
@@ -1112,7 +1111,7 @@ edges: []
         };
         let wf = WorkflowDef {
             name: "Test Graph".to_string(),
-            visible: true,
+            description: None,
             file_stem: String::new(),
             parent_dir: String::new(),
             config: None,
@@ -1251,7 +1250,7 @@ edges: []
 
         let wf = WorkflowDef {
             name: "Repro Graph".to_string(),
-            visible: true,
+            description: None,
             file_stem: String::new(),
             parent_dir: String::new(),
             config: Some(WorkflowConfig {
@@ -1301,7 +1300,6 @@ edges: []
         assert!(path.exists(), "Файл не найден: {:?}", path);
         let wf = parse_workflow_file(path).expect("Парсинг YAML не удался");
         assert_eq!(wf.name, "Кодер");
-        assert!(wf.visible);
 
         // Конфиг: запись — workdir, вне — prompt
         let cfg = wf.config.as_ref().expect("config должен быть");
@@ -1438,7 +1436,6 @@ edges: []
         assert!(path.exists(), "Файл не найден: {:?}", path);
         let wf = parse_workflow_file(path).expect("Парсинг YAML не удался");
         assert_eq!(wf.name, "Аналитик кода");
-        assert!(wf.visible);
 
         let cfg = wf.config.as_ref().expect("config должен быть");
         assert_eq!(cfg.facts_file.as_deref(), Some("facts.yaml"));
@@ -1669,7 +1666,7 @@ edges: []
         };
         let wf = WorkflowDef {
             name: "Test Freeform".to_string(),
-            visible: true,
+            description: None,
             file_stem: String::new(),
             parent_dir: String::new(),
             config: None,

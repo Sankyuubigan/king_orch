@@ -12,6 +12,7 @@
 - `models`: `Vec<String>`
 - `last_model`: `Option<String>`
 - `last_agent`: `Option<String>`
+- `agent_visibility`: `Vec<String>`
 - `models_dir`: `Option<String>`
 - `model_params`: `HashMap<String`
 - `context_size`: `u32`
@@ -23,7 +24,6 @@
 - `prompt_format`: `String`
 - `confidence_threshold`: `f32`
 - `show_advanced_features`: `bool`
-- `show_folder_agents`: `bool`
 - `mmproj_files`: `HashMap<String`
 - `model_meta`: `HashMap<String`
 - `llamacpp_dir`: `Option<String>`

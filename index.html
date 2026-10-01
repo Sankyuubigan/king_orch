@@ -340,9 +340,45 @@
             <input type="checkbox" id="chk-show-advanced" />
             <label for="chk-show-advanced">Отображать продвинутые функции</label>
           </div>
-          <div class="input-row" style="margin-top: 10px;">
-            <input type="checkbox" id="chk-show-folder-agents" />
-            <label for="chk-show-folder-agents">Показывать командных агентов</label>
+        </div>
+
+        <div class="group-box" id="group-box-chat-agents">
+          <div class="group-title">Агенты в чате</div>
+          <div class="agent-picker-hint">
+            Выберите, какие агенты и команды показывать в списке выбора агента.
+            Порядок в левой колонке — это порядок в чате.
+          </div>
+
+          <div class="agent-picker-columns">
+            <!-- ① Выбрано -->
+            <section class="agent-picker-col agent-picker-selected">
+              <header class="agent-picker-col-head">
+                <h4 id="agent-picker-selected-title">В списке чата</h4>
+                <div class="agent-picker-head-actions">
+                  <button type="button" id="agent-picker-clear" class="btn-secondary btn-sm" title="Убрать всех агентов из списка">Очистить</button>
+                </div>
+              </header>
+              <ul id="agent-picker-selected-list" class="agent-picker-list"></ul>
+              <p id="agent-picker-selected-empty" class="agent-picker-empty" hidden>
+                Список пуст — добавьте агентов из правой колонки.
+              </p>
+            </section>
+
+            <!-- ② Каталог -->
+            <section class="agent-picker-col agent-picker-catalog">
+              <header class="agent-picker-col-head">
+                <h4>Доступные агенты</h4>
+                <input type="search" id="agent-picker-search" class="agent-picker-search"
+                       placeholder="Поиск по имени, id, описанию…" autocomplete="off" />
+              </header>
+              <div class="agent-picker-bulk">
+                <button type="button" id="agent-picker-add-graphs" class="btn-secondary btn-sm">+ Все графы</button>
+                <button type="button" id="agent-picker-add-agents" class="btn-secondary btn-sm">+ Все агенты</button>
+                <button type="button" id="agent-picker-reset" class="btn-secondary btn-sm" title="Вернуть базовый набор">Сбросить</button>
+              </div>
+              <div id="agent-picker-catalog-groups" class="agent-picker-catalog-groups"></div>
+              <p id="agent-picker-catalog-empty" class="agent-picker-empty" hidden>Ничего не найдено.</p>
+            </section>
           </div>
         </div>
 

@@ -11,7 +11,6 @@ pub struct AgentProfile {
     pub name: String,
     pub description: String,
     pub system_prompt: String,
-    pub is_hidden: bool,
     pub mode: String,
     #[serde(default)]
     pub mcp_servers: Vec<String>,
@@ -37,15 +36,51 @@ pub struct AgentProfile {
     pub vision: bool,
 }
 
-/// Единая точка входа в UI — может быть .md агентом или YAML графом
+/// Единая точка входа в UI — может быть .md агентом или YAML графом.
+///
+/// Каталог НЕ фильтруется по видимости: показывать или нет entry point —
+/// решение пользователя, хранится в конфиге (`agent_visibility`).
+/// Здесь лежит только факт «что вообще существует на диске».
 #[derive(Debug, Clone, Serialize)]
 pub struct AgentEntry {
     pub id: String,
     pub name: String,
     pub description: String,
     pub entry_type: String,
-    pub is_hidden: bool,
     pub folder: Option<String>,
+    /// Путь относительно `agents/` (например `coder/primary_coder.md`).
+    /// Позволяет UI показать, где лежит агент, и отличить воркер от точки входа.
+    pub rel_path: String,
+    /// Роль агента: `"graph"` — узел workflow-графа, `"agent"` — самостоятельный
+    /// legacy-агент (в т.ч. корень `agents/*.md`, запускается напрямую).
+    pub role: String,
+}
+
+/// Имя папки, содержимое которой — мёртвый код и НЕ должно попадать
+/// ни в каталог, ни в загрузку агентов. Исключение на уровне сканера,
+/// а не на уровне UI: иначе архивные агенты остались бы «невидимыми,
+/// но исполняемыми» через прямой `agent_id` (это ложь в UI, §2.2 core/rules).
+const ARCHIVE_DIR: &str = "archive";
+
+/// Относительный путь файла внутри `agents/` через `/` (кроссплатформенно).
+fn rel_path_of(path: &Path, agents_dir: &Path) -> String {
+    path.strip_prefix(agents_dir)
+        .unwrap_or(path)
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Первый сегмент относительного пути — команда (`coder`, `psychotherapist`…),
+/// `None` для файлов в корне `agents/`.
+fn team_folder_of(path: &Path, agents_dir: &Path) -> Option<String> {
+    let rel = path.strip_prefix(agents_dir).ok()?;
+    let parent = rel.parent()?;
+    parent
+        .components()
+        .next()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
 }
 
 fn collect_md_files(dir: &Path, files: &mut Vec<PathBuf>) {
@@ -53,12 +88,22 @@ fn collect_md_files(dir: &Path, files: &mut Vec<PathBuf>) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                collect_md_files(&path, files); 
+                if is_archive_dir(&path) {
+                    log::info!("[agents] Пропущен архив: {}", path.display());
+                    continue;
+                }
+                collect_md_files(&path, files);
             } else if path.extension().map_or(false, |e| e == "md") {
-                files.push(path); 
+                files.push(path);
             }
         }
     }
+}
+
+/// Папка `archive/` в любой вложенности — мёртвый код, исключается из обхода.
+pub(crate) fn is_archive_dir(path: &Path) -> bool {
+    path.file_name()
+        .map_or(false, |n| n == std::ffi::OsStr::new(ARCHIVE_DIR))
 }
 
 fn process_includes(base_path: &Path, content: &str) -> String {
@@ -91,10 +136,7 @@ fn parse_agent_file(path: &Path, agents_dir: &Path) -> Option<AgentProfile> {
         let processed_content = process_includes(base_dir, &content);
         if let Some(mut agent) = parse_agent_markdown(&processed_content) {
             agent.id = path.file_stem().unwrap().to_string_lossy().to_string();
-            agent.folder = path.strip_prefix(agents_dir).ok()
-                .and_then(|rel| rel.parent()
-                    .and_then(|p| p.components().next())
-                    .map(|c| c.as_os_str().to_string_lossy().to_string()));
+            agent.folder = team_folder_of(path, agents_dir);
             return Some(agent);
         }
     }
@@ -109,7 +151,6 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             let system_prompt = text[end_idx + 6..].trim().to_string();
             let mut name = String::new();
             let mut description = String::new();
-            let mut visible = false;
             let mut replace_report = false;
             let mut current_date = false;
             let mut temperature: Option<f32> = None;
@@ -122,7 +163,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 let line = frontmatter_lines[i].trim();
                 if line.starts_with("name:") { name = line["name:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string(); }
                 else if line.starts_with("description:") { description = line["description:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string(); }
-                else if line.starts_with("visible:") { visible = line["visible:".len()..].trim().parse().unwrap_or(false); }
+                else if line.starts_with("visible:") { log::warn!("[agents] Поле `visible:` в frontmatter проигнорировано — видимостью управляет пользователь в конфиге (agent_visibility)"); }
                 else if line.starts_with("replace_report:") { replace_report = line["replace_report:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("single_report:") { replace_report = line["single_report:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("current_date:") { current_date = line["current_date:".len()..].trim().parse().unwrap_or(false); }
@@ -165,26 +206,38 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 }
                 i += 1;
             }
-            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, is_hidden: !visible, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date, temperature, vision }); }
+            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date, temperature, vision }); }
         }
     }
     None
 }
 
-/// Загружает все entry points для UI: .md агенты с visible: true + YAML графы с visible: true
+/// Каталог всех существующих entry points для UI: `.md` агенты + YAML-графы.
+///
+/// ВОЗВРАЩАЕТ ВСЁ, БЕЗ ФИЛЬТРАЦИИ ПО ВИДИМОСТИ. Показом управляет
+/// пользователь через `agent_visibility` в конфиге (см. `store.agentVisibility`
+/// и `utils/agent-visibility.ts`).
 pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
     let mut entries = Vec::new();
 
-    // .md файлы
+    // .md агенты
     if let Ok(agents) = load_agents(agents_dir) {
         for a in agents {
+            let path = agents_dir.join(
+                a.folder
+                    .as_ref()
+                    .map(|f| PathBuf::from(f).join(&a.id))
+                    .unwrap_or_else(|| PathBuf::from(&a.id))
+                    .with_extension("md"),
+            );
             entries.push(AgentEntry {
                 id: a.id,
                 name: a.name,
                 description: a.description,
                 entry_type: "agent".to_string(),
-                is_hidden: a.is_hidden,
                 folder: a.folder.clone(),
+                rel_path: rel_path_of(&path, agents_dir),
+                role: "agent".to_string(),
             });
         }
     }
@@ -192,13 +245,15 @@ pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
     // YAML графы
     if let Ok(workflows) = load_workflows(agents_dir) {
         for wf in &workflows {
+            let path = PathBuf::from(&wf.parent_dir).join(format!("{}.yaml", wf.file_stem));
             entries.push(AgentEntry {
                 id: wf.file_stem.clone(),
                 name: wf.name.clone(),
-                description: String::new(),
+                description: wf.description.clone().unwrap_or_default(),
                 entry_type: "workflow".to_string(),
-                is_hidden: !wf.visible,
-                folder: None,
+                folder: team_folder_of(&path, agents_dir),
+                rel_path: rel_path_of(&path, agents_dir),
+                role: "graph".to_string(),
             });
         }
     }
@@ -216,7 +271,7 @@ mod tests {
 
     #[test]
     fn tools_json_array_parsed() {
-        let a = parse("---\nname: Test\nvisible: true\ntools: [\"code_write\"]\n---\nbody\n");
+        let a = parse("---\nname: Test\ntools: [\"code_write\"]\n---\nbody\n");
         assert_eq!(a.tools, vec!["code_write"]);
     }
 
