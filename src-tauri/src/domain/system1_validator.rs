@@ -52,6 +52,11 @@ pub struct LayaValidator {
 
 impl LayaValidator {
     pub fn load(model_dir: &Path) -> Result<Self, String> {
+        // ONNX Runtime грузится в процесс здесь, лениво: в бинарь он не линкуется
+        // (см. infra/laya_runtime.rs), поэтому DLL обязана быть готова ДО любого
+        // обращения к `ort`, но её отсутствие не должно мешать старту приложения.
+        crate::infra::laya_runtime::init_environment()?;
+
         let model_path = if model_dir.is_file() {
             model_dir.to_path_buf()
         } else {

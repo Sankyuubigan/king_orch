@@ -58,7 +58,14 @@ flate2 = "1.0"
 url = "2"
 log = "0.4"
 base64 = "0.22"
-ort = { version = "2.0.0-rc.9", features = ["download-binaries", "ndarray"] }
+# Laya (System-1), инференс ONNX. Именно load-dynamic, а НЕ download-binaries:
+# статичная линковка вшивала в king_orch.exe 341 МБ onnxruntime.lib и жёсткий
+# PE-импорт DirectML.dll, а загрузчик Windows резолвит импорты ДО main() — на
+# машинах без DirectML приложение падало без окна и без лога. С load-dynamic
+# импортов нет, DLL грузится в рантайме при первом вызове валидатора
+# (см. infra/laya_runtime.rs). Версия DLL — ONNX Runtime >= 1.27, потому что
+# ORT_API_VERSION у ort 2.0.0-rc.13 = 27 (ort-sys/src/version.rs).
+ort = { version = "2.0.0-rc.9", features = ["load-dynamic", "ndarray"] }
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 ndarray = "0.16"
 [target.'cfg(windows)'.dependencies]

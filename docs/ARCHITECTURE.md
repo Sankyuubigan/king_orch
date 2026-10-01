@@ -186,7 +186,7 @@ Module-scope helper'ы:
 
 | Файл | Зона ответственности |
 |------|---------------------|
-| `llm.rs` | Управление движком llama.cpp как ОТДЕЛЬНЫМ ПРОЦЕССОМ (`llama-server.exe`, HTTP-инференс; приложение НЕ линкует llama.cpp нативно). Запуск/зачистка, `/health`/`/tokenize`/`/v1/chat/completions`, токенизация, генерация, сэмплирование, чтение GGUF, структура `ChatMessage` с полями `type`/`author`/`phase` (`1` — размышления, `2` — ответ). Хелпер `push_report()` — дедупликация отчётов агента при `replace_report` (не вычищает размышления фазы 1 текущего отчёта). Детально: `global_ai_docs/desktop_rust_tauri/llama_cpp_engine.md` |
+| `llm.rs` | Управление движком llama.cpp как ОТДЕЛЬНЫМ ПРОЦЕССОМ (`llama-server.exe`, HTTP-инференс; приложение НЕ линкует llama.cpp нативно). Запуск/зачистка, `/health`/`/tokenize`/`/v1/chat/completions`, токенизация, генерация, сэмплирование, чтение GGUF, структура `ChatMessage` с полями `type`/`author`/`phase` (`1` — размышления, `2` — ответ). При падении сервера на старте ошибка переводится на человеческий язык модулем `startup_diagnosis.rs` плагина (полный тех. след — в лог приложения). Хелпер `push_report()` — дедупликация отчётов агента при `replace_report` (не вычищает размышления фазы 1 текущего отчёта). Детально: `global_ai_docs/desktop_rust_tauri/llama_cpp_engine.md` |
 | `config.rs` | Структуры AppConfig/ModelParams, чтение/запись конфига, каталог моделей |
 | `session_manager.rs` | Чтение/запись JSON-файлов сессий (единый массив `messages[]`) |
 | `mcp_client.rs` | JSON-RPC клиент для MCP-серверов через stdin/stdout |

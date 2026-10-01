@@ -20,6 +20,7 @@ pub mod permissions;
 pub mod lsp;
 pub mod system_proxy;
 pub mod network_diagnostics;
+pub mod laya_runtime;
 
 // Движок llama.cpp — переиспользуемый плагин (SSOT). Глоб-реэкспорт тенят
 // явные `pub use`/`pub mod` хоста ниже (explicit item > glob import).
