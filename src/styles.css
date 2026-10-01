@@ -25,8 +25,36 @@
   --session-hover: #e0e0e0;
   --session-active: #d5e8d4;
   --input-bg: #ffffff;
-  --subcall-btn: #e0f2f1;
+  --subcall-btn: #e0f2e1;
   --subcall-btn-hover: #b2dfdb;
+
+  /* ── Токены, которые читают Web Components плагинов (my-tauri-plugins) ──
+     Без них каждый плагин падал в свои хардкод-фолбэки и рисовал тёмные
+     поля ввода внутри светлых карточек. Контракт — PLUGIN_STANDARD.md. */
+  --text-muted: #6b7280;
+  --bg-elevated: #f4f4f5;
+  --accent: #2e7d32;
+  --muted: var(--text-muted);
+  --font: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  --mono-font: 'Consolas', 'Cascadia Mono', monospace;
+  --success: #16a34a;
+  --warning: #d97706;
+  --logs-toolbar-bg: #f4f4f5;
+  --logs-btn-bg: #e4e4e7;
+  --logs-area-bg: #18181b;
+  --logs-area-text: #e4e4e7;
+
+  /* ── Шкала отступов и радиусов (раньше были только литералы) ── */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04);
+  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
 }
 
 [data-theme="dark"] {
@@ -48,6 +76,20 @@
   --input-bg: #1e1e1e;
   --subcall-btn: #263238;
   --subcall-btn-hover: #37474f;
+
+  --text-muted: #9ca3af;
+  --bg-elevated: #27272a;
+  --accent: #4caf50;
+  --success: #22c55e;
+  --warning: #f59e0b;
+  --logs-toolbar-bg: #252525;
+  --logs-btn-bg: #2d2d30;
+  --logs-area-bg: #0f0f10;
+
+  /* Чёрная тень на тёмном фоне не читается — поднимаем карточку светлым
+     свечением рамки вместо тени. */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --shadow-2: 0 6px 18px rgba(0, 0, 0, 0.6);
 }
 
 body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: var(--bg-color); color: var(--text); margin: 0; padding: 0; height: 100vh; box-sizing: border-box; display: flex; }
@@ -184,7 +226,20 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .tab-btn { flex: 1; background: none; border: none; padding: 12px 20px; font-size: 15px; cursor: pointer; border-bottom: 3px solid transparent; transition: background-color 0.2s; color: var(--text); margin: 0; border-radius: 6px 6px 0 0; }
 .tab-btn:hover { background-color: var(--session-hover); }
 .tab-btn.active { border-bottom-color: var(--primary); font-weight: bold; background-color: var(--bg-color); }
-.view { display: none; flex-direction: column; gap: 10px; flex: 1; background: var(--bg-color); padding-top: 10px; overflow: hidden; }
+/* Раздел рабочей области. Отступы симметричные по периметру: раньше был только
+   padding-top, из-за чего плашки липли к левому/правому/нижнему краю рамки.
+   Вкладки чата получают отступ от .tab-page (правило .tab-page > .view ниже). */
+.view {
+  display: none;
+  flex-direction: column;
+  gap: var(--sp-4);
+  flex: 1;
+  min-height: 0;
+  background: var(--bg-color);
+  padding: var(--sp-4);
+  box-sizing: border-box;
+  overflow: hidden;
+}
 .view.active { display: flex; }
 .chat-layout { height: 100%; }
 .chat-history { flex: 1; background-color: var(--chat-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 15px; box-shadow: inset 0 2px 5px rgba(0,0,0,0.05); }
@@ -224,7 +279,11 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .subchat-header { display: flex; align-items: center; gap: 15px; padding: 10px; background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px; margin-bottom: 10px; }
 .subchat-title { font-weight: bold; font-size: 15px; color: var(--primary); }
 
-.chat-input-area { display: flex; flex-direction: column; gap: 10px; padding: 10px; background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px; flex: 0 0 auto; }
+/* Панель ввода — узкая горизонтальная полоса, а не контентная карточка.
+   Элемент несёт ОБА класса (chat-dom.ts: "chat-input-area group-box"), поэтому
+   селектор составной: он перебивает .group-box независимо от порядка правил. */
+.chat-input-area { display: flex; flex-direction: column; gap: var(--sp-2); background: var(--panel-bg); border: 1px solid var(--border); flex: 0 0 auto; }
+.chat-input-area.group-box { padding: var(--sp-3) var(--sp-4); border-radius: var(--radius-md); }
 .chat-main-page.drag-over .chat-input-area,
 .chat-main-page.drag-over .chat-history { outline: 2px dashed var(--primary); outline-offset: -3px; }
 .chat-main-page.drag-over .chat-input-area { background: color-mix(in srgb, var(--panel-bg) 92%, var(--primary)); }
@@ -415,11 +474,41 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
   .agent-picker-catalog { flex: 1 1 auto; width: 100%; }
 }
 
-.group-box { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
-.group-title { font-weight: bold; margin-bottom: 10px; font-size: 14px; }
-.input-row { display: flex; gap: 10px; align-items: center; }
-.input-row label { white-space: nowrap; font-size: 14px; font-weight: 500; }
-input[type="text"], select { flex: 1; padding: 8px; border: 1px solid var(--border); border-radius: 4px; font-size: 14px; background: var(--input-bg); color: var(--text); }
+/* ═══ Плашка-карточка: единственный примитив панелей во всём приложении ═══ */
+.group-box {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--sp-4) var(--sp-5);
+  box-shadow: var(--shadow-1);
+  box-sizing: border-box;
+  min-width: 0;
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+.group-box:hover { box-shadow: var(--shadow-2); }
+
+/* Заголовок плашки: иерархия через разделитель, а не «просто жирный текст».
+   flex + space-between — чтобы .update-dot (update_badges.ts) вставал справа. */
+.group-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--text);
+  margin: 0 0 var(--sp-3);
+  padding-bottom: var(--sp-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.input-row { display: flex; gap: var(--sp-3); align-items: center; }
+.input-row + .input-row { margin-top: var(--sp-3); }
+.input-row label { white-space: nowrap; font-size: 13.5px; font-weight: 500; color: var(--text); }
+input[type="text"], select { flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); font-size: 13.5px; background: var(--input-bg); color: var(--text); }
+input[type="text"]:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent); }
+input[type="range"] { accent-color: var(--primary); }
 .agent-select, .model-select { flex: 0 1 auto; min-width: 100px; max-width: 250px; padding: 6px 8px; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
 .btn-icon { background: none; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 18px; line-height: 1; color: var(--text); transition: background 0.2s; display: flex; align-items: center; justify-content: center; }
 .btn-icon:hover { background: var(--session-hover); }
@@ -443,9 +532,9 @@ input[type="text"], select { flex: 1; padding: 8px; border: 1px solid var(--bord
 .file-preview-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .file-preview-remove { cursor: pointer; color: var(--danger); font-weight: bold; font-size: 14px; padding: 0 2px; }
 .file-preview-remove:hover { opacity: 0.7; }
-button { padding: 8px 16px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold; transition: opacity 0.2s, background-color 0.2s; display: flex; justify-content: center; align-items: center; }
+button { padding: 8px 16px; border: none; border-radius: var(--radius-sm); cursor: pointer; font-weight: 600; font-size: 13px; transition: opacity 0.2s, background-color 0.2s, border-color 0.2s; display: flex; justify-content: center; align-items: center; }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
-.btn-secondary { background-color: var(--session-hover); color: var(--text); }
+.btn-secondary { background-color: var(--session-hover); color: var(--text); border: 1px solid var(--border); }
 .btn-secondary:hover { background-color: var(--border); }
 .btn-primary { background-color: var(--primary); color: white; }
 .btn-primary:hover:not(:disabled) { background-color: var(--primary-hover); }
@@ -1238,6 +1327,9 @@ body.edge-reconnecting {
 
 .sub-view { display: none; flex-direction: column; gap: 10px; flex: 1; overflow: hidden; }
 .sub-view.active { display: flex; }
+/* Тест-субвкладки состоят из карточек и могут стать выше вьюпорта —
+   им нужен скролл. Граф-субвкладке скролл не нужен (#graph-layout тянется). */
+#view-sub-ai-test, #view-sub-coding-test { overflow-y: auto; }
 
 /* ─── AI тест (суб-вкладка) ─── */
 .test-checklist {
@@ -1642,11 +1734,70 @@ body.edge-reconnecting {
 .tab-page { display: none; flex-direction: column; flex: 1; min-height: 0; padding: 10px; box-sizing: border-box; }
 .tab-page.active { display: flex; }
 
-/* внутренний .view внутри .tab-page: полную высоту страницы */
-.tab-page > .view { flex: 1; padding-top: 0; overflow: hidden; }
+/* Внутренний .view внутри .tab-page: полную высоту страницы, отступы даёт .tab-page */
+.tab-page > .view { flex: 1; padding: 0; overflow: hidden; }
 
-/* активация статического раздела: снять padding-top (уже есть .view) */
-#workspace-content > .view { padding-top: 10px; }
+/* ═══════════════════════════════════════════════════════════════════════════
+   Раскладка карточек разделов (Настройки, Движки, тест-панели Студии)
+
+   База — обычный CSS Grid на 2 колонки с `align-items: start`. Это «запасной»
+   режим: работает без JS и никогда не схлопывает карточки.
+
+   Сверху его дорабатывает bin-packing (src/controllers/card-layout.ts):
+   раскладчик меряет карточки и проставляет им точные координаты через
+   `grid-row`, поэтому низкая карточка встаёт под высокой в свободном месте
+   соседней колонки, а между рядами остаётся ровный `gap` — без дыр.
+
+   Почему не CSS multi-column: он раскладывает элементы «сверху донизу» и сам
+   решает, что во что попадёт, — две первые карточки (оба движка на странице
+   «Движки») оказываются друг под другом. Здесь порядок раскладки под нашим
+   контролем: первые две всегда встают рядом.
+
+   Режим в одну колонку (data-card-layout="list" и окно ≤980px) — обычный
+   поток, упаковка выключена.
+
+   DOM не переставляется: карточки остаются внутри своих контейнеров (важно
+   для ленивой материализации шаблонов в tabs.ts), меняются только
+   CSS-координаты.
+   ═══════════════════════════════════════════════════════════════════════════ */
+.cards-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  column-gap: var(--sp-4);
+  row-gap: var(--sp-4);
+  align-items: start;
+  width: 100%;
+}
+/* Обе карточки, что попадают в поток: прямой ребёнок .cards-grid и ребёнок
+   ленивого контейнера [data-lazy-content]. Селектор по DOM-дереву, поэтому
+   `display: contents` его не сокращает — второй путь нужно назвать явно. */
+.cards-grid > .group-box,
+.cards-grid > [data-lazy-content] > .group-box {
+  min-width: 0;
+}
+/* Карточка во всю ширину (крупные пикеры вроде «Агенты в чате»). */
+.cards-grid > [data-span="full"],
+.cards-grid > [data-lazy-content] > [data-span="full"] {
+  grid-column: 1 / -1;
+}
+/* Ленивый контейнер (плагины монтируются в [data-lazy-content]) не должен
+   занимать ячейку сам — растворяем его, карточки-плагины станут элементами. */
+.cards-grid > [data-lazy-content] { display: contents; }
+
+/* Режим плотной упаковки. Строка сетки = 1px, вертикальный gap считает
+   раскладчик внутри span (см. card-layout.ts). Ставится раскладчиком только
+   после того, как координаты проставлены всем карточкам, — иначе карточки
+   без span схлопнулись бы в 1px. */
+.cards-grid[data-packed] {
+  grid-auto-rows: 1px;
+  row-gap: 0;
+}
+
+[data-card-layout="list"] .cards-grid { grid-template-columns: minmax(0, 1fr); }
+
+@media (max-width: 980px) {
+  .cards-grid { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* контекстное меню вкладки (по мотивам session-menu-*) */
 .tab-menu-dropdown {
@@ -1708,15 +1859,23 @@ body.edge-reconnecting {
   aspect-ratio: 840 / 260;
 }
 
-/* Быстрая навигация по разделам внутри «Настройки» */
-.settings-nav { display: flex; flex-wrap: wrap; gap: 8px; }
+/* Быстрая навигация по разделам внутри «Настройки».
+   Сетка, а не flex-wrap: кнопки всегда одной ширины и сами занимают всю
+   ширину плашки на любом числе колонок — без «лесенки» разной длины. */
+.settings-nav {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--sp-2);
+}
 .settings-nav-btn {
-  padding: 8px 14px;
+  padding: 10px 12px;
   border: 1px solid var(--border);
-  border-radius: 6px;
-  background: var(--panel-bg);
+  border-radius: var(--radius-sm);
+  background: var(--bg-color);
   color: var(--text);
   font-size: 13px;
+  line-height: 1.3;
+  text-align: left;
   cursor: pointer;
   transition: background 0.2s, border-color 0.2s, color 0.2s;
 }

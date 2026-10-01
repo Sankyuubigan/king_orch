@@ -34,3 +34,5 @@ export { UpdatePopupController } from './update_popup'
 export type { UpdatePopupElements } from './update_popup'
 
 export { initUpdateBadgeTargets, initUpdateWatchers } from './update_badges'
+
+export { initCardLayout, refreshCardLayout } from './card-layout'

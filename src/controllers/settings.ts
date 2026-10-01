@@ -6,12 +6,14 @@ import { store } from "../store";
 import { bus } from "../events";
 import { showToast } from "../ui";
 import { setTelemetryEnabled, trackError } from "../telemetry";
+import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { CLOUD_ROUTER_PREFIXES } from "../utils";
 import { getActiveChatController } from "./tabs";
 
 export interface SettingsElements {
   maxGenSlider: HTMLInputElement; maxGenValue: HTMLElement;
   themeSelect: HTMLSelectElement;
+  cardLayoutSelect: HTMLSelectElement;
   tempSlider: HTMLInputElement; tempValue: HTMLElement;
   topkSlider: HTMLInputElement; topkValue: HTMLElement;
   toppSlider: HTMLInputElement; toppValue: HTMLElement;
@@ -37,6 +39,10 @@ export class SettingsController {
 
   constructor(el: SettingsElements) {
     this.el = el;
+    // Раскладку применяем до бинда: селект уже должен показывать актуальный
+    // режим, а не дефолт из разметки. Ключ берём из <html data-card-layout-cache-key>
+    // по образцу data-theme-cache-key — путь в разметке меняется в одном месте.
+    this.restoreCardLayout();
     this.bindDomEvents();
     this.bindBusEvents();
     window.addEventListener("cloud-routers:combos-changed", (e) => {
@@ -260,6 +266,48 @@ export class SettingsController {
     document.documentElement.style.setProperty("--chat-font-scale", String(scale));
   }
 
+  // ── Раскладка карточек (сетка 2 колонки / список 1 колонка) ──
+  // Тот же приём, что у темы: атрибут на <html> + localStorage, без бэкенда —
+  // это чисто видовое предпочтение, не данные пользователя.
+
+  private cardLayoutCacheKey(): string | null {
+    return document.documentElement.dataset.cardLayoutCacheKey || null;
+  }
+
+  private applyCardLayout(layout: string) {
+    const normalized = layout === "list" ? "list" : "grid";
+    document.documentElement.dataset.cardLayout = normalized;
+    if (this.el.cardLayoutSelect) this.el.cardLayoutSelect.value = normalized;
+    return normalized;
+  }
+
+  /** Читает сохранённый режим и ставит его до первой отрисовки разделов. */
+  private restoreCardLayout() {
+    const key = this.cardLayoutCacheKey();
+    let saved: string | null = null;
+    if (key) {
+      try {
+        saved = localStorage.getItem(key);
+      } catch (e) {
+        void trackError("settings.card-layout-cache", e);
+      }
+    }
+    this.applyCardLayout(saved === "list" || saved === "grid" ? saved : "grid");
+  }
+
+  private persistCardLayout(layout: string) {
+    const key = this.cardLayoutCacheKey();
+    if (!key) {
+      void trackError("settings.card-layout-cache", new Error("Отсутствует data-card-layout-cache-key"));
+      return;
+    }
+    try {
+      localStorage.setItem(key, layout);
+    } catch (e) {
+      void trackError("settings.card-layout-cache", e);
+    }
+  }
+
   private async loadAgents(lastAgent?: string) {
     try {
       const entries: any[] = await invoke("get_agents");
@@ -283,6 +331,11 @@ export class SettingsController {
         await invoke("set_config_value", { key: "chat_font_scale", value: scale });
     });
     this.el.themeSelect?.addEventListener("change", async () => { this.applyTheme(this.el.themeSelect.value); await invoke("set_theme", { theme: this.el.themeSelect.value }); });
+    this.el.cardLayoutSelect?.addEventListener("change", () => {
+      const layout = this.applyCardLayout(this.el.cardLayoutSelect.value);
+      this.persistCardLayout(layout);
+      logFront(`[settings] раскладка карточек: ${layout}`);
+    });
     const sliders: [HTMLInputElement, HTMLElement][] = [[this.el.tempSlider, this.el.tempValue],[this.el.topkSlider, this.el.topkValue],[this.el.toppSlider, this.el.toppValue],[this.el.minpSlider, this.el.minpValue],[this.el.reppenSlider, this.el.reppenValue],[this.el.prespenSlider, this.el.prespenValue]];
     for (const [s, l] of sliders) s?.addEventListener("input", () => { l.innerText = s.value; this.saveModelParams(); });
     this.el.btnResetParams?.addEventListener("click", () => { void this.resetDefaults(); });

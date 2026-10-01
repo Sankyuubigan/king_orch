@@ -21,6 +21,7 @@ import {
   SessionController, SettingsController, AgentTestController, AgentPickerController,
   CodingTestController, UpdatePopupController, TabController, initChatEventRouter,
   loadGraphController, initUpdateBadgeTargets, initUpdateWatchers, getTabNavigationMenu,
+  initCardLayout,
 } from "./controllers";
 import type { GraphController } from "./controllers";
 import type { SharedChatControls } from "./utils";
@@ -48,6 +49,9 @@ async function initApp() {
   initImageViewer();
   initPermissionDialog();
   initVramDialog();
+  // Плотная упаковка карточек в разделах (Настройки/Движки/тесты).
+  // До старта сетки работают в запасном режиме — разметка не зависит от JS.
+  initCardLayout();
 
   // ─── Глобальные Tauri-события движка и агентов (регистрируются ОДИН раз) ───
   // (прогресс/статус/стриминг маршрутизируются в обрабатывающую чат-вкладку)
@@ -106,6 +110,7 @@ async function initApp() {
     maxGenSlider: $<HTMLInputElement>("max-gen-slider"), maxGenValue: $<HTMLElement>("max-gen-value"),
     chatFontSlider: $<HTMLInputElement>("chat-font-slider"), chatFontValue: $<HTMLElement>("chat-font-value"),
     themeSelect: $<HTMLSelectElement>("theme-select"),
+    cardLayoutSelect: $<HTMLSelectElement>("card-layout-select"),
     tempSlider: $<HTMLInputElement>("temp-slider"), tempValue: $<HTMLElement>("temp-value"),
     topkSlider: $<HTMLInputElement>("topk-slider"), topkValue: $<HTMLElement>("topk-value"),
     toppSlider: $<HTMLInputElement>("topp-slider"), toppValue: $<HTMLElement>("topp-value"),
