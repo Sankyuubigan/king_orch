@@ -354,6 +354,25 @@ pub async fn chat_request(
         );
     };
 
+    // Мысли модели (`reasoning_content` в SSE) идут отдельным каналом от
+    // движка: они НЕ часть ответа, и под envelope-json их нельзя смешивать с
+    // текстом. Фронтенд уже умеет рисовать их в блоке «Мысли агентов»
+    // (stream_chunk с kind=thought), поэтому шлём туда же, только отдельным
+    // payload. Без этого юзер на reasoning-моделях смотрит в пустой экран,
+    // пока движок думает (инцидент 24.09.2026: 1493 токена мыслей за 20 минут).
+    let app_reason = app.clone();
+    let reason_meta = stream_meta.clone();
+    let reasoning_cb = move |chunk: String| {
+        let author = {
+            let mut m = reason_meta.lock().expect("stream_meta lock poisoned");
+            m.author.clone()
+        };
+        let _ = app_reason.emit(
+            "stream_chunk",
+            serde_json::json!({ "kind": "thought", "author": author, "text": chunk }),
+        );
+    };
+
     let bins_dir = crate::infra::bin_downloader::get_bins_dir(
         &app.path()
             .app_data_dir()
@@ -411,6 +430,7 @@ pub async fn chat_request(
             status_cb,
             subcall_cb,
             stream_cb,
+            reasoning_cb,
             agents_dir,
             mcp_servers_dir,
             bins_dir,

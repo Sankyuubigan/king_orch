@@ -363,11 +363,12 @@ fn estimate_chars_per_token(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_chat<L, S, C, ST>(
+pub fn run_chat<L, S, C, ST, RT>(
     log_cb: L,
     status_cb: S,
     subcall_cb: C,
     stream_cb: ST,
+    reasoning_cb: RT,
     agents_dir: std::path::PathBuf,
     mcp_servers_dir: std::path::PathBuf,
     bins_dir: std::path::PathBuf,
@@ -398,6 +399,7 @@ where
     S: Fn(String, u8) + Clone + Send + Sync + 'static,
     C: Fn(&SubCall) + Clone + Send + Sync + 'static,
     ST: Fn(String) + Clone + Send + Sync + 'static,
+    RT: Fn(String) + Clone + Send + Sync + 'static,
 {
     status_cb(
         if cloud_endpoint.is_some() {
@@ -570,13 +572,15 @@ where
         } else {
             return Err("Некорректный идентификатор модели облачного роутера".to_string());
         }.to_string();
+        // Облачный роутер отдаёт мысли через тот же `stream_cb` (паритет с
+        // локальным движком), поэтому отдельный сток тут не нужен.
         LlmEngine::cloud(endpoint, model, Arc::new(stream_cb))
     } else if any_vision_agent && mmproj_path.is_some() {
         // Проектор поднимаем ТОЛЬКО когда в графе есть агент со зрением: иначе
         // mmproj занимает ~2.4 ГБ VRAM впустую (в логе: прирост 8862 МБ с
         // проектором против 6424 МБ без него) и добавляет роняющий сервер
         // non-causal путь, который в этом прогоне никто не использует.
-        LlmEngine::local(LlamaEngine::new_with_mmproj(
+        let engine = LlamaEngine::new_with_mmproj(
             &engine_dir,
             &model_path,
             mmproj_path.as_deref(),
@@ -586,9 +590,11 @@ where
             reasoning_budget,
             log_cb.clone(),
             stream_cb,
-        )?)
+        )?;
+        engine.set_reasoning_sink(Arc::new(reasoning_cb));
+        LlmEngine::local(engine)
     } else {
-        LlmEngine::local(LlamaEngine::new(
+        let engine = LlamaEngine::new(
             &engine_dir,
             &model_path,
             engine_ctx_limit,
@@ -597,7 +603,9 @@ where
             reasoning_budget,
             log_cb.clone(),
             stream_cb,
-        )?)
+        )?;
+        engine.set_reasoning_sink(Arc::new(reasoning_cb));
+        LlmEngine::local(engine)
     };
 
     let actual_user_text = if user_text.is_empty() {
@@ -1905,6 +1913,25 @@ where
                         if truncate_largest(&mut ctx.llm_messages, budget, tc, |m| log_cb(m)) {
                             continue;
                         }
+                    }
+                    // Таймаут обмена с движком: текст НЕ виноват, поэтому
+                    // усечение не помогает — уменьшать контекст бессмысленно.
+                    // Повтор делаем один раз и без обрезки: за это время слот
+                    // движка мог освободиться.
+                    if is_stream_timeout(&e) {
+                        if overflow_retries >= 1 {
+                            log::error!("[{}] Таймаут обмена с движком не прошёл: {}", ctx_label, e);
+                            return Err(format!(
+                                "Движок LLM не отвечает: {}. Попробуйте ещё раз или выберите модель поменьше.",
+                                first_line(&e)
+                            ));
+                        }
+                        overflow_retries += 1;
+                        log_cb(format!(
+                            "⏳ Движок не отдал результат вовремя ({}) — повторяю запрос без сокращения текста.",
+                            first_line(&e)
+                        ));
+                        continue;
                     }
                     return Err(e);
                 }
@@ -3823,6 +3850,7 @@ mod tests {
         let result = run_chat(
             log_cb,
             |_, _| {},
+            |_| {},
             |_| {},
             |_| {},
             agents_dir,

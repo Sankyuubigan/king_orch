@@ -295,6 +295,28 @@ pub(crate) fn is_server_unavailable(err: &str) -> bool {
         || (e.contains("tcp connect error") && e.contains("10061"))
 }
 
+/// Детект таймаута обмена с движком — НЕ переполнение контекста.
+///
+/// Инцидент 24.09.2026 (GTX 1070 Ti, 8 ГБ): таймаут стрима попадал в
+/// `is_context_overflow`, `truncate_largest` резал сообщение на 22 символа и
+/// запрос уходил заново — четыре бесполезных попытки по 30 секунд. Усечение
+/// тут не помогает: текст не виноват, виновата скорость машины.
+///
+/// Возвращать `true` надо только когда повтор имеет смысл (движок мог
+/// освободиться), поэтому «мёртвый сервер» сюда НЕ входит — он уже отдан
+/// `is_server_unavailable`.
+pub(crate) fn is_stream_timeout(err: &str) -> bool {
+    let e = err.to_lowercase();
+    if is_server_unavailable(err) {
+        return false;
+    }
+    e.contains("[stream-retry-before-first-token]")
+        || e.contains("stream_diagnostic")
+        || e.contains("prompt eval не завершился")
+        || e.contains("генерация остановилась: нет данных от движка")
+        || e.contains("не ответил http-статусом")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -466,5 +488,55 @@ mod tests {
         assert!(is_server_unavailable("connection refused"));
         assert!(is_server_unavailable("health_failed"));
         assert!(!is_server_unavailable("prompt is too long"));
+    }
+
+    /// Реальная строка из лога юзера (GTX 1070 Ti, 24.09.2026): таймаут стрима
+    /// содержал `n_ctx_slot = 19968` в stderr_tail и попадал в
+    /// `is_context_overflow`, из-за чего `truncate_largest` резал сообщение
+    /// на 22 символа и запрос уходил заново — четыре бесполезные попытки.
+    /// Таймаут не должен выглядеть как переполнение контекста.
+    #[test]
+    fn test_stream_timeout_is_not_context_overflow() {
+        let user_log_error = concat!(
+            "STREAM_DIAGNOSTIC [stream-retry-before-first-token]",
+            "Ошибка чтения потока генерации: error decoding response body → operation timed out",
+            " | response=HTTP 200 HTTP/1.1; type=text/event-stream",
+            " | elapsed_ms=30009 | first_token_ms=нет | raw_lines=0 | events=0 | bytes=0",
+            " | stderr_tail= srv load_model: initializing, n_slots = 4, n_ctx_slot = 19968,",
+            " kv_unified = 'true'"
+        );
+        assert!(
+            !is_context_overflow(user_log_error),
+            "таймаут стрима не должен считаться переполнением контекста"
+        );
+        assert!(
+            is_stream_timeout(user_log_error),
+            "таймаут стрима обязан распознаваться как таймаут обмена"
+        );
+    }
+
+    #[test]
+    fn test_stream_timeout_recognises_all_phase_markers() {
+        assert!(is_stream_timeout("Движок не ответил HTTP-статусом за 300 сек (слот занят очередью)."));
+        assert!(is_stream_timeout("prompt eval не завершился за 600 сек (движок считает промпт)"));
+        assert!(is_stream_timeout("генерация остановилась: нет данных от движка 60 сек"));
+    }
+
+    /// Мёртвый сервер — не таймаут обмена: там нужен перезапуск движка, а не
+    /// повтор запроса в тот же слот.
+    #[test]
+    fn test_stream_timeout_excludes_dead_server() {
+        assert!(!is_stream_timeout("os error 10061: connection refused"));
+        assert!(!is_stream_timeout("server_exited: код 1"));
+        assert!(!is_stream_timeout("prompt is too long for context size"));
+    }
+
+    /// Детектор таймаута не должен ловить обычные ошибки — иначе ретрай
+    /// превратится в цикл повторов на любом сбое.
+    #[test]
+    fn test_stream_timeout_ignores_unrelated_errors() {
+        assert!(!is_stream_timeout(""));
+        assert!(!is_stream_timeout("llama-server: HTTP 400 Bad Request"));
+        assert!(!is_stream_timeout("Ошибка создания HTTP-клиента"));
     }
 }
