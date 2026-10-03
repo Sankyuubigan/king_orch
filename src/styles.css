@@ -28,6 +28,12 @@
   --subcall-btn: #e0f2e1;
   --subcall-btn-hover: #b2dfdb;
 
+  /* Полоса вкладок рабочей области: полоса темнее вкладок, активная вкладка
+     совпадает с фоном содержимого (--bg-color) и сливается с ним. */
+  --tab-bar-bg: #e8eaed;
+  --tab-hover-bg: rgba(0, 0, 0, 0.06);
+  --tab-divider: rgba(0, 0, 0, 0.2);
+
   /* ── Токены, которые читают Web Components плагинов (my-tauri-plugins) ──
      Без них каждый плагин падал в свои хардкод-фолбэки и рисовал тёмные
      поля ввода внутри светлых карточек. Контракт — PLUGIN_STANDARD.md. */
@@ -76,6 +82,10 @@
   --input-bg: #1e1e1e;
   --subcall-btn: #263238;
   --subcall-btn-hover: #37474f;
+
+  --tab-bar-bg: #161719;
+  --tab-hover-bg: rgba(255, 255, 255, 0.08);
+  --tab-divider: rgba(255, 255, 255, 0.16);
 
   --text-muted: #9ca3af;
   --bg-elevated: #27272a;
@@ -1534,7 +1544,7 @@ body.edge-reconnecting {
   display: flex;
   align-items: stretch;
   min-width: 0;
-  background-color: var(--panel-bg);
+  background-color: var(--tab-bar-bg);
   border: 1px solid var(--border);
   border-bottom: none;
   border-radius: 6px 6px 0 0;
@@ -1545,19 +1555,23 @@ body.edge-reconnecting {
 .workspace-tabs {
   display: flex;
   align-items: stretch;
-  gap: 4px;
+  gap: 0;
   flex: 1 1 auto;
   min-width: 0;
   min-height: 36px;
   overflow-x: auto;
   overflow-y: hidden;
-  scrollbar-width: thin;
+  /* Ползунка снизу быть не должно: прокрутка остаётся (колесо мыши,
+     см. wheel-обработчик в TabController.bindStripEvents), но полоса скрыта. */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
 }
+.workspace-tabs::-webkit-scrollbar { width: 0; height: 0; display: none; }
 
 .workspace-tab-actions {
   display: flex;
   align-items: center;
-  flex: 0 0 46px;
+  flex: 0 0 38px;
   min-height: 36px;
   margin-left: 4px;
   padding-left: 6px;
@@ -1574,7 +1588,7 @@ body.edge-reconnecting {
   max-width: 220px;
   border: 1px solid transparent;
   border-bottom: none;
-  border-radius: 6px 6px 0 0;
+  border-radius: 8px 8px 0 0;
   cursor: pointer;
   background: transparent;
   color: var(--text-muted, #888);
@@ -1583,9 +1597,33 @@ body.edge-reconnecting {
   white-space: nowrap;
   position: relative;
   overflow: hidden;
+  transition: background-color 0.15s ease;
 }
 
-.workspace-tab:hover { background: var(--session-hover); }
+/* Разделитель между вкладками — короткая вертикальная насечка по центру
+   (как в Chrome), а не рамка во всю высоту. Абсолютное позиционирование:
+   ширину вкладки не двигает, layout-shift нет. Гасится на активной
+   вкладке, на её левом соседе, на hover и на последней вкладке. */
+.workspace-tab::after {
+  content: "";
+  position: absolute;
+  right: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 16px;
+  background-color: var(--tab-divider);
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+}
+.workspace-tab.active::after,
+.workspace-tab:hover::after,
+.workspace-tab:has(+ .workspace-tab.active)::after,
+.workspace-tab:has(+ .workspace-tab:hover)::after,
+.workspace-tab.dragging::after { opacity: 0; }
+.workspace-tab:last-of-type::after { display: none; }
+
+.workspace-tab:hover { background: var(--tab-hover-bg); }
 .workspace-tab.active { background: var(--bg-color); border-color: var(--border); color: var(--text); font-weight: 600; }
 
 .workspace-tab-icon { flex: 0 0 auto; font-size: 14px; }
@@ -1635,31 +1673,42 @@ body.edge-reconnecting {
 
 .workspace-tab-add {
   flex: 0 0 auto;
+  align-self: center;
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: none;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--text);
+  border: none;
+  border-radius: 6px;
+  color: var(--text-muted, #888);
   cursor: pointer;
   font-size: 16px;
   line-height: 1;
-  padding: 5px 10px;
-  margin-bottom: 4px;
+  padding: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
-.workspace-tab-add:hover { background: var(--session-hover); }
+.workspace-tab-add:hover { background: var(--tab-hover-bg); color: var(--text); }
+.workspace-tab-add:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 
 .workspace-tab-menu-toggle {
-  width: 32px;
+  width: 28px;
   height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: none;
-  border: 1px solid var(--border);
-  border-radius: 5px;
-  color: var(--text);
+  border: none;
+  border-radius: 6px;
+  color: var(--text-muted, #888);
   cursor: pointer;
-  font-size: 17px;
+  font-size: 16px;
   line-height: 1;
-  margin-bottom: 4px;
+  padding: 0;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
-.workspace-tab-menu-toggle:hover { background: var(--session-hover); }
+.workspace-tab-menu-toggle:hover { background: var(--tab-hover-bg); color: var(--text); }
 .workspace-tab-menu-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
 
 .workspace-tab-menu-dropdown {

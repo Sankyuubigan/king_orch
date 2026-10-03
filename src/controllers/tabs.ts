@@ -637,12 +637,17 @@ export class TabController {
   }
 
   private renderStrip() {
+    // Полоса перерисовывается целиком (innerHTML = "" сбрасывает scrollLeft
+    // в 0), поэтому позицию прокрутки снимаем до и возвращаем после —
+    // иначе активная вкладка уезжает за край при каждом переключении.
+    const savedScroll = this.stripEl.scrollLeft;
     this.stripEl.innerHTML = "";
     for (const t of this.entries) {
       const isActive = t.id === store.activeTabId;
       const el = document.createElement("div");
       el.className = `workspace-tab${isActive ? " active" : ""}`;
       el.dataset.tabId = t.id;
+      el.title = t.title;
       const icon = document.createElement("span");
       icon.className = "workspace-tab-icon";
       icon.textContent = t.type === "section" ? SECTION_ICONS[t.section as TabSection] : (TAB_ICONS[t.type] ?? "❔");
@@ -667,6 +672,16 @@ export class TabController {
     addBtn.textContent = "＋";
     addBtn.addEventListener("click", () => this.newMainTab());
     this.stripEl.appendChild(addBtn);
+    this.stripEl.scrollLeft = savedScroll;
+    this.scrollActiveIntoView();
+  }
+
+  /** Дотянуть активную вкладку в видимую зону полосы (inline: nearest — без
+   * лишнего движения, если вкладка уже целиком видна). Опциональный вызов:
+   * в jsdom scrollIntoView отсутствует. */
+  private scrollActiveIntoView() {
+    const active = this.entries.find(t => t.id === store.activeTabId);
+    active?.stripEl?.scrollIntoView?.({ inline: "nearest", block: "nearest" });
   }
 
   private showContextMenu(entry: TabEntry, x: number, y: number) {
@@ -727,6 +742,21 @@ export class TabController {
   // ── Перетаскивание по оси X (Pointer Events + transform, без перерисовки DOM) ──
 
   private bindStripEvents() {
+    // Полоса скроллится только по горизонтали (overflow-y: hidden), а Chromium
+    // вертикальное колесо в горизонтальный контейнер не транслирует — делаем
+    // это явно. preventDefault только если сдвинулись: у края и при отсутствии
+    // переполнения событие должно уйти дальше обычным порядком.
+    this.stripEl.addEventListener("wheel", (e: WheelEvent) => {
+      const strip = this.stripEl;
+      if (strip.scrollWidth <= strip.clientWidth) return;
+      const raw = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+      if (raw === 0) return;
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? strip.clientWidth : 1;
+      const before = strip.scrollLeft;
+      strip.scrollLeft = before + raw * unit;
+      if (strip.scrollLeft !== before) e.preventDefault();
+    }, { passive: false });
+
     this.stripEl.addEventListener("pointerdown", (e) => {
       const target = (e.target as HTMLElement).closest(".workspace-tab") as HTMLElement | null;
       if (!target || (e.target as HTMLElement).closest(".workspace-tab-close")) return;
