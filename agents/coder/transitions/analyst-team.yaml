@@ -10,13 +10,21 @@ config:
   write_root: workspace
   write_outside: deny
 
+# Точка входа графа — текст, отправленный пользователем в чат.
+entry: user_message
+
 nodes:
+
+# Источник данных: текст пользователя (без LLM).
+- id: user_message
+  type: user_message
+  ui_pos:
+    x: -284
+    y: 130
 
 - id: extract_facts
   type: llm_fact_extractor
-  input: |
-    User: {{ user_message }}
-    Session history: {{ messages }}
+  input: '{{ nodes.user_message.output.text }}'
   ui_pos:
     x: 100
     y: 130
@@ -49,7 +57,7 @@ nodes:
 - id: call_code_explainer
   type: llm_worker
   agent: code_explainer
-  task: 'Ответь на вопрос пользователя, изучив код: {{ user_message }}'
+  task: 'Ответь на вопрос пользователя, изучив код: {{ nodes.user_message.output.text }}'
   output_type: message
   ui_pos:
     y: -554
@@ -58,7 +66,7 @@ nodes:
 - id: call_project_mapper
   type: llm_worker
   agent: project_mapper
-  task: 'Сделай карту проекта: {{ user_message }}'
+  task: 'Сделай карту проекта: {{ nodes.user_message.output.text }}'
   output_type: message
   ui_pos:
     x: 759
@@ -67,7 +75,7 @@ nodes:
 - id: call_qa_diagnost_direct
   type: llm_worker
   agent: qa_diagnost
-  task: 'Выполни напрямую: {{ user_message }}'
+  task: 'Выполни напрямую: {{ nodes.user_message.output.text }}'
   output_type: message
   ui_pos:
     x: 740
@@ -75,7 +83,7 @@ nodes:
 
 - id: call_research_team
   type: sub_workflow
-  task: '{{ user_message }}'
+  task: '{{ nodes.user_message.output.text }}'
   output_type: thought
   workflow: search-specialist
   ui_pos:
@@ -96,7 +104,7 @@ nodes:
 - id: call_bug_analyst
   type: llm_worker
   agent: bug_analyst
-  task: 'Найди первопричину бага: {{ user_message }}'
+  task: 'Найди первопричину бага: {{ nodes.user_message.output.text }}'
   output_type: thought
   ui_pos:
     y: 48
@@ -152,7 +160,7 @@ nodes:
   agent: task_planner
   task: |
     Составь PRP (Product Requirement Prompt). Учти архитектурные ошибки. Разбей на микро-шаги.
-    Исходная задача: {{ user_message }}
+    Исходная задача: {{ nodes.user_message.output.text }}
     Отчёт аналитика: {{ nodes.call_bug_analyst.output.result }}
     Отчёт QA (падающий тест): {{ nodes.call_qa_reproduce.output.result }}
   output_type: thought
@@ -213,6 +221,9 @@ nodes:
     x: 740
 
 edges:
+
+- from: user_message
+  to: extract_facts
 
 - from: extract_facts
   to: route

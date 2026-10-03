@@ -26,6 +26,10 @@ export interface GraphNodeDef {
   false_to?: string;
   system_message?: string;
   disabled?: boolean;
+  llm_params?: string;
+  max_visits?: number;
+  rules_file?: string;
+  two_phase_thinking?: boolean;
 }
 
 export type ConditionNode =
@@ -45,6 +49,11 @@ export interface WorkflowGraphDef {
   description?: string | null;
   file_stem?: string;
   config?: any;
+  /**
+   * ID ноды — точки входа графа. Движок стартует ровно от неё и без этого
+   * поля не запускает граф, поэтому при сохранении поле всегда заполнено.
+   */
+  entry?: string;
   nodes: GraphNodeDef[];
   edges: GraphEdgeDef[];
 }

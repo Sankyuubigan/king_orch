@@ -1252,6 +1252,52 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   flex-shrink: 0;
 }
 
+/* Нода-источник «Сообщение юзера» — точка входа графа */
+.gn-entry-badge {
+  display: inline-block;
+  margin: 2px 0 3px;
+  padding: 2px 7px;
+  border-radius: 10px;
+  background: #4e342e;
+  color: #ffcc80;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+}
+.gn-source {
+  color: #bcaaa4;
+  font-style: italic;
+}
+/* Сайдбар: назначение точки входа */
+.ge-entry-badge {
+  display: block;
+  padding: 6px 9px;
+  border-radius: 5px;
+  background: #4e342e;
+  color: #ffcc80;
+  font-size: 12px;
+  font-weight: 600;
+}
+.ge-btn {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid #6d4c41;
+  border-radius: 5px;
+  background: #3e2723;
+  color: #ffcc80;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+.ge-btn:hover { background: #4e342e; }
+.detail-hint {
+  margin-top: 5px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #888;
+}
+
 /* Drawflow connection lines */
 .drawflow .connection .main-path {
   stroke: #78909c !important;

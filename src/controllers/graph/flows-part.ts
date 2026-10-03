@@ -4,7 +4,7 @@ import { showToast } from "../../ui";
 import { trackError } from "../../telemetry";
 import { readWorkflowFile, saveWorkflow } from "../../services";
 import type { WorkflowGraphDef, GraphNodeDef, GraphEdgeDef } from "./types";
-import { isDynamicNode, OUTPUT_COUNT } from "./constants";
+import { isDynamicNode, OUTPUT_COUNT, ENTRY_NODE_TYPE, inputCount } from "./constants";
 import type { GraphController } from "./graph-class";
 
 // ─── Системный диалог открытия ───
@@ -45,7 +45,15 @@ export async function handleOpen(this: GraphController): Promise<void> {
       });
       const nonSwitchEdges = nonSwitchEdgeEntries.map(({ edge }) => edge);
       const allEdges = [...nonSwitchEdges, ...this.getImplicitSwitchEdges(wf.nodes)];
-      const nodePositions = this.computeAutoLayout(wf.nodes, allEdges);
+      // entry определяем после подсчёта ВСЕХ рёбер: маршруты динамических нод
+      // хранятся в полях нод, и по одним `edges:` терминальные ноды выглядели бы
+      // корнями графа. От точки входа потом считается и раскладка.
+      this.currentEntryNodeId = this.resolveEntryForEditor({
+        entry: wf.entry,
+        nodes: wf.nodes,
+        edges: allEdges,
+      });
+      const nodePositions = this.computeAutoLayout(wf.nodes, allEdges, this.currentEntryNodeId);
 
       // Build import data structure with custom IDs as keys
       const importData: DrawflowExport = {
@@ -70,7 +78,8 @@ export async function handleOpen(this: GraphController): Promise<void> {
         const outs = isDynamicNode(node.type) ? this.getSwitchOutputCount(node) : OUTPUT_COUNT[node.type] ?? 1;
 
         const inputs: Record<string, { connections: any[] }> = {};
-        for (let i = 1; i <= 1; i++) inputs[`input_${i}`] = { connections: [] };
+        const ins = inputCount(node.type);
+        for (let i = 1; i <= ins; i++) inputs[`input_${i}`] = { connections: [] };
         const outputs: Record<string, { connections: any[] }> = {};
         for (let i = 1; i <= outs; i++) outputs[`output_${i}`] = { connections: [] };
 
@@ -159,6 +168,14 @@ export async function handleOpen(this: GraphController): Promise<void> {
             });
             continue;
           }
+          if (!this.canReceiveEdge(target.to)) {
+            diagnostics.push({
+              code: "EDGE_INTO_SOURCE_NODE",
+              location: target.location,
+              message: `маршрут '${node.id}' → '${target.to}' не будет отображён: у ноды-источника нет входов`,
+            });
+            continue;
+          }
           const outIdx = this.getSwitchOutputIndex(node, target.caseKey);
           try {
             this.editor!.addConnection(node.id, target.to, `output_${outIdx + 1}`, "input_1");
@@ -190,6 +207,56 @@ export function clearEditor(this: GraphController): void {
   for (const id of Object.keys(nodes)) {
     this.editor.removeNodeId("node-" + id);
   }
+}
+
+// ─── Точка входа графа ───
+
+/**
+ * Определяет `entry` для редактора.
+ *
+ * Порядок: объявленное значение → единственная нода типа `user_message` → единственная
+ * нода без входящих рёбер. Последний шаг нужен только для миграции старых файлов:
+ * он ничего не пишет сам, а лишь показывает вход на холсте, чтобы пользователь его
+ * увидел и подтвердил сохранением. Движок принимает только явно записанное `entry`.
+ *
+ * ВАЖНО: передавать нужно ВСЕ рёбра, включая неявные маршруты динамических нод
+ * (`getImplicitSwitchEdges`). По одним `edges:` терминальные ноды выглядят
+ * корнями графа, и точку входа вывести не из чего.
+ */
+export function resolveEntryForEditor(
+  this: GraphController,
+  wf: { entry?: string | null; nodes: GraphNodeDef[]; edges: GraphEdgeDef[] },
+): string | null {
+  const declared = (wf.entry ?? "").trim();
+  if (declared && wf.nodes.some((n) => n.id === declared)) return declared;
+
+  const sourceNodes = wf.nodes.filter((n) => n.type === ENTRY_NODE_TYPE);
+  if (sourceNodes.length === 1) return sourceNodes[0].id;
+  if (sourceNodes.length > 1) return null;
+
+  const hasIncoming = new Set(wf.edges.map((e) => e.to));
+  const roots = wf.nodes.filter((n) => !hasIncoming.has(n.id));
+  return roots.length === 1 ? roots[0].id : null;
+}
+
+/**
+ * Назначает ноду точкой входа графа.
+ *
+ * Порты не трогаем: молча выбрасывать входящие рёбра — это потеря работы
+ * пользователя. Если у новой точки входа есть входящие рёбра — это покажет
+ * диагностика `ENTRY_HAS_INCOMING_EDGE`, а не тихая правка графа.
+ */
+export function setEntryNode(this: GraphController, nodeId: string): void {
+  const dn = this.editor?.drawflow.drawflow.Home.data[nodeId];
+  if (!dn) return;
+  const previousId = this.currentEntryNodeId;
+  if (previousId === nodeId) return;
+
+  this.saveCheckpoint();
+  this.currentEntryNodeId = nodeId;
+  if (previousId) this.updateNodeHtml(previousId);
+  this.updateNodeHtml(nodeId);
+  showToast(`🚪 Вход графа: ${nodeId}`, "success");
 }
 
 // ─── Сохранение ───
@@ -237,12 +304,29 @@ export async function handleSave(this: GraphController): Promise<void> {
         showToast(`⚠️ ${badEdges.length} ребер имеют неверные ID нод — данные могут потеряться`, "error");
       }
 
+      // Точка входа — объявление, а не позиция в `nodes:` (порядок нод здесь
+      // задаётся хешем drawflow). Без неё движок не запустит граф, поэтому
+      // отсутствие входа — ошибка сохранения, а не тихая потеря.
+      const entryNodeId = this.resolveEntryForEditor({
+        entry: this.currentEntryNodeId,
+        nodes,
+        // Полный набор рёбер: маршруты динамических нод хранятся в полях нод
+        // и в `edges:` не попадают, но для определения корней они значимы.
+        edges: [...edges, ...this.getImplicitSwitchEdges(nodes)],
+      });
+      if (!entryNodeId) {
+        const message = "❌ Не задана точка входа: добавь ноду «Сообщение юзера» и назначь её входом (кнопка в сайдбаре)";
+        console.error(`[handleSave] ${message}`);
+        showToast(message, "error");
+        return;
+      }
+
       const config = this.currentWorkflowConfig ? JSON.parse(JSON.stringify(this.currentWorkflowConfig)) : null;
       if (config?.facts_file) {
         config.facts = [];
       }
 
-      const workflow: WorkflowGraphDef = { name: this.currentWorkflowName, config, nodes, edges };
+      const workflow: WorkflowGraphDef = { name: this.currentWorkflowName, config, entry: entryNodeId, nodes, edges };
       const saveResult = await saveWorkflow(this.currentFilePath, workflow);
       void saveResult;
       this.pristineSnapshot = this.captureSnapshot();

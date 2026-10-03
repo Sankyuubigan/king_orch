@@ -5,7 +5,17 @@ config:
   facts_file: facts.yaml
   default_llm_params: creative
 
+# Точка входа графа — текст, отправленный пользователем в чат.
+entry: user_message
+
 nodes:
+  # ── Источник данных: текст пользователя (без LLM) ──
+  - id: user_message
+    type: user_message
+    ui_pos:
+      x: -320
+      y: 40
+
   # ── Детерминированная проверка свежих вложений (без LLM) ──
   - id: check_attachments
     type: system_condition
@@ -23,9 +33,7 @@ nodes:
 
   - id: extract_facts
     type: llm_fact_extractor
-    input: |
-      User: {{ user_message }}
-      Session history (последние сообщения сессии): {{ messages }}
+    input: "{{ nodes.user_message.output.text }}"
     llm_params: strict
 
   - id: route
@@ -46,7 +54,7 @@ nodes:
     task: |
       Отредактируй изображение, на которое пользователь указал в переписке или прикрепил к сообщению.
 
-      Правка: {{ user_message }}
+      Правка: {{ nodes.user_message.output.text }}
     output_type: message
 
   # ── Ветка генерации (терминальная) ──
@@ -58,7 +66,7 @@ nodes:
       Сгенерируй изображение с нуля.
 
       Описание задачи: {{ nodes.extract_facts.output.rewritten_query }}
-      Исходный текст пользователя: {{ user_message }}
+      Исходный текст пользователя: {{ nodes.user_message.output.text }}
     output_type: message
 
   # ── Не image-запрос: честный выход ──
@@ -73,6 +81,9 @@ nodes:
     output_type: message
 
 edges:
+  - from: user_message
+    to: check_attachments
+
   - from: check_attachments
     to: route_media_state
 

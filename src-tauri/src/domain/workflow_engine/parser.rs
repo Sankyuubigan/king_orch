@@ -37,6 +37,15 @@ pub struct WorkflowDef {
     pub parent_dir: String,
     #[serde(default)]
     pub config: Option<WorkflowConfig>,
+    /// ЯВНО объявленная точка входа графа — `nodes[].id`.
+    ///
+    /// Serde-опционально: старый файл должен открываться в визуальном редакторе,
+    /// иначе его нечем починить. Но на уровне движка поле ОБЯЗАТЕЛЬНО —
+    /// резолвится единственным способом, `resolve_entry`. Фоллбэка на
+    /// `nodes.first()` нет: порядок нод в YAML переписывает редактор при
+    /// сохранении (порядок создания), поэтому позиция не является объявлением.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
     pub nodes: Vec<NodeDef>,
     pub edges: Vec<EdgeDef>,
 }
@@ -320,6 +329,9 @@ pub enum NodeType {
     Note,
     #[serde(rename = "system1_validator")]
     System1Validator,
+    /// Точка входа графа — текст, который пользователь отправил в чат.
+    /// Источник данных: 0 входов, 1 выход, LLM не вызывается.
+    UserMessage,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -358,13 +370,21 @@ pub fn load_workflows(agents_dir: &Path) -> Result<Vec<WorkflowDef>, String> {
 /// Загрузить YAML-файл как граф, ОТЛИЧИВ «это не граф» от «это сломанный граф».
 ///
 /// `Ok(None)` — файл не объявляет себя графом. `Ok(Some(wf))` — валидный граф.
-/// `Err` — файл заявил себя графом, но не проходит контракт `WorkflowDef`.
+/// `Err` — файл заявил себя графом, но не проходит контракт `WorkflowDef`
+/// (включая проверку `entry`: без явной точки входа граф не запускается).
 fn discover_workflow_file(path: &Path) -> Result<Option<WorkflowDef>, String> {
     let source = read_yaml_source(path)?;
     if !declares_graph(&source) {
         return Ok(None);
     }
-    into_workflow(source, path).map(Some)
+    let wf = into_workflow(source, path)?;
+    // Точка входа проверяется ЗДЕСЬ, на загрузке движком, а не в `run_workflow`:
+    // сломанный граф не должен попасть в список entry points агентов, где он выглядел
+    // бы рабочим до момента запуска. Редактор читает файл другим путём
+    // (`parse_workflow_file` → `read_workflow_file`) и валидирует entry диагностикой,
+    // поэтому старый файл остаётся открываемым и чинимым.
+    resolve_entry(&wf).map_err(|e| e.to_string())?;
+    Ok(Some(wf))
 }
 
 /// Корневой признак графа — секция `nodes:`.
@@ -440,6 +460,37 @@ pub fn find_workflow_by_stem<'a>(
     workflows.iter().find(|wf| wf.file_stem == stem)
 }
 
+/// Единственный способ узнать точку входа графа.
+///
+/// Контракт жёсткий: `entry` обязан быть объявлен и указывать на существующую ноду.
+/// Никакого отката на `nodes.first()` — порядок нод в YAML переписывает визуальный
+/// редактор при сохранении (в порядке создания), поэтому позиция не является
+/// объявлением о намерении.
+pub fn resolve_entry(workflow: &WorkflowDef) -> Result<&NodeDef, String> {
+    let entry = workflow
+        .entry
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "В workflow '{}' не объявлена точка входа: добавь поле `entry:` верхнего уровня со ссылкой на узел типа user_message",
+                workflow.name
+            )
+        })?;
+
+    workflow
+        .nodes
+        .iter()
+        .find(|n| n.id == entry)
+        .ok_or_else(|| {
+            format!(
+                "Точка входа '{}' в workflow '{}' не существует среди nodes[].id",
+                entry, workflow.name
+            )
+        })
+}
+
 /// Пост-обработка сериализованного YAML: добавляет 2-пробельный отступ для block sequence
 /// (serde_yaml выводит `- item` на том же уровне, что и ключ, что неудобно читать).
 ///
@@ -478,6 +529,230 @@ pub fn separate_top_level_fields(yaml: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn wf_from_yaml(yaml: &str) -> WorkflowDef {
+        serde_yaml::from_str(yaml).expect("парсинг YAML")
+    }
+
+    /// Абсолютный путь боевого графа по относительному сегменту.
+    /// Путь поднимается на уровень выше `src-tauri` (в корень проекта), поэтому
+    /// строка должна жить дольше `Path` — возвращаем владение.
+    fn graph_path(rel: &str) -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("корень проекта")
+            .join(rel)
+    }
+
+    /// Контракт точки входа для КАЖДОГО боевого графа из `agents/`.
+    ///
+    /// Проверяется по исходникам проекта, а не по копии в тесте: регрессия
+    /// (потерянный `entry`, отвязанная нода-источник, экстрактор без входа)
+    /// ломает граф в рантайме, а не в редакторе.
+    const PRODUCTION_GRAPHS: &[&str] = &[
+        "agents/psychotherapist/transitions/main_conversation_flow.yaml",
+        "agents/coder/transitions/analyst-team.yaml",
+        "agents/coder/transitions/coding-team.yaml",
+        "agents/research/transitions/search-specialist.yaml",
+        "agents/media/transitions/media-flow.yaml",
+    ];
+
+    #[test]
+    fn production_graphs_declare_resolvable_entry() {
+        for rel in PRODUCTION_GRAPHS {
+            let path = graph_path(rel);
+            assert!(path.exists(), "Файл графа не найден: {:?}", path);
+
+            let wf = parse_workflow_file(&path)
+                .unwrap_or_else(|e| panic!("Парсинг {:?} не удался: {}", path, e));
+
+            let entry = resolve_entry(&wf)
+                .unwrap_or_else(|e| panic!("Точка входа {:?} не разрешается: {}", path, e));
+            assert_eq!(
+                entry.node_type,
+                NodeType::UserMessage,
+                "Вход {:?} должен быть нодой-источником",
+                path
+            );
+
+            assert!(
+                wf.edges.iter().any(|e| e.from == entry.id),
+                "Вход {:?} отключён: нет ни одного ребра из него",
+                path
+            );
+        }
+    }
+
+    #[test]
+    fn production_graphs_feed_entry_into_fact_extractor() {
+        for rel in PRODUCTION_GRAPHS {
+            let path = graph_path(rel);
+            let wf = parse_workflow_file(&path).expect("парсинг YAML");
+            let entry_id = resolve_entry(&wf).expect("entry").id.clone();
+
+            for node in &wf.nodes {
+                if node.node_type != NodeType::LlmFactExtractor {
+                    continue;
+                }
+                let input = node.input.as_deref().unwrap_or("");
+                assert!(
+                    input.contains(&format!("{{{{ nodes.{}.output.text }}}}", entry_id)),
+                    "Экстрактор {:?} в {:?} не читает ноду входа: {:?}",
+                    node.id,
+                    path,
+                    input
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn production_graphs_pass_editor_fidelity_without_entry_diagnostics() {
+        use crate::domain::workflow_engine::editor_fidelity::analyze_workflow_fidelity;
+
+        for rel in PRODUCTION_GRAPHS {
+            let path = graph_path(rel);
+            let content = std::fs::read_to_string(&path).expect("чтение YAML");
+            let source: serde_yaml::Value = serde_yaml::from_str(&content).expect("YAML");
+            let wf: WorkflowDef = serde_yaml::from_value(source.clone()).expect("workflow");
+
+            let diagnostics = analyze_workflow_fidelity(&source, &wf).expect("анализ");
+            let entry_problems: Vec<&str> = diagnostics
+                .iter()
+                .map(|d| d.code.as_str())
+                .filter(|code| {
+                    code.starts_with("ENTRY_")
+                        || *code == "USER_MESSAGE_NOT_ENTRY"
+                        || *code == "TEMPLATE_NODE_REF_MISSING"
+                })
+                .collect();
+            assert!(
+                entry_problems.is_empty(),
+                "{:?}: диагностика точки входа/шаблонов: {:?}",
+                path,
+                entry_problems
+            );
+        }
+    }
+
+    #[test]
+fn resolve_entry_returns_declared_node() {
+        let wf = wf_from_yaml(
+            r#"
+name: test
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+  - id: extractor
+    type: llm_fact_extractor
+edges:
+  - from: user_input
+    to: extractor
+"#,
+        );
+
+        let entry = resolve_entry(&wf).expect("вход обязан разрешиться");
+        assert_eq!(entry.id, "user_input");
+        assert_eq!(entry.node_type, NodeType::UserMessage);
+    }
+
+    #[test]
+    fn resolve_entry_ignores_node_order() {
+        // Точка входа — объявление, а не позиция: перестановка нод в YAML
+        // не должна менять старт (ровно тот дефект, который чинится).
+        let yaml = r#"
+name: test
+entry: user_input
+nodes:
+  - id: {FIRST}
+    type: {FIRST_TYPE}
+  - id: user_input
+    type: user_message
+edges: []
+"#;
+        let a = wf_from_yaml(
+            &yaml
+                .replace("{FIRST}", "extractor")
+                .replace("{FIRST_TYPE}", "llm_fact_extractor"),
+        );
+        let b = wf_from_yaml(
+            &yaml
+                .replace("{FIRST}", "user_input")
+                .replace("{FIRST_TYPE}", "user_message"),
+        );
+
+        assert_eq!(resolve_entry(&a).unwrap().id, "user_input");
+        assert_eq!(resolve_entry(&b).unwrap().id, "user_input");
+    }
+
+    #[test]
+    fn resolve_entry_rejects_missing_field() {
+        let wf = wf_from_yaml(
+            r#"
+name: test
+nodes:
+  - id: extractor
+    type: llm_fact_extractor
+edges: []
+"#,
+        );
+
+        let err = resolve_entry(&wf).expect_err("без entry — ошибка, не откат на nodes[0]");
+        assert!(err.contains("не объявлена точка входа"), "{}", err);
+    }
+
+    #[test]
+    fn resolve_entry_rejects_blank_field() {
+        let wf = wf_from_yaml(
+            r#"
+name: test
+entry: "   "
+nodes:
+  - id: extractor
+    type: llm_fact_extractor
+edges: []
+"#,
+        );
+
+        assert!(resolve_entry(&wf).is_err());
+    }
+
+    #[test]
+    fn resolve_entry_rejects_dangling_target() {
+        let wf = wf_from_yaml(
+            r#"
+name: test
+entry: nowhere
+nodes:
+  - id: user_input
+    type: user_message
+edges: []
+"#,
+        );
+
+        let err = resolve_entry(&wf).expect_err("битая ссылка — ошибка");
+        assert!(err.contains("не существует среди nodes[].id"), "{}", err);
+    }
+
+    #[test]
+    fn entry_survives_yaml_roundtrip() {
+        let wf = wf_from_yaml(
+            r#"
+name: test
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+edges: []
+"#,
+        );
+
+        let out = separate_top_level_fields(&serde_yaml::to_string(&wf).expect("ser"));
+        let wf2: WorkflowDef = serde_yaml::from_str(&out).expect("round-trip");
+        assert_eq!(wf2.entry.as_deref(), Some("user_input"));
+        assert_eq!(resolve_entry(&wf2).unwrap().id, "user_input");
+    }
 
     fn workspace_root() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -907,15 +1182,24 @@ edges: []
         assert!(wf.nodes.len() > 0, "узлы должны быть");
         assert!(wf.edges.len() > 0, "рёбра должны быть");
 
-        // Факт-экстрактор присутствует и содержит шаблоны.
+        // Факт-экстрактор присутствует и читает текст из ноды входа графа
+        // (явный поток данных), а не из ambient-контекста.
         let ef = wf.nodes.iter().find(|n| n.id == "extract_facts").unwrap();
         assert_eq!(ef.node_type, NodeType::LlmFactExtractor);
         assert!(ef.input.is_some());
-        assert!(ef
-            .input
-            .as_deref()
-            .unwrap_or("")
-            .contains("{{ user_message }}"));
+        assert_eq!(
+            ef.input.as_deref().unwrap_or(""),
+            "{{ nodes.user_message.output.text }}"
+        );
+
+        // Точка входа объявлена, разрешается и указывает на ноду-источник.
+        let entry = resolve_entry(&wf).expect("entry обязан разрешиться");
+        assert_eq!(entry.id, "user_message");
+        assert_eq!(entry.node_type, NodeType::UserMessage);
+        assert!(
+            wf.edges.iter().any(|e| e.from == "user_message"),
+            "вход должен быть связан ребром — иначе текст не попадёт в граф"
+        );
 
         // Проверка конфига
         assert!(wf.config.is_some());
@@ -1193,6 +1477,7 @@ edges: []
             description: None,
             file_stem: String::new(),
             parent_dir: String::new(),
+            entry: None,
             config: None,
             nodes: vec![node],
             edges: vec![],
@@ -1232,6 +1517,7 @@ edges: []
             description: None,
             file_stem: String::new(),
             parent_dir: String::new(),
+            entry: None,
             config: None,
             nodes: vec![node],
             edges: vec![],
@@ -1278,6 +1564,7 @@ edges: []
             description: None,
             file_stem: String::new(),
             parent_dir: String::new(),
+            entry: None,
             config: None,
             nodes: vec![node1, node2],
             edges: vec![],
@@ -1417,6 +1704,7 @@ edges: []
             description: None,
             file_stem: String::new(),
             parent_dir: String::new(),
+            entry: None,
             config: Some(WorkflowConfig {
                 facts_file: Some("facts.yaml".to_string()),
                 extractor_prompt: Some("извлеки факты".to_string()),
@@ -1833,6 +2121,7 @@ edges: []
             description: None,
             file_stem: String::new(),
             parent_dir: String::new(),
+            entry: None,
             config: None,
             nodes: vec![node],
             edges: vec![],

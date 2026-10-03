@@ -5,7 +5,15 @@ visible: false
 config:
   default_llm_params: strict
 
+entry: user_message
+
 nodes:
+
+- id: user_message
+  type: user_message
+  ui_pos:
+    x: -300
+    y: 0
 
 - id: call_validator
   type: llm_worker
@@ -24,6 +32,9 @@ nodes:
     y: 0
 
 edges:
+
+- from: user_message
+  to: call_validator
 
 - from: call_validator
   to: done

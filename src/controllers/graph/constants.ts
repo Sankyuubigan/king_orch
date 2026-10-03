@@ -1,4 +1,5 @@
 export const NODE_COLORS: Record<string, string> = {
+  user_message: "#8d6e63",
   llm_worker: "#4caf50",
   llm_classifier: "#42a5f5",
   llm_fact_extractor: "#7e57c2",
@@ -15,6 +16,7 @@ export const NODE_COLORS: Record<string, string> = {
 };
 
 export const NODE_LABELS: Record<string, string> = {
+  user_message: "💬 Сообщение юзера",
   llm_worker: "🤖 Worker",
   llm_classifier: "📋 Classifier",
   llm_fact_extractor: "📋 Fact Extractor",
@@ -34,7 +36,26 @@ export function isDynamicNode(t: string): boolean {
   return t === "switch" || t === "llm_sequential_switch" || t === "signal_router" || t === "condition_check" || t === "condition_router";
 }
 
+/** Тип узла точки входа графа: текст, который пользователь отправил в чат. */
+export const ENTRY_NODE_TYPE = "user_message";
+
+/**
+ * Число входных портов по типу узла.
+ *
+ * Единственный источник правды: раньше порт входа был захардкожен (`input_1`),
+ * из-за чего ноду-источник нельзя было сделать без входа. У `user_message` входа
+ * нет — это делает ребро INTO невозможным и на холсте, и в YAML.
+ */
+export const INPUT_COUNT: Record<string, number> = {
+  user_message: 0,
+};
+
+export function inputCount(type: string): number {
+  return INPUT_COUNT[type] ?? 1;
+}
+
 export const OUTPUT_COUNT: Record<string, number> = {
+  user_message: 1,
   llm_worker: 1,
   llm_classifier: 1,
   llm_fact_extractor: 1,

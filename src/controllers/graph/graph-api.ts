@@ -1,8 +1,10 @@
 import type { GraphSnapshot, GraphNodeDef, GraphEdgeDef } from "./types";
+import type { GraphDiagnostic } from "../../services";
 
 export interface GraphApi {
   ensureEditor(): void;
   onTabActivated(): void;
+  setYamlDiagnostics(diagnostics: GraphDiagnostic[]): void;
 
   setupCanvasInteraction(): void;
   selectNode(id: string): void;
@@ -17,6 +19,8 @@ export interface GraphApi {
   handleOpen(): Promise<void>;
   clearEditor(): void;
   handleSave(): Promise<void>;
+  resolveEntryForEditor(wf: { entry?: string | null; nodes: GraphNodeDef[]; edges: GraphEdgeDef[] }): string | null;
+  setEntryNode(nodeId: string): void;
 
   showNodeEditor(nodeId: string): void;
   hideSidebar(): void;
@@ -26,6 +30,8 @@ export interface GraphApi {
   addNode(type: string, clientX?: number, clientY?: number): void;
   copyNode(nodeId: string): void;
   generateUniqueNodeId(baseType: string): string;
+  generateEntryNodeId(): string;
+  hasSourceNode(): boolean;
   pasteNode(clientX?: number, clientY?: number): void;
   clearNodeTargets(data: GraphNodeDef): void;
   renameNode(oldKey: string, newKey: string): boolean;
@@ -34,13 +40,14 @@ export interface GraphApi {
 
   rebuildSwitchOutputs(nodeId: string): void;
   syncSwitchNodeFromConnections(dn: any): void;
+  canReceiveEdge(targetId: string): boolean;
   onSwitchConnectionChanged(fromNodeId: string, toNodeId: string, outputKey: string, action: "created" | "removed"): void;
   getSwitchOutputCount(node: GraphNodeDef): number;
   getSwitchCaseKeys(node: GraphNodeDef): string[];
   getSwitchOutputIndex(node: GraphNodeDef, caseVal?: string): number;
   getImplicitSwitchEdges(nodes: GraphNodeDef[]): GraphEdgeDef[];
 
-  computeAutoLayout(nodes: GraphNodeDef[], edges: GraphEdgeDef[]): Map<string, { x: number; y: number }>;
+  computeAutoLayout(nodes: GraphNodeDef[], edges: GraphEdgeDef[], entryNodeId?: string | null): Map<string, { x: number; y: number }>;
 
   buildNodeInnerHtml(data: any, fallbackId?: string): string;
   esc(s: string): string;

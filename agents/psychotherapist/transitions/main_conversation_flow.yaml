@@ -4,18 +4,27 @@ config:
   facts_file: facts.yaml
   default_llm_params: creative
 
+entry: user_message
+
 nodes:
+
+- id: user_message
+  type: user_message
+  ui_pos:
+    x: -2274
+    y: 493
 
 - id: extract_facts
   type: llm_fact_extractor
-  input: '{{ user_message }}'
+  input: '{{ nodes.user_message.output.text }}'
   ui_pos:
-    y: 493
     x: -1990
+    y: 493
   llm_params: strict
 
 - id: check_has_problem
   type: condition_check
+  input_object: '{{ nodes.extract_facts.output }}'
   field: has_problem
   true_to: note_1782221436115
   false_to: note_1785141025138
@@ -62,8 +71,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 1345
     y: 152
+    x: 1345
   llm_params: strict
 
 - id: call_grounder
@@ -78,8 +87,8 @@ nodes:
   - decomposer
   - data_collector
   ui_pos:
-    y: -451
     x: 2841
+    y: -451
 
 - id: call_focus_keeper
   type: llm_worker
@@ -89,8 +98,8 @@ nodes:
   inject_response:
   - decomposer
   ui_pos:
-    x: 51
     y: 330
+    x: 51
   llm_params: strict
 
 - id: check_focus_keeper_signal
@@ -112,8 +121,8 @@ nodes:
   input: переспрашиваем юзера, с какой мишенью работаем
   system_message: "Специалист уже выделил мишени для работы (список выше в чате). Чтобы двигаться дальше, нам нужно определиться, с какой именно мишенью работаем. \nПожалуйста, напишите номер или название мишени, с которой хотите работать."
   ui_pos:
-    y: 662
-    x: 978
+    x: 974
+    y: 708
 
 - id: call_pattern_finder
   type: llm_worker
@@ -124,8 +133,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 2834
     y: 44
+    x: 2834
 
 - id: call_healer
   type: llm_worker
@@ -158,29 +167,29 @@ nodes:
   - data_collector
   - grounder
   ui_pos:
-    y: -456
     x: 2259
+    y: -456
 
 - id: note_1782221436115
   type: note
   input: пересчитываем данные с учетом новых данных от юзера
   ui_pos:
-    y: 255
     x: -1215
+    y: 255
 
 - id: note_1782220193985
   type: note
   input: проверка данных. развилка на доработку данных или отправку на лечение
   ui_pos:
-    y: 161
     x: 908
+    y: 161
 
 - id: note_1784427848563
   type: note
   input: вычисление типа
   ui_pos:
-    y: 41
     x: 2085
+    y: 41
 
 - id: check_critical_elements
   type: condition_router
@@ -197,8 +206,8 @@ nodes:
     equals: false
   logic: any
   ui_pos:
-    x: 1655
     y: 81
+    x: 1655
 
 - id: check_somatic
   type: condition_router
@@ -225,16 +234,16 @@ nodes:
   - key: НУЖНА РУКОСТЬ
     to: note_1785123862689
   ui_pos:
-    x: -332
     y: 117
+    x: -332
 
 - id: note_1785123862689
   type: note
   input: уточнение рукости у юзера
   system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
   ui_pos:
-    y: 10
     x: -57
+    y: 10
 
 - id: note_1785141025138
   type: note
@@ -252,8 +261,8 @@ nodes:
 
     В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
-    y: 748
     x: -1323
+    y: 748
 
 - id: call_request_helper
   type: llm_worker
@@ -294,10 +303,13 @@ nodes:
     equals: false
   logic: all
   ui_pos:
-    y: -302
     x: 2517
+    y: -302
 
 edges:
+
+- from: user_message
+  to: extract_facts
 
 - from: extract_facts
   to: check_has_problem

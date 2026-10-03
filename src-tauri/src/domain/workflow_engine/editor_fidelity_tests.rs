@@ -150,15 +150,143 @@ fn accepts_canonical_workflow() {
         r#"
 name: test
 config: null
+entry: user_input
 nodes:
+  - id: user_input
+    type: user_message
   - id: worker
     type: llm_worker
     agent: test
-edges: []
+edges:
+  - from: user_input
+    to: worker
 "#,
     );
 
     let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
 
     assert!(diagnostics.is_empty(), "{:?}", diagnostics);
+}
+
+#[test]
+fn detects_missing_entry() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+nodes:
+  - id: user_input
+    type: user_message
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.code == "ENTRY_MISSING" && d.location == "entry"));
+}
+
+#[test]
+fn detects_dangling_entry() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: nowhere
+nodes:
+  - id: user_input
+    type: user_message
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.code == "ENTRY_TARGET_MISSING"));
+}
+
+#[test]
+fn detects_entry_of_wrong_type_and_incoming_edge() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: worker
+nodes:
+  - id: user_input
+    type: user_message
+  - id: worker
+    type: llm_worker
+    agent: test
+edges:
+  - from: user_input
+    to: worker
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.code == "ENTRY_TYPE_UNEXPECTED"));
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.code == "ENTRY_HAS_INCOMING_EDGE"));
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.code == "USER_MESSAGE_NOT_ENTRY" && d.location == "nodes[id=user_input]"));
+}
+
+#[test]
+fn detects_template_reference_to_missing_node() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+  - id: worker
+    type: llm_worker
+    agent: test
+    task: "Смотри отчёт: {{ nodes.extractor.output.result }}"
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics.iter().any(|d| {
+        d.code == "TEMPLATE_NODE_REF_MISSING"
+            && d.location == "nodes[id=worker].task"
+            && d.message.contains("extractor")
+    }));
+}
+
+#[test]
+fn accepts_template_reference_to_existing_node() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+  - id: extractor
+    type: llm_fact_extractor
+    input: "{{ nodes.user_input.output.text }}"
+  - id: worker
+    type: llm_worker
+    agent: test
+    task: "Вопрос: {{ nodes.user_input.output.text }} Отчёт: {{ nodes.extractor.output }}"
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(!diagnostics
+        .iter()
+        .any(|d| d.code == "TEMPLATE_NODE_REF_MISSING"));
 }

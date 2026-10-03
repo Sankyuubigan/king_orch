@@ -185,6 +185,14 @@ infra/    — Инфраструктура (LLM, сессии, MCP, конфиг
 - **Разделение бизнес-логики и маршрутизации**: `.md` файлы агентов содержат ТОЛЬКО бизнес-логику (стиль общения, правила представления). Вся маршрутизация (вызов сабагентов, проверка статусов, циклы) — в `.yaml` workflow графах.
 - **Классификация контекста** — реализована в графах workflow, а НЕ отдельным модулем. Built-in узел `llm_fact_extractor` (`workflow_engine/fact_extractor.rs`) извлекает факты из текста (возвращает JSON `{"fact_id": true/false, ...}`), а дальше маршрутизация идёт по узлам `LlmSequentialSwitch` / `switch` / `condition_check` / `signal_router` (`workflow_engine/nodes.rs`, см. `cases_priority`). Отдельного файла `intent_classifier.rs` **не существует** (это устаревшее упоминание).
 
+### Точка входа графа — нода `user_message` (ОБЯЗАТЕЛЬНО)
+- Каждый workflow начинается с ноды типа **`user_message`** (0 входов, 1 выход, LLM не вызывается). Она отдаёт текст хода пользователя как `{"text": ...}` — это **единственный источник** пользовательского входа в графе.
+- Старт объявляется полем **`entry:`** верхнего уровня YAML (`WorkflowDef.entry`). Фоллбэка на `nodes[0]` **нет и не должно быть**: визуальный редактор переписывает порядок нод при сохранении, поэтому позиция не является объявлением. Резолвится единственной функцией `parser::resolve_entry`.
+- `load_workflows` пропускает файл без валидного `entry` с `log::error!` — сломанный граф не должен выглядеть рабочим. Редактор старый файл открывает (иначе нечем чинить) и показывает проблему диагностикой `ENTRY_MISSING` / `ENTRY_TARGET_MISSING` / `ENTRY_TYPE_UNEXPECTED` / `USER_MESSAGE_NOT_ENTRY`.
+- Экстрактор берёт текст из **`input` узла** (`{{ nodes.user_message.output.text }}`), а не из ambient-контекста — иначе нода входа была бы декоративной. `condition_check`同理: `input_object` обязателен, хардкод дефолта `{{ nodes.extract_facts.output }}` удалён.
+- Инвариант: `{{ user_message }}` ≡ `{{ nodes.<entry>.output.text }}` (обе — `sanitize_model_visible_text(context.user_message)`). Короткая форма — сокращение для обратной совместимости, а не второй источник правды.
+- Контракт проверяется тестами `production_graphs_*` в `workflow_engine/parser.rs` по реальным файлам из `agents/`.
+
 ### Grammar Architecture (Method 3 — Hybrid GBNF)
 - Все агенты с JSON-выводом используют **hybrid GBNF** (Method 3 из `docs/gbnf.md`):
   `root ::= think-block json-object`, где `think-block ::= "<think>" [^<]* "</think>" | ""`
@@ -240,6 +248,7 @@ pub struct ChatMessage {
 | **Бизнес-логика** | `.md` файлы агентов | Markdown | `therapist_communicator.md` |
 | **Маршрутизация** | `.yaml` файлы в `workflows/` | YAML граф | `main_conversation_flow.yaml` |
 | **Классификация контекста** | Узлы workflow графа (факт-экстрактор + маршрутизация) | YAML + Rust | `fact_extractor.rs` (`llm_fact_extractor`) + `nodes.rs` (`LlmSequentialSwitch`, `switch`, `condition_check`, `signal_router`) |
+| **Ввод пользователя** | Нода-вход графа + явное поле `entry` | YAML | `type: user_message`, `entry: <id>` |
 
 ### Запрет хардкода конкретных кейсов в бизнес-логике агентов (НАРУШЕНИЕ = КРИТИЧЕСКАЯ ОШИБКА)
 

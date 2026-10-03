@@ -10,13 +10,21 @@ config:
   write_root: workdir
   write_outside: prompt
 
+# Точка входа графа — текст, отправленный пользователем в чат.
+entry: user_message
+
 nodes:
+
+# Источник данных: текст пользователя (без LLM).
+- id: user_message
+  type: user_message
+  ui_pos:
+    x: -284
+    y: 130
 
 - id: extract_facts
   type: llm_fact_extractor
-  input: |
-    User: {{ user_message }}
-    Session history: {{ messages }}
+  input: '{{ nodes.user_message.output.text }}'
   ui_pos:
     x: 100
     y: 130
@@ -45,7 +53,7 @@ nodes:
   type: llm_worker
   agent: ux_ui_designer
   task: |
-    Спроектируй UI/UX для задачи: {{ user_message }}
+    Спроектируй UI/UX для задачи: {{ nodes.user_message.output.text }}
     Верни подробные визуальные инструкции для Primary Coder: файлы, компоненты, CSS/Tailwind-классы, цвета, отступы, анимации. Сам код в файлы не пиши — только инструкции.
   output_type: thought
   ui_pos:
@@ -58,7 +66,7 @@ nodes:
   task: |
     Примени визуальные инструкции дизайнера строго как описано, в указанные файлы.
     Дизайн-инструкции: {{ nodes.call_ux_ui_designer.output.result }}
-    Исходная задача: {{ user_message }}
+    Исходная задача: {{ nodes.user_message.output.text }}
   output_type: message
   ui_pos:
     y: -379
@@ -68,7 +76,7 @@ nodes:
   type: llm_worker
   agent: primary_coder
   task: |
-    Выполни напрямую, без отдельного плана: {{ user_message }}
+    Выполни напрямую, без отдельного плана: {{ nodes.user_message.output.text }}
     Если не хватает контекста — верни 'Не хватает контекста файла X'. Обязательно ставь логи.
   output_type: message
   ui_pos:
@@ -86,7 +94,7 @@ nodes:
     `write_file` в тот же файл. НЕ анализируй код, НЕ переписывай его своими словами —
     просто перенеси готовый код из плана в файл.
     Если утверждённого плана нет — честно верни: "Нет утверждённого плана. Сначала прогони пайплайн «Аналитик кода»."
-    Исходная задача: {{ user_message }}
+    Исходная задача: {{ nodes.user_message.output.text }}
   output_type: thought
   ui_pos:
     x: 3376
@@ -139,6 +147,9 @@ nodes:
     x: 740
 
 edges:
+
+- from: user_message
+  to: extract_facts
 
 - from: extract_facts
   to: route

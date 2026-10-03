@@ -40,6 +40,7 @@ export function setupContextMenu(this: GraphController): void {
           Создать
           <span class="ctx-submenu-arrow">▶</span>
           <div class="ctx-submenu-list">
+            <div class="ctx-item" data-type="user_message">💬 Сообщение юзера</div>
             <div class="ctx-item" data-type="llm_worker">🤖 Worker</div>
             <div class="ctx-item" data-type="switch">🔀 Switch</div>
             <div class="ctx-item" data-type="llm_sequential_switch">🔀 SeqSwitch</div>

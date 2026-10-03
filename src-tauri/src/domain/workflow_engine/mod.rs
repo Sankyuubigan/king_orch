@@ -14,8 +14,8 @@ pub use context::WorkflowContext;
 pub use editor_fidelity::{analyze_workflow_fidelity, GraphDiagnostic};
 pub use parser::WorkflowConfig;
 pub use parser::{
-    find_workflow_by_stem, load_workflows, parse_workflow_file, separate_top_level_fields, EdgeDef, FactsFile,
-    NodeDef, NodeType, WorkflowDef,
+    find_workflow_by_stem, load_workflows, parse_workflow_file, resolve_entry,
+    separate_top_level_fields, EdgeDef, FactsFile, NodeDef, NodeType, WorkflowDef,
 };
 
 use crate::domain::agent_manager::AgentProfile;
@@ -342,12 +342,14 @@ where
         workflow.edges.len()
     ));
 
-    let mut queue: Vec<String> = workflow
-        .nodes
-        .first()
-        .map(|n| n.id.clone())
-        .into_iter()
-        .collect();
+    // Точка входа объявлена в YAML (`entry:`). Позиция в `nodes:` не является
+    // объявлением: визуальный редактор переписывает порядок нод при сохранении.
+    let entry = resolve_entry(workflow).map_err(|e| (e, context.messages.clone()))?;
+    (runner.log_cb)(format!(
+        "[workflow] '{}': вход -> '{}'",
+        workflow.name, entry.id
+    ));
+    let mut queue: Vec<String> = vec![entry.id.clone()];
     // visited → visits: узел может выполниться несколько раз (циклы через рёбра),
     // но не больше node.max_visits (default 1 = прежнее поведение visited-логики).
     let max_visits_map: std::collections::HashMap<String, u32> = workflow

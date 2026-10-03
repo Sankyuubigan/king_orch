@@ -1,6 +1,6 @@
 import type { DrawflowNode } from "drawflow";
 import { showToast } from "../../ui";
-import { isDynamicNode, OUTPUT_COUNT } from "./constants";
+import { isDynamicNode, OUTPUT_COUNT, ENTRY_NODE_TYPE, inputCount } from "./constants";
 import type { GraphNodeDef } from "./types";
 import type { GraphController } from "./graph-class";
 
@@ -8,8 +8,16 @@ import type { GraphController } from "./graph-class";
 
 export function addNode(this: GraphController, type: string, clientX?: number, clientY?: number): void {
   this.ensureEditor();
+
+  // Нода-источник в графе может быть только одна: входящих рёбер у неё нет,
+  // поэтому вторая такая нода была бы недостижима — мёртвый груз на холсте.
+  if (type === ENTRY_NODE_TYPE && this.hasSourceNode()) {
+    showToast(`❌ Нода «${ENTRY_NODE_TYPE}» уже есть — источник данных в графе один`, "error");
+    return;
+  }
+
   this.saveCheckpoint();
-  const id = `${type}_${Date.now()}`;
+  const id = type === ENTRY_NODE_TYPE ? this.generateEntryNodeId() : `${type}_${Date.now()}`;
   const zoom = this.editor!.zoom || 1;
   let cx: number, cy: number;
   if (clientX !== undefined && clientY !== undefined) {
@@ -24,7 +32,8 @@ export function addNode(this: GraphController, type: string, clientX?: number, c
   const outs = type === "condition_check" ? 3 : type === "condition_router" ? 3 : (isDynamicNode(type) ? 2 : OUTPUT_COUNT[type] ?? 1);
 
   const inputs: Record<string, { connections: any[] }> = {};
-  for (let i = 1; i <= 1; i++) inputs[`input_${i}`] = { connections: [] };
+  const ins = inputCount(type);
+  for (let i = 1; i <= ins; i++) inputs[`input_${i}`] = { connections: [] };
   const outputs: Record<string, { connections: any[] }> = {};
   for (let i = 1; i <= outs; i++) outputs[`output_${i}`] = { connections: [] };
 
@@ -49,7 +58,28 @@ export function addNode(this: GraphController, type: string, clientX?: number, c
   this.editor!.addNodeImport(nodeData, this.editor!.precanvas);
   this.editor!.dispatch("nodeCreated", id);
 
+  if (type === ENTRY_NODE_TYPE) this.currentEntryNodeId = id;
+
   this.updateNodeHtml(id);
+}
+
+/** Есть ли на холсте нода-источник (тип `user_message`). */
+export function hasSourceNode(this: GraphController): boolean {
+  const data = this.editor ? this.editor.drawflow.drawflow.Home.data : {};
+  return Object.values(data).some((dn: any) => dn?.data?.type === ENTRY_NODE_TYPE);
+}
+
+/**
+ * Читаемый id для ноды входа: `user_message`, а не `user_message_1770000000000`.
+ * id попадает в YAML и в тексты шаблонов (`{{ nodes.user_message.output.text }}`),
+ * поэтому должен быть осмысленным.
+ */
+export function generateEntryNodeId(this: GraphController): string {
+  const data = this.editor ? this.editor.drawflow.drawflow.Home.data : {};
+  if (!data.user_message) return "user_message";
+  let n = 2;
+  while (data[`user_message_${n}`]) n++;
+  return `user_message_${n}`;
 }
 
 // ─── Копирование / вставка ноды ───
@@ -77,9 +107,19 @@ export function generateUniqueNodeId(this: GraphController, baseType: string): s
 export function pasteNode(this: GraphController, clientX?: number, clientY?: number): void {
   if (!this.copiedNode) return;
   this.ensureEditor();
+
+  // Второй источник в графе недостижим (входящих рёбер нет) — не создаём.
+  if (this.copiedNode.data.type === ENTRY_NODE_TYPE && this.hasSourceNode()) {
+    showToast(`❌ Нода «${ENTRY_NODE_TYPE}» уже есть — источник данных в графе один`, "error");
+    return;
+  }
+
   this.saveCheckpoint();
 
-  const newId = this.generateUniqueNodeId(this.copiedNode.data.type || "node");
+  const isEntry = this.copiedNode.data.type === ENTRY_NODE_TYPE;
+  const newId = isEntry
+    ? this.generateEntryNodeId()
+    : this.generateUniqueNodeId(this.copiedNode.data.type || "node");
   const zoom = this.editor!.zoom || 1;
   let cx: number, cy: number;
   if (clientX !== undefined && clientY !== undefined) {
@@ -102,7 +142,8 @@ export function pasteNode(this: GraphController, clientX?: number, clientY?: num
   // Копия вставляется без связей — пустые порты
   clone.inputs = {};
   clone.outputs = {};
-  clone.inputs.input_1 = { connections: [] };
+  const ins = inputCount(clone.data.type || "");
+  for (let i = 1; i <= ins; i++) clone.inputs[`input_${i}`] = { connections: [] };
   const outs = isDynamicNode(clone.data.type) ? this.getSwitchOutputCount(clone.data) : OUTPUT_COUNT[clone.data.type] ?? 1;
   for (let i = 1; i <= outs; i++) clone.outputs[`output_${i}`] = { connections: [] };
 
@@ -112,6 +153,7 @@ export function pasteNode(this: GraphController, clientX?: number, clientY?: num
   this.editor!.drawflow.drawflow.Home.data[newId] = clone;
   this.editor!.addNodeImport(clone, this.editor!.precanvas);
   this.editor!.dispatch("nodeCreated", newId);
+  if (isEntry) this.currentEntryNodeId = newId;
   this.updateNodeHtml(newId);
   showToast(`📌 Вставлена нода: ${newId}`, "success");
 }
@@ -228,6 +270,10 @@ export function renameNode(this: GraphController, oldKey: string, newKey: string
 
   // 8. Перерендериваем HTML ноды
   this.updateNodeHtml(trimmed);
+
+  // 8a. Переносим ссылку `entry`: переименование входа не должно его терять,
+  // иначе сохранение молча сломает точку входа.
+  if (this.currentEntryNodeId === oldKey) this.currentEntryNodeId = trimmed;
 
   // 9. Обновляем заголовок сайдбара
   this.el.graphDetailTitle.textContent = `✏️ ${trimmed}`;

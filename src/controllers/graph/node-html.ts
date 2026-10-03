@@ -1,9 +1,23 @@
-import { NODE_LABELS, isDynamicNode } from "./constants";
+import { NODE_LABELS, isDynamicNode, ENTRY_NODE_TYPE } from "./constants";
 import { renderConditionExpression } from "./condition-editor";
 import type { GraphController } from "./graph-class";
 
 export function buildNodeInnerHtml(this: GraphController, data: any, fallbackId: string = ""): string {
   const typeLabel = NODE_LABELS[data.type] || data.type;
+  const nodeId = data.id || fallbackId;
+  const isEntry = this.currentEntryNodeId === nodeId;
+
+  // Нода-источник: показывает, что именно запускает граф. Текст подставляется
+  // нодами через `{{ nodes.<id>.output.text }}`.
+  if (data.type === ENTRY_NODE_TYPE) {
+    return `
+      <div class="gn-title">${this.esc(nodeId)}</div>
+      ${isEntry ? `<div class="gn-entry-badge">🚪 ВХОД ГРАФА</div>` : ""}
+      <div class="gn-type">${typeLabel}</div>
+      <div class="gn-agent gn-source">Текст, отправленный юзером в чат</div>
+    `;
+  }
+
   let agentLine = "";
   if (data.type === "llm_worker" && data.agent) {
     agentLine = `<div class="gn-agent">→ ${this.esc(data.agent)}</div>`;
@@ -83,7 +97,8 @@ export function buildNodeInnerHtml(this: GraphController, data: any, fallbackId:
 
   const disabledBadge = data.disabled ? `<div class="gn-disabled-badge">⛔ DISABLED</div>` : "";
   return `
-    <div class="gn-title">${this.esc(data.id || fallbackId)}</div>
+    <div class="gn-title">${this.esc(nodeId)}</div>
+    ${isEntry ? `<div class="gn-entry-badge">🚪 ВХОД ГРАФА</div>` : ""}
     <div class="gn-type">${typeLabel}</div>
     ${disabledBadge}
     ${agentLine}

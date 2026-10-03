@@ -22,6 +22,8 @@ pub fn analyze_workflow_fidelity(
     let mut diagnostics = Vec::new();
     collect_value_differences("workflow", source, &normalized, &mut diagnostics);
     collect_duplicate_node_ids(workflow, &mut diagnostics);
+    collect_entry_diagnostics(workflow, &mut diagnostics);
+    collect_template_reference_diagnostics(workflow, &mut diagnostics);
     collect_node_target_diagnostics(workflow, &mut diagnostics);
     collect_edge_diagnostics(workflow, &mut diagnostics);
     deduplicate(&mut diagnostics);
@@ -138,6 +140,129 @@ fn collect_duplicate_node_ids(
             );
         }
     }
+}
+
+/// Проверки объявленной точки входа.
+///
+/// Движок требует `entry` жёстко (см. `parser::resolve_entry`), поэтому редактор
+/// показывает проблему ДО сохранения, а не после падения запуска.
+fn collect_entry_diagnostics(
+    workflow: &WorkflowDef,
+    diagnostics: &mut Vec<GraphDiagnostic>,
+) {
+    let Some(entry) = workflow
+        .entry
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+    else {
+        push_diagnostic(
+            diagnostics,
+            "ENTRY_MISSING",
+            "entry",
+            "не объявлена точка входа: добавь ноду типа user_message и поле `entry:` верхнего уровня со ссылкой на её id".to_string(),
+        );
+        return;
+    };
+
+    let Some(node) = workflow.nodes.iter().find(|n| n.id == entry) else {
+        push_diagnostic(
+            diagnostics,
+            "ENTRY_TARGET_MISSING",
+            "entry",
+            format!("entry '{}' не существует среди nodes[].id", entry),
+        );
+        return;
+    };
+
+    if node.node_type != NodeType::UserMessage {
+        push_diagnostic(
+            diagnostics,
+            "ENTRY_TYPE_UNEXPECTED",
+            "entry",
+            format!(
+                "вход '{}' имеет тип {:?}, а не user_message — текст пользователя не попадёт в граф явно",
+                entry, node.node_type
+            ),
+        );
+    }
+
+    for (index, edge) in workflow.edges.iter().enumerate() {
+        if edge.to == entry {
+            push_diagnostic(
+                diagnostics,
+                "ENTRY_HAS_INCOMING_EDGE",
+                &format!("edges[{}]", index),
+                format!(
+                    "в '{}' приходит ребро '{}' → точка входа не может иметь входов",
+                    entry, edge.from
+                ),
+            );
+        }
+    }
+
+    for other in &workflow.nodes {
+        if other.node_type == NodeType::UserMessage && other.id != entry {
+            push_diagnostic(
+                diagnostics,
+                "USER_MESSAGE_NOT_ENTRY",
+                &format!("nodes[id={}]", other.id),
+                "второй узел user_message, не являющийся точкой входа: вход в граф должен быть один".to_string(),
+            );
+        }
+    }
+}
+
+/// Статическая сверка `{{ nodes.X.output }}` со списком `nodes[].id`.
+///
+/// Шаблоны разрешаются текстовой заменой, и неразрешённый плейсхолдер МОЛЧА
+/// уезжает в промпт модели (см. `WorkflowContext::resolve_template`). Эта проверка
+/// превращает такой отказ в видимую диагностику редактора, без запуска графа.
+fn collect_template_reference_diagnostics(
+    workflow: &WorkflowDef,
+    diagnostics: &mut Vec<GraphDiagnostic>,
+) {
+    let ids: HashSet<&str> = workflow.nodes.iter().map(|node| node.id.as_str()).collect();
+    for node in &workflow.nodes {
+        for (field, template) in [
+            ("input", node.input.as_deref()),
+            ("input_object", node.input_object.as_deref()),
+            ("task", node.task.as_deref()),
+        ] {
+            let Some(template) = template else { continue };
+            for target in referenced_node_ids(template) {
+                if !ids.contains(target.as_str()) {
+                    push_diagnostic(
+                        diagnostics,
+                        "TEMPLATE_NODE_REF_MISSING",
+                        &format!("nodes[id={}].{}", node.id, field),
+                        format!(
+                            "ссылка {{{{ nodes.{}.output }}}} не разрешится: ноды с id '{}' нет в графе",
+                            target, target
+                        ),
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Вынимает id нод из шаблонов вида `{{ nodes.<id>.output }}` / `{{ nodes.<id>.output.<key> }}`.
+fn referenced_node_ids(template: &str) -> Vec<String> {
+    const PREFIX: &str = "{{ nodes.";
+    let mut found = Vec::new();
+    let mut rest = template;
+    while let Some(pos) = rest.find(PREFIX) {
+        rest = &rest[pos + PREFIX.len()..];
+        let id: String = rest
+            .chars()
+            .take_while(|c| !matches!(c, '.' | ' ' | '}' | '\n' | '\t'))
+            .collect();
+        if !id.is_empty() {
+            found.push(id);
+        }
+    }
+    found
 }
 
 fn collect_node_target_diagnostics(

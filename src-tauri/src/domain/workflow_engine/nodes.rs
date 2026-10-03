@@ -1,3 +1,4 @@
+use crate::domain::orchestrator::prompt::sanitize_model_visible_text;
 use crate::domain::workflow_engine::context::WorkflowContext;
 use crate::domain::workflow_engine::parser::{
     ConditionNode, EdgeDef, NodeDef, NodeType, WorkflowConfig, WorkflowDef,
@@ -201,6 +202,29 @@ pub fn resolve_signal_route(
     (matched, target)
 }
 
+/// Выход узла `user_message` — текст текущего хода пользователя.
+///
+/// Единственное место, где этот текст материализуется как данные графа.
+/// Санитизация происходит здесь и больше нигде: шаблон
+/// `{{ nodes.X.output.text }}` подставляет готовую строку (см.
+/// `WorkflowContext::resolve_template`).
+pub fn user_message_output(context: &WorkflowContext) -> serde_json::Value {
+    serde_json::json!({ "text": sanitize_model_visible_text(&context.user_message) })
+}
+
+/// Текст текущего хода для LLM-узла: берётся из `input` узла, то есть ИЗ ГРАФА.
+///
+/// Так вход виден на холсте ребром, а не спрятан в ambient-контексте.
+/// Фоллбэк на `{{ user_message }}` оставлен для немигрированных файлов; это то же
+/// значение, что отдаёт нода `user_message`, поэтому миграция графов не меняет
+/// поведение экстрактора (проверено тестом эквивалентности).
+pub fn resolve_current_turn_text(node: &NodeDef, context: &WorkflowContext) -> String {
+    match node.input.as_deref().map(str::trim) {
+        Some(template) if !template.is_empty() => context.resolve_template(template),
+        _ => context.resolve_template("{{ user_message }}"),
+    }
+}
+
 /// Выполняет один узел графа и возвращает результат + id следующего узла
 pub fn execute_node<L, S, C>(
     node: &NodeDef,
@@ -214,6 +238,20 @@ where
     C: Fn(&SubCall) + Clone + Send + Sync + 'static,
 {
     match node.node_type {
+        NodeType::UserMessage => {
+            // Точка входа графа: единственный источник пользовательского входа.
+            // LLM не вызывается, расходов нет.
+            (runner.log_cb)(format!(
+                "[workflow] Вход графа: {} симв. от пользователя",
+                context.user_message.chars().count()
+            ));
+            Ok(NodeResult {
+                output: user_message_output(context),
+                next_node: None,
+                next_nodes: vec![],
+            })
+        }
+
         NodeType::System1Validator => {
             // Критерии приходят из YAML-узла (`rules_file`). Движок не знает ни
             // про конкретного агента, ни про количество правил: файл задаёт и
@@ -308,10 +346,13 @@ where
                 .cloned()
                 .unwrap_or(WorkflowConfig::default());
 
-            // Только ТЕКУЩЕЕ сообщение юзера — оно уйдёт в user-роль модели.
-            // История переписки ({{ messages }}) попадает ровно в ОДИН блок system-промпта
-            // (см. fact_extractor::build_default_prompt), чтобы не дублироваться.
-            let current_msg = context.resolve_template("{{ user_message }}");
+            // Текст ТЕКУЩЕГО хода берётся из `input` узла — то есть из графа.
+            // Так вход экстрактора виден на холсте ребром, а не спрятан в ambient-контексте.
+            //
+            // История переписки (`{{ messages }}`) и сигналы (`{{ signals }}`) попадают
+            // ровно в ОДИН блок system-промпта (см. fact_extractor::build_default_prompt),
+            // чтобы не дублироваться — поэтому в `input` их быть не должно.
+            let current_msg = resolve_current_turn_text(node, context);
             let signals = context.resolve_template("{{ signals }}");
             let history = context.resolve_template("{{ messages }}");
             let workflow_dir = std::path::Path::new(&workflow.parent_dir);
@@ -1173,10 +1214,17 @@ where
         }
 
         NodeType::ConditionCheck => {
-            let input_obj = node
-                .input_object
-                .as_deref()
-                .unwrap_or("{{ nodes.extract_facts.output }}");
+            // Вход ОБЯЗАТЕЛЕН. Раньше здесь стоял дефолт
+            // `{{ nodes.extract_facts.output }}` — знание конкретного графа внутри
+            // движка: движок не знает, как называется узел-экстрактор в чужом YAML.
+            // Теперь отсутствие входа — ошибка, а не молчаливое чтение не той ноды.
+            let input_obj = node.input_object.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "узел condition_check \"{}\": не задан input_object — нечего проверять",
+                        node.id
+                    )
+                })?;
             let resolved = context.resolve_template(input_obj);
             let json_val: serde_json::Value =
                 serde_json::from_str(&resolved).unwrap_or(serde_json::Value::Null);
@@ -1557,8 +1605,79 @@ fn fallback_facts_json(expected: &[String]) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::workflow_engine::context::WorkflowContext;
     use crate::domain::workflow_engine::fact_extractor::bool_fact_ids;
-    use crate::domain::workflow_engine::parser::PriorityCase;
+    use crate::domain::workflow_engine::parser::{NodeDef, NodeType, PriorityCase};
+
+    fn ctx_with_user_message(text: &str) -> WorkflowContext {
+        WorkflowContext::new(text.to_string(), vec![], vec![])
+    }
+
+    #[test]
+    fn user_message_node_output_shape() {
+        let ctx = ctx_with_user_message("болит спина");
+        let out = user_message_output(&ctx);
+
+        assert_eq!(out.get("text").and_then(|v| v.as_str()), Some("болит спина"));
+    }
+
+    #[test]
+    fn user_message_node_sanitizes_paths() {
+        let ctx = ctx_with_user_message("файл тут: C:\\Users\\user\\secret.txt");
+        let out = user_message_output(&ctx);
+        let text = out.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+
+        assert!(!text.contains("secret.txt"), "путь не должен утекать в граф: {}", text);
+    }
+
+    #[test]
+    fn entry_node_reference_equals_ambient_shorthand() {
+        // ГЛАВНЫЙ инвариант миграции: `{{ nodes.<entry>.output.text }}` и
+        // `{{ user_message }}` дают одну и ту же строку. Если это перестанет быть
+        // верно, перевод графов на явный вход меняет поведение экстрактора.
+        let mut ctx = ctx_with_user_message("наблюдаю сниженное настроение");
+
+        // Нода входа отработала — её вывод лежит в контексте (как это делает run_workflow).
+        let out = user_message_output(&ctx);
+        ctx.node_outputs.insert("user_input".to_string(), out);
+
+        let explicit = NodeDef {
+            id: "extract_facts".to_string(),
+            node_type: NodeType::LlmFactExtractor,
+            input: Some("{{ nodes.user_input.output.text }}".to_string()),
+            ..Default::default()
+        };
+        let legacy = NodeDef {
+            id: "extract_facts".to_string(),
+            node_type: NodeType::LlmFactExtractor,
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_current_turn_text(&explicit, &ctx),
+            resolve_current_turn_text(&legacy, &ctx)
+        );
+        assert_eq!(resolve_current_turn_text(&legacy, &ctx), "наблюдаю сниженное настроение");
+    }
+
+    #[test]
+    fn current_turn_text_falls_back_on_blank_input() {
+        let ctx = ctx_with_user_message("вопрос");
+
+        for raw in [None, Some(""), Some("   ")] {
+            let node = NodeDef {
+                id: "extract_facts".to_string(),
+                node_type: NodeType::LlmFactExtractor,
+                input: raw.map(str::to_string),
+                ..Default::default()
+            };
+            assert_eq!(
+                resolve_current_turn_text(&node, &ctx),
+                "вопрос",
+                "пустой input = ambient-фоллбек, а не пустая строка"
+            );
+        }
+    }
 
     #[test]
     fn parse_fact_json_accepts_logged_valid_output() {

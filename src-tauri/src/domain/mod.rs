@@ -23,7 +23,7 @@ pub use orchestrator::builtin_tools;
 pub use agent_manager::load_agents;
 pub use agent_manager::load_entry_points;
 pub use workflow_engine::{
-    analyze_workflow_fidelity, find_workflow_by_stem, load_workflows,
+    analyze_workflow_fidelity, find_workflow_by_stem, load_workflows, resolve_entry,
     separate_top_level_fields, EdgeDef, FactsFile, GraphDiagnostic, NodeDef, WorkflowConfig,
     WorkflowDef,
 };

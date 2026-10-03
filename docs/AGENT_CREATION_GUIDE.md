@@ -113,7 +113,15 @@ nodes:
     output_type: message
 ```
 
-**Главное правило №2 (один экстрактор на граф):** в каждом workflow **ровно ОДИН** `llm_fact_extractor` — на входе, для классификации запроса. Факты объявляются один раз в `config.facts` / `config.facts_file` (один `facts.yaml` на команду). Mid-flow решения (нужен ли поиск документации, достаточно ли данных, качество черновика) **не делаются вторым экстрактором** — их выносит воркер-вердикт (JSON в отчёте воркера или `emit_signal`), а роутит чистый `switch` / `condition_check` / `signal_router` по `{{ nodes.X.output.result }}`.
+**Главное правило №2 (один экстрактор на граф):** в каждом workflow **ровно ОДИН** `llm_fact_extractor` — сразу после ноды входа `user_message`, для классификации запроса. Факты объявляются один раз в `config.facts` / `config.facts_file` (один `facts.yaml` на команду). Mid-flow решения (нужен ли поиск документации, достаточно ли данных, качество черновика) **не делаются вторым экстрактором** — их выносит воркер-вердикт (JSON в отчёте воркера или `emit_signal`), а роутит чистый `switch` / `condition_check` / `signal_router` по `{{ nodes.X.output.result }}`.
+
+**Главное правило №3 (вход графа — нода, а не соглашение):** прогон всегда начинается с ноды типа `user_message`, объявленной в поле `entry`. Она отдаёт текст хода пользователя, и дальше этот текст читается **явно** — `{{ nodes.user_message.output.text }}`. Нет «замаскированного» входа: нельзя случайно сделать стартом ноду с фактами, потому что позиция в `nodes:` ни на что не влияет.
+
+#### Инвариант эквивалентности
+
+`{{ user_message }}` и `{{ nodes.user_message.output.text }}` подставляют **одно и то же** значение — обе величины это `sanitize_model_visible_text(context.user_message)`. Это сокращение, а не второй источник правды. Миграция графов на явную ссылку поэтому не меняет поведение экстрактора (проверено тестом `entry_node_reference_equals_ambient_shorthand`).
+
+В новых графах всё же пишите `{{ nodes.user_message.output.text }}`: связь с нодой-источником видна на холсте и не ломается при переименовании точки входа. Короткое `{{ user_message }}` оставлено для обратной совместимости немигрированных файлов.
 
 ---
 
@@ -202,6 +210,11 @@ mcp_servers: ["server_name"]  # опционально: прикрепить MCP
 name: Название графа
 description: Краткое описание команды (показывается в карточке выбора агентов)
 
+# ТОЧКА ВХОДА — обязательное поле верхнего уровня.
+# Это id ноды, с которой начинается прогон. Позиция ноды в `nodes:` входом
+# НЕ является: визуальный редактор переписывает порядок нод при сохранении.
+entry: user_message
+
 config:
   facts:                           # Факты для llm_fact_extractor (можно inline)
     - id: is_greeting
@@ -214,8 +227,13 @@ config:
                                    # При превышении — честная ошибка в лог.
 
 nodes:
+  # Вход графа: текст, отправленный пользователем в чат. LLM не вызывается.
+  # Входящих рёбер у ноды нет by design — ребро INTO невозможно.
+  - id: user_message
+    type: user_message
+
   - id: node_name
-    type: llm_worker | llm_fact_extractor | llm_freeform | system_condition | sub_workflow | switch | llm_sequential_switch | condition_check | signal_router | return | note
+    type: user_message | llm_worker | llm_fact_extractor | llm_freeform | system_condition | sub_workflow | switch | llm_sequential_switch | condition_check | condition_router | signal_router | return | note
     # тип-специфичные поля...
 
 edges:
@@ -224,11 +242,16 @@ edges:
     # condition / case — для условных переходов
 ```
 
+> **⚠️ `entry` обязателен.** Без него движок не запускает граф: `load_workflows`
+> пропустит файл с `log::error!`, и агент не появится в списке. Это сделано
+> намеренно — «точка входа» должна быть объявлением, а не следствием порядка нод.
+
 ### Контекстные переменные (шаблоны в любом поле узла)
 
 | Переменная | Что подставляется |
 |------------|-------------------|
-| `{{ user_message }}` | Текущее сообщение пользователя |
+| `{{ nodes.user_message.output.text }}` | **Текст текущего хода пользователя** (из ноды-входа графа) |
+| `{{ user_message }}` | Сокращение того же самого — см. §«Инвариант эквивалентности» |
 | `{{ messages }}` | История сессии как JSON-массив (все non-thought сообщения, только `type`/`author`/`content`) |
 | `{{ signals }}` | JSON-массив signal-сообщений сессии |
 | `{{ nodes.X.output }}` | JSON-вывод узла X |
@@ -238,14 +261,15 @@ edges:
 
 | Тип узла | Что делает | Ключевые поля |
 |----------|-----------|---------------|
+| `user_message` | **Точка входа графа.** Отдаёт текст текущего хода пользователя как `{"text": ...}`. LLM не вызывается. Входящих рёбер нет by design | — |
 | `llm_worker` | Вызывает `.md` агента с задачей. Результат — `thought` (свёрнутый отчёт) или `message` (в чат), управляется `output_type` | `agent`, `task`, `output_type`, `inject_thoughts`, `inject_response`, `llm_params` |
-| `llm_fact_extractor` | Generic экстрактор фактов (один на граф — на входе, см. «Главное правило №2»). Факты + критерии из `config.facts` / `config.facts_file`. Возвращает JSON `{"fact_id": true/false, ...}` | `input` |
+| `llm_fact_extractor` | Generic экстрактор фактов (один на граф, сразу после входа — см. «Главное правило №2»). Факты + критерии из `config.facts` / `config.facts_file`. Возвращает JSON `{"fact_id": true/false, ...}` | `input` (обязателен: `{{ nodes.user_message.output.text }}`) |
 | `llm_freeform` | Зовёт LLM без системного промпта (только история чата) — для off-topic | `input` |
 | `system_condition` | Rust-side проверка состояния сессии / агрегация отчётов | `action`, `required` |
 | `sub_workflow` | Рекурсивный вызов другого YAML графа (по file_stem) | `workflow` |
 | `switch` | Маршрутизация (3 режима, ниже) | `input`/`input_object`, `switch_field`, `cases_priority`, `default` |
 | `llm_sequential_switch` | Запускает ВСЕ ветки, где факт истин (одна за другой — sequential) | `input_object`, `cases_priority`, `default` |
-| `condition_check` | Ветвление по bool-полю JSON: `true_to`/`false_to` + `sequential_to` | `input_object`, `field`, `true_to`, `false_to`, `sequential_to` |
+| `condition_check` | Ветвление по bool-полю JSON: `true_to`/`false_to` + `sequential_to`. **`input_object` обязателен** — движок не знает id чужих нод и молча читать их не будет | `input_object`, `field`, `true_to`, `false_to`, `sequential_to` |
 | `signal_router` | Маршрутизация по сигналу: ищет в signal-сообщениях значение `signal_name.field` и мапит через `cases_priority` | `signal_name`, `field`, `cases_priority`, `default` |
 
 > ⚠️ **Правило сигнальных агентов:** агент, вызывающий `emit_signal`, ОБЯЗАН генерировать
@@ -476,27 +500,31 @@ agents/psychotherapist/
 ```yaml
 name: Психотерапевт
 description: Диалоговый граф разбора проблемы
+entry: user_message              # ОБЯЗАТЕЛЬНО: отсюда начинается прогон
 config:
   facts_file: facts.yaml        # Факты + критерии + extractor_prompt
   default_llm_params: creative # Скрытый пресет для всех узлов графа
 
 nodes:
+  # Вход: текст, который юзер отправил в чат. LLM не вызывается.
+  - id: user_message
+    type: user_message
+
   - id: extract_facts
     type: llm_fact_extractor
-    input: |
-      User: {{ user_message }}
-      Session history: {{ messages }}
+    input: "{{ nodes.user_message.output.text }}"
     llm_params: strict
 
   - id: check_has_problem
     type: condition_check
+    input_object: "{{ nodes.extract_facts.output }}"   # вход обязателен
     field: has_problem
     true_to: note_has_problem
     false_to: note_explain_rules
 
   - id: freestyle                # Свободный ответ без системного промпта
     type: llm_freeform
-    input: "{{ user_message }}"
+    input: "{{ nodes.user_message.output.text }}"
 
   - id: respond
     type: llm_worker
@@ -522,6 +550,9 @@ nodes:
     input: объясняем юзеру правила составления запроса
 
 edges:
+  - from: user_message
+    to: extract_facts
+
   - from: extract_facts
     to: check_has_problem
 
@@ -615,11 +646,12 @@ facts:
 1. Изучи потребность пользователя
 2. Определи, нужен ли один агент-коммуникатор или несколько
 3. Создай `.md` файл коммуникатора — только стиль общения, без маршрутизации
-4. Создай `.yaml` workflow граф в папке `transitions/` — вся маршрутизация здесь
+4. Создай `.yaml` workflow граф в папке `transitions/` — вся маршрутизация здесь. **Первым узлом поставь `user_message` и объяви `entry: user_message`** — без этого граф не запустится
 5. Воркеры создавай как `.md` с узкой задачей (папки `frontend/`/`backend/` по роли)
 6. Используй неймспейсы для изоляции контекстов разных проблем
-7. Факты выноси в `facts.yaml` рядом с workflow; `llm_fact_extractor` — **один на граф, на входе**; mid-flow решения — воркер-вердикт (JSON в отчёте/сигнал) + `switch`/`condition_check`/`signal_router`; сложные маршруты разбивай на `note`/`switch`/`condition_check`/`signal_router`; циклы — рёбрами с `max_visits` + `config.max_steps` (см. «Циклы в графах»), или линейной схемой с оценщиком.
+7. Факты выноси в `facts.yaml` рядом с workflow; `llm_fact_extractor` — **один на граф, сразу после входа**; mid-flow решения — воркер-вердикт (JSON в отчёте/сигнал) + `switch`/`condition_check`/`signal_router`; сложные маршруты разбивай на `note`/`switch`/`condition_check`/`signal_router`; циклы — рёбрами с `max_visits` + `config.max_steps` (см. «Циклы в графах»), или линейной схемой с оценщиком.
 8. Проверь, что file_stem'ы уникальны (движок ищет рекурсивно по `agents/`)
+9. Проверь контракт точки входа: `entry` объявлен, нода-вход существует, из неё идёт ребро, а `llm_fact_extractor` читает `{{ nodes.user_message.output.text }}`. Эти проверки закрыты тестами `production_graphs_*` в `workflow_engine/parser.rs` — новый граф обязан им удовлетворять.
 
 ---
 

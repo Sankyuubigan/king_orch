@@ -14,6 +14,7 @@ pub struct GraphWorkflowDef {
     pub name: String,
     pub file_stem: String,
     pub config: Option<WorkflowConfig>,
+    pub entry: Option<String>,
     pub nodes: Vec<NodeDef>,
     pub edges: Vec<EdgeDef>,
 }
@@ -62,6 +63,7 @@ pub fn read_workflow_file(path: String) -> Result<GraphWorkflowReadResult, Strin
             name: wf.name,
             file_stem,
             config: wf.config,
+            entry: wf.entry,
             nodes: wf.nodes,
             edges: wf.edges,
         },

@@ -102,6 +102,10 @@ Module-scope helper'ы:
 
 **Dirty state:** Флаг `isDirty` — `true` при любой мутации (там же где snapshot), `false` после `handleSave()` или `handleOpen()`. После Undo/Redo сравнивается JSON текущего состояния с `pristineSnapshot` (слепок при последнем save/load) для корректного определения изменений. Визуально: зелёный/красный кружок рядом с именем файла в тулбаре.
 
+**Точка входа графа (`entry`):** Поле `WorkflowDef.entry` (верхний уровень YAML) — id ноды, с которой начинается прогон. `currentEntryNodeId` — единственное состояние контроллера; производные от него: бейдж «🚪 ВХОД ГРАФА» в теле ноды (`node-html.ts`), секция сайдбара с кнопкой «Сделать точкой входа» (`panel-part.ts`),seed авто-раскладки (`layout.ts`). `resolveEntryForEditor` — единственная точка вывода: объявленное `entry` → единственная нода `user_message` → единственный корень графа. Последний шаг нужен только для миграции старых файлов и сам по себе ничего не пишет.
+
+`INPUT_COUNT` (`constants.ts`) — единственный источник правды о числе входных портов. У `user_message` их 0, поэтому нода-источник не может получить входящее ребро: ни через `addNode`/`pasteNode`, ни при восстановлении из YAML (`canReceiveEdge` в `switch-logic-part.ts` + диагностика `EDGE_INTO_SOURCE_NODE`). `handleSave` **не сохраняет** файл, если точку входа вывести не из чего — вместо записи графа, который движок не запустит.
+
 **Node ID lifecycle:** Узлы Drawflow имеют единственный идентификатор — `data.id`, который совпадает с ключом в `drawflow.Home.data`. При переименовании ноды через сайдбар (`ge-node-id`) вызывается `renameNode(oldKey, newKey)`:
 - Запись перемещается под новый ключ в хеше
 - Обновляются все `conn.node` в `inputs[]`/`outputs[]` всех нод
@@ -159,12 +163,12 @@ Module-scope helper'ы:
 | `sessions.rs` | `get_sessions`, `load_session`, `save_session`, `delete_session`, `rename_session`, `open_session_folder` | CRUD сессий |
 | `models.rs` | `get_models_catalog`, `get_model_params`, `set_model_params`, `reset_model_params`, `add_model` | Параметры моделей и каталог |
 | `agents.rs` | `get_agents` | Загрузка списка entry points (.md + YAML) |
-| `graph.rs` | `get_workflow_graphs` | Чтение YAML workflow и возврат структуры графа для UI |
+| `graph.rs` | `read_workflow_file`, `save_workflow` | Чтение YAML workflow (с диагностикой целостности) и запись обратно |
 | `chat.rs` | `chat_request`, `stop_processing`, `get_prompt_preview` | Главный цикл чата + Live-превью токенов |
 
 ### Подслой 5.2: Домен (`src-tauri/src/domain/`)
 
-**Дверь:** `domain/mod.rs` — реэкспортирует `run_chat`, `AgentEntry`, `AgentProfile`, `load_entry_points`, `build_system_prompt`, `load_agents`, а также workflow-контракт `load_workflows`, `find_workflow_by_stem`, `WorkflowDef`, `NodeType`
+**Дверь:** `domain/mod.rs` — реэкспортирует `run_chat`, `AgentEntry`, `AgentProfile`, `load_entry_points`, `build_system_prompt`, `load_agents`, а также workflow-контракт `load_workflows`, `find_workflow_by_stem`, `resolve_entry`, `WorkflowDef`, `NodeType`
 
 | Файл/Модуль | Зона ответственности |
 |-------------|---------------------|
@@ -173,8 +177,8 @@ Module-scope helper'ы:
 | `orchestrator/runtime.rs` | Загрузка и запуск MCP-серверов, раскрытие `code_read`/`code_write`/explicit-тулов из `agent.tools` (`agent_code_tool_schemas`) |
 | `orchestrator/dispatch.rs` | Диспетчеризация инструментов. Ветка код-тулов (до MCP): **capability-проверка `is_tool_granted`** (тул должен быть выдан в промпт — defense-in-depth), затем `execute_tool` |
 | `workflow_engine/mod.rs` | **Графовый движок маршрутизации.** Исполняет YAML-графы (workflows). Точка входа — `run_workflow()` |
-| `workflow_engine/parser.rs` | Парсинг YAML workflow файлов, структуры `WorkflowDef`, `NodeDef`, `EdgeDef`, поиск по `file_stem` |
-| `workflow_engine/nodes.rs` | Исполнение узлов графа: `llm_worker`, `llm_fact_extractor`, `system_condition`, `sub_workflow`, `switch`, `note` (pass-through), `return` |
+| `workflow_engine/parser.rs` | Парсинг YAML workflow файлов, структуры `WorkflowDef` (включая `entry` — точку входа), `NodeDef`, `EdgeDef`, `resolve_entry`, поиск по `file_stem` |
+| `workflow_engine/nodes.rs` | Исполнение узлов графа: `user_message` (точка входа, LLM не вызывается), `llm_worker`, `llm_fact_extractor`, `system_condition`, `sub_workflow`, `switch`, `note` (pass-through), `return` |
 | `workflow_engine/context.rs` | Контекст выполнения: проход `{{ template }}` переменных, хранение outputs узлов |
 | `workflow_engine/fact_extractor.rs` | **Built-in** fact-экстрактор (не требует отдельного .md файла). Факты инжектятся runtime из YAML |
 | `parsers.rs` | Распаковка JSON от LLM, очистка think-тегов |
@@ -238,18 +242,36 @@ User → Entry point (выбор пользователя в Настройка�
     run_chat() проверяет: есть ли YAML workflow с file_stem == agent_id?
          ↓
      [Да] → workflow_engine::run_workflow()
-           │          ├→ llm_fact_extractor → fact_extractor.rs (built-in, возвращает JSON фактов)
+           │          ├→ resolve_entry(workflow) — ТОЧКА ВХОДА обязательна.
+           │          │   Поле `entry:` верхнего уровня. Фоллбэка на nodes[0] нет:
+           │          │   порядок нод переписывает редактор при сохранении.
+           │          ├→ user_message → нода-вход: {"text": <текст хода>}, LLM не вызывается
+           │          ├→ llm_fact_extractor → fact_extractor.rs (built-in, текст берётся
+           │          │   из `input` узла, т.е. из графа; возвращает JSON фактов)
            │          ├→ switch → приоритетная (cases_priority) или стандартная маршрутизация
            │          ├→ condition_check → бинарная проверка поля (true/false)
            │          ├→ sub_workflow → рекурсивный вызов другого YAML
-           │          ├→ llm_worker → run_agent_node() для .md агента (история non-thought сообщений inject'ится автоматически, как в legacy)
+           │          ├→ llm_worker → run_agent_node() для .md агента (история non-thought
+           │          │   сообщений inject'ится автоматически, как в legacy)
            │          ├→ note → pass-through (визуальная заметка, не влияет на выполнение)
            │          └→ system_condition → Rust-side проверка (aggregate_and_output для вывода)
-         │
-    [Нет] → orchestrator::run_agent_node()
-│          └→ вся история non-thought сообщений inject'ится в llm_messages
-│             (автоматически — в workflow-режиме то же самое, {{ messages }} лишь дублирует её внутрь task)
+           │
+     [Нет] → orchestrator::run_agent_node()
+ │          └→ вся история non-thought сообщений inject'ится в llm_messages
+ │             (автоматически — в workflow-режиме то же самое, {{ messages }} лишь дублирует её внутрь task)
 ```
+
+**Точка входа графа — объявление, а не позиция.** Нода типа `user_message` —
+единственный источник пользовательского входа: у неё 0 входных портов, поэтому
+ребро INTO невозможно ни в YAML, ни на холсте. Движок стартует ровно от `entry`;
+`load_workflows` пропускает файл без валидного `entry` с `log::error!`, поэтому
+сломанный граф не выглядит рабочим до момента запуска. Редактор при этом старый
+файл открывает (иначе его нечем починить) и показывает проблему диагностикой
+`ENTRY_MISSING` / `ENTRY_TARGET_MISSING` / `USER_MESSAGE_NOT_ENTRY`.
+
+Инвариант: `{{ user_message }}` ≡ `{{ nodes.<entry>.output.text }}` — обе подстановки
+дают `sanitize_model_visible_text(context.user_message)`. Короткая форма оставлена
+как сокращение, а не как второй источник правды.
 
 ### Live-превью токенов и VRAM
 

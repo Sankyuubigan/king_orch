@@ -11,6 +11,14 @@ export class GraphController {
   currentFilePath: string | null = null;
   currentWorkflowName: string = "";
   currentWorkflowConfig: any = null;
+  /**
+   * ID узла — точки входа графа (поле `entry` в YAML).
+   *
+   * Вход в workflow ОБЯЗАТЕЛЕН и объявлен в файле: движок стартует ровно от этой
+   * ноды (`parser::resolve_entry`). Позиция ноды в `nodes:` объявлением не является
+   * — порядок переписывает редактор при сохранении.
+   */
+  currentEntryNodeId: string | null = null;
   selectedNodes: Set<string> = new Set();
   isSelecting: boolean = false;
   selectStart: { x: number; y: number } | null = null;

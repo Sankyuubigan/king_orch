@@ -5,15 +5,24 @@ config:
   facts_file: facts.yaml
   default_llm_params: creative
 
+# Точка входа графа — текст, отправленный пользователем в чат.
+entry: user_message
+
 nodes:
+
+# ── Источник данных: текст пользователя (без LLM) ──
+
+- id: user_message
+  type: user_message
+  ui_pos:
+    x: -560
+    y: 60
 
 # ── Классификация и маршрутизация ──
 
 - id: extract_facts
   type: llm_fact_extractor
-  input: |
-    User: {{ user_message }}
-    Session history (последние сообщения сессии): {{ messages }}
+  input: "{{ nodes.user_message.output.text }}"
   llm_params: strict
 
 - id: route
@@ -43,7 +52,7 @@ nodes:
     Ответь пользователю.
 
     Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
-    Исходный вопрос пользователя: {{ user_message }}
+    Исходный вопрос пользователя: {{ nodes.user_message.output.text }}
   output_type: thought
 
 - id: eval_quick
@@ -136,7 +145,7 @@ nodes:
     Ответь пользователю.
 
     Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
-    Исходный вопрос пользователя: {{ user_message }}
+    Исходный вопрос пользователя: {{ nodes.user_message.output.text }}
   output_type: thought
 
 - id: eval_docs
@@ -229,7 +238,7 @@ nodes:
     Найди репозитории/библиотеки по потребности и дай точные факты о них.
 
     Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
-    Исходный вопрос пользователя: {{ user_message }}
+    Исходный вопрос пользователя: {{ nodes.user_message.output.text }}
   output_type: thought
 
 - id: eval_github
@@ -322,7 +331,7 @@ nodes:
     Найди научные статьи/исследования по вопросу и дай точные факты о них.
 
     Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
-    Исходный вопрос пользователя: {{ user_message }}
+    Исходный вопрос пользователя: {{ nodes.user_message.output.text }}
   output_type: thought
 
 - id: eval_academic
@@ -415,7 +424,7 @@ nodes:
     Найди подходящие видео на YouTube и дай точные факты о них.
 
     Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
-    Исходный вопрос пользователя: {{ user_message }}
+    Исходный вопрос пользователя: {{ nodes.user_message.output.text }}
   output_type: thought
 
 - id: eval_video
@@ -508,7 +517,7 @@ nodes:
     Разбей вопрос пользователя на 3 подтемы для глубокого исследования.
 
     Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
-    Исходный вопрос пользователя: {{ user_message }}
+    Исходный вопрос пользователя: {{ nodes.user_message.output.text }}
   output_type: thought
 
 - id: call_sub1
@@ -518,7 +527,7 @@ nodes:
     Проведи глубокое исследование ОДНОЙ подтемы.
 
     Общий вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
-    Исходный вопрос пользователя: {{ user_message }}
+    Исходный вопрос пользователя: {{ nodes.user_message.output.text }}
 
     Полный список подтем в формате JSON: {{ nodes.decompose_topic.output.result }}
     Исследуй ТОЛЬКО подтему из значения JSON-ключа "sub1" (это готовые поисковые запросы «название | запрос a | запрос b» — основа для multi-query WebSearch). Игнорируй ключи sub2 и sub3.
@@ -533,7 +542,7 @@ nodes:
     Проведи глубокое исследование ОДНОЙ подтемы.
 
     Общий вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
-    Исходный вопрос пользователя: {{ user_message }}
+    Исходный вопрос пользователя: {{ nodes.user_message.output.text }}
 
     Полный список подтем в формате JSON: {{ nodes.decompose_topic.output.result }}
     Исследуй ТОЛЬКО подтему из значения JSON-ключа "sub2" (это готовые поисковые запросы «название | запрос a | запрос b» — основа для multi-query WebSearch). Игнорируй ключи sub1 и sub3.
@@ -548,7 +557,7 @@ nodes:
     Проведи глубокое исследование ОДНОЙ подтемы.
 
     Общий вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
-    Исходный вопрос пользователя: {{ user_message }}
+    Исходный вопрос пользователя: {{ nodes.user_message.output.text }}
 
     Полный список подтем в формате JSON: {{ nodes.decompose_topic.output.result }}
     Исследуй ТОЛЬКО подтему из значения JSON-ключа "sub3" (это готовые поисковые запросы «название | запрос a | запрос b» — основа для multi-query WebSearch). Игнорируй ключи sub1 и sub2.
@@ -676,7 +685,7 @@ nodes:
     Ответь пользователю.
 
     Вопрос (переписанный, приоритет): {{ nodes.extract_facts.output.rewritten_query }}
-    Исходный вопрос пользователя: {{ user_message }}
+    Исходный вопрос пользователя: {{ nodes.user_message.output.text }}
   output_type: thought
 
 - id: eval_answer
@@ -756,6 +765,9 @@ nodes:
   output_type: message
 
 edges:
+
+- from: user_message
+  to: extract_facts
 
 - from: extract_facts
   to: route

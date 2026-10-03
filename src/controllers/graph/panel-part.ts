@@ -25,6 +25,7 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
   const typeLabel = NODE_LABELS[data.type] || data.type;
 
   const isDisabled = !!data.disabled;
+  const isEntry = this.currentEntryNodeId === (data.id || nodeId);
 
   let html = `<div class="graph-detail-section">
       <div class="detail-label">ID ноды</div>
@@ -33,6 +34,15 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
     <div class="graph-detail-section">
       <div class="detail-label">Тип</div>
       <div class="detail-value" style="border-left:4px solid ${color};padding-left:8px;">${typeLabel}</div>
+    </div>
+    <div class="graph-detail-section">
+      <div class="detail-label">Точка входа графа</div>
+      ${
+        isEntry
+          ? `<div class="detail-value ge-entry-badge">🚪 Это вход графа — с него начинается прогон</div>`
+          : `<button type="button" id="ge-set-entry" class="ge-btn">🚪 Сделать точкой входа</button>
+             <div class="detail-hint">Вход у графа один. Позиция ноды в списке входом не является.</div>`
+      }
     </div>
     <div class="graph-detail-section ge-disabled-row">
       <div class="detail-label">Состояние</div>
@@ -252,6 +262,14 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
           nodeIdInput.value = nodeId;
         }
       }
+    });
+  }
+
+  const setEntryBtn = document.getElementById("ge-set-entry") as HTMLButtonElement | null;
+  if (setEntryBtn) {
+    setEntryBtn.addEventListener("click", () => {
+      this.setEntryNode(nodeId);
+      this.showNodeEditor(nodeId);
     });
   }
 

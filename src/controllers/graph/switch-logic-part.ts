@@ -1,6 +1,20 @@
-import { isDynamicNode, CONDITION_CHECK_CASES, CONDITION_ROUTER_CASES } from "./constants";
+import { isDynamicNode, CONDITION_CHECK_CASES, CONDITION_ROUTER_CASES, inputCount } from "./constants";
 import type { GraphNodeDef, GraphEdgeDef } from "./types";
 import type { GraphController } from "./graph-class";
+
+/**
+ * Можно ли ввести ребро в ноду: у неё должен быть хотя бы один входной порт.
+ *
+ * У ноды-источника `user_message` входа нет вовсе, поэтому ребро INTO неё
+ * невозможно: ни на холсте (нет порта), ни при восстановлении из YAML.
+ * Раньше порт входа был захардкожен (`input_1`), и такая нода получила бы вход
+ * вопреки модели данных.
+ */
+export function canReceiveEdge(this: GraphController, targetId: string): boolean {
+  const data = this.editor?.drawflow.drawflow.Home.data;
+  const target = data?.[targetId];
+  return !!target && inputCount(target.data?.type || "") > 0;
+}
 
 export function rebuildSwitchOutputs(this: GraphController, nodeId: string): void {
   if (!this.editor) return;
@@ -47,6 +61,7 @@ export function rebuildSwitchOutputs(this: GraphController, nodeId: string): voi
   for (let i = 0; i < targets.length; i++) {
     const targetId = targets[i];
     if (targetId && this.editor.drawflow.drawflow.Home.data[targetId]) {
+      if (!this.canReceiveEdge(targetId)) continue;
       try {
         this.editor!.addConnection(nodeId, targetId, `output_${i + 1}`, "input_1");
       } catch (_) { }
