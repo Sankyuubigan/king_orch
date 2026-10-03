@@ -96,18 +96,45 @@ pub fn build_facts_grammar(config: &WorkflowConfig, workflow_dir: Option<&Path>)
     crate::infra::get_hybrid_grammar(&base)
 }
 
+/// Прочитать внешний контракт фактов (`config.facts_file`) из папки workflow.
+///
+/// Раньше ошибки чтения/парсинга здесь молча проглатывались (`if let Ok`): сломанный
+/// facts.yaml превращался в пустой контракт, экстрактор уходил в пустой JSON и
+/// workflow падал с «Не удалось извлечь факты даже после повтора» — без единого
+/// упоминания настоящей причины. Теперь причина называется сразу и с путём к файлу.
+fn load_facts_file(facts_file: &str, workflow_dir: Option<&Path>) -> Option<FactsFile> {
+    let ext_path = workflow_dir?.join(facts_file);
+    let content = match fs::read_to_string(&ext_path) {
+        Ok(content) => content,
+        Err(e) => {
+            log::error!(
+                "[fact_extractor] Не удалось прочитать контракт фактов {}: {}",
+                ext_path.display(),
+                e
+            );
+            return None;
+        }
+    };
+    match serde_yaml::from_str::<FactsFile>(&content) {
+        Ok(ext) => Some(ext),
+        Err(e) => {
+            log::error!(
+                "[fact_extractor] Ошибка парсинга контракта фактов {}: {}",
+                ext_path.display(),
+                e
+            );
+            None
+        }
+    }
+}
+
 pub(crate) fn resolve_facts(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Vec<FactDef> {
     if !config.facts.is_empty() {
         return config.facts.clone();
     }
     if let Some(ref facts_file) = config.facts_file {
-        if let Some(dir) = workflow_dir {
-            let ext_path = dir.join(facts_file);
-            if let Ok(content) = fs::read_to_string(&ext_path) {
-                if let Ok(ext) = serde_yaml::from_str::<FactsFile>(&content) {
-                    return ext.facts;
-                }
-            }
+        if let Some(ext) = load_facts_file(facts_file, workflow_dir) {
+            return ext.facts;
         }
     }
     vec![]
@@ -118,13 +145,8 @@ fn resolve_output_fields(
     workflow_dir: Option<&Path>,
 ) -> Vec<OutputFieldDef> {
     if let Some(ref facts_file) = config.facts_file {
-        if let Some(dir) = workflow_dir {
-            let ext_path = dir.join(facts_file);
-            if let Ok(content) = fs::read_to_string(&ext_path) {
-                if let Ok(ext) = serde_yaml::from_str::<FactsFile>(&content) {
-                    return ext.output_fields;
-                }
-            }
+        if let Some(ext) = load_facts_file(facts_file, workflow_dir) {
+            return ext.output_fields;
         }
     }
     vec![]
@@ -135,13 +157,8 @@ pub(crate) fn resolve_phases(config: &WorkflowConfig, workflow_dir: Option<&Path
         return config.phases.clone();
     }
     if let Some(ref facts_file) = config.facts_file {
-        if let Some(dir) = workflow_dir {
-            let ext_path = dir.join(facts_file);
-            if let Ok(content) = fs::read_to_string(&ext_path) {
-                if let Ok(ext) = serde_yaml::from_str::<FactsFile>(&content) {
-                    return ext.phases;
-                }
-            }
+        if let Some(ext) = load_facts_file(facts_file, workflow_dir) {
+            return ext.phases;
         }
     }
     vec![]
@@ -155,13 +172,8 @@ fn resolve_extractor_prompt(
         return config.extractor_prompt.clone();
     }
     if let Some(ref facts_file) = config.facts_file {
-        if let Some(dir) = workflow_dir {
-            let ext_path = dir.join(facts_file);
-            if let Ok(content) = fs::read_to_string(&ext_path) {
-                if let Ok(ext) = serde_yaml::from_str::<FactsFile>(&content) {
-                    return ext.extractor_prompt;
-                }
-            }
+        if let Some(ext) = load_facts_file(facts_file, workflow_dir) {
+            return ext.extractor_prompt;
         }
     }
     None

@@ -338,9 +338,13 @@ pub fn load_workflows(agents_dir: &Path) -> Result<Vec<WorkflowDef>, String> {
     let mut workflows = Vec::new();
     let mut yaml_files = Vec::new();
     collect_yaml_files(agents_dir, &mut yaml_files);
-        for path in yaml_files {
-        match parse_workflow_file(&path) {
-            Ok(wf) => workflows.push(wf),
+    for path in yaml_files {
+        match discover_workflow_file(&path) {
+            // Файл не объявляет себя графом — это файл данных (facts.yaml,
+            // правила валидации, словари). Молча пропускаем, ровно как
+            // `load_agents` молча игнорирует `.md` без frontmatter агента.
+            Ok(None) => {}
+            Ok(Some(wf)) => workflows.push(wf),
             Err(e) => log::error!(
                 "[workflow_engine] Ошибка загрузки {}: {}",
                 path.display(),
@@ -349,6 +353,54 @@ pub fn load_workflows(agents_dir: &Path) -> Result<Vec<WorkflowDef>, String> {
         }
     }
     Ok(workflows)
+}
+
+/// Загрузить YAML-файл как граф, ОТЛИЧИВ «это не граф» от «это сломанный граф».
+///
+/// `Ok(None)` — файл не объявляет себя графом. `Ok(Some(wf))` — валидный граф.
+/// `Err` — файл заявил себя графом, но не проходит контракт `WorkflowDef`.
+fn discover_workflow_file(path: &Path) -> Result<Option<WorkflowDef>, String> {
+    let source = read_yaml_source(path)?;
+    if !declares_graph(&source) {
+        return Ok(None);
+    }
+    into_workflow(source, path).map(Some)
+}
+
+/// Корневой признак графа — секция `nodes:`.
+///
+/// Это не эвристика и не соглашение об имени файла: `WorkflowDef::nodes`
+/// объявлено обязательным полем без `#[serde(default)]`, поэтому наличие ключа
+/// `nodes` — это ровно то, чем файл ДЕКЛАРИРУЕТ себя как граф. Отсутствие
+/// ключа означает «это не граф», и файл не является ошибкой загрузки.
+/// Никаких списков папок/имён: признак берётся из самого документа.
+fn declares_graph(source: &serde_yaml::Value) -> bool {
+    source.as_mapping().is_some_and(|m| {
+        m.contains_key(&serde_yaml::Value::String("nodes".into()))
+    })
+}
+
+fn read_yaml_source(path: &Path) -> Result<serde_yaml::Value, String> {
+    let content = fs::read_to_string(path)
+        .map_err(|e| format!("Не удалось прочитать {}: {}", path.display(), e))?;
+    serde_yaml::from_str(&content)
+        .map_err(|e| format!("Ошибка парсинга YAML {}: {}", path.display(), e))
+}
+
+fn into_workflow(source: serde_yaml::Value, path: &Path) -> Result<WorkflowDef, String> {
+    let mut wf: WorkflowDef = serde_yaml::from_value(source)
+        .map_err(|e| format!("Ошибка парсинга YAML {}: {}", path.display(), e))?;
+    wf.file_stem = path
+        .file_stem()
+        .unwrap_or_default()
+        .to_string_lossy()
+        .to_string();
+    wf.parent_dir = path
+        .parent()
+        .unwrap_or(Path::new("."))
+        .to_string_lossy()
+        .to_string();
+    Ok(wf)
 }
 
 fn collect_yaml_files(dir: &Path, files: &mut Vec<PathBuf>) {
@@ -372,24 +424,13 @@ fn collect_yaml_files(dir: &Path, files: &mut Vec<PathBuf>) {
 }
 
 pub fn parse_workflow_file(path: &Path) -> Result<WorkflowDef, String> {
-    let content = fs::read_to_string(path)
-        .map_err(|e| format!("Не удалось прочитать {}: {}", path.display(), e))?;
-    let file_stem = path
-        .file_stem()
-        .unwrap_or_default()
-        .to_string_lossy()
-        .to_string();
-    let parent_dir = path.parent().unwrap_or(Path::new("."));
-    let mut wf: WorkflowDef = serde_yaml::from_str(&content)
-        .map_err(|e| format!("Ошибка парсинга YAML {}: {}", path.display(), e))?;
-    wf.file_stem = file_stem;
-    wf.parent_dir = parent_dir.to_string_lossy().to_string();
-
     // Внешние facts.yaml / statuses.yaml НЕ вливаются в config.facts при парсинге.
     // Они загружаются лениво в fact_extractor::build_extractor_prompt() при выполнении.
     // Это гарантирует, что save_workflow() не запишет дублированные facts в workflow YAML.
-
-    Ok(wf)
+    //
+    // Здесь путь задан ЯВНО (редактор графов, pipeline-тест), поэтому «файл не
+    // граф» здесь невозможно и любая ошибка — честная ошибка файла.
+    into_workflow(read_yaml_source(path)?, path)
 }
 
 pub fn find_workflow_by_stem<'a>(
@@ -443,6 +484,121 @@ mod tests {
             .parent()
             .expect("workspace root")
             .to_path_buf()
+    }
+
+    /// Реальные файлы данных из `agents/`: ни один не является графом.
+    /// Проверяем по исходникам проекта — копий критериев в тесте не создаём.
+    const DATA_FILES: &[&str] = &[
+        "coder/transitions/facts.yaml",
+        "media/transitions/facts.yaml",
+        "psychotherapist/transitions/facts.yaml",
+        "research/transitions/facts.yaml",
+        "psychotherapist/database/element_validation_rules.yaml",
+        "psychotherapist/database/element_validation_rules_system1.yaml",
+    ];
+
+    /// Регрессия: файл данных не должен попадать в загрузку графов и не должен
+    /// порождать ошибку. Именно эти файлы давали 20 ложных `[ERROR]
+    /// [workflow_engine] Ошибка загрузки ... missing field 'name'` в логе.
+    #[test]
+    fn data_files_are_not_graphs_and_are_not_errors() {
+        let agents_dir = workspace_root().join("agents");
+        for rel in DATA_FILES {
+            let path = agents_dir.join(rel);
+            assert!(path.exists(), "файл данных не найден: {}", path.display());
+            match discover_workflow_file(&path) {
+                Ok(None) => {}
+                Ok(Some(_)) => panic!(
+                    "{} — файл данных, а не граф: load_workflows не должен его считать графом",
+                    rel
+                ),
+                Err(e) => panic!(
+                    "{} — файл данных не должен давать ошибку загрузки: {}",
+                    rel, e
+                ),
+            }
+        }
+    }
+
+    /// Контрпример к текстовой эвристике: `element_validation_rules.yaml`
+    /// СОДЕРЖИТ вложенные поля `name:` (`name: "Сопротивление"`), но не имеет
+    /// `nodes:`. Признак «есть name → это граф» здесь дал бы ложное срабатывание.
+    #[test]
+    fn nested_name_does_not_make_a_data_file_a_graph() {
+        let path = workspace_root()
+            .join("agents/psychotherapist/database/element_validation_rules.yaml");
+        let source = read_yaml_source(&path).expect("валидный YAML");
+        let first_element_name = source
+            .get("elements")
+            .and_then(|elements| elements.get(1))
+            .and_then(|element| element.get("name"))
+            .and_then(|name| name.as_str());
+        assert_eq!(
+            first_element_name,
+            Some("Сопротивление"),
+            "фикстура изменилась: вложенное name не найдено"
+        );
+        assert!(
+            !declares_graph(&source),
+            "вложенное `name:` не должно объявлять файл графом"
+        );
+    }
+
+    /// Настоящий граф обязан распознаваться как граф и грузиться.
+    #[test]
+    fn real_graphs_are_still_discovered() {
+        let agents_dir = workspace_root().join("agents");
+        let mut stems: Vec<String> = load_workflows(&agents_dir)
+            .expect("загрузка графов")
+            .iter()
+            .map(|wf| wf.file_stem.clone())
+            .collect();
+        stems.sort();
+        assert_eq!(
+            stems,
+            [
+                "analyst-team",
+                "coding-team",
+                "main_conversation_flow",
+                "media-flow",
+                "search-specialist",
+            ],
+            "фильтр не должен терять или подменять реальные графы"
+        );
+    }
+
+    /// Сломанный граф — честная ошибка, а не тишина: файл объявил себя графом
+    /// секцией `nodes:`, но не проходит контракт `WorkflowDef` (забыт `name` —
+    /// ровно тот случай, который раньше давал `missing field 'name'` в логе).
+    #[test]
+    fn broken_graph_is_reported_not_swallowed() {
+        let broken = r#"
+nodes:
+  - id: start
+    type: llm_worker
+edges: []
+"#;
+        let source: serde_yaml::Value = serde_yaml::from_str(broken).expect("валидный YAML");
+        assert!(declares_graph(&source), "файл объявляет себя графом");
+        let error = into_workflow(source, Path::new("broken.yaml")).expect_err("граф сломан");
+        assert!(
+            error.contains("broken.yaml"),
+            "в ошибке нет пути к файлу: {}",
+            error
+        );
+        assert!(
+            error.contains("name"),
+            "в ошибке нет указания на отсутствующее поле: {}",
+            error
+        );
+    }
+
+    /// Корень не-маппинг (например, YAML-последовательность) — тоже не граф,
+    /// и это не ошибка загрузки.
+    #[test]
+    fn non_mapping_root_is_not_a_graph() {
+        let source: serde_yaml::Value = serde_yaml::from_str("- один\n- два\n").expect("YAML");
+        assert!(!declares_graph(&source));
     }
 
     #[test]
