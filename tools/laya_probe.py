@@ -25,12 +25,17 @@ ONNX_MODEL_ID = "mizchi/laya-multilingual-onnx"
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CASES = PROJECT_ROOT / "test_cases/new_tests_for_validator/cases.yaml"
-# Критерии (тексты вопросов e1..e9) живут отдельно от кейсов, но рядом с ними:
-# docs/LAYA_MODEL.md §6.1.
+# Критерии System-1 (для Laya, тип noul). Лежат рядом с агентами, а не в
+# test_cases/, потому что это боевой конфиг: он попадает в инсталлер
+# (tauri.conf.json -> bundle.resources -> "../agents/"), и стенд должен мерить
+# РОВНО тот файл, который поедет к пользователю. Один файл — один источник
+# правды; второй экземпляр критериев System-1 разошёлся бы с боевым молча.
+# Файл System-2 (LLM-валидатор) — другой, см. PROD_RULES ниже.
 DEFAULT_RULES = (
-    PROJECT_ROOT / "test_cases/new_tests_for_validator"
-    / "element_validation_rules_prod_noul.yaml"
+    PROJECT_ROOT / "agents/psychotherapist/database/element_validation_rules_system1.yaml"
 )
+# Критерии System-2: их читает LLM-валидатор (agents/psychotherapist/backend/
+# validator.md через <<INCLUDE:>>). К Laya отношения не имеют.
 PROD_RULES = PROJECT_ROOT / "agents/psychotherapist/database/element_validation_rules.yaml"
 
 ELEMENTS = tuple(f"e{number}" for number in range(1, 10))
@@ -255,6 +260,42 @@ def build_questions(
             true_labels[qid] = "true"
             continue
 
+        if qtype == "score":
+            # Градуированный вопрос (laya/common.py:12 QTYPES, onnx_agent.py:283).
+            # Требует `criteria` списком уровней (mcp/tools.py:67) и возвращает
+            # распределение по уровням, а не одно число.
+            #
+            # ЗАЧЕМ: у `noul` нет состояния «упомянуто косвенно», поэтому серая
+            # зона обязана разрешиться в true или false. Именно это порождает
+            # ложные срабатывания, а не плохая калибровка. Уровень «сомнительно»
+            # делает серое состояние явным.
+            #
+            # Перестановка для `score` — разворот порядка уровней (для `noul` это
+            # своп true/false). Без него усреднение по двум проходам не имеет
+            # смысла: сдвиг позиции уровня иначе не снимается.
+            levels = element.get("levels")
+            if not isinstance(levels, list) or len(levels) < 2:
+                raise RuntimeError(
+                    f"e{number}: question_type=score требует список levels "
+                    f"из минимум 2 уровней"
+                )
+            ordered = [str(level) for level in levels]
+            if labels in ("neutral_rev", "both"):
+                # Разворот: после разворота «прямо названное» становится уровнем 0.
+                ordered = list(reversed(ordered))
+            questions[qid] = {
+                "type": "score",
+                "instructions": element.get(
+                    "scale_question",
+                    f"Насколько явно в тексте назван элемент «{name}»?",
+                ),
+                "criteria": ordered,
+            }
+            # Для score «истинная» метка — это верхний уровень шкалы. При развороте
+            # порядок меняется, поэтому искомый уровень всегда последний в ordered.
+            true_labels[qid] = str(len(ordered) - 1)
+            continue
+
         if labels == "bool":
             criteria, true_label = {"true": crit_true, "false": crit_false}, "true"
         elif labels == "neutral":
@@ -370,7 +411,21 @@ def evaluate_case(
             else:
                 probs = answer.get("probabilities", {})
                 prob = float(probs.get(true_label, 0.0))
-                per_order[key] = {"p_true": prob, "ans_conf": confidence, "raw": answer.get("choice")}
+                entry = {"p_true": prob, "ans_conf": confidence,
+                         "raw": answer.get("choice")}
+                if answer.get("type") == "score":
+                    # Распределение по уровням целиком: из него считается доля
+                    # серого состояния, ради которого `score` и вводится.
+                    level_probs = {str(k): float(v) for k, v in probs.items()}
+                    entry["level_probs"] = level_probs
+                    entry["expected_level"] = answer.get("score")
+                    entry["top_level"] = true_label
+                    # `raw` для score — доминирующий уровень, а не `choice`
+                    # (его у score нет). Иначе order_stable всегда True и
+                    # диагностика позиционного смещения врала бы в ноль.
+                    if level_probs:
+                        entry["raw"] = max(level_probs, key=lambda k: level_probs[k])
+                per_order[key] = entry
         runs.append(per_order)
     inference_ms = round((time.perf_counter() - started) * 1000)
 
@@ -400,6 +455,16 @@ def evaluate_case(
             ],
             "order_stable": stable,
         }
+        # Для `score` сохраняем усреднённое распределение по уровням: по нему
+        # считается доля серого состояния и проверяется, что шкала не вырождена.
+        level_runs = [run[key].get("level_probs") for run in runs]
+        if all(level_runs):
+            keys = sorted(level_runs[0], key=lambda s: int(s))
+            report_questions[key]["level_probs"] = {
+                level: sum(run[level] for run in level_runs) / len(level_runs)
+                for level in keys
+            }
+            report_questions[key]["top_level"] = runs[0][key].get("top_level")
 
     matches = [key for key in actual if actual[key] == expected[key]]
     mismatches = [key for key in actual if actual[key] != expected[key]]

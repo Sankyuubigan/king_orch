@@ -8,6 +8,7 @@ pub mod editor_fidelity;
 pub mod fact_extractor;
 pub mod nodes;
 pub mod parser;
+pub mod system1_rules;
 
 pub use context::WorkflowContext;
 pub use editor_fidelity::{analyze_workflow_fidelity, GraphDiagnostic};
@@ -47,6 +48,12 @@ pub struct WorkflowRunner<'a, L, S, C> {
     pub bins_dir: &'a Path,
     /// agents/<папка>/grammars/ — per-agent GBNF для llm_worker узлов
     pub grammars_dir: &'a Path,
+    /// Корень `agents/` — от него резолвятся файлы агентов (критерии System-1).
+    ///
+    /// Раньше нода `system1_validator` искала критерии через
+    /// `../../../test_cases/...`, то есть относительный путь от каталога
+    /// workflow. В установленной программе `test_cases/` нет, и путь ломался.
+    pub agents_dir: &'a Path,
     pub all_sub_calls: &'a mut Vec<SubCall>,
     pub msg_counter: &'a mut u32,
     pub stream_meta: Arc<Mutex<orchestrator::StreamMeta>>,

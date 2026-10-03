@@ -368,6 +368,7 @@ pub fn run_pipeline_test(
         mcp_servers_dir: &mcp_servers_dir,
         bins_dir: &bins_dir,
         grammars_dir: &grammars_dir,
+        agents_dir: &agents_dir,
         all_sub_calls: &mut all_sub_calls,
         msg_counter: &mut msg_counter,
         stream_meta: std::sync::Arc::new(std::sync::Mutex::new(StreamMeta::default())),

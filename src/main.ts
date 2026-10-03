@@ -14,6 +14,8 @@ import "@my-tauri-plugins/plugin-image-engine";
 import "@my-tauri-plugins/plugin-cloud-routers";
 // Регистрирует <downloader-widget> / <downloader-progress> (единый прогресс загрузок).
 import "@my-tauri-plugins/plugin-downloader";
+// Регистрирует <system1-panel> (проверка/установка файлов модели быстрых решений).
+import "@my-tauri-plugins/plugin-system1";
 import { initUpdateWatcher as initLlamaUpdateWatcher } from "@my-tauri-plugins/plugin-llama-engine";
 import { initUpdateWatcher as initImageUpdateWatcher } from "@my-tauri-plugins/plugin-image-engine";
 import { initUpdateWatcher as initRoutersUpdateWatcher } from "@my-tauri-plugins/plugin-cloud-routers";

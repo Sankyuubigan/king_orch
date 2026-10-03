@@ -18,6 +18,7 @@
     "@my-tauri-plugins/plugin-cloud-routers": "file:../my-tauri-plugins/tauri-plugin-cloud-routers",
     "@my-tauri-plugins/plugin-downloader": "file:../my-tauri-plugins/tauri-plugin-downloader",
     "@my-tauri-plugins/plugin-image-engine": "file:../my-tauri-plugins/tauri-plugin-image-engine",
+    "@my-tauri-plugins/plugin-system1": "file:../my-tauri-plugins/tauri-plugin-system1",
     "@tauri-apps/api": "2.10.1",
     "@tauri-apps/plugin-dialog": "2.7.0",
     "@tauri-apps/plugin-process": "2.3.1",

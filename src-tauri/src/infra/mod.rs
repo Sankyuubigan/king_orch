@@ -20,7 +20,13 @@ pub mod permissions;
 pub mod lsp;
 pub mod system_proxy;
 pub mod network_diagnostics;
-pub mod laya_runtime;
+// System-1 (быстрые решения): адаптер к плагину `tauri-plugin-system1`.
+pub mod system1;
+
+// System-1 (быстрые решения) — переиспользуемый плагин (SSOT).
+// Инференс, рантайм ONNX и модель живут в `tauri-plugin-system1`; хосту
+// остались только критерии и пороги (`domain::workflow_engine::system1_rules`),
+// а вызов плагина изолирован в адаптере `infra::system1`.
 
 // Движок llama.cpp — переиспользуемый плагин (SSOT). Глоб-реэкспорт тенят
 // явные `pub use`/`pub mod` хоста ниже (explicit item > glob import).

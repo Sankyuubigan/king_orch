@@ -5,6 +5,8 @@ use crate::domain::workflow_engine::parser::{
 use crate::domain::workflow_engine::WorkflowRunner;
 use crate::infra::{extract_model_filename, message_phase, push_report, ChatMessage, SubCall};
 
+use tauri_plugin_system1::contract::TypedQuestion;
+
 /// Результат выполнения узла
 #[derive(Debug, Clone)]
 pub struct NodeResult {
@@ -213,24 +215,19 @@ where
 {
     match node.node_type {
         NodeType::System1Validator => {
-            let workflow_dir = std::path::Path::new(&workflow.parent_dir);
-            // Критерии System-1 живут рядом с кейсами, на которых они настроены
-            // (tools/laya_probe.py — тот же файл, SSOT текстов вопросов e1..e9).
-            let rules_path = workflow_dir.join("../../../test_cases/new_tests_for_validator/element_validation_rules_prod_noul.yaml");
-            let rules_path = if rules_path.exists() {
-                rules_path
-            } else {
-                std::path::Path::new("test_cases/new_tests_for_validator/element_validation_rules_prod_noul.yaml").to_path_buf()
-            };
+            // Критерии приходят из YAML-узла (`rules_file`). Движок не знает ни
+            // про конкретного агента, ни про количество правил: файл задаёт и
+            // набор, и идентификаторы. Абсолютный путь берётся как есть,
+            // относительный считается от каталога агентов — того, что уже
+            // лежит в инсталле (tauri.conf.json → bundle.resources).
+            let rules_file = node
+                .rules_file
+                .as_deref()
+                .ok_or_else(|| format!("узел system1_validator \"{}\": не задан rules_file", node.id))?;
+            let rules_path = super::system1_rules::resolve_rules_path(&runner.agents_dir, rules_file);
+            let rules = super::system1_rules::load_rules(&rules_path)?;
 
-            let model_dir = std::path::Path::new("test/laya_probe/models/laya-multilingual-onnx");
-            let validator = crate::domain::system1_validator::LayaValidator::load(model_dir)
-                .map_err(|e| format!("Failed to load Laya validator ONNX: {}", e))?;
-
-            let rules = crate::domain::system1_validator::LayaValidator::load_rules(&rules_path)
-                .map_err(|e| format!("Failed to load rules for system1_validator: {}", e))?;
-
-            let text_to_validate = if let Some(msg) = context.messages.iter().rev().find(|m| m.author.as_deref() == Some("fact_consolidator") || m.author.as_deref() == Some("fact_consolidator")) {
+            let text_to_validate = if let Some(msg) = context.messages.iter().rev().find(|m| m.author.as_deref() == Some("fact_consolidator")) {
                 msg.content.clone()
             } else {
                 context.messages.iter()
@@ -240,31 +237,66 @@ where
                     .join("\n\n")
             };
 
-            let report = validator.validate(&text_to_validate, &rules)
-                .map_err(|e| format!("System1Validator inference error: {}", e))?;
+            // Один вызов плагина на все правила: энкодер проходит текст
+            // пациента один раз, а не по разу на правило.
+            let questions: Vec<TypedQuestion> = rules
+                .iter()
+                .map(|rule| rule.to_typed_question())
+                .collect();
 
-            let output_value = serde_json::to_value(&report).unwrap_or_default();
-            let report_json = serde_json::json!({
-                "e1": report.e1,
-                "e2": report.e2,
-                "e3": report.e3,
-                "e4": report.e4,
-                "e5": report.e5,
-                "e6": report.e6,
-                "e7": report.e7,
-                "e8": report.e8,
-                "e9": report.e9,
-            });
+            let report = crate::infra::system1::decide(&text_to_validate, &questions)?;
+            let probabilities = report.probabilities;
 
-            context.signals.insert("validator_report".to_string(), report_json.clone());
+            // Пороги и правило решения — ЗДЕСЬ, в хосте. Плагин не знает, что
+            // такое элемент и когда «верно»; он вернул вероятности.
+            let mut verdicts = serde_json::Map::new();
+            let mut elements = serde_json::Map::new();
+
+            for rule in &rules {
+                let p_true = probabilities.get(&rule.id).copied().ok_or_else(|| {
+                    format!(
+                        "System-1 не вернул вероятность для правила {}",
+                        rule.id
+                    )
+                })?;
+                let verdict = p_true >= rule.threshold_or_default();
+                verdicts.insert(rule.id.clone(), serde_json::Value::Bool(verdict));
+                elements.insert(
+                    rule.id.clone(),
+                    serde_json::json!({
+                        "verdict": verdict,
+                        "p_true": p_true,
+                        "answer_confidence": p_true.max(1.0 - p_true),
+                        "name": rule.name,
+                        "threshold": rule.threshold_or_default(),
+                    }),
+                );
+            }
+
+            let report_json = serde_json::Value::Object(verdicts);
+            context
+                .signals
+                .insert("validator_report".to_string(), report_json.clone());
 
             (runner.log_cb)(format!(
-                "[system1_validator] Validated in {}ms. Report: {}",
-                report.elapsed_ms, report_json
+                "[system1_validator] {} правил за {} мс (модель загружена за {} мс): {}",
+                rules.len(),
+                report.elapsed_ms,
+                report.load_ms,
+                report_json
             ));
 
+            // FP/FN здесь НЕ считаются: в проде нет эталонных меток, а
+            // проставлять нули означало бы утверждать «ложных срабатываний нет».
             Ok(NodeResult {
-                output: output_value,
+                output: serde_json::json!({
+                    "report": report_json,
+                    "elements": serde_json::Value::Object(elements),
+                    "rules_file": rules_file,
+                    "elapsed_ms": report.elapsed_ms,
+                    "load_ms": report.load_ms,
+                    "device": report.device,
+                }),
                 next_node: None,
                 next_nodes: Vec::new(),
             })

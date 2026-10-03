@@ -281,6 +281,14 @@ pub struct NodeDef {
     /// Фаза 1 использует max_gen_tokens для размышлений, фаза 2 — для JSON.
     #[serde(default, skip_serializing_if = "is_false")]
     pub two_phase_thinking: bool,
+    /// Файл критериев System-1 для узла `system1_validator`.
+    ///
+    /// Относительный путь считается от каталога агентов (тот, что уже есть в
+    /// инсталле), абсолютный берётся как есть. Количество правил и их
+    /// идентификаторы определяются файлом, а не движком: узел ничего не знает
+    /// про конкретный набор критериев агента.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules_file: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {

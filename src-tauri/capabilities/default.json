@@ -20,6 +20,7 @@
     "llama-engine:default",
     "cloud-routers:default",
     "image-engine:default",
+    "system1:default",
     "downloader:default"
   ]
 }
