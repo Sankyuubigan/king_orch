@@ -16,6 +16,7 @@ pub struct ValidationRule {
     pub question: String,
     pub true_criteria: String,
     pub false_criteria: String,
+    pub threshold: Option<f32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,12 +175,13 @@ impl LayaValidator {
         let mut elements_map = BTreeMap::new();
         let mut verdicts = [false; 9];
 
-        for (i, (num, _rule)) in rules.iter().enumerate() {
+        for (i, (num, rule)) in rules.iter().enumerate() {
             let key = format!("e{}", num);
             let p_a = run_a[i];
             let p_b = run_b[i];
             let p_true = (p_a + p_b) / 2.0;
-            let verdict = p_true >= 0.5;
+            let thr = rule.threshold.unwrap_or(0.5);
+            let verdict = p_true >= thr;
             let ans_conf = (p_true.max(1.0 - p_true)).min(1.0).max(0.0);
 
             verdicts[i] = verdict;

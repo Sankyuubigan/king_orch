@@ -34,7 +34,10 @@ DEFAULT_RULES = (
 PROD_RULES = PROJECT_ROOT / "agents/psychotherapist/database/element_validation_rules.yaml"
 
 ELEMENTS = tuple(f"e{number}" for number in range(1, 10))
-DEFAULT_PRIORITY_FALSE = ("e3", "e6")
+# Приоритетные элементы — те, где ложный элемент у клиента дороже всего:
+# e3 катастрофа, e6 триггер, e8 искажение мировоззрения, e9 идол.
+# Кейс может переопределить список полем `priority_false_elements`.
+DEFAULT_PRIORITY_FALSE = ("e3", "e6", "e8", "e9")
 
 # Человеческие записи вместо true/false — YAML их не булев, приводим сами.
 TRUTHY = {"да", "yes", "y", "true", "1", "истина"}
@@ -164,6 +167,23 @@ def load_cases(path: Path) -> list[Case]:
             )
         )
     return cases
+
+
+def load_thresholds(rules_path: Path) -> dict[str, float]:
+    try:
+        document = yaml.safe_load(rules_path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    elements = document.get("elements", {}) if isinstance(document, dict) else {}
+    thresholds = {}
+    for num in range(1, 10):
+        elem = elements.get(num, {}) if isinstance(elements, dict) else {}
+        if isinstance(elem, dict) and "threshold" in elem:
+            try:
+                thresholds[f"e{num}"] = float(elem["threshold"])
+            except (ValueError, TypeError):
+                pass
+    return thresholds
 
 
 def build_questions(
@@ -329,6 +349,7 @@ def evaluate_case(
         report_option_lengths(agent.tok, probe_questions)
         agent._lengths_printed = True
     started = time.perf_counter()
+    thresholds = load_thresholds(rules_path)
     runs: list[dict[str, Any]] = []
     for order in orders:
         questions, true_labels = build_questions(rules_path, labels=order)
@@ -361,7 +382,8 @@ def evaluate_case(
         samples = [run[key]["p_true"] for run in runs]
         prob_true = sum(samples) / len(samples)
         confidence = max(samples + [1.0 - s for s in samples])
-        actual[key] = prob_true >= 0.5
+        thr = thresholds.get(key, 0.5)
+        actual[key] = prob_true >= thr
         probabilities = {"true": prob_true, "false": 1.0 - prob_true}
         verdicts = [run[key]["raw"] for run in runs]
         stable = len(set(str(v) for v in verdicts)) == 1
@@ -562,7 +584,13 @@ def main() -> int:
         # вроде element_validation_rules_noul.yaml помечались как "orig" и
         # перезаписывали результаты друг друга.
         rules_tag = rules_path.stem.replace("element_validation_rules", "").strip("_-") or "prod"
-        out_tag = f"{tag}_{rules_tag}_{args.labels}"
+        # Набор кейсов — часть тега: два разных файла кейсов (например, сплит-тест
+        # соматики против основного набора) писали в одни и те же файлы и молча
+        # затирали друг друга. Стандартный набор помечается пустым суффиксом,
+        # чтобы его старые имена файлов оставались валидными.
+        cases_stem = args.cases.stem
+        cases_tag = "" if cases_stem == DEFAULT_CASES.stem else f"_{cases_stem}"
+        out_tag = f"{tag}_{rules_tag}_{args.labels}{cases_tag}"
 
         results_dir = PROJECT_ROOT / "test/laya_probe/results"
         payloads: list[dict[str, Any]] = []
