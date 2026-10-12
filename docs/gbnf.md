@@ -66,7 +66,17 @@ json-object ::= "{" ... "}" # тут правила вашего JSON
 >
 > **Для Method 3 агентов** (signal contracts, hybrid grammar с think-block)
 > `disable_reasoning` НЕ включается — модель думает в `<think>...</think>`.
-> См. `orchestrator/mod.rs:539` — флаг `uses_method_3`.
+> См. `orchestrator/mod.rs:1785-1805` — флаг `uses_method_3`.
+>
+> **Исключение — боевой узел `llm_fact_extractor` графа** (`workflow_engine/nodes.rs`):
+> там `disable_reasoning = true` (коммит `e1695e7`, 24.08.2026), при этом
+> грамматика остаётся гибридной и think в ней **не ограничен** (`[^<]*`).
+> То есть размышление у факт-экстрактора подавляется подсказкой движка, а не
+> структурой грамматики. Побочный эффект: при JSON-ответе в канале `reasoning_content`
+> нода читает оба канала, а при полном провале повторяет запрос и **останавливает
+> workflow**. Конструктивная защита (граница think в грамматике) описана в
+> `workflow_engine/verdict_contract.rs` (`DEFAULT_THINK_BUDGET_CHARS`), но в бою
+> не применена — см. `tasks/08.10.26 …md` §2.5.
 
 Вы можете написать простую обертку в вашем проекте. Логика такая:
 Вы храните грамматику агентов в удобной JSON Schema (или Pydantic).

@@ -3,8 +3,8 @@ use std::fs;
 use std::path::Path;
 
 use crate::domain::{
-    analyze_workflow_fidelity, separate_top_level_fields, EdgeDef, FactsFile, GraphDiagnostic,
-    NodeDef, WorkflowConfig, WorkflowDef,
+    analyze_workflow_fidelity, resolve_entry, separate_top_level_fields, EdgeDef, FactsFile,
+    GraphDiagnostic, NodeDef, WorkflowConfig, WorkflowDef,
 };
 
 /// Workflow со включённым file_stem + team
@@ -101,8 +101,14 @@ pub fn save_workflow(
 
     // Валидация: сгенерированный YAML должен обратно парситься.
     // Если нет — файл НЕ записываем (иначе данные потеряются).
-    serde_yaml::from_str::<WorkflowDef>(&yaml_final)
+    let reparsed: WorkflowDef = serde_yaml::from_str(&yaml_final)
         .map_err(|e| format!("❌ Сгенерированный YAML невалиден, файл НЕ сохранён: {}", e))?;
+
+    // Точка входа проверяется ДО записи, а не при следующей загрузке.
+    // Иначе редактор мог сохранить граф, который `load_workflows` отбросит с
+    // ошибкой, и пользователь обнаружил бы это через исчезновение агента из
+    // списка, а не через отказ сохранения с внятным текстом.
+    resolve_entry(&reparsed).map_err(|e| format!("❌ {}", e))?;
 
     fs::write(&path, &yaml_final)
         .map_err(|e| format!("Ошибка записи файла {}: {}", path, e))?;

@@ -19,8 +19,7 @@ export interface GraphApi {
   handleOpen(): Promise<void>;
   clearEditor(): void;
   handleSave(): Promise<void>;
-  resolveEntryForEditor(wf: { entry?: string | null; nodes: GraphNodeDef[]; edges: GraphEdgeDef[] }): string | null;
-  setEntryNode(nodeId: string): void;
+  resolveEntryForEditor(wf: { entry?: string | null; nodes: GraphNodeDef[] }): string | null;
 
   showNodeEditor(nodeId: string): void;
   hideSidebar(): void;

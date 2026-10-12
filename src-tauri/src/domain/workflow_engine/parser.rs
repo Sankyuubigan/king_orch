@@ -462,10 +462,13 @@ pub fn find_workflow_by_stem<'a>(
 
 /// Единственный способ узнать точку входа графа.
 ///
-/// Контракт жёсткий: `entry` обязан быть объявлен и указывать на существующую ноду.
-/// Никакого отката на `nodes.first()` — порядок нод в YAML переписывает визуальный
-/// редактор при сохранении (в порядке создания), поэтому позиция не является
-/// объявлением о намерении.
+/// Контракт жёсткий: `entry` обязан быть объявлен, указывать на существующую ноду
+/// **и эта нода обязана быть `user_message`**. Никакого отката на `nodes.first()` —
+/// порядок нод в YAML переписывает визуальный редактор при сохранении (в порядке
+/// создания), поэтому позиция не является объявлением о намерении.
+///
+/// Требование типа — не стилистика, а условие работоспособности: текст
+/// пользователя попадает в граф только через ноду `user_message`.
 pub fn resolve_entry(workflow: &WorkflowDef) -> Result<&NodeDef, String> {
     let entry = workflow
         .entry
@@ -479,7 +482,7 @@ pub fn resolve_entry(workflow: &WorkflowDef) -> Result<&NodeDef, String> {
             )
         })?;
 
-    workflow
+    let node = workflow
         .nodes
         .iter()
         .find(|n| n.id == entry)
@@ -488,7 +491,22 @@ pub fn resolve_entry(workflow: &WorkflowDef) -> Result<&NodeDef, String> {
                 "Точка входа '{}' в workflow '{}' не существует среди nodes[].id",
                 entry, workflow.name
             )
-        })
+        })?;
+
+    // Тип входа проверяется здесь, а не в редакторе: иначе граф, где входом
+    // назначена любая нода, ЗАГРУЖАЛСЯ и молча стартовал не с пользовательского
+    // текста. Нода `user_message` не выполнялась, её вывод не создавался, и
+    // `{{ nodes.user_message.output.text }}` уезжал в промпт дословно.
+    // Проверка делает такое состояние невозможным, а не «заметным в редакторе».
+    if node.node_type != NodeType::UserMessage {
+        return Err(format!(
+            "Точка входа '{}' в workflow '{}' имеет тип {:?}, а должна быть user_message: \
+             только нода user_message даёт текст пользователя",
+            entry, workflow.name, node.node_type
+        ));
+    }
+
+    Ok(node)
 }
 
 /// Пост-обработка сериализованного YAML: добавляет 2-пробельный отступ для block sequence
@@ -551,6 +569,10 @@ mod tests {
     /// ломает граф в рантайме, а не в редакторе.
     const PRODUCTION_GRAPHS: &[&str] = &[
         "agents/psychotherapist/transitions/main_conversation_flow.yaml",
+        // Граф, который правится руками в редакторе графа: контракт `entry`
+        // и читаемость входа экстрактором проверяются на нём же, а не только
+        // на шаблонных графах команд.
+        "agents/psychotherapist/transitions/psychotherapist.yaml",
         "agents/coder/transitions/analyst-team.yaml",
         "agents/coder/transitions/coding-team.yaml",
         "agents/research/transitions/search-specialist.yaml",
@@ -736,6 +758,37 @@ edges: []
     }
 
     #[test]
+    fn resolve_entry_rejects_non_user_message_target() {
+        // Редактор раньше позволял назначить входом любую ноду, и такой файл
+        // молча загружался: движок стартовал с `llm_worker`, нода
+        // `user_message` не выполнялась, и `{{ nodes.user_message.output.text }}`
+        // уезжал в промпт дословно. Теперь такое состояние невозможно.
+        let wf = wf_from_yaml(
+            r#"
+name: test
+entry: worker
+nodes:
+  - id: worker
+    type: llm_worker
+    agent: som
+  - id: user_input
+    type: user_message
+edges:
+  - from: worker
+    to: user_input
+"#,
+        );
+
+        let err = resolve_entry(&wf).expect_err("вход не user_message — ошибка загрузки");
+        assert!(
+            err.contains("должна быть user_message"),
+            "ошибка должна называть требование: {}",
+            err
+        );
+        assert!(err.contains("worker"), "ошибка должна называть ноду: {}", err);
+    }
+
+    #[test]
     fn entry_survives_yaml_roundtrip() {
         let wf = wf_from_yaml(
             r#"
@@ -836,6 +889,7 @@ edges: []
                 "coding-team",
                 "main_conversation_flow",
                 "media-flow",
+                "psychotherapist",
                 "search-specialist",
             ],
             "фильтр не должен терять или подменять реальные графы"

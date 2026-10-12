@@ -133,9 +133,6 @@ pub struct AppConfig {
     /// Папка бандла весов ImageGEN (ключ плагина image-engine).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_bundle_dir: Option<String>,
-    /// Папка установки облачных роутеров (ключ секции `cloud_routers` плагина cloud-routers).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cloud_routers_dir: Option<String>,
     /// Двухфазный режим генерации по умолчанию (для ВСЕХ агентов, а не только
     /// signal-агентов с YAML-флагом two_phase_thinking): Phase 1 — свободные
     /// размышления без грамматики, Phase 2 — ответ с enable_thinking=false
@@ -198,7 +195,6 @@ impl Default for AppConfig {
             data_dir: None,
             sdcpp_dir: None,
             image_bundle_dir: None,
-            cloud_routers_dir: None,
             two_phase_default: default_two_phase_default(),
         }
     }

@@ -62,6 +62,14 @@ export function buildNodeInnerHtml(this: GraphController, data: any, fallbackId:
     if (data.false_to) parts.push(`✗ ${this.esc(data.false_to)}`);
     signalLine = `<div class="gn-agent" style="color:#5c6bc0" title="${this.esc(fullExpr)}">🔀 ${parts.join(" | ")}</div>`;
   }
+  if (data.type === "system1_validator") {
+    const parts: string[] = [];
+    if (data.input) parts.push(`← ${this.esc(data.input)}`);
+    if (data.rules_file) parts.push(this.esc(data.rules_file));
+    if (parts.length > 0) {
+      signalLine = `<div class="gn-agent" style="color:#00897b" title="${this.esc(parts.join(" | "))}">🧠 ${parts.join(" | ")}</div>`;
+    }
+  }
   let casesLine = "";
   if (isDynamicNode(data.type)) {
     const labels = this.getSwitchCaseKeys(data);

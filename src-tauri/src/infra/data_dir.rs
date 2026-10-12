@@ -124,7 +124,10 @@ pub fn apply(app: &AppHandle, raw_path: &str) -> Result<PathBuf, String> {
             .to_string_lossy()
             .to_string(),
     );
-    cfg.cloud_routers_dir = Some(dir.join("cloud_routers").to_string_lossy().to_string());
+    // `cloud_routers_dir` здесь больше не пишется: папку роутеров задаёт сам
+    // плагин (`APPDATA/cloud-routers/<id>`), общий для всех проектов. Хост,
+    // назначавший путь, разводил бы папку шлюза по приложениям — процесс-то
+    // один, и второй проект его не видел бы.
     infra::save_config(app, &cfg)?;
     Ok(dir)
 }

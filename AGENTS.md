@@ -196,11 +196,13 @@ infra/    — Инфраструктура (LLM, сессии, MCP, конфиг
 ### Grammar Architecture (Method 3 — Hybrid GBNF)
 - Все агенты с JSON-выводом используют **hybrid GBNF** (Method 3 из `docs/gbnf.md`):
   `root ::= think-block json-object`, где `think-block ::= "<think>" [^<]* "</think>" | ""`
-- `disable_reasoning` НЕ включается для Method 3 агентов (signal contracts, fact extractor)
-- `disable_reasoning: true` только для агентов с **обычной** GBNF (без think-block)
+- `disable_reasoning` НЕ включается для **signal contract** агентов оркестратора (`orchestrator/mod.rs:1785-1805`) — там модель сама решает, думать или нет
+- `disable_reasoning: true` для агентов с **обычной** GBNF (без think-block) **и для боевого узла `llm_fact_extractor` графа** (`nodes.rs`, вызов `call_llm_direct`) — введено коммитом `e1695e7` (24.08.2026). Флаг уходит в llama-server как `chat_template_kwargs: {"enable_thinking": false}`
+- ⚠️ У грамматики факт-экстрактора think **структурно разрешён и НЕ ограничен** (`[^<]*`), поэтому от размышления удерживает только подсказка движка. Если chat-template её проигнорирует, бюджет `n_predict` уйдёт в `<think>` и узод остановит workflow (`nodes.rs`, «Не удалось извлечь факты даже после повтора»). Конструктивная защита (граница think в грамматике) написана в `verdict_contract::DEFAULT_THINK_BUDGET_CHARS`, но в бою **не применена** — см. `tasks/08.10.26 …md` §2.5
 - Грамматика восстанавливается через единую `ctx.restore_grammar()` (не散点 вызовы)
 - Signal contracts: `agents/*/signals/root.schema.json` → `build_signal_envelope_grammar()` → hybrid GBNF
 - Fact extractor: `build_facts_grammar()` → `get_hybrid_grammar()` → hybrid GBNF
+- Промпты, где модель выносит вердикт по критериям, берут **один** каноничный блок трактовки — `fact_extractor::CRITERIA_INTERPRETATION_BLOCK`. Копий правил в стендах быть не должно: своя редакция в `verdict_contract` дала замер, не соответствующий боевому поведению
 
 ## 2. Сессия и сообщения
 

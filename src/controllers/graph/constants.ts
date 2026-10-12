@@ -4,6 +4,7 @@ export const NODE_COLORS: Record<string, string> = {
   llm_classifier: "#42a5f5",
   llm_fact_extractor: "#7e57c2",
   llm_freeform: "#26c6da",
+  system1_validator: "#00897b",
   system_condition: "#ffa726",
   sub_workflow: "#ab47bc",
   switch: "#ef5350",
@@ -21,6 +22,7 @@ export const NODE_LABELS: Record<string, string> = {
   llm_classifier: "📋 Classifier",
   llm_fact_extractor: "📋 Fact Extractor",
   llm_freeform: "💬 Freeform",
+  system1_validator: "🧠 System-1 (Laya)",
   system_condition: "⚡ Condition",
   sub_workflow: "📦 Sub-workflow",
   switch: "🔀 Switch",
@@ -32,6 +34,14 @@ export const NODE_LABELS: Record<string, string> = {
   note: "📝 Note",
 };
 
+/**
+ * Ноды с динамическим числом выходов: порты и рёбра выводятся из `cases_priority`.
+ *
+ * `system1_validator` здесь НЕ должен появляться: он маршрутизирует обычными
+ * рёбрами (движок возвращает `next_node: None` и ищет следующую ноду по `edges`),
+ * а `cases_priority` он не читает. Если добавить его сюда, редактор начнёт
+ * синтезировать кейсы, которых движок не ожидает, и маршрут перестанет сохраняться.
+ */
 export function isDynamicNode(t: string): boolean {
   return t === "switch" || t === "llm_sequential_switch" || t === "signal_router" || t === "condition_check" || t === "condition_router";
 }
@@ -60,6 +70,7 @@ export const OUTPUT_COUNT: Record<string, number> = {
   llm_classifier: 1,
   llm_fact_extractor: 1,
   llm_freeform: 1,
+  system1_validator: 1,
   system_condition: 1,
   sub_workflow: 1,
   switch: 0,

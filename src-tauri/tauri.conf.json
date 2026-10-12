@@ -73,7 +73,7 @@
       "support_url": "https://interesting-knowledges.vercel.app/docs/otblagodarit-avtora.-pomosch-proektam"
     },
     "system1": {
-      "autoDownload": false
+      "autoDownload": true
     }
   }
 }

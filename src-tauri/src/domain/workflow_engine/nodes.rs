@@ -225,6 +225,53 @@ pub fn resolve_current_turn_text(node: &NodeDef, context: &WorkflowContext) -> S
     }
 }
 
+/// Текст, подаваемый в модель System-1.
+///
+/// Источник объявлен в графе полем `input` — тем же способом, каким вход
+/// объявляют `llm_fact_extractor` и `condition_check`. Раньше здесь стоял
+/// хардкод `author == "fact_consolidator"` с фолбэком «склеить всю переписку».
+/// Обе вещи были неверны по отдельности: движок не должен знать имя чужого
+/// агента, а молчаливый фолбэк отдавал модели текст, которого нет ни в одном
+/// замере (справ. модели `tauri-plugin-system1/docs/LAYA_MODEL.md` §13.2, §11.2).
+///
+/// Отказ здесь конструктивный: отсутствие или неразрешимость входа — ошибка
+/// ДО инференса, а не «все элементы false».
+pub fn resolve_state_text(node: &NodeDef, context: &WorkflowContext) -> Result<String, String> {
+    let template = node
+        .input
+        .as_deref()
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .ok_or_else(|| {
+            format!(
+                "узел system1_validator \"{}\": не задан input — укажите, какой текст \
+                 проверяется, например {{{{ nodes.call_fact_consolidator.output.result }}}}",
+                node.id
+            )
+        })?;
+
+    let resolved = context.resolve_template(template);
+
+    // `resolve_template` подставляет текстом и неразрешённый плейсхолдер
+    // оставляет как есть. Подать модели `{{ nodes.нет.такой.ноды.output }}` —
+    // значит потратить прогон графа на заведомо бессмысленный текст.
+    if resolved.contains("{{") {
+        return Err(format!(
+            "узел system1_validator \"{}\": шаблон input не разрешился, осталась подстановка: {}",
+            node.id, template
+        ));
+    }
+
+    if resolved.trim().is_empty() {
+        return Err(format!(
+            "узел system1_validator \"{}\": input разрешился в пустой текст — проверять нечего",
+            node.id
+        ));
+    }
+
+    Ok(resolved)
+}
+
 /// Выполняет один узел графа и возвращает результат + id следующего узла
 pub fn execute_node<L, S, C>(
     node: &NodeDef,
@@ -265,15 +312,7 @@ where
             let rules_path = super::system1_rules::resolve_rules_path(&runner.agents_dir, rules_file);
             let rules = super::system1_rules::load_rules(&rules_path)?;
 
-            let text_to_validate = if let Some(msg) = context.messages.iter().rev().find(|m| m.author.as_deref() == Some("fact_consolidator")) {
-                msg.content.clone()
-            } else {
-                context.messages.iter()
-                    .filter(|m| m.msg_type == "message" && !m.content.trim().is_empty())
-                    .map(|m| format!("[{}]: {}", m.author.as_deref().unwrap_or("user"), m.content))
-                    .collect::<Vec<_>>()
-                    .join("\n\n")
-            };
+            let text_to_validate = resolve_state_text(node, context)?;
 
             // Один вызов плагина на все правила: энкодер проходит текст
             // пациента один раз, а не по разу на правило.
@@ -316,12 +355,30 @@ where
                 .signals
                 .insert("validator_report".to_string(), report_json.clone());
 
+            // Вероятности в лог — не украшение: при сравнении System-1 с
+            // System-2 именно они показывают, где именно разошлись verdicts.
+            // Длина входа рядом с ними — потому что модель режет текст до
+            // ~1500 токенов С НАЧАЛА и молча теряет хвост жалобы.
+            let probabilities_line = rules
+                .iter()
+                .map(|rule| {
+                    format!(
+                        "{}={:.3} (порог {:.2})",
+                        rule.id,
+                        probabilities.get(&rule.id).copied().unwrap_or(-1.0),
+                        rule.threshold_or_default()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
             (runner.log_cb)(format!(
-                "[system1_validator] {} правил за {} мс (модель загружена за {} мс): {}",
+                "[system1_validator] {} правил за {} мс (модель загружена за {} мс), вход {} симв.: {} | p_true: {}",
                 rules.len(),
                 report.elapsed_ms,
                 report.load_ms,
-                report_json
+                text_to_validate.chars().count(),
+                report_json,
+                probabilities_line
             ));
 
             // FP/FN здесь НЕ считаются: в проде нет эталонных меток, а
@@ -1677,6 +1734,95 @@ mod tests {
                 "пустой input = ambient-фоллбек, а не пустая строка"
             );
         }
+    }
+
+    /// Вход System-1 приходит из графа полем `input` — как у экстрактора
+    /// фактов. Хардкод имени агента и «склейка всей переписки» как фолбэк
+    /// убраны: обе вещи отдавали модели текст, которого нет ни в одном замере.
+    #[test]
+    fn state_text_is_taken_from_the_graph_input() {
+        let mut ctx = ctx_with_user_message("жалоба юзера");
+        ctx.node_outputs.insert(
+            "call_fact_consolidator".to_string(),
+            serde_json::json!({ "result": "подтверждённые факты", "agent": "fact_consolidator" }),
+        );
+
+        let node = NodeDef {
+            id: "validate_system1".to_string(),
+            node_type: NodeType::System1Validator,
+            input: Some("{{ nodes.call_fact_consolidator.output.result }}".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            resolve_state_text(&node, &ctx).expect("вход разрешён"),
+            "подтверждённые факты"
+        );
+    }
+
+    /// Нет `input` — ошибка с понятным советом, а не «все элементы false».
+    /// Тихий отказ здесь стоил бы прогон графа и маршрут, ушедший не туда.
+    #[test]
+    fn missing_state_input_is_an_error_not_a_silent_default() {
+        let ctx = ctx_with_user_message("жалоба юзера");
+
+        for raw in [None, Some(""), Some("   ")] {
+            let node = NodeDef {
+                id: "validate_system1".to_string(),
+                node_type: NodeType::System1Validator,
+                input: raw.map(str::to_string),
+                ..Default::default()
+            };
+            let error = resolve_state_text(&node, &ctx)
+                .expect_err("пустой input обязан быть ошибкой");
+            assert!(
+                error.contains("input"),
+                "в ошибке нет упоминания поля: {}",
+                error
+            );
+        }
+    }
+
+    /// `resolve_template` оставляет неразрешённый плейсхолдер как есть. Если
+    /// такой текст уйдёт в модель, прогон потратится впустую, а виновником
+    /// окажется модель.
+    #[test]
+    fn unresolved_state_template_is_an_error() {
+        let ctx = ctx_with_user_message("жалоба юзера");
+        let node = NodeDef {
+            id: "validate_system1".to_string(),
+            node_type: NodeType::System1Validator,
+            input: Some("{{ nodes.нет_такой_ноды.output.result }}".to_string()),
+            ..Default::default()
+        };
+
+        let error = resolve_state_text(&node, &ctx).expect_err("плейсхолдер обязан быть ошибкой");
+        assert!(
+            error.contains("не разрешился"),
+            "в ошибке нет указания на подстановку: {}",
+            error
+        );
+    }
+
+    /// Пустой текст — ошибка, а не «все e=false»: нулевой вход не значит
+    /// отсутствие проблемы. Шаблон здесь непустой, но разрешается в пустую
+    /// строку (пробельные значения отсекаются раньше, как «input не задан»).
+    #[test]
+    fn empty_state_text_is_an_error() {
+        let mut ctx = ctx_with_user_message("жалоба юзера");
+        ctx.node_outputs.insert(
+            "call_fact_consolidator".to_string(),
+            serde_json::json!({ "result": "", "agent": "fact_consolidator" }),
+        );
+        let node = NodeDef {
+            id: "validate_system1".to_string(),
+            node_type: NodeType::System1Validator,
+            input: Some("{{ nodes.call_fact_consolidator.output.result }}".to_string()),
+            ..Default::default()
+        };
+
+        let error = resolve_state_text(&node, &ctx).expect_err("пустой текст обязан быть ошибкой");
+        assert!(error.contains("пустой"), "{}", error);
     }
 
     #[test]

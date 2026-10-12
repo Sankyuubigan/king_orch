@@ -40,8 +40,7 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
       ${
         isEntry
           ? `<div class="detail-value ge-entry-badge">🚪 Это вход графа — с него начинается прогон</div>`
-          : `<button type="button" id="ge-set-entry" class="ge-btn">🚪 Сделать точкой входа</button>
-             <div class="detail-hint">Вход у графа один. Позиция ноды в списке входом не является.</div>`
+          : `<div class="detail-hint">Вход графа — нода «Сообщение юзера». Назначить входом другую ноду нельзя: только она даёт текст пользователя.</div>`
       }
     </div>
     <div class="graph-detail-section ge-disabled-row">
@@ -193,6 +192,26 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
     </div>`;
   }
 
+  if (data.type === "system1_validator") {
+    html += `<div class="graph-detail-section">
+      <div class="detail-label">Файл критериев (rules_file)</div>
+      <input type="text" id="ge-rules-file" class="ge-input"
+        placeholder="psychotherapist/database/element_validation_rules_system1.yaml"
+        value="${this.esc(data.rules_file || "")}" />
+      <div class="detail-hint">YAML с вопросами, полюсами true/false и порогами. Относительный путь — от каталога агентов, абсолютный — как есть. Набор элементов и их id задаёт файл, а не движок.</div>
+    </div>`;
+    html += `<div class="graph-detail-section">
+      <div class="detail-label">Текст на проверку (input)</div>
+      <input type="text" id="ge-input" class="ge-input"
+        placeholder="{{ nodes.call_fact_consolidator.output.result }}"
+        value="${this.esc(data.input || "")}" />
+      <div class="detail-hint">Обязательное поле. Шаблн текста, который увидит модель. Пустое или неразрешимое значение — ошибка прогона, а не «все элементы false».</div>
+    </div>`;
+    html += `<div class="graph-detail-section">
+      <div class="detail-value">Результат публикуется в сигнал <b>validator_report</b> ({e1: true, …}). Роутеры читают его как <code>validator_report.e3</code>.</div>
+    </div>`;
+  }
+
   if (data.type === "note") {
     html += `<div class="graph-detail-section">
       <div class="detail-label">Текст заметки (только в редакторе графа)</div>
@@ -265,14 +284,6 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
     });
   }
 
-  const setEntryBtn = document.getElementById("ge-set-entry") as HTMLButtonElement | null;
-  if (setEntryBtn) {
-    setEntryBtn.addEventListener("click", () => {
-      this.setEntryNode(nodeId);
-      this.showNodeEditor(nodeId);
-    });
-  }
-
   const disabledToggle = document.getElementById("ge-disabled") as HTMLInputElement;
   if (disabledToggle) {
     disabledToggle.addEventListener("change", () => {
@@ -299,6 +310,24 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
     fieldInput.addEventListener("change", () => {
       this.saveCheckpoint();
       this.editor!.drawflow.drawflow.Home.data[nodeId].data.field = fieldInput.value || undefined;
+      this.updateNodeHtml(nodeId);
+    });
+  }
+
+  const rulesFileInput = document.getElementById("ge-rules-file") as HTMLInputElement;
+  if (rulesFileInput) {
+    rulesFileInput.addEventListener("change", () => {
+      this.saveCheckpoint();
+      data.rules_file = rulesFileInput.value.trim() || undefined;
+      this.updateNodeHtml(nodeId);
+    });
+  }
+
+  const stateInput = document.getElementById("ge-input") as HTMLInputElement;
+  if (stateInput) {
+    stateInput.addEventListener("change", () => {
+      this.saveCheckpoint();
+      data.input = stateInput.value.trim() || undefined;
       this.updateNodeHtml(nodeId);
     });
   }

@@ -45,13 +45,11 @@ export async function handleOpen(this: GraphController): Promise<void> {
       });
       const nonSwitchEdges = nonSwitchEdgeEntries.map(({ edge }) => edge);
       const allEdges = [...nonSwitchEdges, ...this.getImplicitSwitchEdges(wf.nodes)];
-      // entry определяем после подсчёта ВСЕХ рёбер: маршруты динамических нод
-      // хранятся в полях нод, и по одним `edges:` терминальные ноды выглядели бы
-      // корнями графа. От точки входа потом считается и раскладка.
+      // entry определяем по нодам: единственный источник — `user_message`,
+      // рёбра на это не влияют. От точки входа потом считается раскладка.
       this.currentEntryNodeId = this.resolveEntryForEditor({
         entry: wf.entry,
         nodes: wf.nodes,
-        edges: allEdges,
       });
       const nodePositions = this.computeAutoLayout(wf.nodes, allEdges, this.currentEntryNodeId);
 
@@ -214,49 +212,36 @@ export function clearEditor(this: GraphController): void {
 /**
  * Определяет `entry` для редактора.
  *
- * Порядок: объявленное значение → единственная нода типа `user_message` → единственная
- * нода без входящих рёбер. Последний шаг нужен только для миграции старых файлов:
- * он ничего не пишет сам, а лишь показывает вход на холсте, чтобы пользователь его
- * увидел и подтвердил сохранением. Движок принимает только явно записанное `entry`.
+ * Единственный источник — нода типа `user_message`: только она даёт текст
+ * пользователя, и только такой вход принимает движок. Порядок: объявленное
+ * значение (если оно действительно `user_message`) → единственная такая нода →
+ * `null`, и тогда сохранение отменяется с внятным сообщением.
  *
- * ВАЖНО: передавать нужно ВСЕ рёбра, включая неявные маршруты динамических нод
- * (`getImplicitSwitchEdges`). По одним `edges:` терминальные ноды выглядят
- * корнями графа, и точку входа вывести не из чего.
+ * Рёбра сознательно не учитываются: старый фолбэк «единственный корень графа»
+ * порождал вход-`llm_worker` — граф грузился, но стартовал не с текста
+ * пользователя, и `{{ nodes.user_message.output.text }}` уезжал в промпт
+ * дословно. Ошибка, которая выглядит как работающая система, дороже отказа.
  */
 export function resolveEntryForEditor(
   this: GraphController,
-  wf: { entry?: string | null; nodes: GraphNodeDef[]; edges: GraphEdgeDef[] },
+  wf: { entry?: string | null; nodes: GraphNodeDef[] },
 ): string | null {
-  const declared = (wf.entry ?? "").trim();
-  if (declared && wf.nodes.some((n) => n.id === declared)) return declared;
-
   const sourceNodes = wf.nodes.filter((n) => n.type === ENTRY_NODE_TYPE);
+
+  // Объявленный вход принимается только если он действительно `user_message`.
+  // Раньше здесь стояла проверка «id существует», и битый файл с входом-llm_worker
+  // молча переписывался тем же неверным значением — редактор закреплял ошибку
+  // вместо того, чтобы её убрать.
+  const declared = (wf.entry ?? "").trim();
+  if (declared && sourceNodes.some((n) => n.id === declared)) return declared;
+
   if (sourceNodes.length === 1) return sourceNodes[0].id;
-  if (sourceNodes.length > 1) return null;
 
-  const hasIncoming = new Set(wf.edges.map((e) => e.to));
-  const roots = wf.nodes.filter((n) => !hasIncoming.has(n.id));
-  return roots.length === 1 ? roots[0].id : null;
-}
-
-/**
- * Назначает ноду точкой входа графа.
- *
- * Порты не трогаем: молча выбрасывать входящие рёбра — это потеря работы
- * пользователя. Если у новой точки входа есть входящие рёбра — это покажет
- * диагностика `ENTRY_HAS_INCOMING_EDGE`, а не тихая правка графа.
- */
-export function setEntryNode(this: GraphController, nodeId: string): void {
-  const dn = this.editor?.drawflow.drawflow.Home.data[nodeId];
-  if (!dn) return;
-  const previousId = this.currentEntryNodeId;
-  if (previousId === nodeId) return;
-
-  this.saveCheckpoint();
-  this.currentEntryNodeId = nodeId;
-  if (previousId) this.updateNodeHtml(previousId);
-  this.updateNodeHtml(nodeId);
-  showToast(`🚪 Вход графа: ${nodeId}`, "success");
+  // Нет ноды user_message или их несколько — вход вывести не из чего.
+  // Фолбэка «единственный корень графа» здесь нет намеренно: корень может
+  // быть `llm_worker`, и такой вход принимался движком, но не давал текста
+  // пользователя — вместо сообщения об ошибке в промпт уезжал бы сырой шаблон.
+  return null;
 }
 
 // ─── Сохранение ───
@@ -310,12 +295,9 @@ export async function handleSave(this: GraphController): Promise<void> {
       const entryNodeId = this.resolveEntryForEditor({
         entry: this.currentEntryNodeId,
         nodes,
-        // Полный набор рёбер: маршруты динамических нод хранятся в полях нод
-        // и в `edges:` не попадают, но для определения корней они значимы.
-        edges: [...edges, ...this.getImplicitSwitchEdges(nodes)],
       });
       if (!entryNodeId) {
-        const message = "❌ Не задана точка входа: добавь ноду «Сообщение юзера» и назначь её входом (кнопка в сайдбаре)";
+        const message = "❌ Не задана точка входа: в графе должна быть ровно одна нода «Сообщение юзера»";
         console.error(`[handleSave] ${message}`);
         showToast(message, "error");
         return;
