@@ -450,6 +450,8 @@ mod tests {
             current_date: false,
             temperature: None,
             vision: false,
+            think_budget_chars: None,
+            disable_reasoning: false,
         }
     }
 

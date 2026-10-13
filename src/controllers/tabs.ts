@@ -10,7 +10,6 @@ import type { WorkspaceMenuController } from "../ui";
 import { deleteSession, openSessionFolder, fetchSessions } from "../services";
 import { trackError } from "../telemetry";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
-import { ensureStarted } from "@my-tauri-plugins/plugin-cloud-routers";
 import { computeTargetIndex, computeShifts } from "../utils/drag";
 
 const SECTION_VIEWS: Record<TabSection, string> = {
@@ -42,6 +41,9 @@ const TAB_ICONS: Partial<Record<AppTab["type"], string>> = {
   chat: "💬",
   webview: "🌐",
 };
+
+/** Заголовок вкладки-веб-страницы. */
+const WEBVIEW_TITLE = "Web UI облачных роутеров";
 
 export interface TabControllerHooks {
   /// Раздел-вкладка активирована: графический контроллер и пр. пересоздают
@@ -312,27 +314,39 @@ export class TabController {
     return tab;
   }
 
-  /** Открыть вкладку веб-страницы (iframe Web UI облачного роутера). */
-  async openWebview(): Promise<AppTab | null> {
-    try {
-      const status = await ensureStarted("9router");
-      const base = status?.base_url;
-      if (!base) throw new Error("Облачный роутер не поднят");
-      const existing = this.entries.find(t => t.type === "webview");
-      if (existing) { this.activate(existing.id); return this.tabToApp(existing); }
-      const tab: AppTab = { id: genTabId(), type: "webview", sessionId: null, section: null, customTitle: null, url: `${base}/dashboard` };
-      this.materializeTab(tab);
-      this.renderStrip();
-      this.activate(tab.id);
-      this.persistTabs();
-      return tab;
-    } catch (e) {
-      showToast(`Не удалось открыть Web UI облачного роутера: ${e}`, "error");
-      void trackError("tabs.openWebview", e);
-      // Роутер не установлен — ведём на честную панель в Настройках.
-      this.openSection("settings");
-      return null;
+  /**
+   * Открыть дашборд роутера вкладкой внутри приложения.
+   *
+   * Вызывается по событию плагина (`onOpenDashboard`): к этому моменту роутер
+   * уже поднят и адрес проверен, поэтому хост ничего не стартует — дублировать
+   * логику «поднять роутер» в двух местах нельзя, они разъедутся. Идентификатор
+   * роутера приходит в payload и уходит в заголовок вкладки: дашборд есть у
+   * всех роутеров, и без подписи нельзя понять, чей открыт.
+   */
+  openWebview(payload: { router: string; base_url: string }): AppTab {
+    const url = `${payload.base_url.replace(/\/+$/, "")}/dashboard`;
+    // Дедуп по URL, а не «первая попавшаяся webview-вкладка»: вкладок может
+    // быть несколько (по одной на роутер), и повторный клик должен возвращать
+    // пользователя в его же вкладку, а не переключать на чужую.
+    const existing = this.entries.find(t => t.type === "webview" && t.url === url);
+    if (existing) {
+      this.activate(existing.id);
+      return this.tabToApp(existing);
     }
+    const tab: AppTab = {
+      id: genTabId(),
+      type: "webview",
+      sessionId: null,
+      section: null,
+      customTitle: null,
+      url,
+      title: `Web UI · ${payload.router}`,
+    };
+    this.materializeTab(tab);
+    this.renderStrip();
+    this.activate(tab.id);
+    this.persistTabs();
+    return tab;
   }
 
   closeTab(id: string) {
@@ -432,7 +446,7 @@ export class TabController {
       }
       case "webview": {
         entry.viewEl = buildWebviewPage(tab.url || "about:blank");
-        entry.title = "Web UI 9Router";
+        entry.title = this.defaultTitle(tab);
         break;
       }
     }
@@ -484,7 +498,7 @@ export class TabController {
 
   private defaultTitle(tab: AppTab): string {
     if (tab.type === "chat") return tab.customTitle || (tab as any).custom_title || (tab as any).title || "Новая сессия";
-    if (tab.type === "webview") return "Web UI 9Router";
+    if (tab.type === "webview") return tab.title || WEBVIEW_TITLE;
     if (tab.type === "section") return this.sectionTitle(tab.section as TabSection);
     return "Новая сессия";
   }
@@ -628,7 +642,6 @@ export class TabController {
       { id: "engines", label: "Движки", icon: "🚂", badge: true, action: () => { this.openSection("engines"); } },
       { id: "settings", label: "Настройки", icon: "⚙️", badge: true, action: () => { this.openSection("settings"); } },
       { id: "logs", label: "Логи", icon: "📝", action: () => { this.openSection("logs"); } },
-      { id: "cloud-routers", label: "Web UI облачных роутеров", icon: "🌐", action: () => { void this.openWebview(); } },
     ]);
   }
 

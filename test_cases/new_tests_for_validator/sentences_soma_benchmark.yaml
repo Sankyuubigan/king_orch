@@ -1,0 +1,467 @@
+version: 1
+
+description: "Бенчмарк для попредложной классификации соматики vs ментальных переживаний (75 предложений)"
+
+sentences:
+  # -------------------------------------------------------------
+  # ГРУППА 1: Чистая соматика (30 предложений) -> label: soma
+  # -------------------------------------------------------------
+  - id: s_soma_01
+    text: "Болит поясница третий день, тяжело нагибаться."
+    label: soma
+    category: pure_soma
+  - id: s_soma_02
+    text: "Температура 38.5, горло саднит и кашель."
+    label: soma
+    category: pure_soma
+  - id: s_soma_03
+    text: "У меня мигрень, тошнит от яркого света."
+    label: soma
+    category: pure_soma
+  - id: s_soma_04
+    text: "После вчерашнего праздника сильно раскалывается голова."
+    label: soma
+    category: pure_soma
+  - id: s_soma_05
+    text: "Болит живот справа внизу, отдаёт в ногу."
+    label: soma
+    category: pure_soma
+  - id: s_soma_06
+    text: "Постоянно хочется спать, слабость в теле, сплю по 10 часов."
+    label: soma
+    category: pure_soma
+  - id: s_soma_07
+    text: "Закладывает нос, из пазух идет гной, давит на лоб."
+    label: soma
+    category: pure_soma
+  - id: s_soma_08
+    text: "Тянет связку на голени после пробежки."
+    label: soma
+    category: pure_soma
+  - id: s_soma_09
+    text: "Онемели пальцы на левой руке, покалывает в мизинце."
+    label: soma
+    category: pure_soma
+  - id: s_soma_10
+    text: "Давление поднялось до 150 на 95, шумит в ушах."
+    label: soma
+    category: pure_soma
+  - id: s_soma_11
+    text: "Скрутило спину так, что не могу встать с кровати."
+    label: soma
+    category: pure_soma
+  - id: s_soma_12
+    text: "Колет под правым ребром после жирной еды."
+    label: soma
+    category: pure_soma
+  - id: s_soma_13
+    text: "Врач назначил уколы мильгаммы и диклофенак от радикулита."
+    label: soma
+    category: pure_soma
+  - id: s_soma_14
+    text: "На МРТ нашли две протрузии в шейном отделе L4-L5."
+    label: soma
+    category: pure_soma
+  - id: s_soma_15
+    text: "Зуб ноет всю ночь, обезболивающее не помогает."
+    label: soma
+    category: pure_soma
+  - id: s_soma_16
+    text: "Обострился гастрит, изжога после каждого приема пищи."
+    label: soma
+    category: pure_soma
+  - id: s_soma_17
+    text: "Хрустит правое колено при подъеме по лестнице."
+    label: soma
+    category: pure_soma
+  - id: s_soma_18
+    text: "Сильный насморк и слезотечение от весенней аллергии."
+    label: soma
+    category: pure_soma
+  - id: s_soma_19
+    text: "Спазмировало икроножную мышцу посреди ночи."
+    label: soma
+    category: pure_soma
+  - id: s_soma_20
+    text: "Одышка при ходьбе, трудно сделать глубокий вдох."
+    label: soma
+    category: pure_soma
+  - id: s_soma_21
+    text: "Ожег палец о горячую сковороду, вздулся волдырь."
+    label: soma
+    category: pure_soma
+  - id: s_soma_22
+    text: "Анализы крови показали повышенный холестерин и ферритин."
+    label: soma
+    category: pure_soma
+  - id: s_soma_23
+    text: "В ухе стреляет и пульсирует, температура 37.8."
+    label: soma
+    category: pure_soma
+  - id: s_soma_24
+    text: "Синяк на бедре после ушиба долго не проходит."
+    label: soma
+    category: pure_soma
+  - id: s_soma_25
+    text: "Горло пересохло, сел голос, не могу говорить."
+    label: soma
+    category: pure_soma
+  - id: s_soma_26
+    text: "Шею продуло под кондиционером, не могу повернуть голову."
+    label: soma
+    category: pure_soma
+  - id: s_soma_27
+    text: "Дергает веко на правом глазу уже третий день."
+    label: soma
+    category: pure_soma
+  - id: s_soma_28
+    text: "Болят стопы после долгой ходьбы в неудобной обуви."
+    label: soma
+    category: pure_soma
+  - id: s_soma_29
+    text: "Тошнота и рвота после отравления несвежей рыбой."
+    label: soma
+    category: pure_soma
+  - id: s_soma_30
+    text: "Бессонница, не могу заснуть до утра, сплю по 3 часа."
+    label: soma
+    category: pure_soma
+
+  # -------------------------------------------------------------
+  # ГРУППА 2: Чистый ментал (30 предложений) -> label: mental
+  # -------------------------------------------------------------
+  - id: s_mental_01
+    text: "Не могу заставить себя сесть за работу, всё откладываю."
+    label: mental
+    category: pure_mental
+  - id: s_mental_02
+    text: "Постоянно боюсь, что меня уволят и я останусь ни с чем."
+    label: mental
+    category: pure_mental
+  - id: s_mental_03
+    text: "Ругаюсь с женой каждый вечер, не могу сдержать раздражение."
+    label: mental
+    category: pure_mental
+  - id: s_mental_04
+    text: "Чувствую себя никчёмным неудачником, ничего не добился в жизни."
+    label: mental
+    category: pure_mental
+  - id: s_mental_05
+    text: "Хожу по кругу и не знаю, какое решение принять по поводу развода."
+    label: mental
+    category: pure_mental
+  - id: s_mental_06
+    text: "Тревожно перед каждым созвоном, кажется, что все смотрят на меня."
+    label: mental
+    category: pure_mental
+  - id: s_mental_07
+    text: "Я обязан всегда быть безупречным и не имею права на ошибку."
+    label: mental
+    category: pure_mental
+  - id: s_mental_08
+    text: "Специально избегаю встреч с друзьями, чтобы не расспрашивали про работу."
+    label: mental
+    category: pure_mental
+  - id: s_mental_09
+    text: "Мне стыдно признаться родителям, что я бросил учебу."
+    label: mental
+    category: pure_mental
+  - id: s_mental_10
+    text: "Если я не проконтролирую подчиненных, всё обязательно развалится."
+    label: mental
+    category: pure_mental
+  - id: s_mental_11
+    text: "Чувствую вину перед ребенком за то, что мало провожу с ним времени."
+    label: mental
+    category: pure_mental
+  - id: s_mental_12
+    text: "Кажется, что весь мир настроен против меня и никто не поможет."
+    label: mental
+    category: pure_mental
+  - id: s_mental_13
+    text: "Не могу сказать 'нет' коллегам, поэтому сижу с чужими задачами до ночи."
+    label: mental
+    category: pure_mental
+  - id: s_mental_14
+    text: "Паникую при мысли о том, что придется выступать с презентацией."
+    label: mental
+    category: pure_mental
+  - id: s_mental_15
+    text: "Считаю себя самозванцем, которому просто случайно повезло."
+    label: mental
+    category: pure_mental
+  - id: s_mental_16
+    text: "Застрял в апатии, ничего не радует, цели потеряли всякий смысл."
+    label: mental
+    category: pure_mental
+  - id: s_mental_17
+    text: "Злюсь на мужа за то, что он игнорирует мои просьбы."
+    label: mental
+    category: pure_mental
+  - id: s_mental_18
+    text: "Постоянно перепроверяю закрыта ли дверь по пять раз подряд."
+    label: mental
+    category: pure_mental
+  - id: s_mental_19
+    text: "Боюсь одиночества, готов терпеть плохое отношение лишь бы не быть одним."
+    label: mental
+    category: pure_mental
+  - id: s_mental_20
+    text: "Накручиваю себя катастрофическими сценариями будущего."
+    label: mental
+    category: pure_mental
+  - id: s_mental_21
+    text: "Не верю в свои силы, бросаю любое начинание на полпути."
+    label: mental
+    category: pure_mental
+  - id: s_mental_22
+    text: "Мне кажется, что меня осуждают за спиной."
+    label: mental
+    category: pure_mental
+  - id: s_mental_23
+    text: "У меня железное правило: никогда не просить помощи и рассчитывать только на себя."
+    label: mental
+    category: pure_mental
+  - id: s_mental_24
+    text: "Раздражаюсь на медлительность других людей и срываюсь на крик."
+    label: mental
+    category: pure_mental
+  - id: s_mental_25
+    text: "Испытываю сосущую тоску и внутреннюю пустоту по вечерам."
+    label: mental
+    category: pure_mental
+  - id: s_mental_26
+    text: "Постоянно сравниваю свои успехи с другими в соцсетях и расстраиваюсь."
+    label: mental
+    category: pure_mental
+  - id: s_mental_27
+    text: "Боюсь высказать свое мнение на совещании, чтобы не показаться глупым."
+    label: mental
+    category: pure_mental
+  - id: s_mental_28
+    text: "Чувствую себя заложником обстоятельств, от меня ничего не зависит."
+    label: mental
+    category: pure_mental
+  - id: s_mental_29
+    text: "Требую от детей только пятерок, иначе считаю себя плохим родителем."
+    label: mental
+    category: pure_mental
+  - id: s_mental_30
+    text: "Не могу отпустить старую обиду на предательство партнера."
+    label: mental
+    category: pure_mental
+
+  # -------------------------------------------------------------
+  # ГРУППА 3: Метафоры и пограничные фразы (15 предложений) -> label: mental
+  # (В этих предложениях есть слова тела/боли, но смысл строго ментальный)
+  # -------------------------------------------------------------
+  - id: s_meta_01
+    text: "У меня буквально болит душа за будущее детей."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: false
+      e2: false
+      e3: false
+      e4: false
+      e5: false
+      e6: true
+      e7: true
+      e8: false
+      e9: false
+  - id: s_meta_02
+    text: "На сердце лежит тяжелый камень после того разговора."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: false
+      e2: false
+      e3: false
+      e4: false
+      e5: false
+      e6: true
+      e7: true
+      e8: false
+      e9: false
+  - id: s_meta_03
+    text: "Руки опускаются, когда вижу, что ничего не получается."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: true
+      e2: true
+      e3: false
+      e4: false
+      e5: false
+      e6: true
+      e7: false
+      e8: true
+      e9: false
+  - id: s_meta_04
+    text: "Меня тошнит от этой фальшивой показухи на работе."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: false
+      e2: false
+      e3: false
+      e4: false
+      e5: false
+      e6: true
+      e7: true
+      e8: false
+      e9: false
+  - id: s_meta_05
+    text: "Внутри всё сжимается от страха, когда слышу шаги в коридоре."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: true
+      e2: false
+      e3: false
+      e4: false
+      e5: false
+      e6: true
+      e7: true
+      e8: false
+      e9: false
+  - id: s_meta_06
+    text: "Голова кругом идет от количества нерешенных проблем и долгов."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: true
+      e2: false
+      e3: false
+      e4: false
+      e5: false
+      e6: false
+      e7: false
+      e8: false
+      e9: false
+  - id: s_meta_07
+    text: "В горле стоит ком обиды, не могу вымолвить ни слова."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: true
+      e2: true
+      e3: false
+      e4: false
+      e5: false
+      e6: false
+      e7: true
+      e8: false
+      e9: false
+  - id: s_meta_08
+    text: "Эта неопределенность просто высасывает из меня все соки."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: false
+      e2: false
+      e3: false
+      e4: false
+      e5: false
+      e6: false
+      e7: false
+      e8: false
+      e9: false
+  - id: s_meta_09
+    text: "Земля уходит из-под ног, когда думаю о банкротстве."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: true
+      e2: false
+      e3: true
+      e4: false
+      e5: false
+      e6: true
+      e7: true
+      e8: false
+      e9: false
+  - id: s_meta_10
+    text: "Сердце кровью обливается, когда смотрю на одиноких стариков."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: false
+      e2: false
+      e3: false
+      e4: false
+      e5: false
+      e6: true
+      e7: true
+      e8: false
+      e9: false
+  - id: s_meta_11
+    text: "Чувствую себя выжатым как лимон после разговора с начальником."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: false
+      e2: false
+      e3: false
+      e4: false
+      e5: false
+      e6: true
+      e7: false
+      e8: false
+      e9: false
+  - id: s_meta_12
+    text: "Меня парализует ужас перед будущим."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: true
+      e2: true
+      e3: true
+      e4: false
+      e5: false
+      e6: true
+      e7: true
+      e8: false
+      e9: false
+  - id: s_meta_13
+    text: "В груди давит тяжесть от невысказанных претензий."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: true
+      e2: true
+      e3: false
+      e4: false
+      e5: false
+      e6: true
+      e7: false
+      e8: false
+      e9: false
+  - id: s_meta_14
+    text: "Я на грани нервного срыва из-за постоянной гонки дедлайнов."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: true
+      e2: false
+      e3: true
+      e4: false
+      e5: false
+      e6: true
+      e7: true
+      e8: false
+      e9: false
+  - id: s_meta_15
+    text: "Вся эта ситуация сидит у меня в печенках."
+    label: mental
+    category: metaphor_mental
+    expected:
+      e1: false
+      e2: false
+      e3: false
+      e4: false
+      e5: false
+      e6: false
+      e7: true
+      e8: false
+      e9: false

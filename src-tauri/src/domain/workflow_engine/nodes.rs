@@ -272,6 +272,115 @@ pub fn resolve_state_text(node: &NodeDef, context: &WorkflowContext) -> Result<S
     Ok(resolved)
 }
 
+/// Человекочитаемый отчёт System-1 для блока «Мысли».
+///
+/// Показывает ровно то, чем решается вердикт: имя элемента, `p_true` и порог.
+/// Один список вероятностей без порогов нечитаем — пользователь не может
+/// отличить «уверенно нет» от «едва не да».
+fn format_system1_report(
+    rules: &[super::system1_rules::System1Rule],
+    probabilities: &std::collections::BTreeMap<String, f32>,
+    report_json: &serde_json::Value,
+    elapsed_ms: u64,
+    device: &str,
+    input_chars: usize,
+) -> String {
+    let mut lines = vec![format!(
+        "### System-1: проверено элементов — {} за {:.1}с",
+        rules.len(),
+        elapsed_ms as f64 / 1000.0
+    )];
+
+    for rule in rules {
+        let p_true = probabilities.get(&rule.id).copied().unwrap_or(0.0);
+        let threshold = rule.threshold_or_default();
+        let verdict = report_json
+            .get(&rule.id)
+            .and_then(serde_json::Value::as_bool);
+        let mark = match verdict {
+            Some(true) => "да",
+            Some(false) => "нет",
+            None => "?",
+        };
+        let name = if rule.name.trim().is_empty() {
+            rule.id.as_str()
+        } else {
+            rule.name.as_str()
+        };
+        lines.push(format!(
+            "- **{}** ({}): **{}** — p={:.3}, порог {:.2}{}",
+            rule.id,
+            name,
+            mark,
+            p_true,
+            threshold,
+            // Порог, отличный от умолчания, — часть вердикта: без пометки
+            // «нет» при 0.43 выглядит как уверенное отрицание.
+            if (threshold - super::system1_rules::DEFAULT_THRESHOLD).abs() > f32::EPSILON {
+                " (порог изменён)"
+            } else {
+                ""
+            }
+        ));
+    }
+
+    lines.push(format!(
+        "_Устройство: {}. Вход: {} симв._",
+        device, input_chars
+    ));
+    lines.join("\n")
+}
+
+/// Собрать два сообщения отчёта System-1: `thought` (для юзера) и `signal`
+/// (для нисходящих нод).
+///
+/// Отдельная функция, а не код прямо в ноде: поведение «отчёт доезжает до
+/// `messages[]`» — это ровно то, что однажды молча пропало, и проверить его
+/// можно без 646-мегабайтной модели.
+fn system1_report_messages(
+    node: &NodeDef,
+    report_text: String,
+    report_json: &serde_json::Value,
+    elapsed_sec: f64,
+    model_id: &str,
+    msg_counter: &mut u32,
+) -> (ChatMessage, ChatMessage) {
+    // Автор — тот же, что и у `llm_worker`: явный `agent` в YAML, иначе id ноды.
+    // Хардкод `"validator"` означал бы, что движок знает имя чужого агента —
+    // та же ошибка, что была с `fact_consolidator`.
+    let author = node.agent.as_deref().unwrap_or(&node.id);
+
+    let thought = ChatMessage {
+        id: Some(format!("msg_{}", msg_counter)),
+        msg_type: node.output_type.as_deref().unwrap_or("thought").to_string(),
+        content: report_text,
+        sub_calls: None,
+        author: Some(author.to_string()),
+        model: Some(model_id.to_string()),
+        time_sec: Some(elapsed_sec),
+        attachments: None,
+        phase: Some(2),
+    };
+    *msg_counter += 1;
+
+    // Форма сигнала совпадает с `emit_signal` агента (`{key: value}`), поэтому
+    // `inject_response` находит его первым, а не откатывается к тексту отчёта.
+    let signal = ChatMessage {
+        id: Some(format!("msg_{}", msg_counter)),
+        msg_type: "signal".to_string(),
+        content: serde_json::json!({ "validator_report": report_json }).to_string(),
+        sub_calls: None,
+        author: Some(author.to_string()),
+        model: None,
+        time_sec: None,
+        attachments: None,
+        phase: Some(2),
+    };
+    *msg_counter += 1;
+
+    (thought, signal)
+}
+
 /// Выполняет один узел графа и возвращает результат + id следующего узла
 pub fn execute_node<L, S, C>(
     node: &NodeDef,
@@ -383,6 +492,44 @@ where
 
             // FP/FN здесь НЕ считаются: в проде нет эталонных меток, а
             // проставлять нули означало бы утверждать «ложных срабатываний нет».
+
+            // Отчёт публикуется в `messages[]` ДВАЯ: как `thought` — чтобы
+            // юзер видел вердикты в блоке «Мысли», и как `signal` — чтобы
+            // нисходящие ноды с `inject_response: ["<author>"]` получали
+            // вердикты, а не «[Ответ не найден]».
+            //
+            // Без этого отчёта система выглядела исправной: сигнал в
+            // `context.signals` уходил роутерам, вердикты применялись, а
+            // юзер и последующие агенты ничего не видели.
+            let report_text = format_system1_report(
+                &rules,
+                &probabilities,
+                &report_json,
+                report.elapsed_ms,
+                &report.device,
+                text_to_validate.chars().count(),
+            );
+
+            let (thought, signal) = system1_report_messages(
+                node,
+                report_text,
+                &report_json,
+                report.elapsed_ms as f64 / 1000.0,
+                &crate::infra::system1::model_id(),
+                &mut runner.msg_counter,
+            );
+
+            // Считаем ДО `push_report`: сообщение перемещается в `messages[]`.
+            let outputs_as_message = thought.msg_type == "message";
+
+            // `replace_report = true`: каждый ход юзера перезаписывает прошлый
+            // отчёт того же автора, иначе в сессии копится лестница устаревших
+            // вердиктов. Сигналы `push_report` по условию сохраняет всегда.
+            push_report(&mut context.messages, thought, true, Some(2));
+            push_report(&mut context.messages, signal, false, None);
+
+            context.output_emitted = outputs_as_message;
+
             Ok(NodeResult {
                 output: serde_json::json!({
                     "report": report_json,
@@ -568,58 +715,11 @@ where
             // inject_thoughts  → размышления (фаза 1) перечисленных агентов.
             // inject_response  → финальные ответы (фаза 2): сигнал, если есть,
             //                    иначе последний thought/message фазы 2.
-            let mut injected_reports = String::new();
-
-            if let Some(ref aids) = node.inject_thoughts {
-                if !aids.is_empty() {
-                    injected_reports.push_str("### [РАЗМЫШЛЕНИЯ КОЛЛЕГ (ФАЗА 1)]\n");
-                    for aid in aids {
-                        let report = context
-                            .messages
-                            .iter()
-                            .rev()
-                            .find(|m| {
-                                m.author.as_deref() == Some(aid.as_str())
-                                    && crate::infra::llm_types::message_phase(m) == Some(1)
-                            })
-                            .map(|m| m.content.clone())
-                            .unwrap_or_else(|| "[Размышления не найдены]".to_string());
-                        injected_reports
-                            .push_str(&format!("--- Мысли от {} ---\n{}\n\n", aid, report));
-                    }
-                }
-            }
-
-            if let Some(ref aids) = node.inject_response {
-                if !aids.is_empty() {
-                    injected_reports.push_str("### [ОТВЕТЫ КОЛЛЕГ (ФАЗА 2)]\n");
-                    for aid in aids {
-                        let report = context
-                            .messages
-                            .iter()
-                            .rev()
-                            .find(|m| {
-                                m.author.as_deref() == Some(aid.as_str()) && m.msg_type == "signal"
-                            })
-                            .map(|m| m.content.clone())
-                            .or_else(|| {
-                                context
-                                    .messages
-                                    .iter()
-                                    .rev()
-                                    .find(|m| {
-                                        m.author.as_deref() == Some(aid.as_str())
-                                            && message_phase(m) != Some(1)
-                                            && (m.msg_type == "message" || m.msg_type == "thought")
-                                    })
-                                    .map(|m| m.content.clone())
-                            })
-                            .unwrap_or_else(|| "[Ответ не найден]".to_string());
-                        injected_reports
-                            .push_str(&format!("--- Ответ от {} ---\n{}\n\n", aid, report));
-                    }
-                }
-            }
+            //
+            // Сборка живёт в `reports::build_injected_reports`: её использует и
+            // стенд замеров, иначе измерялся бы не боевой текст инжекта.
+            let injected_reports =
+                crate::domain::workflow_engine::reports::build_injected_reports(node, &context.messages);
 
             (runner.log_cb)(format!(
                 "[worker] Вызов '{}': {}",
@@ -1758,6 +1858,134 @@ mod tests {
             resolve_state_text(&node, &ctx).expect("вход разрешён"),
             "подтверждённые факты"
         );
+    }
+
+    fn system1_rule(id: &str, name: &str, threshold: Option<f32>) -> super::super::system1_rules::System1Rule {
+        super::super::system1_rules::System1Rule {
+            id: id.to_string(),
+            name: name.to_string(),
+            question: "вопрос".to_string(),
+            true_criteria: "да".to_string(),
+            false_criteria: "нет".to_string(),
+            threshold,
+        }
+    }
+
+    /// Отчёт обязан называть элемент, вероятность и порог. Один список
+    /// булевых вердиктов нечитаем: «нет» при p=0.43 и «нет» при p=0.01 —
+    /// разные факты, а выглядят одинаково.
+    #[test]
+    fn system1_report_shows_verdict_probability_and_threshold() {
+        let rules = vec![
+            system1_rule("e1", "Сопротивление", Some(0.5)),
+            system1_rule("e3", "Идол-Катастрофа", Some(0.36)),
+        ];
+        let mut probabilities = std::collections::BTreeMap::new();
+        probabilities.insert("e1".to_string(), 0.63);
+        probabilities.insert("e3".to_string(), 0.28);
+        let report_json = serde_json::json!({ "e1": true, "e3": false });
+
+        let text = format_system1_report(&rules, &probabilities, &report_json, 4308, "cpu", 349);
+
+        assert!(text.contains("e1"), "нет id элемента: {}", text);
+        assert!(text.contains("Сопротивление"), "нет имени элемента: {}", text);
+        assert!(text.contains("p=0.630"), "нет вероятности: {}", text);
+        assert!(text.contains("порог 0.50"), "нет порога: {}", text);
+        // Изменённый порог помечен: иначе «нет» при 0.28 выглядит как
+        // уверенное отрицание по общему правилу.
+        assert!(
+            text.contains("порог изменён"),
+            "не отмечен нестандартный порог: {}",
+            text
+        );
+        assert!(text.contains("349"), "нет длины входа: {}", text);
+    }
+
+    /// Регресс: нода публиковала вердикты только в `context.signals`. Роутеры
+    /// работали, а юзер в блоке «Мысли» и нисходящие ноды с
+    /// `inject_response: ["validator"]` — нет. Обе роли проверяются здесь.
+    #[test]
+    fn system1_report_publishes_thought_and_signal_messages() {
+        let node = NodeDef {
+            id: "validate_system1".to_string(),
+            node_type: NodeType::System1Validator,
+            agent: Some("validator".to_string()),
+            ..Default::default()
+        };
+        let report_json = serde_json::json!({ "e1": true, "e3": false });
+        let mut counter = 7;
+
+        let (thought, signal) = system1_report_messages(
+            &node,
+            "### System-1: отчёт".to_string(),
+            &report_json,
+            4.3,
+            "laya-multilingual-onnx",
+            &mut counter,
+        );
+
+        assert_eq!(thought.msg_type, "thought", "по умолчанию отчёт — мысль");
+        assert_eq!(thought.author.as_deref(), Some("validator"));
+        assert_eq!(thought.model.as_deref(), Some("laya-multilingual-onnx"));
+        assert_eq!(thought.time_sec, Some(4.3));
+
+        // Форма сигнала обязана совпадать с `emit_signal` агента, иначе
+        // `inject_response` не найдёт отчёт и подставит «[Ответ не найден]».
+        assert_eq!(signal.msg_type, "signal");
+        assert_eq!(signal.author.as_deref(), Some("validator"));
+        let parsed: serde_json::Value =
+            serde_json::from_str(&signal.content).expect("сигнал — валидный JSON");
+        assert_eq!(parsed["validator_report"]["e1"], serde_json::json!(true));
+        assert_eq!(parsed["validator_report"]["e3"], serde_json::json!(false));
+
+        assert_eq!(counter, 9, "оба сообщения должны получить id");
+    }
+
+    /// Без явного `agent` автором становится id ноды, а не выдуманное имя:
+    /// движок не знает, кто «validator» в чужом графе.
+    #[test]
+    fn system1_report_falls_back_to_node_id_as_author() {
+        let node = NodeDef {
+            id: "quick_check".to_string(),
+            node_type: NodeType::System1Validator,
+            ..Default::default()
+        };
+        let mut counter = 0;
+        let (thought, signal) = system1_report_messages(
+            &node,
+            "отчёт".to_string(),
+            &serde_json::json!({ "x": true }),
+            1.0,
+            "laya",
+            &mut counter,
+        );
+
+        assert_eq!(thought.author.as_deref(), Some("quick_check"));
+        assert_eq!(signal.author.as_deref(), Some("quick_check"));
+    }
+
+    /// Явный `output_type: message` отчёт уводит из «Мыслей» в чат — как и у
+    /// `llm_worker`. Значение по умолчанию остаётся `thought`.
+    #[test]
+    fn system1_report_honours_output_type() {
+        let node = NodeDef {
+            id: "validate_system1".to_string(),
+            node_type: NodeType::System1Validator,
+            output_type: Some("message".to_string()),
+            ..Default::default()
+        };
+        let mut counter = 0;
+        let (thought, signal) = system1_report_messages(
+            &node,
+            "отчёт".to_string(),
+            &serde_json::json!({ "x": true }),
+            1.0,
+            "laya",
+            &mut counter,
+        );
+
+        assert_eq!(thought.msg_type, "message");
+        assert_eq!(signal.msg_type, "signal", "сигнал нужен при любом output_type");
     }
 
     /// Нет `input` — ошибка с понятным советом, а не «все элементы false».

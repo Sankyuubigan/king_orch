@@ -8,7 +8,56 @@ pub mod editor_fidelity;
 pub mod fact_extractor;
 pub mod nodes;
 pub mod parser;
+// `reports` — общий код боевой ноды (`nodes::execute_node`) и стендов: инжект
+// отчётов собирается одной функцией, иначе стенд мерил бы не тот текст.
+pub mod reports;
 pub mod system1_rules;
+
+// ─── Стенды замера валидатора 9 элементов ───
+//
+// Всё ниже обслуживает ОДНУ задачу — сравнение методов определения элементов
+// (System-1 ONNX, System-2 LLM, трёхслойная воронка, плоская форма) на одном
+// золоте. Движок о них не знает: все модули помечены `#[cfg(test)]`, поэтому в
+// релизном бинаре измеритель места не занимает (AGENTS.md §1 «разделение
+// бизнес-логики и движка»).
+//
+// Что где:
+//   `probe_cases`      — загрузка кейсов из `test_cases/new_tests_for_validator/`
+//   `probe_call`       — разбор конверта `emit_signal` (тот же путь, что в бою)
+//                        и отказ с сырыми ответами слоёв
+//   `mental_gate`      — маршрут «только соматика → слои не вызываются», из
+//                        измеренного артефакта боевого гейта
+//   `validator_layers` — состав воронки из `agents/.../validator_layers.yaml`
+//   `verdict_contract` — общий счёт полей по контракту сигнала
+//   `probe_report`     — форма отчёта, сводка по наборам, статистика маршрута
+//   `probe_acceptance` — приёмка: пороги из `acceptance_gates.json`
+//   `*_probe`          — сами стенды (форма = одна функция стенда)
+//   `gold_rescore`     — пересчёт ВСЕХ систем на одном золоте без вызова модели
+//
+// Стенды ОТКЛОНЁННЫХ методов (Лайя 3 слоя, Лайя-консолидатор, старый плоский
+// Орнит, гейт фактов) вынесены в `test/laya_probe/experiments/`: их вердикты
+// зафиксированы в `docs/LAYA_MODEL.md` и `tasks/`, а сами прогоны больше не
+// нужны — `gold_rescore` пересчитывает их результаты прямо из артефактов.
+#[cfg(test)]
+mod flat_validator_probe;
+#[cfg(test)]
+mod gold_rescore;
+#[cfg(test)]
+mod layered_validator_probe;
+#[cfg(test)]
+mod mental_gate;
+#[cfg(test)]
+mod probe_acceptance;
+#[cfg(test)]
+mod probe_call;
+#[cfg(test)]
+mod probe_cases;
+#[cfg(test)]
+mod probe_report;
+#[cfg(test)]
+mod validator_layers;
+#[cfg(test)]
+mod verdict_contract;
 
 pub use context::WorkflowContext;
 pub use editor_fidelity::{analyze_workflow_fidelity, GraphDiagnostic};
@@ -546,6 +595,8 @@ mod tests {
             current_date: false,
             temperature: temp,
             vision: false,
+            think_budget_chars: None,
+            disable_reasoning: false,
         }
     }
 

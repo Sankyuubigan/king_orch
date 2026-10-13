@@ -572,7 +572,13 @@ mod tests {
         // Граф, который правится руками в редакторе графа: контракт `entry`
         // и читаемость входа экстрактором проверяются на нём же, а не только
         // на шаблонных графах команд.
-        "agents/psychotherapist/transitions/psychotherapist.yaml",
+        //
+        // Лежит в `experiments/`, а не в `transitions/`: это вариант графа с
+        // нодой System-1 (Лайя) и гейтом `mental_presence`, а не основной
+        // пайплайн. Загрузчик `collect_yaml_files` пропускает только папку
+        // `archive`, поэтому из `experiments/` граф всё равно регистрируется и
+        // доступен в выборе агента — перенос не отключает его.
+        "agents/psychotherapist/experiments/psychotherapist.yaml",
         "agents/coder/transitions/analyst-team.yaml",
         "agents/coder/transitions/coding-team.yaml",
         "agents/research/transitions/search-specialist.yaml",

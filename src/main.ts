@@ -18,7 +18,7 @@ import "@my-tauri-plugins/plugin-downloader";
 import "@my-tauri-plugins/plugin-system1";
 import { initUpdateWatcher as initLlamaUpdateWatcher } from "@my-tauri-plugins/plugin-llama-engine";
 import { initUpdateWatcher as initImageUpdateWatcher } from "@my-tauri-plugins/plugin-image-engine";
-import { initUpdateWatcher as initRoutersUpdateWatcher } from "@my-tauri-plugins/plugin-cloud-routers";
+import { initUpdateWatcher as initRoutersUpdateWatcher, onOpenDashboard } from "@my-tauri-plugins/plugin-cloud-routers";
 import {
   SessionController, SettingsController, AgentTestController, AgentPickerController,
   CodingTestController, UpdatePopupController, TabController, initChatEventRouter,
@@ -315,6 +315,19 @@ async function initApp() {
   initImageUpdateWatcher();
   initRoutersUpdateWatcher();
   initUpdateWatchers();
+
+  // ─── Дашборд роутера открываем вкладкой внутри приложения ───
+  // Плагин поднимает роутер и присылает готовое событие с адресом; хост только
+  // показывает вкладку. Отдельный пункт меню для этого не нужен — единственная
+  // точка входа «Web UI» живёт в панели плагина.
+  void onOpenDashboard((p) => {
+    try {
+      tabCtrl.openWebview(p);
+    } catch (e) {
+      showToast(`Не удалось открыть Web UI роутера: ${e}`, "error");
+      void trackError("tabs.openWebview", e);
+    }
+  }).catch((e) => void trackError("tabs.openWebview-listen", e));
 }
 
 document.addEventListener("DOMContentLoaded", () => {

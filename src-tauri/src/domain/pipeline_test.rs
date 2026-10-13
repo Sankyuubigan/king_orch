@@ -748,11 +748,44 @@ fn chrono_timestamp() -> String {
 
 // ─── CLI-обёртка ───
 
+/// Сказать плагину System-1, где лежит `KingOrchData` — до первого обращения к модели.
+///
+/// Обычное приложение делает это в `main.rs` на старте. Тесты идут мимо `main`:
+/// их бинарь лежит в `target/debug/deps`, и без указания плагин ищет модель
+/// в `target/debug/deps/KingOrchData`, которой нет, — нода `system1_validator`
+/// падала с «onnxruntime.dll не найден» ДО начала измерения.
+///
+/// Путь берётся из того же `app_config.json`, что и в приложении
+/// (`infra::config::load_config_early().data_dir`), поэтому второго источника
+/// правды не появляется. Образец — `system1_rules.rs:352-358`.
+///
+/// Пусто в конфиге — не повод пропускать вызов молча: причина называется в
+/// лог, иначе падение ниже читается как «модель не скачана» (§2.2).
+fn configure_system1_data_dir(log_cb: &dyn Fn(String)) {
+    match crate::infra::config::load_config_early().data_dir {
+        Some(dir) if !dir.trim().is_empty() => {
+            let path = PathBuf::from(dir);
+            log_cb(format!(
+                "[system1] корень данных модели: {}",
+                path.display()
+            ));
+            tauri_plugin_system1::set_data_dir(path);
+        }
+        other => log::warn!(
+            "[pipeline_test] в app_config нет data_dir ({:?}) — System-1 будет искать \
+             модель рядом с бинарём теста (target\\debug\\deps\\KingOrchData) и упадёт",
+            other
+        ),
+    }
+}
+
 pub fn run_pipeline_test_cli(
     test_id: &str,
     model_path: &str,
     project_root: &Path,
 ) -> Result<PipelineTestResult, String> {
+    configure_system1_data_dir(&|msg| { eprintln!("[LOG] {}", msg); });
+
     let tests = load_pipeline_tests(project_root)?;
     let test_def = tests.into_iter()
         .find(|t| t.id == test_id)

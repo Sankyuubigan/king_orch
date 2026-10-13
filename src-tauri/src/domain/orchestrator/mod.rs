@@ -37,7 +37,7 @@ use crate::domain::parsers::{
     split_thinking_and_answer,
 };
 use crate::domain::signals::{
-    build_signal_envelope_grammar, build_signal_envelope_json_only_grammar,
+    build_signal_envelope_grammar_with_think_budget, build_signal_envelope_json_only_grammar,
     extract_signal_value_from_text, load_signal_contract, SignalContract,
 };
 use crate::domain::workflow_engine::{
@@ -1195,17 +1195,10 @@ where
             system_prompt.push_str(&image_candidates);
         }
     }
-    // 4.5: плагин-слой — точка расширения системного промпта (pass-through, если плагинов нет).
-    crate::infra::plugins::global_plugins().on_system_prompt(&agent.id, &mut system_prompt);
-
-    if !injected_reports.is_empty() {
-        system_prompt.push_str("\n\n");
-        system_prompt.push_str(&injected_reports);
-    }
-
-    // Глобальное правило для всех мыслящих моделей, чтобы не пробивали лимит 2048 токенов
-    system_prompt.push_str("\n\n[КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ]\n");
-    system_prompt.push_str(prompt::CRITICAL_LIMIT_BLOCK);
+    // 4.5: плагин-слой — точка расширения системного промпта (pass-through, если плагинов нет),
+    // инжект отчётов коллег и блок лимита — в общей сборке `finalize_system_prompt`,
+    // чтобы стенды замеров видели ровно тот же текст.
+    let system_prompt = prompt::finalize_system_prompt(&system_prompt, &agent.id, &injected_reports);
 
     let mut llm_messages: Vec<LlmMessage> = vec![LlmMessage {
         role: "system".to_string(),
@@ -1370,12 +1363,20 @@ where
                 gbnf.len()
             ));
         }
-    } else if let Some(contract) = &signal_contract {
+} else if let Some(contract) = &signal_contract {
         // Сигнальные агенты: Method 3 из docs/gbnf.md — гибридная GBNФ.
         // think-block ( düşünce <think>...</think>) + envelope-json. Модель думает
         // свободно, грамматика направляет к JSON после </think>.
         // disable_reasoning НЕ включается — см. has_agent_grammar ниже.
-        let grammar = build_signal_envelope_grammar(contract);
+        //
+        // Граница размышления берётся из frontmatter агента (`think_budget:`).
+        // Без неё модель может выжечь весь n_predict в think и не вернуть сигнал
+        // вовсе (измерено на `tasks/09.10.26 …md` §7) — это отказ формата, и он
+        // устраняется зашивкой бюджета в грамматику, а не ретраем.
+        let grammar = build_signal_envelope_grammar_with_think_budget(
+            contract,
+            agent.think_budget_chars,
+        );
         engine.set_grammar(Some(GrammarSpec {
             gbnf: Some(grammar),
             json_schema: None,
@@ -1385,7 +1386,7 @@ where
             // контракт сигнала держится на системном промпте + native tools.
             log_cb(format!("🎯 Агент '{}': облако — грамматика не поддерживается, сигнал по промпту + native tools", agent.id));
         } else {
-            log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены)", agent.id));
+            log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены), граница размышления: {:?} симв.", agent.id, agent.think_budget_chars));
         }
     } else {
         engine.set_grammar(None);
@@ -1408,7 +1409,10 @@ where
             json_schema: None,
         })
     } else if let Some(contract) = &signal_contract {
-        let grammar = build_signal_envelope_grammar(contract);
+        let grammar = build_signal_envelope_grammar_with_think_budget(
+            contract,
+            agent.think_budget_chars,
+        );
         Some(GrammarSpec {
             gbnf: Some(grammar),
             json_schema: None,
@@ -1802,7 +1806,14 @@ where
             None
         };
         let attempt_generate = |msgs: &[LlmMessage]| -> Result<GenerationResult, String> {
-            let disable_reasoning = force_no_thinking.get() || has_agent_grammar;
+            // `agent.disable_reasoning` — явный выбор агента: у reasoning-моделей
+            // размышление идёт ОТДЕЛЬНЫМ каналом, грамматика его не ограничивает,
+            // и весь `n_predict` может уйти в think — тогда конверт сигнала не
+            // появится вовсе (измерено на `tasks/09.10.26 …md` §7: слой вернул
+            // 0 токенов ответа и 2042 токена думателя). Агент, которому формат
+            // важнее рассуждения, объявляет это во frontmatter.
+            let disable_reasoning =
+                force_no_thinking.get() || has_agent_grammar || agent.disable_reasoning;
             if !attachments.is_empty() && (engine.is_multimodal() || engine.is_cloud()) {
                 engine.generate_chat_multimodal(
                     msgs,
@@ -2752,6 +2763,8 @@ mod tests {
             current_date: false,
             temperature: None,
             vision: false,
+            think_budget_chars: None,
+            disable_reasoning: false,
         }
     }
 

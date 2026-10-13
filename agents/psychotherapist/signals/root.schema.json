@@ -22,6 +22,64 @@
         "required": ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9"]
       }
     },
+    "validator_flat": {
+      "key": "validator_report",
+      "value": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "e1": { "type": "boolean" },
+          "e2": { "type": "boolean" },
+          "e3": { "type": "boolean" },
+          "e4": { "type": "boolean" },
+          "e5": { "type": "boolean" },
+          "e6": { "type": "boolean" },
+          "e7": { "type": "boolean" },
+          "e8": { "type": "boolean" },
+          "e9": { "type": "boolean" }
+        },
+        "required": ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9"]
+      }
+    },
+    "validator_surface": {
+      "key": "validator_surface",
+      "value": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "e1": { "type": "boolean" },
+          "e2": { "type": "boolean" },
+          "e6": { "type": "boolean" },
+          "e7": { "type": "boolean" }
+        },
+        "required": ["e1", "e2", "e6", "e7"]
+      }
+    },
+    "validator_facade": {
+      "key": "validator_facade",
+      "value": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "e4": { "type": "boolean" },
+          "e5": { "type": "boolean" },
+          "e8": { "type": "boolean" },
+          "e9": { "type": "boolean" }
+        },
+        "required": ["e4", "e5", "e8", "e9"]
+      }
+    },
+    "validator_core": {
+      "key": "validator_core",
+      "value": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "e3": { "type": "boolean" }
+        },
+        "required": ["e3"]
+      }
+    },
     "focus_keeper": {
       "key": "focus_keeper",
       "value": {

@@ -146,6 +146,35 @@ pub fn build_system_prompt(
     sp
 }
 
+/// Финальная сборка системного промпта агента: плагины → инжект отчётов
+/// коллег → блок критического лимита.
+///
+/// Вынесено отдельной функцией, потому что **стенды замеров обязаны видеть тот же
+/// текст, что и боевая нода**. Пока сборка жила внутри `run_agent_node`, стенд
+/// вынужден был повторять её у себя, и замерял бы промпт без блока лимита и без
+/// правок плагинов — то есть другой промпт при той же модели.
+///
+/// Порядок частей сохранён как был: плагины видели промпт уже с медиа-блоком, а
+/// критический лимит оставался последним разделом.
+pub fn finalize_system_prompt(
+    base: &str,
+    agent_id: &str,
+    injected_reports: &str,
+) -> String {
+    let mut sp = base.to_string();
+    crate::infra::plugins::global_plugins().on_system_prompt(agent_id, &mut sp);
+
+    if !injected_reports.is_empty() {
+        sp.push_str("\n\n");
+        sp.push_str(injected_reports);
+    }
+
+    // Глобальное правило для всех мыслящих моделей, чтобы не пробивали лимит ответа.
+    sp.push_str("\n\n[КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ]\n");
+    sp.push_str(CRITICAL_LIMIT_BLOCK);
+    sp
+}
+
 pub(crate) fn sanitize_model_visible_text(text: &str) -> String {
     let mut sanitized = String::with_capacity(text.len());
     for part in text.split_inclusive(char::is_whitespace) {
@@ -284,5 +313,31 @@ mod tests {
             "при пустых сообщениях — mirror (англ. fallback), получено: {}",
             d
         );
+    }
+
+    /// Порядок частей системного промпта зафиксирован: инжект идёт ДО блока
+    /// критического лимита. Если блок переедет выше, модель прочитает «не
+    /// пробивай лимит» как часть отчёта коллеги, а не как правило себе.
+    #[test]
+    fn finalize_keeps_inject_before_critical_limit() {
+        let prompt = finalize_system_prompt("БАЗА", "agent_x", "ИНЖЕКТ");
+        let base = prompt.find("БАЗА").expect("база на месте");
+        let injected = prompt.find("ИНЖЕКТ").expect("инжект на месте");
+        let limit = prompt
+            .find("[КРИТИЧЕСКОЕ ОГРАНИЧЕНИЕ]")
+            .expect("блок лимита на месте");
+        assert!(base < injected, "инжект должен идти после базового промпта");
+        assert!(
+            injected < limit,
+            "блок лимита обязан оставаться последним разделом"
+        );
+    }
+
+    /// Пустой инжект не оставляет пустого раздела: лишний перевод строки перед
+    /// блоком лимита меняет текст, который видят и бой, и стенды.
+    #[test]
+    fn finalize_without_inject_has_no_empty_section() {
+        let prompt = finalize_system_prompt("БАЗА", "agent_x", "");
+        assert!(!prompt.contains("\n\n\n"), "пустой инжект оставил пустой раздел");
     }
 }

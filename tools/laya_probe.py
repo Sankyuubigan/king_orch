@@ -681,7 +681,7 @@ def main() -> int:
                 "model_id": model_id,
                 "model_revision": model_revision,
                 "device": str(agent.device),
-                "cases_file": args.cases.relative_to(PROJECT_ROOT).as_posix(),
+                "cases_file": args.cases.resolve().relative_to(PROJECT_ROOT).as_posix(),
                 "rules_file": rules_path.name,
                 "labels": args.labels,
                 "cases_total": len(cases),

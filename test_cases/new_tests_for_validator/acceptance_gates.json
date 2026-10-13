@@ -1,0 +1,125 @@
+{
+  "_note": "Приёмка стендов валидатора 9 элементов. Конфигурация замера живёт здесь, а не константами в Rust: гейты объявляются ДО прогона (AGENTS.md §00.3.1) и обязаны быть проверяемы другим. Копия этих чисел в коде движка — нарушение SSOT (core rules §2.1).",
+  "_declared_in": "tasks/11.10.26 Плоский валидатор против трёхслойной воронки.md §5",
+  "noise_floor_fields": {
+    "_note": "На 432 полях разница меньше этого числа неотличима от шума (docs/LAYA_MODEL.md §15.4).",
+    "value": 15
+  },
+  "references": {
+    "funnel_3layer": {
+      "label": "Орнит, 3 слоя, N черновиков + граница GBNF",
+      "correct_fields": 346,
+      "artifact": "layered_validator_Ornith-1.5-9B-uncensored.i1-IQ4_NL.json",
+      "measured_on": "2026-10-11"
+    },
+    "system1_flat_laya": {
+      "label": "Система-1 плоская (Лайя)",
+      "correct_fields": 312,
+      "artifact": "gate_end_to_end_ornith.json"
+    }
+  },
+  "systems": {
+    "flat_validator": {
+      "label": "Орнит, плоская форма (1 вызов, 9 черновиков)",
+      "max_unparsed_calls": 0,
+      "max_gain_against": {
+        "reference": "funnel_3layer",
+        "min_fields": 15
+      },
+      "gates": [
+        {
+          "id": "G1_overall_vs_funnel",
+          "dataset": "overall",
+          "metric": "accuracy",
+          "bound": "at_least",
+          "threshold": 0.8009,
+          "_why": "Не хуже воронки. Отвечает на вопрос «не сломали ли», а не «лучше ли»."
+        },
+        {
+          "id": "G3_somatic_accuracy",
+          "dataset": "somatic_only",
+          "metric": "accuracy",
+          "bound": "at_least",
+          "threshold": 0.963,
+          "_why": "Соматика не должна разваливаться: на этом наборе Лайя даёт 0.963."
+        },
+        {
+          "id": "G4_neurosis_recall",
+          "dataset": "neurosis_base",
+          "metric": "recall_true",
+          "bound": "at_least",
+          "threshold": 0.6735,
+          "_why": "Анти-FN страж: на неврозе ловушка точности — заливка false даёт высокую accuracy и нулевой recall."
+        },
+        {
+          "id": "G5_metaphor_lost",
+          "dataset": "overall",
+          "metric": "body_metaphor_lost",
+          "bound": "at_most",
+          "threshold": 0,
+          "measured_on": "body_metaphor",
+          "_why": "Метафоры не теряются. Гейт проходит только вместе с G4: без разметки метрика тривиально зелёная при заливке true. `measured_on` обязателен — без него «потеряно 0» и «метафоры не мерили» дают одно и то же число."
+        }
+      ]
+    },
+    "layered_validator_funnel": {
+      "label": "Орнит, 3 слоя (воронка)",
+      "max_unparsed_calls": 0,
+      "diagnostics": {
+        "target_case": "mixed_4_heart_perfectionism",
+        "_why": "Диагностика, не приёмка: у Лайи на этом кейсе 4 FP из 9 (gate_end_to_end_ornith.json). Кейс назван здесь, а не в коде стенда."
+      },
+      "gates": [
+        {
+          "id": "O1_overall_vs_baseline",
+          "dataset": "overall",
+          "metric": "accuracy",
+          "bound": "at_least",
+          "threshold": 0.7222,
+          "_why": "Не хуже базовой Система-1 на том же золоте."
+        },
+        {
+          "id": "O2_somatic_vs_baseline",
+          "dataset": "somatic_only",
+          "metric": "accuracy",
+          "bound": "at_least",
+          "threshold": 0.963,
+          "_why": "Не хуже базовой Система-1 на соматике."
+        },
+        {
+          "id": "O3_neurosis_specificity_floor",
+          "dataset": "neurosis_base",
+          "metric": "specificity_false",
+          "bound": "at_least",
+          "threshold": 0.3678,
+          "_why": "Анти-FP страж на неврозе."
+        },
+        {
+          "id": "O4_mixed_specificity_floor",
+          "dataset": "mixed_body_mental",
+          "metric": "specificity_false",
+          "bound": "at_least",
+          "threshold": 0.3284,
+          "_why": "Анти-FP страж на смешанных."
+        },
+        {
+          "id": "O5_metaphor_accuracy_vs_baseline",
+          "dataset": "body_metaphor",
+          "metric": "accuracy",
+          "bound": "at_least",
+          "threshold": 0.4444,
+          "measured_on": "body_metaphor",
+          "_why": "Не хуже базовой на метафорах. measured_on обязателен: без него гейт зеленеет на наборе, который не мерили."
+        },
+        {
+          "id": "R1_overall_no_regression",
+          "dataset": "overall",
+          "metric": "accuracy",
+          "bound": "at_least",
+          "threshold": 0.7847,
+          "_why": "Не хуже собственного прошлого прогона (1 черновик на слой)."
+        }
+      ]
+    }
+  }
+}

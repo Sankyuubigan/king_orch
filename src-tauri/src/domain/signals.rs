@@ -81,7 +81,62 @@ pub fn build_signal_envelope_schema(contract: &SignalContract) -> Value {
 /// root ::= think-block envelope-json (Method 3 из docs/gbnf.md)
 /// think-block ::= "<think>" [^<]* "</think>" | ""
 /// ```
+///
+/// Размышление здесь **не ограничено** — историческое поведение всех
+/// сигнальных агентов. Агент, которому бюджет размышления задан во
+/// frontmatter (`think_budget:`), собирает грамматику через
+/// [`build_signal_envelope_grammar_with_think_budget`].
 pub fn build_signal_envelope_grammar(contract: &SignalContract) -> String {
+    build_signal_envelope_grammar_with_think_budget(contract, None)
+}
+
+/// Гибридная грамматика конверта с **границей размышления**.
+///
+/// # Зачем граница (измерено, `tasks/09.10.26 …md` §7)
+///
+/// `think-block ::= "<think>" [^<]* "</think>"` не ограничивает длину
+/// размышления, поэтому модель, ушедшая в длинный разбор, выжигает весь
+/// `n_predict` в think и **JSON-фаза становится недостижимой**: конверта нет,
+/// сигнала нет, воронка останавливается. На 63 кейсах это воспроизвелось
+/// на `somatic_throat_fever` (слой 1, 2048 токенов размышления, 0 символов
+/// ответа) — механический отказ, а не качество модели.
+///
+/// Граница зашивается в ФОРМАТ, а не в `max_tokens` и не в ретрай
+/// (AGENTS.md §00.2): после неё грамматика принудительно закрывает `</think>`,
+/// поэтому JSON-фаза структурно достижима всегда. Число символов — то же, что
+/// у измеренного контракта вердиктов
+/// ([`verdict_contract::DEFAULT_THINK_BUDGET_CHARS`], свип 500 / 1200 / без
+/// потолка: 73.9% / **74.8%** / 73.9% при хвосте 121 с против 11.9 с).
+///
+/// Класс символов `[^\n<]` — как в `verdict_contract`: перевод строки внутри
+/// think невозможен, поэтому граница наступает раньше, чем модель его написала
+/// бы сама.
+/// Гибридная грамматика конверта сигнала: **свой черновик на каждый элемент**.
+///
+/// # Что изменилось и почему
+///
+/// Раньше на слой был ОДИН черновик на все его элементы (`think-block`,
+/// слои `validator_surface` / `validator_facade` — по четыре элемента на один
+/// блок). Модель писала один проход по четырём элементам сразу, и на замере
+/// 11.10.26 элементы 6 («Триггер») и 8 («Иллюзии») не двигались ни при какой
+/// правке формулировок: 19 и 13 промахов соответственно. Гипотеза в том, что
+/// делить один черновик — значит отдавать четверть внимания каждому элементу.
+///
+/// Теперь число черновиков равно числу обязательных полей контракта, то есть
+/// числу элементов в слое. Оно НЕ задаётся руками: считается из контракта,
+/// поэтому слой и его контракт не могут разойтись (SSOT).
+///
+/// # Про потолок
+///
+/// `think_budget_chars = None` — черновик не ограничен грамматикой, бюджет
+/// задаёт движок (`max_gen_tokens` из конфига пользователя). Это осознанный
+/// выбор замера: 1400 символов в заголовках агентов брались из свипа на
+/// gemma-4-12B для ОДНОГО черновика (`tasks/02.10.26 …md`, строка 237) и к
+/// этой конфигурации отношения не имели.
+pub fn build_signal_envelope_grammar_with_think_budget(
+    contract: &SignalContract,
+    think_budget_chars: Option<usize>,
+) -> String {
     let schema = &contract.value_schema;
 
     // Правило пробелов (ограниченное, как в официальном конвертере llama.cpp)
@@ -100,19 +155,28 @@ pub fn build_signal_envelope_grammar(contract: &SignalContract) -> String {
     // Генерируем value-грамматику в зависимости от типа контракта
     let value_grammar = build_value_grammar(schema);
 
-    // Method 3 из docs/gbnf.md: гибридная GBNF с think-block.
-    // root ::= think-block envelope-json
-    // think-block ::= "<think>" [^<]* "</think>" | ""  — опциональный thinking.
-    // Thinking-модели генерируют <think>...</think>, non-thinking — сразу JSON.
-    // Без disable_reasoning: модель сама решает, думать или нет.
+    // Свой черновик на каждый обязательный элемент контракта.
+    let drafts = required_field_count(schema);
+    let draft_rule = match think_budget_chars {
+        None => "draft ::= \"<think>\" [^<]* \"</think>\"".to_string(),
+        Some(budget) => format!("draft ::= \"<think>\" [^\\n<]{{0,{budget}}} \"</think>\""),
+    };
+    let drafts_rule = format!("drafts-block ::= draft{{{}}}", drafts);
+    // Экранированный ключ `"value"` внутри грамматики. Вынесен отдельно
+    // намеренно: в строке формата это `\"\\\"value\\\"\"`, и одна лишняя
+    // `\"` здесь молча ломает разбор грамматики движком (`failed to parse
+    // grammar`), не ломая при этом тесты Rust.
+    let quoted_value_key = "\"\\\"value\\\"\"";
+
     format!(
-        "root ::= think-block envelope-json\n\
-         think-block ::= \"<think>\" [^<]* \"</think>\" | \"\"\n\
+        "root ::= drafts-block envelope-json\n\
+         {drafts_rule}\n\
+         {draft_rule}\n\
          \n\
          envelope-json ::= \"{{\" sp tool-field \",\" sp arguments-field sp \"}}\"\n\
          tool-field ::= \"\\\"tool\\\"\" sp \":\" sp \"\\\"emit_signal\\\"\"\n\
          arguments-field ::= \"\\\"arguments\\\"\" sp \":\" sp arguments-json\n\
-         arguments-json ::= \"{{\" sp key-field \",\" sp \"\\\"value\\\"\" sp \":\" sp value-field sp \"}}\"\n\
+         arguments-json ::= \"{{\" sp key-field \",\" sp {quoted_value_key} sp \":\" sp value-field sp \"}}\"\n\
          key-field ::= \"\\\"key\\\"\" sp \":\" sp \"\\\"{}\\\"\"\n\
          {}\n\
          {}\n\
@@ -122,6 +186,55 @@ pub fn build_signal_envelope_grammar(contract: &SignalContract) -> String {
         sp,
         json_rules,
     )
+}
+
+/// Сколько черновиков требует контракт: столько же, сколько у него
+/// обязательных полей. Ноль полов у контракта означал бы, что модель не может
+/// перейти к конверту вовсе, поэтому такое значение — ошибка контракта.
+pub fn required_field_count(schema: &serde_json::Value) -> usize {
+    schema
+        .get("required")
+        .and_then(serde_json::Value::as_array)
+        .map(|items| items.len())
+        .unwrap_or(0)
+}
+
+/// Токены, оставаемые конверту `emit_signal`.
+///
+/// Конверт жёстко задан грамматикой: имя ключа, четыре (или один) булевых поля,
+/// скобки — около 150 символов, то есть порядка 50 токенов. Здесь взят запас
+/// примерно пятикратный: резервировать ровно минимум нельзя, любая ошибка в
+/// оценке съедает конверт и возвращает отказ «слой не ответил».
+const ENVELOPE_TOKENS: usize = 256;
+
+/// Символов на токен для русского текста, **взято с запасом вниз**.
+///
+/// Грамматика режет черновик в символах, а движок — в токенах, поэтому перевод
+/// нужен в любую сторону. Замер 11.10.26 на этом же стенде при
+/// `max_gen_tokens = 2048`: ответы, дошедшие до конверта, не длиннее 5443
+/// символов, ответы без конверта — от 6851. Значит бюджет в 2048 токенов
+/// вмещает от 2.7 до 3.3 символа на токен. Берётся 2.0: при меньшем
+/// коэффициенте граница черновика наступает раньше, чем кончится бюджет.
+/// Цена — черновики короче измеренного среднего; выигрыш — «не дошёл до
+/// конверта» становится структурно невозможен.
+const CHARS_PER_TOKEN: usize = 2;
+
+/// Граница ОДНОГО черновика: бюджет генерации делится между черновиками слоя,
+/// минус резерв под конверт сигнала.
+///
+/// Возвращает `None`, если граница выходит нулевой: такой бюджет не способен
+/// вместить даже пустой черновик, и молча ставить `Some(0)` значило бы запретить
+/// модели размышлять вовсе. Тогда грамматика строится без границы, и отказ
+/// приходит из движка, а не из заведомо непроходимого формата.
+pub fn per_draft_budget_chars(max_gen_tokens: usize, drafts: usize) -> Option<usize> {
+    let for_drafts = max_gen_tokens.saturating_sub(ENVELOPE_TOKENS.min(max_gen_tokens));
+    let per_draft_tokens = for_drafts / drafts.max(1);
+    let chars = per_draft_tokens.saturating_mul(CHARS_PER_TOKEN);
+    if chars == 0 {
+        None
+    } else {
+        Some(chars)
+    }
 }
 
 /// Phase 2: JSON-only grammar (без think-block).
@@ -430,6 +543,124 @@ mod tests {
         assert!(load_signal_contract(dir, "no_such_agent").is_none());
     }
 
+    /// Граница размышления обязана быть В ГРАММАТИКЕ: без неё модель выжигает
+    /// весь `n_predict` в think и не возвращает конверт вообще (воспроизведено
+    /// на `somatic_throat_fever`, `tasks/09.10.26 …md` §7).
+    #[test]
+    fn think_budget_is_written_into_grammar() {
+        let contract = SignalContract {
+            key: "validator_surface".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "e1": { "type": "boolean" }, "e2": { "type": "boolean" } },
+                "required": ["e1", "e2"]
+            }),
+        };
+        let bounded = build_signal_envelope_grammar_with_think_budget(&contract, Some(1400));
+        let bounded_draft = bounded
+            .lines()
+            .find(|line| line.starts_with("draft ::="))
+            .unwrap_or_default();
+        assert!(
+            bounded_draft.contains("{0,1400}"),
+            "в грамматике нет границы черновика: {}",
+            bounded_draft
+        );
+        // Агент без объявленного потолка: черновик не ограничен грамматикой,
+        // бюджет задаёт движок (`max_gen_tokens` из конфига пользователя).
+        let unbounded = build_signal_envelope_grammar(&contract);
+        let unbounded_draft = unbounded
+            .lines()
+            .find(|line| line.starts_with("draft ::="))
+            .unwrap_or_default();
+        assert!(
+            !unbounded_draft.contains("{0,"),
+            "грамматика без бюджета не должна получать границу: {}",
+            unbounded_draft
+        );
+        assert!(unbounded_draft.contains("[^<]*"), "исторический черновик потерян");
+        // Число черновиков не зависит от потолка: его задаёт контракт.
+        assert!(
+            bounded.contains("drafts-block ::= draft{2}") && unbounded.contains("drafts-block ::= draft{2}"),
+            "потолок не должен менять число черновиков"
+        );
+        // Остальная форма конверта одинакова — граница меняет только черновик.
+        assert_eq!(
+            bounded.lines().count(),
+            unbounded.lines().count(),
+            "структура грамматики разъехалась"
+        );
+    }
+
+    /// Экранирование ключа `"value"` внутри грамматики обязано остаться GBNF-строкой
+    /// `"\"value\""`. Проверено на движке 11.10.26: при «голом» `\"value\"` парсер
+    /// llama.cpp отвечает `failed to parse grammar`, а все тесты Rust при этом
+    /// остаются зелёными — грамматику проверяет только сервер. Сырой литерал
+    /// здесь обязателен: повторный набор экранирования в обычной строке и породил
+    /// тот самый отказ.
+    #[test]
+    fn value_key_escaping_survives() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("корень проекта")
+            .join("agents")
+            .join("psychotherapist")
+            .join("signals");
+        for id in ["validator_surface", "validator_facade", "validator_core"] {
+            let contract = load_signal_contract(&dir, id).expect("контракт прочитан");
+            let grammar = build_signal_envelope_grammar(&contract);
+            assert!(
+                grammar.contains(
+                    r#"arguments-json ::= "{" sp key-field "," sp "\"value\"" sp ":" sp value-field sp "}""#
+                ),
+                "экранирование ключа value сломано в грамматике слоя {}, grammar:\n{}",
+                id,
+                grammar
+            );
+        }
+    }
+
+    /// Слои воронки НЕ объявляют потолок черновика — по решению владельца
+    /// бюджет берётся из конфига пользователя (`max_gen_tokens`), и модель
+    /// должна уложиться в него сама. Прежняя цифра 1400 пришла из свипа на
+    /// gemma-4-12B для ОДНОГО черновика на слой (`tasks/02.10.26 …md`, строка
+    /// 237) и к этой конфигурации отношения не имела.
+    ///
+    /// Явный тест, а не «молча убрали»: если кто-то вернёт цифру в заголовок,
+    /// грамматика снова начнёт резать черновик не по бюджету пользователя.
+    #[test]
+    fn funnel_layer_agents_declare_no_think_budget() {
+        let agents_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("корень проекта")
+            .join("agents");
+        let agents = crate::domain::agent_manager::load_agents(&agents_dir).expect("агенты прочитаны");
+        // Плоская форма — та же граница из конфига, что и у слоёв: иначе плоский
+        // вариант мерился бы на другом бюджете и сравнение было бы бессмысленным.
+        for id in ["validator_surface", "validator_facade", "validator_core", "validator_flat"] {
+            let agent = agents
+                .iter()
+                .find(|agent| agent.id == id)
+                .unwrap_or_else(|| panic!("агент слоя {} не найден", id));
+            assert_eq!(
+                agent.think_budget_chars, None,
+                "у слоя {} в заголовке появился think_budget: {:?} — бюджет должен идти \
+                 из конфига пользователя, иначе грамматика режет черновик не по нему",
+                id,
+                agent.think_budget_chars
+            );
+        }
+        // Плоский валидатор боя не трогаем этой правкой.
+        let plain = agents.iter().find(|agent| agent.id == "validator");
+        if let Some(plain) = plain {
+            assert_eq!(
+                plain.think_budget_chars, None,
+                "think_budget у плоского валидатора не менялся этой правкой"
+            );
+        }
+    }
+
     #[test]
     fn envelope_schema_is_inline_and_strict() {
         let contract = SignalContract {
@@ -451,8 +682,27 @@ mod tests {
         let path = schema_path();
         let dir = path.parent().expect("папка signals");
         let map = load_all_signal_contracts(dir);
-        assert_eq!(map.len(), 5, "все 5 сигналов");
-        assert!(map.contains_key("validator"));
+        // Число контрактов растёт вместе с агентами: проверяем не количество, а
+        // то, что каждый объявленный агент читается. Счётчик «5 сигналов» устарел
+        // с появлением трёх слоёв воронки и молчал бы о битом контракте.
+        for agent in [
+            "validator",
+            "validator_flat",
+            "validator_surface",
+            "validator_facade",
+            "validator_core",
+            "focus_keeper",
+            "soma_translator",
+            "synthesizer",
+            "destructor_detector",
+        ] {
+            assert!(
+                map.contains_key(agent),
+                "контракт агента '{}' не читается из {}",
+                agent,
+                path.display()
+            );
+        }
     }
 
     #[test]
@@ -579,10 +829,17 @@ mod tests {
             }),
         };
         let grammar = build_signal_envelope_grammar(&c);
-        // Грамматика ОБЯЗАНА содержать think-блок (Method 3 из docs/gbnf.md).
+        // Грамматика ОБЯЗАНА содержать черновик (Method 3 из docs/gbnf.md), и черновик
+// теперь СВОЙ НА КАЖДЫЙ обязательный элемент: контракт с двумя полями требует
+// двух слотов, а не одного на весь слой.
         assert!(grammar.contains("<think>"), "грамматика должна содержать <think>");
         assert!(grammar.contains("</think>"), "грамматика должна содержать </think>");
-        assert!(grammar.contains("think-block"), "грамматика должна содержать правило think-block");
+        assert!(grammar.contains("drafts-block"), "грамматика должна содержать правило drafts-block");
+        assert!(
+            grammar.contains("drafts-block ::= draft{2}"),
+            "два обязательных поля контракта — значит два черновика: {}",
+            grammar
+        );
         // Конверт больше не несёт поле thought (размышления — Phase 1).
         assert!(!grammar.contains("thought-field"), "поле thought убрано из конверта");
         // Грамматика ОБЯЗАНА содержать ключи сигнала
@@ -652,10 +909,10 @@ mod tests {
             }),
         };
         let grammar = build_signal_envelope_grammar(&c);
-        // Гибридный think-блок (Method 3 из docs/gbnf.md): <think> ... </think>
+        // Гибридный черновик (Method 3 из docs/gbnf.md): <think> ... </think>
         assert!(grammar.contains("<think>"), "должен быть <think>, grammar:\n{}", grammar);
         assert!(grammar.contains("</think>"), "должен быть </think>, grammar:\n{}", grammar);
-        assert!(grammar.contains("think-block"), "должно быть правило think-block, grammar:\n{}", grammar);
+        assert!(grammar.contains("drafts-block"), "должно быть правило drafts-block, grammar:\n{}", grammar);
         // Не должно быть токенного синтаксиса (не работает с gemma-4)
         assert!(!grammar.contains("<thingk>"), "не должно быть токена <thingk>");
         assert!(!grammar.contains("<end_of_think>"), "не должно быть токена <end_of_think>");
@@ -706,7 +963,7 @@ mod tests {
         assert!(grammar.contains("key"), "должно быть поле key");
         assert!(grammar.contains("validator_report"), "должен быть ключ validator_report");
         assert!(grammar.contains("e1"), "должен быть e1");
-        assert!(grammar.contains("think-block"), "должно быть правило think-block");
+        assert!(grammar.contains("drafts-block"), "должно быть правило drafts-block");
         assert!(grammar.contains("envelope-json"), "должно быть правило envelope-json");
     }
 

@@ -192,7 +192,12 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
     </div>`;
   }
 
-  if (data.type === "system1_validator") {
+if (data.type === "system1_validator") {
+    html += `<div class="graph-detail-section">
+      <div class="detail-label">Автор отчёта (agent)</div>
+      <input type="text" id="ge-agent" class="ge-input" placeholder="validator" value="${this.esc(data.agent || "")}" />
+      <div class="detail-hint">Под этим именем отчёт попадает в блок «Мысли» и в историю сессии. От него же зависят <code>inject_response</code> нисходящих нод: пустое поле = автором будет id этой ноды, и <code>inject_response: [validator]</code> перестанет находить отчёт.</div>
+    </div>`;
     html += `<div class="graph-detail-section">
       <div class="detail-label">Файл критериев (rules_file)</div>
       <input type="text" id="ge-rules-file" class="ge-input"
@@ -205,10 +210,17 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
       <input type="text" id="ge-input" class="ge-input"
         placeholder="{{ nodes.call_fact_consolidator.output.result }}"
         value="${this.esc(data.input || "")}" />
-      <div class="detail-hint">Обязательное поле. Шаблн текста, который увидит модель. Пустое или неразрешимое значение — ошибка прогона, а не «все элементы false».</div>
+      <div class="detail-hint">Обязательное поле. Шаблон текста, который увидит модель. Пустое или неразрешимое значение — ошибка прогона, а не «все элементы false».</div>
     </div>`;
     html += `<div class="graph-detail-section">
-      <div class="detail-value">Результат публикуется в сигнал <b>validator_report</b> ({e1: true, …}). Роутеры читают его как <code>validator_report.e3</code>.</div>
+      <div class="detail-label">Тип вывода</div>
+      <select id="ge-output-type" class="ge-select">
+        <option value="message" ${data.output_type === "message" ? "selected" : ""}>message</option>
+        <option value="thought" ${!data.output_type || data.output_type === "thought" ? "selected" : ""}>thought</option>
+      </select>
+    </div>`;
+    html += `<div class="graph-detail-section">
+      <div class="detail-value">Отчёт публикуется в <b>validator_report</b> ({e1: true, …}) — роутеры читают его как <code>validator_report.e3</code>. В <code>messages[]</code> он попадает как <b>thought</b> (то, что видит юзер) и как <b>signal</b> (то, что получают <code>inject_response</code>).</div>
     </div>`;
   }
 

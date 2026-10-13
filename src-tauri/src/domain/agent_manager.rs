@@ -34,6 +34,29 @@ pub struct AgentProfile {
     /// действительно нужны.
     #[serde(default)]
     pub vision: bool,
+    /// Граница размышления в символах для сигнальных агентов (`think_budget:`).
+    ///
+    /// `None` — историческое поведение: think-блок грамматики не ограничен.
+    /// Заданное значение зашивает границу в ФОРМАТ ответа
+    /// ([`crate::domain::signals::build_signal_envelope_grammar_with_think_budget`]),
+    /// то есть делает JSON-фазу структурно достижимой: модель, ушедшая в длинный
+    /// разбор, не может выжечь весь `n_predict` и не вернуть сигнал вовсе
+    /// (измерено: `tasks/09.10.26 …md` §7).
+    #[serde(default)]
+    pub think_budget_chars: Option<usize>,
+    /// Агент объявляет, что ему не нужно свободное размышление: движок
+    /// передаёт `enable_thinking: false`.
+    ///
+    /// Нужно агентам с жёсткой формой ответа, у которых размышление идёт
+    /// ОТДЕЛЬНЫМ каналом (`--reasoning-format`): грамматика этот канал не
+    /// ограничивает, поэтому весь `n_predict` может уйти в think, а конверт
+    /// сигнала не появится (измерено: `tasks/09.10.26 …md` §7 — 0 токенов ответа
+    /// при 2042 токенах думателя). Тот же режим дал 63/63 разобранных ответов у
+    /// плоского валидатора (`tasks/08.10.26 …md` §5), против 17/63 с размышлением.
+    ///
+    /// Дефолт `false` — поведение всех существующих агентов не меняется.
+    #[serde(default)]
+    pub disable_reasoning: bool,
 }
 
 /// Единая точка входа в UI — может быть .md агентом или YAML графом.
@@ -155,6 +178,8 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             let mut current_date = false;
             let mut temperature: Option<f32> = None;
             let mut vision = false;
+            let mut think_budget_chars: Option<usize> = None;
+            let mut disable_reasoning = false;
             let mut mcp_servers = Vec::new();
             let mut tools = Vec::new();
             let frontmatter_lines: Vec<&str> = frontmatter.lines().collect();
@@ -172,6 +197,21 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 }
                 else if line.starts_with("vision:") {
                     vision = line["vision:".len()..].trim().parse().unwrap_or(false);
+                }
+                else if line.starts_with("think_budget:") {
+                    // Ноль и мусор — как «бюджета нет»: грамматика остаётся
+                    // исторической, без границы think.
+                    think_budget_chars = line["think_budget:".len()..]
+                        .trim()
+                        .parse::<usize>()
+                        .ok()
+.filter(|budget| *budget > 0);
+                }
+                else if line.starts_with("disable_reasoning:") {
+                    disable_reasoning = line["disable_reasoning:".len()..]
+                        .trim()
+                        .parse::<bool>()
+                        .unwrap_or(false);
                 }
                 else if line.starts_with("mcp_servers:") {
                     if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["mcp_servers:".len()..].trim()) { mcp_servers = parsed; }
@@ -206,7 +246,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 }
                 i += 1;
             }
-            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date, temperature, vision }); }
+            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date, temperature, vision, think_budget_chars, disable_reasoning }); }
         }
     }
     None
@@ -311,5 +351,54 @@ mod tests {
 
         let b = parse("---\nname: Default Agent\n---\nbody\n");
         assert_eq!(b.temperature, None);
+    }
+
+    /// Граница размышления — опция агента, а не глобальная настройка: агент без
+    /// объявления сохраняет историческое «think не ограничен».
+    #[test]
+    fn think_budget_parsed_from_frontmatter() {
+        let layer = parse("---\nname: Layer\nthink_budget: 1400\n---\nbody\n");
+        assert_eq!(layer.think_budget_chars, Some(1400));
+
+        let plain = parse("---\nname: Plain\n---\nbody\n");
+        assert_eq!(plain.think_budget_chars, None);
+
+        // Ноль и мусор трактуются как «бюджета нет»: граница в 0 символов
+        // заставила бы модель отвечать без размышления вовсе.
+        let zero = parse("---\nname: Zero\nthink_budget: 0\n---\nbody\n");
+        assert_eq!(zero.think_budget_chars, None);
+        let junk = parse("---\nname: Junk\nthink_budget: много\n---\nbody\n");
+        assert_eq!(junk.think_budget_chars, None);
+    }
+
+    /// Файлы отчётов и замеров лежат под `agents/`, потому что относятся к этому
+    /// агенту, но агентами быть не должны — иначе появятся в списке агентов.
+    ///
+    /// Защита от тихой поломки: сегодня файл без заголовка `---` просто
+    /// отбрасывается, но стоит кому-то дописать заголовок по привычке — и файл
+    /// станет агентом. Тест ловит это на сборке, а не в интерфейсе.
+    #[test]
+    fn experiment_reports_are_not_agents() {
+        let agents_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("корень проекта")
+            .join("agents");
+        let loaded = load_agents(&agents_dir).expect("агенты прочитаны");
+        for report in [
+            "agents/psychotherapist/experiments/validator_tests.md",
+            "agents/psychotherapist/archive/old_archive_info.md",
+        ] {
+            let stem = std::path::Path::new(report)
+                .file_stem()
+                .expect("имя файла")
+                .to_string_lossy()
+                .to_string();
+            assert!(
+                !loaded.iter().any(|agent| agent.id == stem),
+                "файл результатов '{}' загрузился как агент `{}` — уберите заголовок `---`",
+                report,
+                stem
+            );
+        }
     }
 }
