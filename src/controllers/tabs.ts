@@ -11,10 +11,18 @@ import { deleteSession, openSessionFolder, fetchSessions } from "../services";
 import { trackError } from "../telemetry";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { computeTargetIndex, computeShifts } from "../utils/drag";
+import type { AgentStudioTab } from "./studio-page";
 
-const SECTION_VIEWS: Record<TabSection, string> = {
+/**
+ * Статичные разделы, живущие в `index.html`.
+ *
+ * `agent-studio` здесь НЕТ намеренно: студия — не статичная разметка, а экземпляр из
+ * `<template id="template-agent-studio">`, который создаётся в рантайме (`buildAgentStudioPage`).
+ * Хранить её адрес как CSS-селектор нельзя: узлов может быть несколько, и селектор
+ * `#view-agent-studio` попадёт в первый попавшийся.
+ */
+const SECTION_VIEWS: Partial<Record<TabSection, string>> = {
   sessions: "#view-sessions",
-  "agent-studio": "#view-agent-studio",
   settings: "#view-settings",
   logs: "#view-logs",
   engines: "#view-engines",
@@ -28,7 +36,14 @@ const SECTION_ICONS: Record<TabSection, string> = {
   engines: "🚂",
 };
 
-const DUPLICABLE_SECTIONS: TabSection[] = ["settings", "engines"];
+/**
+ * Разделы, которые можно открыть НЕСКОЛЬКИМИ вкладками.
+ *
+ * `agent-studio` здесь потому, что студия создаётся фабрикой экземпляров: у каждой вкладки
+ * свой холст графа, свой открытый файл и свой undo. `settings`/`engines` — дубли одного
+ * живого DOM-узла (состояние общее).
+ */
+const DUPLICABLE_SECTIONS: TabSection[] = ["settings", "engines", "agent-studio"];
 
 const SECTION_LAZY_TEMPLATES: Partial<Record<TabSection, string>> = {
   settings: "template-settings-lazy-panels",
@@ -46,6 +61,15 @@ const TAB_ICONS: Partial<Record<AppTab["type"], string>> = {
 const WEBVIEW_TITLE = "Web UI облачных роутеров";
 
 export interface TabControllerHooks {
+  /**
+   * Создать вкладку «Студии агентов».
+   *
+   * Фабрика приходит снаружи (`main.ts`), потому что она тянет динамический импорт
+   * drawflow-редактора: `tabs.ts` не должен знать про ленивую загрузку графа, иначе
+   * получится цикл дверей `controllers/index -> tabs -> studio-page -> index`.
+   * Если хук не задан — секция студии просто не открывается.
+   */
+  createStudioTab?: (instanceKey: string) => AgentStudioTab;
   /// Раздел-вкладка активирована: графический контроллер и пр. пересоздают
   /// размеры канвы (граф строится по getBoundingClientRect).
   onSectionActivated?: (tab: AppTab, section: TabSection) => void;
@@ -68,6 +92,15 @@ interface TabEntry {
   stripEl: HTMLElement;
   labelEl: HTMLElement;
   ctrl: ChatController | null;
+  /**
+   * Экземпляр студии агентов — только у вкладок раздела `agent-studio`.
+   *
+   * Вкладка ВЛАДЕЕТ этим экземпляром: его DOM, его три контроллера, его активная
+   * суб-вкладка. `dispose()` вызывается ровно там, где вкладка умирает (closeTab /
+   * resetEntries / смена раздела in-place), — иначе закрытая вкладка оставляла бы
+   * живой холст, слушатели шины и узел в DOM.
+   */
+  studio: AgentStudioTab | null;
   title: string;
   sessionLoadStarted: boolean;
 }
@@ -147,11 +180,11 @@ export class TabController {
     }
     for (const entry of this.entries) {
       if (entry.ctrl) TAB_REGISTRY.delete(entry.ctrl.state.sessionId ?? "");
-      if (entry.type === "section") {
-        this.parkSectionNode(entry.viewEl);
-      } else {
-        entry.viewEl.remove();
-      }
+      // Статичный раздел возвращаем на парковку, экземпляр студии освобождаем:
+      // его DOM ничей, парковать нечего (см. closeTab).
+      if (entry.studio) this.releaseStudio(entry);
+      else if (entry.type === "section") this.parkSectionNode(entry.viewEl);
+      else entry.viewEl.remove();
       entry.stripEl.remove();
     }
     this.entries = [];
@@ -207,7 +240,9 @@ export class TabController {
   private materializeSectionContent(section: TabSection) {
     const templateId = SECTION_LAZY_TEMPLATES[section];
     if (!templateId) return;
-    const target = document.querySelector<HTMLElement>(`${SECTION_VIEWS[section]} [data-lazy-content="${section}"]`);
+    const viewSel = SECTION_VIEWS[section];
+    if (!viewSel) return;
+    const target = document.querySelector<HTMLElement>(`${viewSel} [data-lazy-content="${section}"]`);
     if (!target || target.childElementCount > 0) return;
     const template = document.getElementById(templateId) as HTMLTemplateElement | null;
     if (!template) {
@@ -220,10 +255,14 @@ export class TabController {
     bus.emit("updates:render");
   }
 
-  /** Оригинальный DOM-узел раздела. Узел один на приложение, клонов нет:
+  /** Оригинальный DOM-узел СТАТИЧНОГО раздела. Узел один на приложение, клонов нет:
    * дубли settings/engines делят один живой узел (контроллеры биндятся по id
    * один раз при старте, клоны были бы мертвыми). Узел мигрирует
-   * appendChild в wrapper активной вкладки, на парковке — без .active. */
+   * appendChild в wrapper активной вкладки, на парковке — без .active.
+   *
+   * Студии здесь нет намеренно: у неё нет узла в `index.html` — экземпляр создаёт
+   * фабрика (`createStudio`), поэтому искать студию селектором нельзя (узлов может
+   * быть несколько, селектор попал бы в первый попавшийся). */
   private sectionEl(tabSection: TabSection): HTMLElement | null {
     const sel = SECTION_VIEWS[tabSection] ?? "#view-settings";
     const el = document.querySelector<HTMLElement>(sel);
@@ -236,9 +275,40 @@ export class TabController {
     return el;
   }
 
-  /** Открыть/сфокусировать вкладку раздела. sessions/agent-studio/logs —
-   * синглтон; settings/engines — дубли разрешены, все дубли указывают на один
-   * живой DOM-узел (состояние общее, привязки контроллеров целы). */
+  /** Место статичных разделов: они лежат прямыми детьми рабочей области. */
+  private sectionHost(): HTMLElement {
+    return document.getElementById("workspace-content") ?? document.body;
+  }
+
+  /**
+   * Создать экземпляр студии агентов для вкладки `instanceKey`.
+   *
+   * Фабрика приходит хуком (`createStudioTab`), потому что тянет динамический импорт
+   * drawflow-редактора: `tabs.ts` не должен зависеть от двери `controllers/index`
+   * (получился бы цикл `index -> tabs -> studio-page -> index`).
+   *
+   * Корень вставляем в рабочую область сразу, как статичные разделы: `.view`
+   * показывается только с классом `active`, который ставит `activate()`.
+   */
+  private createStudio(instanceKey: string): AgentStudioTab {
+    const create = this.hooks.createStudioTab;
+    if (!create) {
+      throw new Error("Студия агентов недоступна: TabController создан без хука createStudioTab");
+    }
+    const studio = create(instanceKey);
+    this.sectionHost().appendChild(studio.root);
+    return studio;
+  }
+
+  /** Освободить экземпляр студии вкладки (если он есть) и забыть ссылку. */
+  private releaseStudio(entry: TabEntry): void {
+    entry.studio?.dispose();
+    entry.studio = null;
+  }
+
+  /** Открыть/сфокусировать вкладку раздела. sessions/logs —
+   * синглтон; settings/engines/agent-studio — дубли разрешены, у студии
+   * каждый дубль владеет СВОИМ экземпляром (свой граф, свой файл, свой undo). */
   openSection(tabSection: TabSection): AppTab | null {
     if (!DUPLICABLE_SECTIONS.includes(tabSection)) {
       const existing = this.entries.find(
@@ -250,8 +320,20 @@ export class TabController {
         return this.tabToApp(existing);
       }
     }
-    const el = this.sectionEl(tabSection);
-    if (!el) return null;
+    if (tabSection === "agent-studio") {
+      // Студия не имеет узла в index.html: проверять нечего, кроме наличия фабрики.
+      // Честно сообщаем, если хук не передан (иначе клик молча ничего не сделает).
+      if (!this.hooks.createStudioTab) {
+        const err = "Студия агентов недоступна: контроллер вкладок создан без фабрики студии";
+        logFront(`[tabs] ${err}`);
+        void trackError("tabs.studio-hook-missing", err);
+        showToast(err, "error");
+        return null;
+      }
+    } else {
+      const el = this.sectionEl(tabSection);
+      if (!el) return null;
+    }
     const tab: AppTab = { id: genTabId(), type: "section", sessionId: null, section: tabSection, customTitle: null, url: null };
     this.materializeTab(tab);
     const created = this.entries[this.entries.length - 1];
@@ -268,7 +350,10 @@ export class TabController {
 
   /** Открыть раздел В ТОЙ ЖЕ вкладке (клик из settings-nav): активная
    * section-вкладка перепривязывается на новый раздел без создания вкладки.
-   * DOM не клонируется — только смена указателя на оригинальный узел. */
+   * DOM не клонируется — только смена указателя на оригинальный узел.
+   * Студия — исключение: у неё нет общего узла, поэтому экземпляр создаётся
+   * заново, а прежний освобождается (`dispose`), иначе закрытая вкладка
+   * оставляла бы в рабочей области живой чужой холст. */
   openSectionInPlace(tabSection: TabSection): AppTab | null {
     const active = this.entries.find(t => t.id === store.activeTabId);
     if (active && active.type === "section") {
@@ -277,8 +362,23 @@ export class TabController {
         this.activate(active.id);
         return this.tabToApp(active);
       }
-      const src = this.sectionEl(tabSection);
-      if (!src) return null;
+      let nextViewEl: HTMLElement;
+      let nextStudio: AgentStudioTab | null = null;
+      if (tabSection === "agent-studio") {
+        if (!this.hooks.createStudioTab) {
+          const err = "Студия агентов недоступна: контроллер вкладок создан без фабрики студии";
+          logFront(`[tabs] ${err}`);
+          void trackError("tabs.studio-hook-missing", err);
+          showToast(err, "error");
+          return null;
+        }
+        nextStudio = this.createStudio(active.id);
+        nextViewEl = nextStudio.root;
+      } else {
+        const src = this.sectionEl(tabSection);
+        if (!src) return null;
+        nextViewEl = src;
+      }
       // Синглтон-раздел уже открыт в другой вкладке — закрываем её,
       // чтобы не плодить два таба на один static-view.
       if (!DUPLICABLE_SECTIONS.includes(tabSection)) {
@@ -286,9 +386,13 @@ export class TabController {
         if (other) this.closeTab(other.id);
       }
       const from = active.section ?? "?";
+      const prevStudio = active.studio;
       active.section = tabSection;
-      active.viewEl = src;
+      active.studio = nextStudio;
+      active.viewEl = nextViewEl;
       active.title = this.sectionTitle(tabSection);
+      // Прежний экземпляр этой вкладки больше никому не принадлежит.
+      if (prevStudio && prevStudio !== nextStudio) prevStudio.dispose();
       store.tabs = this.entries.map(t => this.tabToApp(t));
       logFront(`[tabs] in-place ${from} -> ${tabSection} в ${active.id}`);
       this.renderStrip();
@@ -357,7 +461,13 @@ export class TabController {
     }
     const entry = this.entries[idx];
     if (entry.ctrl) TAB_REGISTRY.delete(entry.ctrl.state.sessionId ?? "");
-    if (entry.type === "section") {
+    if (entry.studio) {
+      // Экземпляр студии принадлежит только этой вкладке: узел удаляем, ресурсы
+      // освобождаем. Парковка (как для статичных разделов) здесь не нужна и вредна —
+      // холст закрытой вкладки не должен оставаться в рабочей области.
+      this.releaseStudio(entry);
+      logFront(`[tabs] closeTab студия ${entry.section} ${id} (экземпляр освобождён)`);
+    } else if (entry.type === "section") {
       // Оригинальный узел один на всех и из DOM не удаляется никогда.
       // Последний наследник — паркуем узел (снять .active, вернуть в
       // workspace-content); общий — класс не трогаем, его поднимет activate.
@@ -416,6 +526,7 @@ export class TabController {
       stripEl: document.createElement("div"),
       labelEl: document.createElement("span"),
       ctrl: null,
+      studio: null,
       title: this.defaultTitle(tab),
       sessionLoadStarted: false,
     };
@@ -435,10 +546,17 @@ export class TabController {
         break;
       }
       case "section": {
+        if (tab.section === "agent-studio") {
+          // Прямой lookup узла здесь был бы ошибкой: студия не статична, её экземпляр
+          // создаётся фабрикой (свой DOM, свой граф, свой undo на каждую вкладку).
+          entry.studio = this.createStudio(tab.id);
+          entry.viewEl = entry.studio.root;
+          entry.title = this.sectionTitle("agent-studio");
+          break;
+        }
         // Прямой lookup без тоста: user-facing пути (openSection/InPlace)
         // уже проверили узел через sectionEl; throw здесь ловит init().
-        const sel = SECTION_VIEWS[tab.section as TabSection] ?? "#view-settings";
-        const viewEl = document.querySelector<HTMLElement>(sel);
+        const viewEl = document.querySelector<HTMLElement>(SECTION_VIEWS[tab.section as TabSection] ?? "#view-settings");
         if (!viewEl) throw new Error(`Не найден static-раздел ${tab.section}`);
         entry.viewEl = viewEl;
         entry.title = this.sectionTitle(tab.section as TabSection);
@@ -452,7 +570,8 @@ export class TabController {
     }
     this.entries.push(entry);
     if (entry.viewEl !== this.slotEl && !(entry.type === "section")) {
-      // Страницы чат/веб вставляем в слот; статические разделы остаются на месте.
+      // Страницы чат/веб вставляем в слот; разделы остаются на месте —
+      // статические лежат в разметке, корень студии вставила фабрика (`createStudio`).
       this.slotEl.appendChild(entry.viewEl);
     }
     store.tabs = this.entries.map(t => this.tabToApp(t));
@@ -567,8 +686,15 @@ export class TabController {
     }
     const active = this.entries.find(t => t.id === id);
     if (active) {
-      if (active.type === "section" && active.section) this.materializeSectionContent(active.section);
-      else this.activateSession(active);
+      if (active.studio) {
+        // Вкладка студии поднимает СВОЮ суб-вкладку (в одной открыт граф, в другой —
+        // тесты) и, если это граф, свой холст. Переключение соседней вкладки её не трогает.
+        active.studio.activate();
+      } else if (active.type === "section" && active.section) {
+        this.materializeSectionContent(active.section);
+      } else {
+        this.activateSession(active);
+      }
       active.viewEl.classList.add("active");
       if (active.type === "chat" || active.type === "main") {
         nowFocus = active.ctrl;
@@ -655,6 +781,16 @@ export class TabController {
     // иначе активная вкладка уезжает за край при каждом переключении.
     const savedScroll = this.stripEl.scrollLeft;
     this.stripEl.innerHTML = "";
+    // Номер вкладки студии вычисляем на каждой перерисовке: заголовок — производное
+    // от порядка вкладок, а не скопированное значение (иначе после закрытия первой
+    // студии вторая навсегда осталась бы «Студия агентов 2»). Первой номер не пишем.
+    const studioBaseTitle = this.sectionTitle("agent-studio");
+    let studioNo = 0;
+    for (const t of this.entries) {
+      if (!t.studio) continue;
+      studioNo += 1;
+      t.title = studioNo === 1 ? studioBaseTitle : `${studioBaseTitle} ${studioNo}`;
+    }
     for (const t of this.entries) {
       const isActive = t.id === store.activeTabId;
       const el = document.createElement("div");

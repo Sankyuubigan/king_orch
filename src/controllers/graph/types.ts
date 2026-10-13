@@ -7,6 +7,15 @@ export interface GraphSnapshot {
 }
 
 export interface GraphElements {
+  /**
+   * Корень экземпляра студии (граница поиска элементов).
+   *
+   * Нужен потому, что студий может быть НЕСКОЛЬКО (по одной на вкладку): поля редактора
+   * ноды (`ge-*`) и ноды холста (`node-*`) обязаны искаться внутри своего экземпляра, иначе
+   * две студии находили бы элементы друг друга. Необязателен: тесты и одиночный экземпляр
+   * исторически передают только сами элементы.
+   */
+  root?: HTMLElement;
   graphContainer: HTMLDivElement;
   graphSidebar: HTMLDivElement;
   graphDetailTitle: HTMLSpanElement;

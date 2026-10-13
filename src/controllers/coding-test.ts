@@ -32,10 +32,46 @@ export class CodingTestController {
   private suitesLoaded = false;
   private listenersReady = false;
   private running = false;
+  /**
+   * Отписки от Tauri-событий бенчмарка.
+   *
+   * `listen` регистрирует обработчик в рантайме Tauri, а не в DOM панели: закрытая
+   * вкладка студии продолжала бы получать `coding_done` и трогать отсоединённые
+   * элементы. Отписка возвращается промисом, поэтому функции складываются сразу,
+   * а `destroy()` применяет их все.
+   */
+  private unlisteners: (() => void)[] = [];
+  private destroyed = false;
 
   constructor(el: CodingTestElements) {
     this.el = el;
     this.bindEvents();
+  }
+
+  /**
+   * Запомнить отписку от Tauri-события.
+   *
+   * `listen` возвращает промис, поэтому отписка может прийти ПОСЛЕ `destroy()` (вкладку
+   * закрыли, пока шла регистрация). Такой обработчик отписывается сразу — иначе закрытая
+   * вкладка продолжила бы получать `coding_done` навсегда.
+   */
+  private trackListen(promise: Promise<() => void>): void {
+    void promise.then((unlisten) => {
+      if (this.destroyed) unlisten();
+      else this.unlisteners.push(unlisten);
+    });
+  }
+
+  /**
+   * Освободить панель: отписаться от событий бенчмарка.
+   *
+   * Вызывается при закрытии вкладки студии (`AgentStudioTab.dispose`). Слушатели
+   * кнопок снимать не нужно — они внутри корня экземпляра и уходят вместе с ним.
+   */
+  destroy(): void {
+    this.destroyed = true;
+    for (const unlisten of this.unlisteners.splice(0)) unlisten();
+    this.listenersReady = false;
   }
 
   init(): void {
@@ -127,16 +163,22 @@ export class CodingTestController {
   }
 
   private setupListeners(): void {
-    void listen<string>("coding_status", (e) => {
-      this.el.codingStatusLabel.textContent = e.payload;
-    });
-    void listen<number>("coding_progress", (e) => {
-      const pct = Math.max(0, Math.min(100, e.payload));
-      this.el.codingProgressBar.style.width = `${pct}%`;
-    });
-    void listen<any>("coding_done", (e) => {
-      this.onDone(e.payload);
-    });
+    this.trackListen(
+      listen<string>("coding_status", (e) => {
+        this.el.codingStatusLabel.textContent = e.payload;
+      }),
+    );
+    this.trackListen(
+      listen<number>("coding_progress", (e) => {
+        const pct = Math.max(0, Math.min(100, e.payload));
+        this.el.codingProgressBar.style.width = `${pct}%`;
+      }),
+    );
+    this.trackListen(
+      listen<any>("coding_done", (e) => {
+        this.onDone(e.payload);
+      }),
+    );
   }
 
   private async run(): Promise<void> {

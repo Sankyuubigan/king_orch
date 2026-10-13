@@ -31,6 +31,18 @@ pub struct WorkflowDef {
     /// Описание графа для UI (карточка в выборе агентов).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Предлагать ли граф в КАТАЛОГЕ UI (Настройки → «Агенты в чате» → «Доступные агенты»).
+    ///
+    /// Решение АВТОРА графа, а не пользователя: `visible: false` убирает запись из каталога,
+    /// чтобы служебный/экспериментальный граф не предлагался в общем списке. Пользовательский
+    /// выбор «что показывать в списке чата» — отдельный сигнал (`agent_visibility` в конфиге).
+    ///
+    /// На ЗАПУСК не влияет: диспетчеризация по `file_stem` видимость не проверяет.
+    ///
+    /// Дефолт `true` + `skip_serializing_if` — у существующих графов поля нет и в файл оно
+    /// не дописывается: сохранение графа из редактора не меняет YAML, который никто не просил.
+    #[serde(default = "default_visible", skip_serializing_if = "is_true")]
+    pub visible: bool,
     #[serde(skip)]
     pub file_stem: String,
     #[serde(skip)]
@@ -140,6 +152,18 @@ fn default_output_type() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+/// Дефолт для `WorkflowDef::visible`: граф без объявления поля виден, как раньше.
+fn default_visible() -> bool {
+    true
+}
+
+/// `skip_serializing_if` для `visible`: в YAML пишется ТОЛЬКО `visible: false`.
+/// Иначе первое сохранение из редактора дописало бы `visible: true` в каждый граф
+/// и раздуло диффы так, что настоящее изменение стало бы невидимым.
+fn is_true(flag: &bool) -> bool {
+    *flag
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -813,13 +837,65 @@ edges: []
         assert_eq!(resolve_entry(&wf2).unwrap().id, "user_input");
     }
 
+    /// `visible` графа — часть контракта редактора, а не украшение: поле обязано
+    /// переживать round-trip, иначе сохранение из визуального редактора вернуло бы
+    /// скрытый граф в каталог «Доступные агенты».
+    ///
+    /// Вторая половина теста не менее важна: у графа БЕЗ поля `visible` оно не должно
+    /// появиться в YAML — иначе первое сохранение дописало бы `visible: true` во все
+    /// файлы и утопило настоящие изменения в диффе.
+    #[test]
+    fn visible_round_trips_and_is_omitted_when_true() {
+        let hidden: WorkflowDef = serde_yaml::from_str(
+            r#"
+name: hidden_graph
+visible: false
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+edges: []
+"#,
+        )
+        .expect("парсинг графа со скрытием");
+        assert!(!hidden.visible, "visible: false обязан читаться из YAML");
+
+        let out = separate_top_level_fields(&serde_yaml::to_string(&hidden).expect("ser"));
+        assert!(
+            out.contains("visible: false"),
+            "скрытие обязано сохраниться в YAML, получено:\n{}",
+            out
+        );
+        let rehidden: WorkflowDef = serde_yaml::from_str(&out).expect("round-trip");
+        assert!(!rehidden.visible, "после round-trip граф остаётся скрытым");
+
+        let plain: WorkflowDef = serde_yaml::from_str(
+            r#"
+name: plain_graph
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+edges: []
+"#,
+        )
+        .expect("парсинг графа без поля");
+        assert!(plain.visible, "без поля visible граф виден");
+
+        let plain_out = separate_top_level_fields(&serde_yaml::to_string(&plain).expect("ser"));
+        assert!(
+            !plain_out.contains("visible"),
+            "поле visible не должно дописываться в граф, где его не было, получено:\n{}",
+            plain_out
+        );
+    }
+
     fn workspace_root() -> PathBuf {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .expect("workspace root")
             .to_path_buf()
     }
-
     /// Реальные файлы данных из `agents/`: ни один не является графом.
     /// Проверяем по исходникам проекта — копий критериев в тесте не создаём.
     const DATA_FILES: &[&str] = &[
@@ -1535,6 +1611,7 @@ edges: []
         let wf = WorkflowDef {
             name: "Test Freeform".to_string(),
             description: None,
+            visible: true,
             file_stem: String::new(),
             parent_dir: String::new(),
             entry: None,
@@ -1575,6 +1652,7 @@ edges: []
         let wf = WorkflowDef {
             name: "Test Freeform".to_string(),
             description: None,
+            visible: true,
             file_stem: String::new(),
             parent_dir: String::new(),
             entry: None,
@@ -1622,6 +1700,7 @@ edges: []
         let wf = WorkflowDef {
             name: "Test Graph".to_string(),
             description: None,
+            visible: true,
             file_stem: String::new(),
             parent_dir: String::new(),
             entry: None,
@@ -1762,6 +1841,7 @@ edges: []
         let wf = WorkflowDef {
             name: "Repro Graph".to_string(),
             description: None,
+            visible: true,
             file_stem: String::new(),
             parent_dir: String::new(),
             entry: None,
@@ -2179,6 +2259,7 @@ edges: []
         let wf = WorkflowDef {
             name: "Test Freeform".to_string(),
             description: None,
+            visible: true,
             file_stem: String::new(),
             parent_dir: String::new(),
             entry: None,

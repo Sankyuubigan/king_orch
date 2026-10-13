@@ -237,7 +237,15 @@ if (data.type === "system1_validator") {
 
   this.el.graphDetailContent.innerHTML = html;
 
-  const agentInput = document.getElementById("ge-agent") as HTMLInputElement;
+  // Экземпляр студии может быть не один (вкладок студии несколько), поэтому поиск полей
+  // идёт В ПРЕДЕЛАХ сайдбара этого контроллера, а не по всему документу. Разметка сайдбара
+  // пересоздаётся при каждом открытии ноды, значит лишние id внутри неё уже удалены.
+  const editorRoot = this.el.graphDetailContent;
+
+  /** Поле редактора ноды в границах ЭТОГО сайдбара (не по всему документу). */
+  const getField = <T extends Element>(id: string): T => editorRoot.querySelector<T>(`#${id}`) as T;
+
+  const agentInput = getField<HTMLInputElement>("ge-agent");
   if (agentInput) {
     agentInput.addEventListener("input", () => {
       this.editor!.drawflow.drawflow.Home.data[nodeId].data.agent = agentInput.value;
@@ -245,7 +253,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const taskTextarea = document.getElementById("ge-task") as HTMLTextAreaElement;
+  const taskTextarea = getField<HTMLTextAreaElement>("ge-task");
   if (taskTextarea) {
     taskTextarea.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -253,7 +261,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const outputTypeSelect = document.getElementById("ge-output-type") as HTMLSelectElement;
+  const outputTypeSelect = getField<HTMLSelectElement>("ge-output-type");
   if (outputTypeSelect) {
     outputTypeSelect.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -262,7 +270,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const thoughtsInput = document.getElementById("ge-inject-thoughts") as HTMLInputElement;
+  const thoughtsInput = getField<HTMLInputElement>("ge-inject-thoughts");
   if (thoughtsInput) {
     thoughtsInput.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -272,7 +280,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const responseInput = document.getElementById("ge-inject-response") as HTMLInputElement;
+  const responseInput = getField<HTMLInputElement>("ge-inject-response");
   if (responseInput) {
     responseInput.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -282,7 +290,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const nodeIdInput = document.getElementById("ge-node-id") as HTMLInputElement;
+  const nodeIdInput = getField<HTMLInputElement>("ge-node-id");
   if (nodeIdInput) {
     nodeIdInput.addEventListener("change", () => {
       const newId = nodeIdInput.value.trim();
@@ -296,7 +304,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const disabledToggle = document.getElementById("ge-disabled") as HTMLInputElement;
+  const disabledToggle = getField<HTMLInputElement>("ge-disabled");
   if (disabledToggle) {
     disabledToggle.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -309,7 +317,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const signalNameInput = document.getElementById("ge-signal-name") as HTMLInputElement;
+  const signalNameInput = getField<HTMLInputElement>("ge-signal-name");
   if (signalNameInput) {
     signalNameInput.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -317,7 +325,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const fieldInput = document.getElementById("ge-field") as HTMLInputElement;
+  const fieldInput = getField<HTMLInputElement>("ge-field");
   if (fieldInput) {
     fieldInput.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -326,7 +334,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const rulesFileInput = document.getElementById("ge-rules-file") as HTMLInputElement;
+  const rulesFileInput = getField<HTMLInputElement>("ge-rules-file");
   if (rulesFileInput) {
     rulesFileInput.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -335,7 +343,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const stateInput = document.getElementById("ge-input") as HTMLInputElement;
+  const stateInput = getField<HTMLInputElement>("ge-input");
   if (stateInput) {
     stateInput.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -344,7 +352,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const sequentialToInput = document.getElementById("ge-sequential-to") as HTMLInputElement;
+  const sequentialToInput = getField<HTMLInputElement>("ge-sequential-to");
   if (sequentialToInput) {
     sequentialToInput.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -353,7 +361,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const trueToInput = document.getElementById("ge-true-to") as HTMLInputElement;
+  const trueToInput = getField<HTMLInputElement>("ge-true-to");
   if (trueToInput) {
     trueToInput.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -362,7 +370,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const falseToInput = document.getElementById("ge-false-to") as HTMLInputElement;
+  const falseToInput = getField<HTMLInputElement>("ge-false-to");
   if (falseToInput) {
     falseToInput.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -373,7 +381,7 @@ if (data.type === "system1_validator") {
 
   // ─── Switch/SeqSwitch/SignalRouter event handlers ───
 
-  const switchTypeSelect = document.getElementById("ge-switch-type") as HTMLSelectElement;
+  const switchTypeSelect = getField<HTMLSelectElement>("ge-switch-type");
   if (switchTypeSelect) {
     switchTypeSelect.addEventListener("change", () => {
       const oldType = data.type;
@@ -387,7 +395,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const inputObjectArea = document.getElementById("ge-input-object") as HTMLTextAreaElement;
+  const inputObjectArea = getField<HTMLTextAreaElement>("ge-input-object");
   if (inputObjectArea) {
     inputObjectArea.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -395,7 +403,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const defaultInput = document.getElementById("ge-default") as HTMLInputElement;
+  const defaultInput = getField<HTMLInputElement>("ge-default");
   if (defaultInput) {
     defaultInput.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -404,7 +412,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const noteContent = document.getElementById("ge-note-content") as HTMLTextAreaElement;
+  const noteContent = getField<HTMLTextAreaElement>("ge-note-content");
   if (noteContent) {
     noteContent.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -413,7 +421,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const freeformInput = document.getElementById("ge-freeform-input") as HTMLTextAreaElement;
+  const freeformInput = getField<HTMLTextAreaElement>("ge-freeform-input");
   if (freeformInput) {
     freeformInput.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -422,7 +430,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  const noteSysMsg = document.getElementById("ge-note-sysmsg") as HTMLTextAreaElement;
+  const noteSysMsg = getField<HTMLTextAreaElement>("ge-note-sysmsg");
   if (noteSysMsg) {
     noteSysMsg.addEventListener("change", () => {
       this.saveCheckpoint();
@@ -433,7 +441,7 @@ if (data.type === "system1_validator") {
 
   // ─── Condition Router event handlers (дерево условий) ───
 
-  document.querySelectorAll(".ge-cond-logic").forEach((sel) => {
+  this.el.graphDetailContent.querySelectorAll(".ge-cond-logic").forEach((sel) => {
     sel.addEventListener("change", () => {
       this.saveCheckpoint();
       const path = JSON.parse((sel as HTMLElement).dataset.path || "[]") as number[];
@@ -449,7 +457,7 @@ if (data.type === "system1_validator") {
     });
   });
 
-  document.querySelectorAll(".ge-cond-field").forEach((inp) => {
+  this.el.graphDetailContent.querySelectorAll(".ge-cond-field").forEach((inp) => {
     inp.addEventListener("input", () => {
       const path = JSON.parse((inp as HTMLElement).dataset.path || "[]") as number[];
       const target = conditionAt({ conditions: data.conditions }, path);
@@ -458,7 +466,7 @@ if (data.type === "system1_validator") {
     });
   });
 
-  document.querySelectorAll(".ge-cond-equals").forEach((inp) => {
+  this.el.graphDetailContent.querySelectorAll(".ge-cond-equals").forEach((inp) => {
     const apply = () => {
       const path = JSON.parse((inp as HTMLElement).dataset.path || "[]") as number[];
       const target = conditionAt({ conditions: data.conditions }, path);
@@ -474,7 +482,7 @@ if (data.type === "system1_validator") {
     });
   });
 
-  document.querySelectorAll(".ge-cond-add").forEach((btn) => {
+  this.el.graphDetailContent.querySelectorAll(".ge-cond-add").forEach((btn) => {
     btn.addEventListener("click", () => {
       this.saveCheckpoint();
       const path = JSON.parse((btn as HTMLElement).dataset.path || "[]") as number[];
@@ -483,7 +491,7 @@ if (data.type === "system1_validator") {
     });
   });
 
-  document.querySelectorAll(".ge-cond-add-group").forEach((btn) => {
+  this.el.graphDetailContent.querySelectorAll(".ge-cond-add-group").forEach((btn) => {
     btn.addEventListener("click", () => {
       this.saveCheckpoint();
       const path = JSON.parse((btn as HTMLElement).dataset.path || "[]") as number[];
@@ -492,7 +500,7 @@ if (data.type === "system1_validator") {
     });
   });
 
-  document.querySelectorAll(".ge-cond-remove").forEach((btn) => {
+  this.el.graphDetailContent.querySelectorAll(".ge-cond-remove").forEach((btn) => {
     btn.addEventListener("click", () => {
       this.saveCheckpoint();
       const path = JSON.parse((btn as HTMLElement).dataset.path || "[]") as number[];
@@ -503,7 +511,7 @@ if (data.type === "system1_validator") {
     });
   });
 
-  document.querySelectorAll(".ge-cond-up").forEach((btn) => {
+  this.el.graphDetailContent.querySelectorAll(".ge-cond-up").forEach((btn) => {
     btn.addEventListener("click", () => {
       this.saveCheckpoint();
       const path = JSON.parse((btn as HTMLElement).dataset.path || "[]") as number[];
@@ -517,7 +525,7 @@ if (data.type === "system1_validator") {
     });
   });
 
-  document.querySelectorAll(".ge-cond-down").forEach((btn) => {
+  this.el.graphDetailContent.querySelectorAll(".ge-cond-down").forEach((btn) => {
     btn.addEventListener("click", () => {
       this.saveCheckpoint();
       const path = JSON.parse((btn as HTMLElement).dataset.path || "[]") as number[];
@@ -531,7 +539,7 @@ if (data.type === "system1_validator") {
     });
   });
 
-  const addBtn = document.getElementById("ge-case-add");
+  const addBtn = getField<HTMLButtonElement>("ge-case-add");
   if (addBtn) {
     addBtn.addEventListener("click", () => {
       this.saveCheckpoint();
@@ -541,7 +549,7 @@ if (data.type === "system1_validator") {
     });
   }
 
-  document.querySelectorAll(".ge-case-remove").forEach((btn) => {
+  this.el.graphDetailContent.querySelectorAll(".ge-case-remove").forEach((btn) => {
     btn.addEventListener("click", () => {
       this.saveCheckpoint();
       const row = (btn as HTMLElement).closest(".ge-case-row") as HTMLElement;
@@ -552,7 +560,7 @@ if (data.type === "system1_validator") {
     });
   });
 
-  document.querySelectorAll(".ge-case-up").forEach((btn) => {
+  this.el.graphDetailContent.querySelectorAll(".ge-case-up").forEach((btn) => {
     btn.addEventListener("click", () => {
       this.saveCheckpoint();
       const row = (btn as HTMLElement).closest(".ge-case-row") as HTMLElement;
@@ -566,7 +574,7 @@ if (data.type === "system1_validator") {
     });
   });
 
-  document.querySelectorAll(".ge-case-down").forEach((btn) => {
+  this.el.graphDetailContent.querySelectorAll(".ge-case-down").forEach((btn) => {
     btn.addEventListener("click", () => {
       this.saveCheckpoint();
       const row = (btn as HTMLElement).closest(".ge-case-row") as HTMLElement;
@@ -580,7 +588,7 @@ if (data.type === "system1_validator") {
     });
   });
 
-  document.querySelectorAll(".ge-case-key").forEach((inp) => {
+  this.el.graphDetailContent.querySelectorAll(".ge-case-key").forEach((inp) => {
     inp.addEventListener("input", () => {
       const row = (inp as HTMLElement).closest(".ge-case-row") as HTMLElement;
       const idx = parseInt(row.dataset.index || "0", 10);

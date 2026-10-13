@@ -36,3 +36,8 @@ export type { UpdatePopupElements } from './update_popup'
 export { initUpdateBadgeTargets, initUpdateWatchers } from './update_badges'
 
 export { initCardLayout, refreshCardLayout } from './card-layout'
+
+// 🏭 Экземпляр страницы «Студия агентов» (студий может быть несколько — по одной на вкладку).
+// `createAgentStudioTab` — то самое «одна строка = рабочая вкладка»: страница + контроллеры.
+export { buildAgentStudioPage, createAgentStudioTab, studioPrefix } from './studio-page'
+export type { AgentStudioPage, AgentStudioTab, StudioSubTab } from './studio-page'

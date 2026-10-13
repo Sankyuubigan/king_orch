@@ -4,6 +4,7 @@ import { bus } from "../events";
 import { showToast } from "../ui";
 import { trackError } from "../telemetry";
 import type { AgentEntry } from "../types";
+import { isAgentOfferedInCatalog, offeredCatalogEntries } from "../utils/agent-visibility";
 
 export interface AgentPickerElements {
   root: HTMLElement;
@@ -26,9 +27,14 @@ const DEFAULT_VISIBILITY = ["basic"];
  * Панель «Агенты в чате» в Настройках: две колонки.
  *
  * Слева — что сейчас показывается в выпадающем списке агентов, в порядке
- * показа. Справа — весь каталог `agents/` без фильтров, разбитый на «графовые
- * команды» и «отдельные агенты». Правка любой ячейки сразу пишется в конфиг
- * (`agent_visibility`) и перерисовывает селекты во всех чат-вкладках.
+ * показа. Справа — каталог `agents/`, разбитый на «графовые команды» и
+ * «отдельные агенты», **без записей, скрытых автором** (`visible: false`
+ * во frontmatter `.md` или в корне YAML-графа). Правка любой ячейки сразу
+ * пишется в конфиг (`agent_visibility`) и перерисовывает селекты во всех
+ * чат-вкладках.
+ *
+ * Левая колонка фильтру не подчиняется: если пользователь уже выбрал агента,
+ * который позже был скрыт автором, — это его выбор, и он снимается только им.
  */
 export class AgentPickerController {
   private el: AgentPickerElements;
@@ -79,8 +85,10 @@ export class AgentPickerController {
   }
 
   private async addAll(entryType: AgentEntry["entry_type"]): Promise<void> {
+    // Только предлагаемые записи: скрытый автором агент не должен попадать в список
+    // чата «массовой» кнопкой в обход фильтра каталога.
     const missing = store.agents
-      .filter(a => a.entry_type === entryType && !store.agentVisibility.includes(a.id))
+      .filter(a => a.entry_type === entryType && isAgentOfferedInCatalog(a) && !store.agentVisibility.includes(a.id))
       .map(a => a.id);
     if (!missing.length) {
       showToast("Все уже добавлены", "info");
@@ -190,16 +198,26 @@ export class AgentPickerController {
     const container = this.el.catalogGroups;
     container.replaceChildren();
 
-    const graphs = store.agents.filter(a => a.entry_type === "workflow");
-    const agents = store.agents.filter(a => a.entry_type === "agent");
+    // Скрытые автором (`visible: false`) записи в каталог не попадают вовсе —
+    // предлагать к добавлению то, что автор просил не показывать, нельзя.
+    // Пустая группа не рисуется: «Графовые команды (0)» — это шум, а не сообщение.
+    const offered = offeredCatalogEntries(store.agents);
+    const graphs = offered.filter(a => a.entry_type === "workflow");
+    const agents = offered.filter(a => a.entry_type === "agent");
     const matchedGraphs = this.filterEntries(graphs);
     const matchedAgents = this.filterEntries(agents);
-    this.el.catalogEmpty.hidden = matchedGraphs.length + matchedAgents.length > 0;
 
-    if (graphs.length) {
+    // «Ничего не найдено» — это про ПОИСК, а не про «каталог ещё не загружен»:
+    // при пустом (`offered`) каталоге сообщение скрыто, иначе на старте до загрузки
+    // агентов пользователь читал бы «Ничего не найдено» как факт о своей установке.
+    // Пустая группа от поиска (записи есть, совпадений нет) остаётся «Нет совпадений».
+    this.el.catalogEmpty.hidden = offered.length === 0 || matchedGraphs.length + matchedAgents.length > 0;
+    const searchActive = this.searchQuery.length > 0;
+
+    if (matchedGraphs.length || (searchActive && graphs.length)) {
       container.appendChild(this.buildGroup("Графовые команды", matchedGraphs, "📁"));
     }
-    if (agents.length) {
+    if (matchedAgents.length || (searchActive && agents.length)) {
       container.appendChild(this.buildGroup("Отдельные агенты", matchedAgents, "📊"));
     }
   }

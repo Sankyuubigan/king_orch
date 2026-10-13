@@ -59,8 +59,8 @@ nodes:
   inject_thoughts:
   - soma_translator
   ui_pos:
-    y: 506
     x: 989
+    y: 506
 
 - id: call_validator
   type: llm_worker
@@ -71,8 +71,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    y: 152
     x: 1345
+    y: 152
   llm_params: strict
 
 - id: call_grounder
@@ -87,8 +87,8 @@ nodes:
   - decomposer
   - data_collector
   ui_pos:
-    x: 2841
     y: -451
+    x: 2841
 
 - id: call_focus_keeper
   type: llm_worker
@@ -98,8 +98,8 @@ nodes:
   inject_response:
   - decomposer
   ui_pos:
-    y: 330
     x: 51
+    y: 330
   llm_params: strict
 
 - id: check_focus_keeper_signal
@@ -113,16 +113,16 @@ nodes:
   - key: НУЖЕН ВЫБОР МИШЕНИ
     to: note_ask_target
   ui_pos:
-    x: 567
     y: 287
+    x: 567
 
 - id: note_ask_target
   type: note
   input: переспрашиваем юзера, с какой мишенью работаем
   system_message: "Специалист уже выделил мишени для работы (список выше в чате). Чтобы двигаться дальше, нам нужно определиться, с какой именно мишенью работаем. \nПожалуйста, напишите номер или название мишени, с которой хотите работать."
   ui_pos:
-    x: 974
-    y: 708
+    x: 970
+    y: 751
 
 - id: call_pattern_finder
   type: llm_worker
@@ -133,8 +133,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    y: 44
     x: 2834
+    y: 44
 
 - id: call_healer
   type: llm_worker
@@ -152,8 +152,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    y: -5
     x: 3468
+    y: -5
 
 - id: call_shadow_worker
   type: llm_worker
@@ -206,8 +206,8 @@ nodes:
     equals: false
   logic: any
   ui_pos:
-    y: 81
     x: 1655
+    y: 81
 
 - id: check_somatic
   type: condition_router
@@ -303,8 +303,8 @@ nodes:
     equals: false
   logic: all
   ui_pos:
-    x: 2517
     y: -302
+    x: 2517
 
 edges:
 

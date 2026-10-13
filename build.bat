@@ -45,6 +45,24 @@ set "CARGO_PROFILE_RELEASE_LTO="
 set "CARGO_PROFILE_RELEASE_CODEGEN_UNITS="
 set "CARGO_PROFILE_RELEASE_STRIP="
 
+REM --- Temp of frontend build inside the project ---
+REM The system %TEMP% on this machine denies DELETE of just-written files:
+REM cl.exe fails with D8050, esbuild (inside vite) fails with
+REM "remove ...esbuild-<hash>: Access is denied" -> vite build cannot finish.
+REM A project-local temp dir is proven to build successfully. Keep it ASCII.
+set "TMP_MISSING="
+if not exist "%PROJ%temp" mkdir "%PROJ%temp"
+set "FRONTEND_TMP=%PROJ%temp\buildtmp"
+if not exist "%FRONTEND_TMP%" mkdir "%FRONTEND_TMP%"
+if not exist "%FRONTEND_TMP%" set "TMP_MISSING=1"
+if not defined TMP_MISSING (
+  set "TMP=%FRONTEND_TMP%"
+  set "TEMP=%FRONTEND_TMP%"
+  echo [build.bat] temp for build: %FRONTEND_TMP%
+) else (
+  echo [build.bat] WARNING: cannot create %FRONTEND_TMP%, using system TEMP
+)
+
 node "%TOOLKIT%" build --project "%PROJ%"
 if errorlevel 1 (
   echo [ERROR] Build failed.

@@ -57,6 +57,24 @@ pub struct AgentProfile {
     /// Дефолт `false` — поведение всех существующих агентов не меняется.
     #[serde(default)]
     pub disable_reasoning: bool,
+    /// Предлагать ли агента в КАТАЛОГЕ (Настройки → «Агенты в чате» → «Доступные агенты»).
+    ///
+    /// Это решение АВТОРА агента, а не пользователя: `visible: false` убирает запись из
+    /// правой колонки каталога, чтобы служебный/экспериментальный агент не мозолил глаза.
+    /// Пользовательский выбор «что показывать в чате» — отдельный сигнал и живёт в конфиге
+    /// (`agent_visibility`), см. [`AgentEntry`].
+    ///
+    /// На ЗАПУСК не влияет: диспетчеризация по `agent_id` видимость не проверяет — иначе
+    /// скрытый агент остался бы «невидимым, но исполняемым» (то же правило, что для `archive/`).
+    ///
+    /// Дефолт `true`: агент без объявления виден ровно как раньше, поведение не меняется.
+    #[serde(default = "default_visible")]
+    pub visible: bool,
+}
+
+/// Отсутствие поля `visible` означает «виден»: скрывать агента нужно ЯВНО.
+fn default_visible() -> bool {
+    true
 }
 
 /// Единая точка входа в UI — может быть .md агентом или YAML графом.
@@ -77,6 +95,16 @@ pub struct AgentEntry {
     /// Роль агента: `"graph"` — узел workflow-графа, `"agent"` — самостоятельный
     /// legacy-агент (в т.ч. корень `agents/*.md`, запускается напрямую).
     pub role: String,
+    /// Предлагать ли запись в КАТАЛОГЕ UI (правая колонка «Доступные агенты»).
+    ///
+    /// У `.md` агента — frontmatter `visible:` (дефолт `true`), у YAML-графа — поле
+    /// верхнего уровня `visible:` (дефолт `true`). Работает одинаково для обоих типов,
+    /// поэтому поле лежит здесь, а не в профилях-потомках.
+    ///
+    /// Каталог отдаёт запись ВСЕГДА (даже скрытую): UI обязан уметь отличить
+    /// «агента нет на диске» от «агент скрыт автором», иначе скрытие выглядело бы
+    /// как удаление (см. `utils/agent-visibility.ts` — единственный предикат показа).
+    pub visible: bool,
 }
 
 /// Имя папки, содержимое которой — мёртвый код и НЕ должно попадать
@@ -180,6 +208,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             let mut vision = false;
             let mut think_budget_chars: Option<usize> = None;
             let mut disable_reasoning = false;
+            let mut visible = true;
             let mut mcp_servers = Vec::new();
             let mut tools = Vec::new();
             let frontmatter_lines: Vec<&str> = frontmatter.lines().collect();
@@ -188,7 +217,19 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 let line = frontmatter_lines[i].trim();
                 if line.starts_with("name:") { name = line["name:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string(); }
                 else if line.starts_with("description:") { description = line["description:".len()..].trim().trim_matches('"').trim_matches('\'').trim().to_string(); }
-                else if line.starts_with("visible:") { log::warn!("[agents] Поле `visible:` в frontmatter проигнорировано — видимостью управляет пользователь в конфиге (agent_visibility)"); }
+                // `visible: false` убирает агента из каталога «Доступные агенты».
+                // Неизвестное значение (опечатка `fales`, кавычки) НЕ считается
+                // скрытием: скрывать нужно явно, иначе опечатка молча спрячет агента.
+                else if line.starts_with("visible:") {
+                    let raw = line["visible:".len()..].trim().trim_matches('"').trim_matches('\'');
+                    match raw.parse::<bool>() {
+                        Ok(flag) => visible = flag,
+                        Err(_) => log::warn!(
+                            "[agents] Поле `visible:` имеет нераспознанное значение '{}' — считаю агента видимым (что видно в списке чата, решает пользователь в конфиге `agent_visibility`)",
+                            raw
+                        ),
+                    }
+                }
                 else if line.starts_with("replace_report:") { replace_report = line["replace_report:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("single_report:") { replace_report = line["single_report:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("current_date:") { current_date = line["current_date:".len()..].trim().parse().unwrap_or(false); }
@@ -246,7 +287,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 }
                 i += 1;
             }
-            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date, temperature, vision, think_budget_chars, disable_reasoning }); }
+            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date, temperature, vision, think_budget_chars, disable_reasoning, visible }); }
         }
     }
     None
@@ -254,9 +295,13 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
 
 /// Каталог всех существующих entry points для UI: `.md` агенты + YAML-графы.
 ///
-/// ВОЗВРАЩАЕТ ВСЁ, БЕЗ ФИЛЬТРАЦИИ ПО ВИДИМОСТИ. Показом управляет
-/// пользователь через `agent_visibility` в конфиге (см. `store.agentVisibility`
-/// и `utils/agent-visibility.ts`).
+/// ВОЗВРАЩАЕТ ВСЁ, БЕЗ ФИЛЬТРАЦИИ ПО ВИДИМОСТИ — включая записи с `visible: false`.
+/// Два независимых сигнала видимости, и оба обязаны быть видны UI:
+/// * `visible` (это поле записи) — решение АВТОРА: предлагать ли агента в каталоге;
+/// * `agent_visibility` в конфиге — решение ПОЛЬЗОВАТЕЛЯ: что показывать в списке чата.
+///
+/// Отфильтровать скрытое здесь означало бы соврать UI: «скрыт автором» стало бы
+/// неотличимо от «агента нет на диске» (см. `utils/agent-visibility.ts`).
 pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
     let mut entries = Vec::new();
 
@@ -278,6 +323,7 @@ pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
                 folder: a.folder.clone(),
                 rel_path: rel_path_of(&path, agents_dir),
                 role: "agent".to_string(),
+                visible: a.visible,
             });
         }
     }
@@ -294,6 +340,7 @@ pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
                 folder: team_folder_of(&path, agents_dir),
                 rel_path: rel_path_of(&path, agents_dir),
                 role: "graph".to_string(),
+                visible: wf.visible,
             });
         }
     }
@@ -351,6 +398,24 @@ mod tests {
 
         let b = parse("---\nname: Default Agent\n---\nbody\n");
         assert_eq!(b.temperature, None);
+    }
+
+    /// `visible: false` убирает агента из каталога «Доступные агенты»; отсутствие
+    /// поля = виден. Мусор в значении НЕ скрывает агента: опечатка не должна тихо
+    /// прятать рабочего агента от пользователя.
+    #[test]
+    fn visible_parsed_and_defaults_to_true() {
+        let default_agent = parse("---\nname: Default Agent\n---\nbody\n");
+        assert!(default_agent.visible, "без поля visible агент обязан быть видимым");
+
+        let hidden = parse("---\nname: Hidden\nvisible: false\n---\nbody\n");
+        assert!(!hidden.visible, "visible: false обязан скрывать агента из каталога");
+
+        let shown = parse("---\nname: Shown\nvisible: true\n---\nbody\n");
+        assert!(shown.visible);
+
+        let junk = parse("---\nname: Junk\nvisible: fales\n---\nbody\n");
+        assert!(junk.visible, "нераспознанное значение — не скрытие: агент остаётся видимым");
     }
 
     /// Граница размышления — опция агента, а не глобальная настройка: агент без

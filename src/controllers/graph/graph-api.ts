@@ -6,6 +6,15 @@ export interface GraphApi {
   onTabActivated(): void;
   setYamlDiagnostics(diagnostics: GraphDiagnostic[]): void;
 
+  /**
+   * DOM-узел ноды Drawflow в границах СВОЕГО экземпляра студии.
+   *
+   * Нужен, потому что студий может быть несколько: id нод задаёт автор графа, и в двух
+   * открытых графах они совпадают (`user_message`, `router`…), поэтому поиск по документу
+   * попадал бы в чужой граф.
+   */
+  findNodeEl(nodeId: string): HTMLElement | null;
+
   setupCanvasInteraction(): void;
   selectNode(id: string): void;
   deselectAllNodes(): void;

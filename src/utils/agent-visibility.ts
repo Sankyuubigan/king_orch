@@ -8,6 +8,10 @@ import { store } from "../store";
  * (`model-options.ts` и `controllers/agent-test.ts`) и опирался на два
  * независимых сигнала — `visible` во frontmatter и флаг `show_folder_agents`
  * в настройках. Теперь сигнал один: `store.agentVisibility`.
+ *
+ * Второй сигнал (`visible` у самого агента) живёт здесь же и отвечает на ДРУГОЙ
+ * вопрос — «предлагать ли запись в каталоге» (см. `isAgentOfferedInCatalog`).
+ * Один модуль, две функции — но не два предиката для одного и того же решения.
  */
 
 /** Запись каталога по id, если она ещё существует на диске. */
@@ -49,6 +53,26 @@ export function agentOptionLabel(entry: AgentEntry): string {
 /** Показывать ли запись каталога в UI. Единственный предикат видимости. */
 export function isAgentVisible(id: string): boolean {
   return store.agentVisibility.includes(id);
+}
+
+/**
+ * Предлагать ли запись в КАТАЛОГЕ (правая колонка «Доступные агенты»).
+ *
+ * Отдельный сигнал от `isAgentVisible`: тот — выбор пользователя «что показывать
+ * в списке чата» (`agent_visibility` в конфиге), а этот — объявление АВТОРА агента
+ * (`visible:` в frontmatter `.md` / в корне YAML-графа). Скрытый автор агент не
+ * предлагается к добавлению, но уже выбранный пользователем из списка чата не
+ * выдёргивается: его решение сильнее и отменяется только им самим.
+ *
+ * Отсутствие поля — «виден»: старые каталоги и ручные записи ведут себя как раньше.
+ */
+export function isAgentOfferedInCatalog(entry: AgentEntry): boolean {
+  return entry.visible !== false;
+}
+
+/** Каталог для показа пользователю: скрытые автором записи отброшены. */
+export function offeredCatalogEntries(entries: readonly AgentEntry[]): AgentEntry[] {
+  return entries.filter(isAgentOfferedInCatalog);
 }
 
 /**

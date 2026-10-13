@@ -423,9 +423,10 @@ where
 
     let workflows = load_workflows(&agents_dir).unwrap_or_default();
     // Режим запуска определяется ТОЛЬКО фактом существования workflow с таким
-    // file_stem. Флага `visible` больше нет: он смешивал две разные ответственности
-    // (рантайм-гейт и UI-видимость) и делал графы неисполняемыми без явного
-    // разрешения в frontmatter. Что показывать пользователю — решает конфиг.
+    // file_stem. Рантайм-гейта видимости здесь нет: `visible` в YAML — это решение
+    // автора «предлагать ли граф в КАТАЛОГЕ» (UI), а не разрешение на запуск.
+    // Смешивать эти ответственности нельзя: скрытый граф обязан оставаться
+    // исполнимым по прямому `agent_id` (иначе он «невидимый, но сломанный»).
     let workflow_match = find_workflow_by_stem(&workflows, &agent_id);
     let mut messages_store = history.clone();
     for (index, message) in messages_store.iter_mut().enumerate() {
@@ -2765,6 +2766,7 @@ mod tests {
             vision: false,
             think_budget_chars: None,
             disable_reasoning: false,
+            visible: true,
         }
     }
 

@@ -126,7 +126,7 @@ export function setupCanvasInteraction(this: GraphController): void {
               if (!dn) continue;
               dn.pos_x = sini.x + dx;
               dn.pos_y = sini.y + dy;
-              const el = document.getElementById('node-' + sid);
+              const el = this.findNodeEl(sid);
               if (el) {
                 el.style.top = dn.pos_y + 'px';
                 el.style.left = dn.pos_x + 'px';
@@ -146,13 +146,13 @@ export function setupCanvasInteraction(this: GraphController): void {
 
 export function selectNode(this: GraphController, id: string): void {
   this.selectedNodes.add(id);
-  const el = document.getElementById('node-' + id);
+  const el = this.findNodeEl(id);
   if (el) el.classList.add('selected');
 }
 
 export function deselectAllNodes(this: GraphController): void {
   for (const id of this.selectedNodes) {
-    const el = document.getElementById('node-' + id);
+    const el = this.findNodeEl(id);
     if (el) el.classList.remove('selected');
   }
   this.selectedNodes.clear();
@@ -216,7 +216,7 @@ export function endBoxSelection(this: GraphController, _e: MouseEvent): void {
   const data = this.editor.drawflow.drawflow.Home.data;
 
   for (const id of Object.keys(data)) {
-    const nodeEl = document.getElementById('node-' + id);
+    const nodeEl = this.findNodeEl(id);
     if (!nodeEl) continue;
     const nodeRect = nodeEl.getBoundingClientRect();
     // Проверяем пересечение ноды с рамкой (мировые координаты)

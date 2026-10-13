@@ -597,6 +597,7 @@ mod tests {
             vision: false,
             think_budget_chars: None,
             disable_reasoning: false,
+            visible: true,
         }
     }
 

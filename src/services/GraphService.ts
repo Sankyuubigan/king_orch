@@ -54,6 +54,14 @@ export interface WorkflowGraphDef {
    * поля не запускает граф, поэтому при сохранении поле всегда заполнено.
    */
   entry?: string;
+  /**
+   * Предлагать ли граф в каталоге «Доступные агенты» (`visible: false` скрывает).
+   *
+   * Поле обязано ездить через редактор: `save_workflow` пишет `WorkflowDef` поверх
+   * файла, поэтому забытое здесь `visible` вернуло бы скрытый граф в каталог.
+   * Отсутствие поля = `true` (дефолт backend'а).
+   */
+  visible?: boolean;
   nodes: GraphNodeDef[];
   edges: GraphEdgeDef[];
 }

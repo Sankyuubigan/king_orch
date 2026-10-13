@@ -1,6 +1,7 @@
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import type { DrawflowExport } from "drawflow";
 import { showToast } from "../../ui";
+import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError } from "../../telemetry";
 import { readWorkflowFile, saveWorkflow } from "../../services";
 import type { WorkflowGraphDef, GraphNodeDef, GraphEdgeDef } from "./types";
@@ -25,6 +26,8 @@ export async function handleOpen(this: GraphController): Promise<void> {
       this.currentFilePath = selected;
       this.currentWorkflowName = wf.name;
       this.currentWorkflowConfig = wf.config ?? null;
+      // `visible` отсутствует в старых файлах — это «виден», а не «скрыт».
+      this.currentWorkflowVisible = wf.visible !== false;
       this.el.btnSaveWorkflow.disabled = false;
       this.hideSidebar();
       this.ensureEditor();
@@ -191,7 +194,10 @@ export async function handleOpen(this: GraphController): Promise<void> {
       this.resetHistory();
       this.setYamlDiagnostics(diagnostics);
     } catch (e) {
-      console.error("handleOpen error:", e);
+      // Ошибка открытия/импорта уходит и в вкладку «Логи» (logFront), и в тост:
+      // в консоли её не видит пользователь, а молчаливая поломка редактора — это ложь
+      // (core/rules.md §2.2, §2.5).
+      logFront(`[graph] handleOpen error: ${e}`);
       showToast(`Ошибка загрузки: ${e}`, "error");
       void trackError("graph.open", e);
     }
@@ -272,7 +278,7 @@ export async function handleSave(this: GraphController): Promise<void> {
           for (const conn of dn.inputs[inKey].connections || []) {
             const fromNode = nodes.find((n) => n.id === conn.node);
             if (!fromNode) {
-              console.warn(`[handleSave] fromNode не найден для conn.node="${conn.node}" (target="${nodeId}"). drawflow-ключ расходится с data.id — это баг renameNode`);
+              logFront(`[handleSave] fromNode не найден для conn.node="${conn.node}" (target="${nodeId}"). drawflow-ключ расходится с data.id — это баг renameNode`);
             }
             if (fromNode && isDynamicNode(fromNode.type)) {
               continue;
@@ -285,7 +291,7 @@ export async function handleSave(this: GraphController): Promise<void> {
       // Валидация: каждое ребро должно ссылаться на существующий node.id
       const badEdges = edges.filter(e => !nodes.find(n => n.id === e.from) || !nodes.find(n => n.id === e.to));
       if (badEdges.length > 0) {
-        console.error("[handleSave] Битые рёбра (ссылаются на несуществующие node.id):", JSON.stringify(badEdges));
+        logFront(`[handleSave] Битые рёбра (ссылаются на несуществующие node.id): ${JSON.stringify(badEdges)}`);
         showToast(`⚠️ ${badEdges.length} ребер имеют неверные ID нод — данные могут потеряться`, "error");
       }
 
@@ -298,7 +304,7 @@ export async function handleSave(this: GraphController): Promise<void> {
       });
       if (!entryNodeId) {
         const message = "❌ Не задана точка входа: в графе должна быть ровно одна нода «Сообщение юзера»";
-        console.error(`[handleSave] ${message}`);
+        logFront(`[handleSave] ${message}`);
         showToast(message, "error");
         return;
       }
@@ -308,7 +314,7 @@ export async function handleSave(this: GraphController): Promise<void> {
         config.facts = [];
       }
 
-      const workflow: WorkflowGraphDef = { name: this.currentWorkflowName, config, entry: entryNodeId, nodes, edges };
+      const workflow: WorkflowGraphDef = { name: this.currentWorkflowName, config, entry: entryNodeId, visible: this.currentWorkflowVisible, nodes, edges };
       const saveResult = await saveWorkflow(this.currentFilePath, workflow);
       void saveResult;
       this.pristineSnapshot = this.captureSnapshot();
@@ -318,7 +324,7 @@ export async function handleSave(this: GraphController): Promise<void> {
     } catch (e) {
       // Файл НЕ сохранён (бэкенд отклоняет невалидный YAML до записи).
       // Оставляем dirty-флаг — данные на холсте считаются несохранёнными.
-      console.error("[handleSave] Сохранение НЕ выполнено, файл не перезаписан:", e);
+      logFront(`[handleSave] Сохранение НЕ выполнено, файл не перезаписан: ${e}`);
       showToast(`❌ Не сохранено: ${e}`, "error");
       void trackError("graph.save", e);
     }

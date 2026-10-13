@@ -9,14 +9,14 @@ export function setupContextMenu(this: GraphController): void {
   document.body.appendChild(this.ctxMenu);
 
   // Закрытие по клику вне меню
-  document.addEventListener('mousedown', (e) => {
+  this.addGlobalListener<MouseEvent>(document, "mousedown", (e) => {
     if (this.ctxMenu && !this.ctxMenu.contains(e.target as Node)) {
       this.ctxMenu.classList.remove('open');
     }
   });
 
   // Закрытие по Escape
-  document.addEventListener('keydown', (e) => {
+  this.addGlobalListener<KeyboardEvent>(document, "keydown", (e) => {
     if (e.key === 'Escape' && this.ctxMenu) {
       this.ctxMenu.classList.remove('open');
     }

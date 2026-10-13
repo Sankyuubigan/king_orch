@@ -624,8 +624,12 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 .thoughts-collapsed { max-height: 0; padding: 0; border: none; }
 .thoughts-expanded { max-height: 5000px; padding: 8px 0; }
 
-/* ─── Граф (вкладка 🔀) — редактор Drawflow ─── */
-#graph-toolbar {
+/* ─── Граф (вкладка 🔀) — редактор Drawflow ───
+   Селекторы — КЛАССЫ, а не id: разметка студии множится по вкладкам, её id
+   получают префикс экземпляра (`s-<key>-graph-toolbar`), и правило по id
+   перестало бы попадать в разметку (вёрстка схлопывалась: холст 0×0, сайдбар
+   без позиционирования). id остаётся адресом для кода, оформление — классом. */
+.graph-toolbar {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -635,7 +639,7 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   font-size: 13px;
   flex-wrap: wrap;
 }
-#graph-toolbar .graph-yaml-warning {
+.graph-toolbar .graph-yaml-warning {
   max-width: min(620px, 100%);
   color: var(--danger);
   background: var(--msg-system);
@@ -645,19 +649,19 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   font-size: 12px;
   line-height: 1.35;
 }
-#graph-toolbar .graph-yaml-warning summary {
+.graph-toolbar .graph-yaml-warning summary {
   cursor: pointer;
   font-weight: 600;
   white-space: nowrap;
 }
-#graph-toolbar .graph-yaml-warning ul {
+.graph-toolbar .graph-yaml-warning ul {
   margin: 6px 0 2px;
   padding-left: 18px;
   max-height: 180px;
   overflow-y: auto;
   white-space: normal;
 }
-#graph-toolbar .toolbar-separator {
+.graph-toolbar .toolbar-separator {
   width: 1px;
   height: 24px;
   background: var(--border);
@@ -676,13 +680,24 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 }
 .graph-add-btn:hover { background: var(--session-hover); border-color: var(--primary); color: var(--primary); }
 
-#graph-toolbar .graph-add-btn[disabled] {
+.graph-toolbar .graph-add-btn[disabled] {
   opacity: 0.35;
   cursor: default;
   pointer-events: none;
 }
-#graph-layout { flex: 1; position: relative; overflow: hidden; }
-#graph-container { width: 100%; height: 100%; border: none; background: #1a1a1a; }
+.graph-layout { flex: 1; position: relative; overflow: hidden; }
+/* Хост холста. Наш класс — здесь, на элементе ВНЕ drawflow-узла: библиотека
+   опознаёт свой контейнер по ПЕРВОМУ классу (`classList[0] === "parent-drawflow"`),
+   поэтому наш класс на переданном ей узле тихо ломает панорамирование
+   (доказано в живом окне: transform не меняется). Узел drawflow остаётся «чистым»,
+   а размеры ему задаёт правило по его собственному классу — он у него всегда первый. */
+.graph-canvas {
+  width: 100%;
+  height: 100%;
+  border: none;
+  background: #1a1a1a;
+}
+.graph-canvas > .parent-drawflow { width: 100%; height: 100%; }
 
 /* Selection rectangle */
 .graph-selection-rect {
@@ -695,7 +710,7 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 }
 
 /* ─── Боковая панель редактирования (поверх холста) ─── */
-#graph-sidebar {
+.graph-sidebar {
   position: absolute;
   top: 0;
   right: -360px;
@@ -709,7 +724,7 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   flex-direction: column;
   overflow-y: auto;
 }
-#graph-sidebar.open { right: 0; }
+.graph-sidebar.open { right: 0; }
 
 .graph-sidebar-header {
   display: flex;
@@ -720,9 +735,9 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   font-weight: 600;
   font-size: 15px;
 }
-#graph-detail-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graph-detail-title { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-#graph-detail-content {
+.graph-detail-content {
   flex: 1;
   overflow-y: auto;
   padding: 12px 16px;
@@ -1321,7 +1336,7 @@ body.edge-reconnecting {
 }
 
 /* Drawflow canvas background grid */
-#graph-container {
+.graph-canvas {
   --grid-color: #2a2a2a;
   --grid-size: 30px;
   background-image:
@@ -1384,8 +1399,8 @@ body.edge-reconnecting {
 .sub-view { display: none; flex-direction: column; gap: 10px; flex: 1; overflow: hidden; }
 .sub-view.active { display: flex; }
 /* Тест-субвкладки состоят из карточек и могут стать выше вьюпорта —
-   им нужен скролл. Граф-субвкладке скролл не нужен (#graph-layout тянется). */
-#view-sub-ai-test, #view-sub-coding-test { overflow-y: auto; }
+   им нужен скролл. Граф-субвкладке скролл не нужен (.graph-layout тянется). */
+.sub-view.studio-scroll { overflow-y: auto; }
 
 /* ─── AI тест (суб-вкладка) ─── */
 .test-checklist {
@@ -1411,7 +1426,7 @@ body.edge-reconnecting {
 .test-hint { color: #888; font-size: 13px; font-style: italic; }
 .test-progress { margin-top: 10px; }
 
-#test-file-path {
+.test-file-path {
   background: var(--input-bg);
   color: var(--text);
   padding: 8px;
@@ -1419,7 +1434,7 @@ body.edge-reconnecting {
   border-radius: 4px;
   font-size: 13px;
 }
-#test-results-content {
+.test-results-content {
   max-height: 400px;
   overflow-y: auto;
   font-size: 13px;

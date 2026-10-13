@@ -4,7 +4,7 @@ import type { GraphController } from "./graph-class";
 
 export function enableReverseConnection(this: GraphController, nodeId: string): void {
   if (!this.editor) return;
-  const nodeEl = document.querySelector(`#node-${nodeId}`);
+  const nodeEl = this.findNodeEl(nodeId);
   if (!nodeEl) return;
   const targetInputEl = nodeEl.querySelector<HTMLElement>('.input');
   if (!targetInputEl) return;
@@ -177,7 +177,7 @@ export function beginEdgeReconnect(this: GraphController, data: {
   document.body.classList.add('edge-reconnecting');
 
   const getPortCenter = (nodeId: string, selector: string): { x: number; y: number } | null => {
-    const nodeEl = document.getElementById('node-' + nodeId);
+    const nodeEl = this.findNodeEl(nodeId);
     if (!nodeEl) return null;
     const portEl = nodeEl.querySelector<HTMLElement>(selector);
     if (!portEl) return null;

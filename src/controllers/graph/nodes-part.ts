@@ -1,5 +1,6 @@
 import type { DrawflowNode } from "drawflow";
 import { showToast } from "../../ui";
+import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { isDynamicNode, OUTPUT_COUNT, ENTRY_NODE_TYPE, inputCount } from "./constants";
 import type { GraphNodeDef } from "./types";
 import type { GraphController } from "./graph-class";
@@ -194,7 +195,7 @@ export function renameNode(this: GraphController, oldKey: string, newKey: string
 
   const nodeData = data[oldKey];
   if (!nodeData) {
-    console.error(`[renameNode] oldKey "${oldKey}" не найден`);
+    logFront(`[renameNode] oldKey "${oldKey}" не найден`);
     return false;
   }
 
@@ -247,7 +248,7 @@ export function renameNode(this: GraphController, oldKey: string, newKey: string
   }
 
   // 5. Обновляем DOM-атрибут id ноды
-  const domEl = document.getElementById(`node-${oldKey}`);
+  const domEl = this.findNodeEl(oldKey);
   if (domEl) domEl.id = `node-${trimmed}`;
 
   // 6. Обновляем CSS-классы на SVG-соединениях
@@ -288,12 +289,15 @@ export function updateNodeHtml(this: GraphController, nodeId: string): void {
   const dn = this.editor.drawflow.drawflow.Home.data[nodeId];
   if (!dn) return;
   const data = dn.data;
-  const el = document.querySelector(`#node-${nodeId} .drawflow_content_node`) as HTMLElement;
+  const nodeEl = this.findNodeEl(nodeId);
+  const el = nodeEl?.querySelector<HTMLElement>(".drawflow_content_node");
   if (!el) return;
 
   el.innerHTML = this.buildNodeInnerHtml(data, nodeId);
 
-  const nodeEl = el.closest('.drawflow-node') as HTMLElement;
+  // Нода найдена выше В ГРАНИЦАХ своего экземпляра студии (`findNodeEl`); повторный
+  // `el.closest('.drawflow-node')` был дублем и, что важнее, ломал сборку: `nodeEl`
+  // объявлялся второй раз в той же области видимости.
   if (nodeEl) {
     nodeEl.classList.toggle('node-disabled', !!data.disabled);
   }
@@ -307,7 +311,7 @@ export function alignOutputsWithCases(this: GraphController, nodeId: string): vo
   if (!this.editor) return;
   const dn = this.editor.drawflow.drawflow.Home.data[nodeId];
   if (!dn || !isDynamicNode(dn.data.type)) return;
-  const nodeEl = document.getElementById('node-' + nodeId);
+  const nodeEl = this.findNodeEl(nodeId);
   if (!nodeEl) return;
   const caseRows = nodeEl.querySelectorAll('.gn-case-row');
   if (caseRows.length === 0) return;

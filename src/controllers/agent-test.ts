@@ -48,14 +48,50 @@ export class AgentTestController {
   private pipelineTestsLoaded = false;
   private pipelineModelsLoaded = false;
   private pipelineListenersSetup = false;
+  /**
+   * Отписки от подписок, которые переживают закрытие вкладки студии.
+   *
+   * Подписка на шине и `listen()` Tauri живут дольше DOM панели: без отписки закрытая
+   * вкладка продолжала бы получать `model-catalog-changed` и события pipeline-теста и
+   * писать в отсоединённые элементы — а на 20 вкладках это ещё и 20 живых обработчиков.
+   */
+  private unsubscribers: (() => void)[] = [];
+  private destroyed = false;
 
   constructor(el: AgentTestElements) {
     this.el = el;
     this.bindEvents();
-    bus.on("model-catalog-changed", () => {
-      this.agentsLoaded = false;
-      void this.loadAgents();
+    this.unsubscribers.push(
+      bus.on("model-catalog-changed", () => {
+        this.agentsLoaded = false;
+        void this.loadAgents();
+      }),
+    );
+  }
+
+  /**
+   * Запомнить отписку от Tauri-события.
+   *
+   * `listen` возвращает промис, поэтому отписка может прийти ПОСЛЕ `destroy()` (вкладку
+   * закрыли, пока шла регистрация). Такой обработчик отписывается сразу, иначе он
+   * остался бы жить навсегда — ровно та утечка, ради которой `destroy()` и написан.
+   */
+  private trackListen(promise: Promise<() => void>): void {
+    void promise.then((unlisten) => {
+      if (this.destroyed) unlisten();
+      else this.unsubscribers.push(unlisten);
     });
+  }
+
+  /**
+   * Освободить панель: снять подписку на шину и Tauri-`listen`.
+   *
+   * Вызывается при закрытии вкладки студии (`AgentStudioTab.dispose`). Слушатели кнопок
+   * отдельно снимать не нужно — их цели лежат внутри корня экземпляра и уходят с DOM.
+   */
+  destroy(): void {
+    this.destroyed = true;
+    for (const unsubscribe of this.unsubscribers.splice(0)) unsubscribe();
   }
 
   init(): void {
@@ -319,19 +355,25 @@ export class AgentTestController {
     if (this.pipelineListenersSetup) return;
     this.pipelineListenersSetup = true;
 
-    listen<string>("pipeline_status", (e) => {
-      this.el.pipelineStatusLabel.textContent = e.payload;
-    });
-    listen<number>("pipeline_progress", (e) => {
-      const pct = Math.max(0, Math.min(100, e.payload));
-      this.el.pipelineProgressBar.style.width = `${pct}%`;
-    });
-    listen<boolean>("pipeline_done", (e) => {
-      const passed = e.payload;
-      this.el.pipelineStatusLabel.textContent = passed ? "✅ Тест пройден" : "❌ Тест НЕ пройден";
-      this.el.pipelineProgressBar.style.width = "100%";
-      showToast(passed ? "Pipeline test пройден!" : "Pipeline test НЕ пройден", passed ? "success" : "error");
-    });
+    this.trackListen(
+      listen<string>("pipeline_status", (e) => {
+        this.el.pipelineStatusLabel.textContent = e.payload;
+      }),
+    );
+    this.trackListen(
+      listen<number>("pipeline_progress", (e) => {
+        const pct = Math.max(0, Math.min(100, e.payload));
+        this.el.pipelineProgressBar.style.width = `${pct}%`;
+      }),
+    );
+    this.trackListen(
+      listen<boolean>("pipeline_done", (e) => {
+        const passed = e.payload;
+        this.el.pipelineStatusLabel.textContent = passed ? "✅ Тест пройден" : "❌ Тест НЕ пройден";
+        this.el.pipelineProgressBar.style.width = "100%";
+        showToast(passed ? "Pipeline test пройден!" : "Pipeline test НЕ пройден", passed ? "success" : "error");
+      }),
+    );
   }
 
   private async runPipelineTest(): Promise<void> {

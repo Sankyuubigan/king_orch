@@ -8,6 +8,10 @@ use crate::domain::{
 };
 
 /// Workflow со включённым file_stem + team
+///
+/// Поля здесь — это РОВНО тот контракт, который редактор обязан вернуть обратно при
+/// сохранении (`save_workflow` сериализует `WorkflowDef` поверх файла). Поле, забытое
+/// в этом контракте, молча теряется при первом же сохранении из визуального редактора.
 #[derive(Debug, Clone, Serialize)]
 pub struct GraphWorkflowDef {
     pub team: String,
@@ -15,6 +19,8 @@ pub struct GraphWorkflowDef {
     pub file_stem: String,
     pub config: Option<WorkflowConfig>,
     pub entry: Option<String>,
+    /// Видимость графа в каталоге «Доступные агенты»: отсутствие поля = `true`.
+    pub visible: bool,
     pub nodes: Vec<NodeDef>,
     pub edges: Vec<EdgeDef>,
 }
@@ -64,6 +70,7 @@ pub fn read_workflow_file(path: String) -> Result<GraphWorkflowReadResult, Strin
             file_stem,
             config: wf.config,
             entry: wf.entry,
+            visible: wf.visible,
             nodes: wf.nodes,
             edges: wf.edges,
         },

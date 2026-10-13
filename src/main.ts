@@ -20,12 +20,11 @@ import { initUpdateWatcher as initLlamaUpdateWatcher } from "@my-tauri-plugins/p
 import { initUpdateWatcher as initImageUpdateWatcher } from "@my-tauri-plugins/plugin-image-engine";
 import { initUpdateWatcher as initRoutersUpdateWatcher, onOpenDashboard } from "@my-tauri-plugins/plugin-cloud-routers";
 import {
-  SessionController, SettingsController, AgentTestController, AgentPickerController,
-  CodingTestController, UpdatePopupController, TabController, initChatEventRouter,
+  SessionController, SettingsController, AgentPickerController,
+  UpdatePopupController, TabController, initChatEventRouter,
   loadGraphController, initUpdateBadgeTargets, initUpdateWatchers, getTabNavigationMenu,
-  initCardLayout,
+  initCardLayout, createAgentStudioTab,
 } from "./controllers";
-import type { GraphController } from "./controllers";
 import type { SharedChatControls } from "./utils";
 import type { TabSection } from "./types";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
@@ -145,121 +144,22 @@ async function initApp() {
     catalogEmpty: $<HTMLElement>("agent-picker-catalog-empty"),
   });
 
-  // ─── Контроллер графа (суб-вкладка 🔀 в студии агентов) ───
-  let graphCtrl: GraphController | null = null;
-  let graphCtrlPromise: Promise<GraphController> | null = null;
-
-  async function getGraphCtrl(): Promise<GraphController> {
-    if (graphCtrl) return graphCtrl;
-    if (!graphCtrlPromise) {
-      graphCtrlPromise = loadGraphController().then((GraphControllerClass) => {
-        graphCtrl = new GraphControllerClass({
-          graphContainer: $<HTMLDivElement>("graph-container"),
-          graphSidebar: $<HTMLDivElement>("graph-sidebar"),
-          graphDetailTitle: $<HTMLSpanElement>("graph-detail-title"),
-          graphDetailContent: $<HTMLDivElement>("graph-detail-content"),
-          graphSidebarClose: $<HTMLButtonElement>("graph-sidebar-close"),
-          btnOpenWorkflow: $<HTMLButtonElement>("btn-open-workflow"),
-          btnSaveWorkflow: $<HTMLButtonElement>("btn-save-workflow"),
-          currentWorkflowName: $<HTMLSpanElement>("current-workflow-name"),
-          yamlWarning: $<HTMLDetailsElement>("graph-yaml-warning"),
-          yamlWarningList: $<HTMLUListElement>("graph-yaml-warning-list"),
-          btnUndo: $<HTMLButtonElement>("btn-undo"),
-          btnRedo: $<HTMLButtonElement>("btn-redo"),
-          dirtyIndicator: $<HTMLSpanElement>("dirty-indicator"),
-        });
-        return graphCtrl;
-      });
-    }
-    return graphCtrlPromise;
-  }
-
-  function activateGraph() {
-    void getGraphCtrl().then((ctrl) => requestAnimationFrame(() => ctrl.onTabActivated()));
-  }
-
-  // ─── Контроллер теста агентов (суб-вкладка в студии агентов) ───
-  const agentTestCtrl = new AgentTestController({
-    testFilePath: $<HTMLInputElement>("test-file-path"),
-    btnSelectTestFile: $<HTMLButtonElement>("btn-select-test-file"),
-    testAgentList: $<HTMLDivElement>("test-agent-list"),
-    testModelList: $<HTMLDivElement>("test-model-list"),
-    btnRunTest: $<HTMLButtonElement>("btn-run-test"),
-    testProgress: $<HTMLDivElement>("test-progress"),
-    testStatusLabel: $<HTMLDivElement>("test-status-label"),
-    testProgressBar: $<HTMLDivElement>("test-progress-bar"),
-    testResultsBox: $<HTMLDivElement>("test-results-box"),
-    testResultsContent: $<HTMLDivElement>("test-results-content"),
-    btnSaveTestResults: $<HTMLButtonElement>("btn-save-test-results"),
-    testModeSelect: $<HTMLSelectElement>("test-mode-select"),
-    yamlTestPanel: $<HTMLDivElement>("yaml-test-panel"),
-    pipelineTestPanel: $<HTMLDivElement>("pipeline-test-panel"),
-    pipelineTestList: $<HTMLDivElement>("pipeline-test-list"),
-    pipelineModelList: $<HTMLDivElement>("pipeline-model-list"),
-    btnRunPipelineTest: $<HTMLButtonElement>("btn-run-pipeline-test"),
-    pipelineProgress: $<HTMLDivElement>("pipeline-progress"),
-    pipelineStatusLabel: $<HTMLDivElement>("pipeline-status-label"),
-    pipelineProgressBar: $<HTMLDivElement>("pipeline-progress-bar"),
-    pipelineResultsBox: $<HTMLDivElement>("pipeline-results-box"),
-    pipelineResultsContent: $<HTMLDivElement>("pipeline-results-content"),
-  });
-
-  // ─── Контроллер кодинг-теста LLM (суб-вкладка в студии агентов) ───
-  const codingTestCtrl = new CodingTestController({
-    codingModelList: $<HTMLDivElement>("coding-model-list"),
-    codingSuiteList: $<HTMLDivElement>("coding-suite-list"),
-    codingQuickCount: $<HTMLInputElement>("coding-quick-count"),
-    codingVrBudget: $<HTMLInputElement>("coding-vr-budget"),
-    btnRunCodingTest: $<HTMLButtonElement>("btn-run-coding-test"),
-    btnStopCodingTest: $<HTMLButtonElement>("btn-stop-coding-test"),
-    codingProgress: $<HTMLDivElement>("coding-progress"),
-    codingStatusLabel: $<HTMLDivElement>("coding-status-label"),
-    codingProgressBar: $<HTMLDivElement>("coding-progress-bar"),
-    codingLog: $<HTMLDivElement>("coding-log"),
-    codingResultsBox: $<HTMLDivElement>("coding-results-box"),
-    codingResultsContent: $<HTMLDivElement>("coding-results-content"),
-    codingReportLink: $<HTMLAnchorElement>("coding-report-link"),
-  });
-
-  // ─── Суб-вкладки студии агентов (singleton, активируются вкладкой-разделом) ───
-  const subtabGraph = $<HTMLButtonElement>("subtab-graph");
-  const subtabAiTest = $<HTMLButtonElement>("subtab-ai-test");
-  const subtabCodingTest = $<HTMLButtonElement>("subtab-coding-test");
-  const viewSubGraph = $<HTMLDivElement>("view-sub-graph");
-  const viewSubAiTest = $<HTMLDivElement>("view-sub-ai-test");
-  const viewSubCodingTest = $<HTMLDivElement>("view-sub-coding-test");
-
-  let activeSubTab: 'graph' | 'ai-test' | 'coding-test' = 'graph';
-
-  function switchSubTab(tab: 'graph' | 'ai-test' | 'coding-test') {
-    activeSubTab = tab;
-    subtabGraph.classList.toggle('active', tab === 'graph');
-    subtabAiTest.classList.toggle('active', tab === 'ai-test');
-    subtabCodingTest.classList.toggle('active', tab === 'coding-test');
-    viewSubGraph.classList.toggle('active', tab === 'graph');
-    viewSubAiTest.classList.toggle('active', tab === 'ai-test');
-    viewSubCodingTest.classList.toggle('active', tab === 'coding-test');
-    if (tab === 'graph') activateGraph();
-  }
-
-  subtabGraph?.addEventListener("click", () => switchSubTab('graph'));
-  subtabAiTest?.addEventListener("click", () => { switchSubTab('ai-test'); agentTestCtrl.init(); });
-  subtabCodingTest?.addEventListener("click", () => { switchSubTab('coding-test'); codingTestCtrl.init(); });
-
-  // ─── Контроллер вкладок рабочей области (браузерные вкладки) ───
+  // ─── Вкладки рабочей области (браузерные вкладки) ───
+  // Студия агентов здесь НЕ создаётся: её экземпляр принадлежит вкладке и рождается
+  // в момент открытия раздела. `TabController` получает только фабрику — знание
+  // «как собрать студию» живёт в `controllers/studio-page`, а не в бутстраппере.
+  // Иначе получилось бы ровно то, от чего уходили: один глобальный экземпляр на
+  // приложение, который вторая вкладка делит с первой.
   const tabCtrl = new TabController(
     $<HTMLElement>("workspace-tabs"),
     $<HTMLElement>("workspace-tab-actions"),
     $<HTMLElement>("chat-tab-slot"),
     sharedSampling,
     {
+      createStudioTab: (instanceKey) => createAgentStudioTab(instanceKey, loadGraphController),
       onSectionActivated: (_tab, section) => {
         if (section === "sessions") {
           void sessionCtrl.loadSessionsListUI();
-        }
-        if (section === "agent-studio") {
-          switchSubTab(activeSubTab);
-          if (activeSubTab === 'graph') activateGraph();
         }
       },
     },

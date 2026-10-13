@@ -70,184 +70,8 @@
           </div>
         </div>
 
-        <div id="view-agent-studio" class="view">
-        <div class="sub-tabs">
-          <button id="subtab-graph" class="subtab-btn active">🔀 Граф</button>
-          <button id="subtab-ai-test" class="subtab-btn">🤖 Тест агентов ИИ</button>
-          <button id="subtab-coding-test" class="subtab-btn">💻 Кодинг тест LLM</button>
-        </div>
-
-        <div id="view-sub-graph" class="sub-view active">
-          <div id="graph-toolbar">
-            <button id="btn-open-workflow" class="btn-secondary" style="padding:6px 14px;">📂 Открыть</button>
-            <div class="toolbar-separator"></div>
-            <button id="btn-undo" class="graph-add-btn" disabled title="Отменить (Ctrl+Z)">↩</button>
-            <button id="btn-redo" class="graph-add-btn" disabled title="Повторить (Ctrl+Shift+Z)">↪</button>
-            <div style="flex:1;"></div>
-            <span id="current-workflow-name" style="font-weight:600; color:var(--primary); font-size:13px;">Файл не выбран</span>
-            <details id="graph-yaml-warning" class="graph-yaml-warning" hidden>
-              <summary>YAML повреждён; будет исправлен после Сохранить</summary>
-              <ul id="graph-yaml-warning-list"></ul>
-            </details>
-            <span id="dirty-indicator" style="font-size:16px; line-height:1;"></span>
-            <button id="btn-save-workflow" class="btn-primary" disabled style="padding:6px 16px; margin-left:4px;">💾 Сохранить</button>
-          </div>
-          <div id="graph-layout">
-            <div id="graph-container"></div>
-            <aside id="graph-sidebar">
-              <div class="graph-sidebar-header">
-                <span id="graph-detail-title">Информация</span>
-                <button id="graph-sidebar-close" class="btn-secondary" style="padding:4px 10px;">✕</button>
-              </div>
-              <div id="graph-detail-content">
-                <p class="graph-hint">Откройте workflow-файл для редактирования</p>
-              </div>
-            </aside>
-          </div>
-        </div>
-
-
-
-        <div id="view-sub-ai-test" class="sub-view">
-          <div class="group-box">
-            <div class="group-title">Режим теста</div>
-            <select id="test-mode-select" style="width:100%; padding:6px;">
-              <option value="yaml">YAML тест (input/output сравнение)</option>
-              <option value="pipeline">Pipeline test (fixture-папка, 3-уровневая валидация)</option>
-            </select>
-          </div>
-
-          <!-- YAML test mode -->
-          <div id="yaml-test-panel">
-            <div class="cards-grid">
-            <div class="group-box">
-              <div class="group-title">1. Выберите YAML-файл с тест-кейсами</div>
-              <div class="input-row">
-                <input type="text" id="test-file-path" readonly placeholder="Файл не выбран..." style="flex:1;" />
-                <button id="btn-select-test-file" class="btn-secondary">Выбрать файл</button>
-              </div>
-            </div>
-
-            <div class="group-box">
-              <div class="group-title">2. Выберите агентов для тестирования</div>
-              <div id="test-agent-list" class="test-checklist">
-                <span class="test-hint">Загрузка агентов...</span>
-              </div>
-            </div>
-
-            <div class="group-box">
-              <div class="group-title">3. Выберите модели LLM</div>
-              <div id="test-model-list" class="test-checklist">
-                <span class="test-hint">Загрузка моделей...</span>
-              </div>
-            </div>
-
-            <div class="group-box">
-              <button id="btn-run-test" class="btn-primary" disabled>▶ Запустить тест</button>
-              <div id="test-progress" class="test-progress" style="display:none;">
-                <div class="status-label" id="test-status-label">Подготовка...</div>
-                <div class="progress-bar-container">
-                  <div id="test-progress-bar" class="progress-bar"></div>
-                </div>
-              </div>
-            </div>
-
-            <div class="group-box" id="test-results-box" data-span="full" style="display:none;">
-              <div class="group-title">
-                <span>Результаты</span>
-                <button id="btn-save-test-results" class="btn-secondary" style="padding:4px 10px; font-size:12px;">💾 Сохранить</button>
-              </div>
-              <div id="test-results-content"></div>
-            </div>
-            </div>
-          </div>
-
-          <!-- Pipeline test mode -->
-          <div id="pipeline-test-panel" style="display:none;">
-            <div class="cards-grid">
-            <div class="group-box">
-              <div class="group-title">1. Выберите тест</div>
-              <div id="pipeline-test-list" class="test-checklist">
-                <span class="test-hint">Загрузка тестов...</span>
-              </div>
-            </div>
-
-            <div class="group-box">
-              <div class="group-title">2. Выберите модель LLM</div>
-              <div id="pipeline-model-list" class="test-checklist">
-                <span class="test-hint">Загрузка моделей...</span>
-              </div>
-            </div>
-
-            <div class="group-box">
-              <button id="btn-run-pipeline-test" class="btn-primary" disabled>▶ Запустить тест</button>
-              <div id="pipeline-progress" class="test-progress" style="display:none;">
-                <div class="status-label" id="pipeline-status-label">Подготовка...</div>
-                <div class="progress-bar-container">
-                  <div id="pipeline-progress-bar" class="progress-bar"></div>
-                </div>
-              </div>
-            </div>
-
-            <div class="group-box" id="pipeline-results-box" data-span="full" style="display:none;">
-              <div class="group-title">Результаты</div>
-              <div id="pipeline-results-content"></div>
-            </div>
-            </div>
-          </div>
-        </div>
-
-
-        <div id="view-sub-coding-test" class="sub-view">
-          <div class="cards-grid">
-          <div class="group-box">
-            <div class="group-title">1. Выберите модели LLM (~8B, бюджет VRAM 14 ГБ)</div>
-            <div id="coding-model-list" class="test-checklist">
-              <span class="test-hint">Загрузка моделей...</span>
-            </div>
-          </div>
-
-          <div class="group-box">
-            <div class="group-title">2. Выберите наборы задач</div>
-            <div id="coding-suite-list" class="test-checklist">
-              <span class="test-hint">Загрузка наборов...</span>
-            </div>
-          </div>
-
-          <div class="group-box">
-            <div class="group-title">3. Параметры запуска</div>
-            <div class="input-row">
-              <label class="inline-label">Быстрый режим (задач на набор, 0 = все):
-                <input type="number" id="coding-quick-count" min="0" value="0" style="width:90px;" />
-              </label>
-              <label class="inline-label">Бюджет VRAM (МБ):
-                <input type="number" id="coding-vr-budget" min="1024" step="256" value="14336" style="width:110px;" />
-              </label>
-            </div>
-          </div>
-
-          <div class="group-box">
-            <button id="btn-run-coding-test" class="btn-primary">▶ Запустить бенчмарк</button>
-            <button id="btn-stop-coding-test" class="btn-secondary" disabled style="margin-left:8px;">⏹ Стоп</button>
-            <div id="coding-progress" class="test-progress" style="display:none;">
-              <div class="status-label" id="coding-status-label">Подготовка...</div>
-              <div class="progress-bar-container">
-                <div id="coding-progress-bar" class="progress-bar"></div>
-              </div>
-              <div id="coding-log" class="coding-log"></div>
-            </div>
-          </div>
-
-          <div class="group-box" id="coding-results-box" data-span="full" style="display:none;">
-            <div class="group-title">
-              <span>Результаты бенчмарка</span>
-              <a id="coding-report-link" class="btn-secondary" style="padding:4px 10px; font-size:12px; display:none;" target="_blank">📄 Отчёт</a>
-            </div>
-            <div id="coding-results-content"></div>
-          </div>
-          </div>
-        </div>
-      </div>
+        <!-- Студия агентов создаётся на КАЖДУЮ вкладку из <template id="template-agent-studio">:
+             разметка не статична, иначе все вкладки делили бы один и тот же DOM-узел. -->
 
 <div id="view-settings" class="view" style="overflow-y: auto;">
        <div class="cards-grid">
@@ -489,6 +313,192 @@
   </div>
 
   <div id="toast-container"></div>
+
+  <template id="template-agent-studio">
+        <div class="sub-tabs">
+          <button id="s-{p}-subtab-graph" class="subtab-btn active">🔀 Граф</button>
+          <button id="s-{p}-subtab-ai-test" class="subtab-btn">🤖 Тест агентов ИИ</button>
+          <button id="s-{p}-subtab-coding-test" class="subtab-btn">💻 Кодинг тест LLM</button>
+        </div>
+
+        <div id="s-{p}-view-sub-graph" class="sub-view active">
+          <div id="s-{p}-graph-toolbar" class="graph-toolbar">
+            <button id="s-{p}-btn-open-workflow" class="btn-secondary" style="padding:6px 14px;">📂 Открыть</button>
+            <div class="toolbar-separator"></div>
+            <button id="s-{p}-btn-undo" class="graph-add-btn" disabled title="Отменить (Ctrl+Z)">↩</button>
+            <button id="s-{p}-btn-redo" class="graph-add-btn" disabled title="Повторить (Ctrl+Shift+Z)">↪</button>
+            <div style="flex:1;"></div>
+            <span id="s-{p}-current-workflow-name" style="font-weight:600; color:var(--primary); font-size:13px;">Файл не выбран</span>
+            <details id="s-{p}-graph-yaml-warning" class="graph-yaml-warning" hidden>
+              <summary>YAML повреждён; будет исправлен после Сохранить</summary>
+              <ul id="s-{p}-graph-yaml-warning-list"></ul>
+            </details>
+            <span id="s-{p}-dirty-indicator" style="font-size:16px; line-height:1;"></span>
+            <button id="s-{p}-btn-save-workflow" class="btn-primary" disabled style="padding:6px 16px; margin-left:4px;">💾 Сохранить</button>
+          </div>
+          <div id="s-{p}-graph-layout" class="graph-layout">
+            <!-- Хост холста. Наш оформительский класс живёт на ХОСТЕ, а не на узле,
+                 который отдаётся Drawflow: библиотека опознаёт свой контейнер по
+                 первому классу (`classList[0] === "parent-drawflow"`), и любой наш
+                 класс на этом узле тихо ломает панорамирование (проверено в живом
+                 окне: transform холста не меняется). -->
+            <div class="graph-canvas">
+              <div id="s-{p}-graph-container"></div>
+            </div>
+            <aside id="s-{p}-graph-sidebar" class="graph-sidebar">
+              <div class="graph-sidebar-header">
+                <span id="s-{p}-graph-detail-title" class="graph-detail-title">Информация</span>
+                <button id="s-{p}-graph-sidebar-close" class="btn-secondary" style="padding:4px 10px;">✕</button>
+              </div>
+              <div id="s-{p}-graph-detail-content" class="graph-detail-content">
+                <p class="graph-hint">Откройте workflow-файл для редактирования</p>
+              </div>
+            </aside>
+          </div>
+        </div>
+
+
+
+        <div id="s-{p}-view-sub-ai-test" class="sub-view studio-scroll">
+          <div class="group-box">
+            <div class="group-title">Режим теста</div>
+            <select id="s-{p}-test-mode-select" style="width:100%; padding:6px;">
+              <option value="yaml">YAML тест (input/output сравнение)</option>
+              <option value="pipeline">Pipeline test (fixture-папка, 3-уровневая валидация)</option>
+            </select>
+          </div>
+
+          <!-- YAML test mode -->
+          <div id="s-{p}-yaml-test-panel">
+            <div class="cards-grid">
+            <div class="group-box">
+              <div class="group-title">1. Выберите YAML-файл с тест-кейсами</div>
+              <div class="input-row">
+                <input type="text" id="s-{p}-test-file-path" class="test-file-path" readonly placeholder="Файл не выбран..." style="flex:1;" />
+                <button id="s-{p}-btn-select-test-file" class="btn-secondary">Выбрать файл</button>
+              </div>
+            </div>
+
+            <div class="group-box">
+              <div class="group-title">2. Выберите агентов для тестирования</div>
+              <div id="s-{p}-test-agent-list" class="test-checklist">
+                <span class="test-hint">Загрузка агентов...</span>
+              </div>
+            </div>
+
+            <div class="group-box">
+              <div class="group-title">3. Выберите модели LLM</div>
+              <div id="s-{p}-test-model-list" class="test-checklist">
+                <span class="test-hint">Загрузка моделей...</span>
+              </div>
+            </div>
+
+            <div class="group-box">
+              <button id="s-{p}-btn-run-test" class="btn-primary" disabled>▶ Запустить тест</button>
+              <div id="s-{p}-test-progress" class="test-progress" style="display:none;">
+                <div class="status-label" id="s-{p}-test-status-label">Подготовка...</div>
+                <div class="progress-bar-container">
+                  <div id="s-{p}-test-progress-bar" class="progress-bar"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="group-box" id="s-{p}-test-results-box" data-span="full" style="display:none;">
+              <div class="group-title">
+                <span>Результаты</span>
+                <button id="s-{p}-btn-save-test-results" class="btn-secondary" style="padding:4px 10px; font-size:12px;">💾 Сохранить</button>
+              </div>
+              <div id="s-{p}-test-results-content" class="test-results-content"></div>
+            </div>
+            </div>
+          </div>
+
+          <!-- Pipeline test mode -->
+          <div id="s-{p}-pipeline-test-panel" style="display:none;">
+            <div class="cards-grid">
+            <div class="group-box">
+              <div class="group-title">1. Выберите тест</div>
+              <div id="s-{p}-pipeline-test-list" class="test-checklist">
+                <span class="test-hint">Загрузка тестов...</span>
+              </div>
+            </div>
+
+            <div class="group-box">
+              <div class="group-title">2. Выберите модель LLM</div>
+              <div id="s-{p}-pipeline-model-list" class="test-checklist">
+                <span class="test-hint">Загрузка моделей...</span>
+              </div>
+            </div>
+
+            <div class="group-box">
+              <button id="s-{p}-btn-run-pipeline-test" class="btn-primary" disabled>▶ Запустить тест</button>
+              <div id="s-{p}-pipeline-progress" class="test-progress" style="display:none;">
+                <div class="status-label" id="s-{p}-pipeline-status-label">Подготовка...</div>
+                <div class="progress-bar-container">
+                  <div id="s-{p}-pipeline-progress-bar" class="progress-bar"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="group-box" id="s-{p}-pipeline-results-box" data-span="full" style="display:none;">
+              <div class="group-title">Результаты</div>
+              <div id="s-{p}-pipeline-results-content"></div>
+            </div>
+            </div>
+          </div>
+        </div>
+
+
+        <div id="s-{p}-view-sub-coding-test" class="sub-view studio-scroll">
+          <div class="cards-grid">
+          <div class="group-box">
+            <div class="group-title">1. Выберите модели LLM (~8B, бюджет VRAM 14 ГБ)</div>
+            <div id="s-{p}-coding-model-list" class="test-checklist">
+              <span class="test-hint">Загрузка моделей...</span>
+            </div>
+          </div>
+
+          <div class="group-box">
+            <div class="group-title">2. Выберите наборы задач</div>
+            <div id="s-{p}-coding-suite-list" class="test-checklist">
+              <span class="test-hint">Загрузка наборов...</span>
+            </div>
+          </div>
+
+          <div class="group-box">
+            <div class="group-title">3. Параметры запуска</div>
+            <div class="input-row">
+              <label class="inline-label">Быстрый режим (задач на набор, 0 = все):
+                <input type="number" id="s-{p}-coding-quick-count" min="0" value="0" style="width:90px;" />
+              </label>
+              <label class="inline-label">Бюджет VRAM (МБ):
+                <input type="number" id="s-{p}-coding-vr-budget" min="1024" step="256" value="14336" style="width:110px;" />
+              </label>
+            </div>
+          </div>
+
+          <div class="group-box">
+            <button id="s-{p}-btn-run-coding-test" class="btn-primary">▶ Запустить бенчмарк</button>
+            <button id="s-{p}-btn-stop-coding-test" class="btn-secondary" disabled style="margin-left:8px;">⏹ Стоп</button>
+            <div id="s-{p}-coding-progress" class="test-progress" style="display:none;">
+              <div class="status-label" id="s-{p}-coding-status-label">Подготовка...</div>
+              <div class="progress-bar-container">
+                <div id="s-{p}-coding-progress-bar" class="progress-bar"></div>
+              </div>
+              <div id="s-{p}-coding-log" class="coding-log"></div>
+            </div>
+          </div>
+
+          <div class="group-box" id="s-{p}-coding-results-box" data-span="full" style="display:none;">
+            <div class="group-title">
+              <span>Результаты бенчмарка</span>
+              <a id="s-{p}-coding-report-link" class="btn-secondary" style="padding:4px 10px; font-size:12px; display:none;" target="_blank">📄 Отчёт</a>
+            </div>
+            <div id="s-{p}-coding-results-content"></div>
+          </div>
+          </div>
+        </div>
+  </template>
 
   <template id="template-settings-lazy-panels">
     <div class="group-box">

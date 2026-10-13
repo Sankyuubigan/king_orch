@@ -1,5 +1,5 @@
 name: ПсихТер 2.0
-
+visible: false
 config:
   facts_file: facts.yaml
   default_llm_params: creative
@@ -7,357 +7,355 @@ config:
 entry: user_message
 
 nodes:
+  - id: user_message
+    type: user_message
+    ui_pos:
+      x: -2274
+      y: 493
 
-- id: user_message
-  type: user_message
-  ui_pos:
-    x: -2274
-    y: 493
+  - id: extract_facts
+    type: llm_fact_extractor
+    input: "{{ nodes.user_message.output.text }}"
+    ui_pos:
+      x: -1990
+      y: 493
+    llm_params: strict
 
-- id: extract_facts
-  type: llm_fact_extractor
-  input: '{{ nodes.user_message.output.text }}'
-  ui_pos:
-    x: -1990
-    y: 493
-  llm_params: strict
+  - id: check_has_problem
+    type: condition_check
+    input_object: "{{ nodes.extract_facts.output }}"
+    field: has_problem
+    true_to: note_1782221436115
+    false_to: note_1785141025138
+    ui_pos:
+      x: -1700
+      y: 495
 
-- id: check_has_problem
-  type: condition_check
-  input_object: '{{ nodes.extract_facts.output }}'
-  field: has_problem
-  true_to: note_1782221436115
-  false_to: note_1785141025138
-  ui_pos:
-    x: -1700
-    y: 495
+  - id: call_collector
+    type: llm_worker
+    agent: data_collector
+    output_type: message
+    inject_response:
+      - validator
+      - decomposer
+    ui_pos:
+      y: -353
+      x: 3393
 
-- id: call_collector
-  type: llm_worker
-  agent: data_collector
-  output_type: message
-  inject_response:
-  - validator
-  - decomposer
-  ui_pos:
-    y: -353
-    x: 3393
+  - id: call_soma_translator
+    type: llm_worker
+    agent: soma_translator
+    task: Пользователь описал боль. Дай ему расшифровку по НГМ.
+    ui_pos:
+      y: 210
+      x: -561
+    llm_params: strict
 
-- id: call_soma_translator
-  type: llm_worker
-  agent: soma_translator
-  task: Пользователь описал боль. Дай ему расшифровку по НГМ.
-  ui_pos:
-    y: 210
-    x: -561
-  llm_params: strict
+  - id: call_decomposer
+    type: llm_worker
+    agent: decomposer
+    output_type: message
+    inject_thoughts:
+      - soma_translator
+    ui_pos:
+      y: 506
+      x: 989
 
-- id: call_decomposer
-  type: llm_worker
-  agent: decomposer
-  output_type: message
-  inject_thoughts:
-  - soma_translator
-  ui_pos:
-    y: 506
-    x: 989
+  - id: call_fact_consolidator
+    type: llm_worker
+    agent: fact_consolidator
+    inject_response:
+      - decomposer
+      - shadow_worker
+      - grounder
+      - data_collector
+    ui_pos:
+      y: 155
+      x: 1360
+    llm_params: strict
 
-- id: call_fact_consolidator
-  type: llm_worker
-  agent: fact_consolidator
-  inject_response:
-  - decomposer
-  - shadow_worker
-  - grounder
-  - data_collector
-  ui_pos:
-    y: 155
-    x: 1360
-  llm_params: strict
+  - id: validate_system1
+    type: system1_validator
+    input: "{{ nodes.call_fact_consolidator.output.result }}"
+    agent: validator
+    output_type: thought
+    ui_pos:
+      x: 1601
+      y: 166
+    rules_file: psychotherapist/database/element_validation_rules_system1.yaml
 
-- id: validate_system1
-  type: system1_validator
-  input: '{{ nodes.call_fact_consolidator.output.result }}'
-  agent: validator
-  output_type: thought
-  ui_pos:
-    x: 1601
-    y: 166
-  rules_file: psychotherapist/database/element_validation_rules_system1.yaml
+  - id: call_grounder
+    type: llm_worker
+    agent: grounder
+    task: Проанализируй отчёты коллег и жалобу пользователя. Выдай несколько конкретных, приземлённых бытовых сценариев возможных МЕНТАЛЬНЫХ причин проблемы (6-й элемент невроза, а не соматика). Если данных не хватает — задай пользователю уточняющие вопросы.
+    output_type: message
+    inject_thoughts:
+      - soma_translator
+    inject_response:
+      - validator
+      - decomposer
+      - data_collector
+    ui_pos:
+      y: -457
+      x: 3051
 
-- id: call_grounder
-  type: llm_worker
-  agent: grounder
-  task: Проанализируй отчёты коллег и жалобу пользователя. Выдай несколько конкретных, приземлённых бытовых сценариев возможных МЕНТАЛЬНЫХ причин проблемы (6-й элемент невроза, а не соматика). Если данных не хватает — задай пользователю уточняющие вопросы.
-  output_type: message
-  inject_thoughts:
-  - soma_translator
-  inject_response:
-  - validator
-  - decomposer
-  - data_collector
-  ui_pos:
-    y: -457
-    x: 3051
+  - id: call_focus_keeper
+    type: llm_worker
+    agent: focus_keeper
+    inject_thoughts:
+      - soma_translator
+    inject_response:
+      - decomposer
+    ui_pos:
+      y: 330
+      x: 51
+    llm_params: strict
 
-- id: call_focus_keeper
-  type: llm_worker
-  agent: focus_keeper
-  inject_thoughts:
-  - soma_translator
-  inject_response:
-  - decomposer
-  ui_pos:
-    y: 330
-    x: 51
-  llm_params: strict
+  - id: check_focus_keeper_signal
+    type: signal_router
+    signal_name: focus_keeper
+    cases_priority:
+      - key: Конкретная проблема
+        to: note_1782220193985
+      - key: Кластер
+        to: call_decomposer
+      - key: НУЖЕН ВЫБОР МИШЕНИ
+        to: note_ask_target
+    ui_pos:
+      y: 287
+      x: 567
 
-- id: check_focus_keeper_signal
-  type: signal_router
-  signal_name: focus_keeper
-  cases_priority:
-  - key: Конкретная проблема
-    to: note_1782220193985
-  - key: Кластер
-    to: call_decomposer
-  - key: НУЖЕН ВЫБОР МИШЕНИ
-    to: note_ask_target
-  ui_pos:
-    y: 287
-    x: 567
+  - id: note_ask_target
+    type: note
+    input: переспрашиваем юзера, с какой мишенью работаем
+    system_message: "Специалист уже выделил мишени для работы (список выше в чате). Чтобы двигаться дальше, нам нужно определиться, с какой именно мишенью работаем. \nПожалуйста, напишите номер или название мишени, с которой хотите работать."
+    ui_pos:
+      x: 974
+      y: 708
 
-- id: note_ask_target
-  type: note
-  input: переспрашиваем юзера, с какой мишенью работаем
-  system_message: "Специалист уже выделил мишени для работы (список выше в чате). Чтобы двигаться дальше, нам нужно определиться, с какой именно мишенью работаем. \nПожалуйста, напишите номер или название мишени, с которой хотите работать."
-  ui_pos:
-    x: 974
-    y: 708
+  - id: call_pattern_finder
+    type: llm_worker
+    agent: pattern_finder_by_elements
+    inject_response:
+      - decomposer
+      - shadow_worker
+      - grounder
+      - data_collector
+    ui_pos:
+      x: 3044
+      y: 38
 
-- id: call_pattern_finder
-  type: llm_worker
-  agent: pattern_finder_by_elements
-  inject_response:
-  - decomposer
-  - shadow_worker
-  - grounder
-  - data_collector
-  ui_pos:
-    x: 3044
-    y: 38
+  - id: call_healer
+    type: llm_worker
+    agent: neuro_healer
+    task: |
+      Из отчёта pattern_finder_by_elements возьми номер типа паттерна.
+      Затем выполни ШАГ 2 — прочитай описание этого паттерна в базе знаний инструментом ReadSection.
+      После этого переведи паттерн на контекст проблемы пользователя.
+    output_type: message
+    inject_response:
+      - pattern_finder_by_elements
+      - synthesizer
+      - decomposer
+      - shadow_worker
+      - grounder
+      - data_collector
+    ui_pos:
+      x: 3678
+      y: -11
 
-- id: call_healer
-  type: llm_worker
-  agent: neuro_healer
-  task: |
-    Из отчёта pattern_finder_by_elements возьми номер типа паттерна.
-    Затем выполни ШАГ 2 — прочитай описание этого паттерна в базе знаний инструментом ReadSection.
-    После этого переведи паттерн на контекст проблемы пользователя.
-  output_type: message
-  inject_response:
-  - pattern_finder_by_elements
-  - synthesizer
-  - decomposer
-  - shadow_worker
-  - grounder
-  - data_collector
-  ui_pos:
-    x: 3678
-    y: -11
+  - id: call_shadow_worker
+    type: llm_worker
+    agent: shadow_worker
+    output_type: message
+    inject_thoughts:
+      - soma_translator
+    inject_response:
+      - validator
+      - decomposer
+      - data_collector
+      - grounder
+    ui_pos:
+      y: -462
+      x: 2469
 
-- id: call_shadow_worker
-  type: llm_worker
-  agent: shadow_worker
-  output_type: message
-  inject_thoughts:
-  - soma_translator
-  inject_response:
-  - validator
-  - decomposer
-  - data_collector
-  - grounder
-  ui_pos:
-    y: -462
-    x: 2469
+  - id: note_1782221436115
+    type: note
+    input: пересчитываем данные с учетом новых данных от юзера
+    ui_pos:
+      y: 255
+      x: -1215
 
-- id: note_1782221436115
-  type: note
-  input: пересчитываем данные с учетом новых данных от юзера
-  ui_pos:
-    y: 255
-    x: -1215
+  - id: note_1782220193985
+    type: note
+    input: проверка данных. развилка на доработку данных или отправку на лечение
+    ui_pos:
+      y: 125
+      x: 894
 
-- id: note_1782220193985
-  type: note
-  input: проверка данных. развилка на доработку данных или отправку на лечение
-  ui_pos:
-    y: 125
-    x: 894
+  - id: note_1784427848563
+    type: note
+    input: вычисление типа
+    ui_pos:
+      x: 2295
+      y: 35
 
-- id: note_1784427848563
-  type: note
-  input: вычисление типа
-  ui_pos:
-    x: 2295
-    y: 35
-
-- id: check_critical_elements
-  type: condition_router
-  true_to: check_elements1
-  false_to: note_1784427848563
-  conditions:
-  - field: validator_report.e3
-    equals: false
-  - field: validator_report.e6
-    equals: false
-  - field: validator_report.e8
-    equals: false
-  - field: validator_report.e9
-    equals: false
-  logic: any
-  ui_pos:
-    y: 75
-    x: 1865
-
-- id: check_somatic
-  type: condition_router
-  sequential_to: call_focus_keeper
-  true_to: call_soma_translator
-  conditions:
-  - field: somatic_presence
-    equals: new
-  - logic: all
+  - id: check_critical_elements
+    type: condition_router
+    true_to: check_elements1
+    false_to: note_1784427848563
     conditions:
-    - field: somatic_presence
-      equals: history
-    - field: reports.soma_translator
-      equals: false
-  logic: any
-  ui_pos:
-    y: 218
-    x: -802
+      - field: validator_report.e3
+        equals: false
+      - field: validator_report.e6
+        equals: false
+      - field: validator_report.e8
+        equals: false
+      - field: validator_report.e9
+        equals: false
+    logic: any
+    ui_pos:
+      y: 75
+      x: 1865
 
-- id: check_need_handedness
-  type: signal_router
-  signal_name: soma_translator
-  cases_priority:
-  - key: НУЖНА РУКОСТЬ
-    to: note_1785123862689
-  ui_pos:
-    y: 117
-    x: -332
+  - id: check_somatic
+    type: condition_router
+    sequential_to: call_focus_keeper
+    true_to: call_soma_translator
+    conditions:
+      - field: somatic_presence
+        equals: new
+      - logic: all
+        conditions:
+          - field: somatic_presence
+            equals: history
+          - field: reports.soma_translator
+            equals: false
+    logic: any
+    ui_pos:
+      y: 218
+      x: -802
 
-- id: note_1785123862689
-  type: note
-  input: уточнение рукости у юзера
-  system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
-  ui_pos:
-    y: 10
-    x: -57
+  - id: check_need_handedness
+    type: signal_router
+    signal_name: soma_translator
+    cases_priority:
+      - key: НУЖНА РУКОСТЬ
+        to: note_1785123862689
+    ui_pos:
+      y: 117
+      x: -332
 
-- id: note_1785141025138
-  type: note
-  input: Объясняем юзеру правила составления запроса
-  system_message: |-
-    Психотерапевт может решать любые жизненные проблемы внутренние и помогать достигать целей. Всё что Вам необходимо сделать - это правильно объяснить свою проблему в чат.
+  - id: note_1785123862689
+    type: note
+    input: уточнение рукости у юзера
+    system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
+    ui_pos:
+      y: 10
+      x: -57
 
-    некоторые примеры внутренних проблем:
-    - проблемы со здоровьем тела
-    - абсурдный внутренний блок на пути к своей цели.
-    - финансовые блоки
-    - проблемы в отношениях с людьми
-    - депрессии, вспышки ярости и т.п.
-    Если у вас есть сопротивление к работе над собой, то вы можете описать это сопротивление.
+  - id: note_1785141025138
+    type: note
+    input: Объясняем юзеру правила составления запроса
+    system_message: |-
+      Психотерапевт может решать любые жизненные проблемы внутренние и помогать достигать целей. Всё что Вам необходимо сделать - это правильно объяснить свою проблему в чат.
 
-    В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
-  ui_pos:
-    x: -1323
-    y: 748
+      некоторые примеры внутренних проблем:
+      - проблемы со здоровьем тела
+      - абсурдный внутренний блок на пути к своей цели.
+      - финансовые блоки
+      - проблемы в отношениях с людьми
+      - депрессии, вспышки ярости и т.п.
+      Если у вас есть сопротивление к работе над собой, то вы можете описать это сопротивление.
 
-- id: call_request_helper
-  type: llm_worker
-  agent: request_helper
-  output_type: message
-  ui_pos:
-    x: -808
-    y: 864
+      В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
+    ui_pos:
+      x: -1323
+      y: 748
 
-- id: check_elements1
-  type: condition_router
-  true_to: call_shadow_worker
-  false_to: check_elements2
-  conditions:
-  - field: validator_report.e1
-    equals: true
-  - field: validator_report.e2
-    equals: true
-  - field: validator_report.e5
-    equals: true
-  - field: validator_report.e6
-    equals: true
-  - field: validator_report.e7
-    equals: true
-  logic: all
-  ui_pos:
-    x: 2177
-    y: -289
+  - id: call_request_helper
+    type: llm_worker
+    agent: request_helper
+    output_type: message
+    ui_pos:
+      x: -808
+      y: 864
 
-- id: check_elements2
-  type: condition_router
-  true_to: call_grounder
-  false_to: call_collector
-  conditions:
-  - field: reports.soma_translator
-    equals: true
-  - field: validator_report.e6
-    equals: false
-  logic: all
-  ui_pos:
-    x: 2727
-    y: -308
+  - id: check_elements1
+    type: condition_router
+    true_to: call_shadow_worker
+    false_to: check_elements2
+    conditions:
+      - field: validator_report.e1
+        equals: true
+      - field: validator_report.e2
+        equals: true
+      - field: validator_report.e5
+        equals: true
+      - field: validator_report.e6
+        equals: true
+      - field: validator_report.e7
+        equals: true
+    logic: all
+    ui_pos:
+      x: 2177
+      y: -289
 
-- id: check_mental_presence
-  type: condition_router
-  true_to: check_critical_elements
-  false_to: call_fact_consolidator
-  conditions:
-  - field: mental_presence
-    equals: none
-  ui_pos:
-    x: 1068
-    y: -156
+  - id: check_elements2
+    type: condition_router
+    true_to: call_grounder
+    false_to: call_collector
+    conditions:
+      - field: reports.soma_translator
+        equals: true
+      - field: validator_report.e6
+        equals: false
+    logic: all
+    ui_pos:
+      x: 2727
+      y: -308
+
+  - id: check_mental_presence
+    type: condition_router
+    true_to: check_critical_elements
+    false_to: call_fact_consolidator
+    conditions:
+      - field: mental_presence
+        equals: none
+    ui_pos:
+      x: 1068
+      y: -156
 
 edges:
+  - from: user_message
+    to: extract_facts
 
-- from: user_message
-  to: extract_facts
+  - from: extract_facts
+    to: check_has_problem
 
-- from: extract_facts
-  to: check_has_problem
+  - from: call_fact_consolidator
+    to: validate_system1
 
-- from: call_fact_consolidator
-  to: validate_system1
+  - from: call_focus_keeper
+    to: check_focus_keeper_signal
 
-- from: call_focus_keeper
-  to: check_focus_keeper_signal
+  - from: note_1784427848563
+    to: call_pattern_finder
 
-- from: note_1784427848563
-  to: call_pattern_finder
+  - from: call_pattern_finder
+    to: call_healer
 
-- from: call_pattern_finder
-  to: call_healer
+  - from: validate_system1
+    to: check_critical_elements
 
-- from: validate_system1
-  to: check_critical_elements
+  - from: note_1782221436115
+    to: check_somatic
 
-- from: note_1782221436115
-  to: check_somatic
+  - from: call_soma_translator
+    to: check_need_handedness
 
-- from: call_soma_translator
-  to: check_need_handedness
+  - from: note_1785141025138
+    to: call_request_helper
 
-- from: note_1785141025138
-  to: call_request_helper
-
-- from: note_1782220193985
-  to: check_mental_presence
+  - from: note_1782220193985
+    to: check_mental_presence

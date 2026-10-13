@@ -56,6 +56,15 @@ export interface AgentEntry {
     rel_path: string;
     /** `graph` — узел workflow-графа, `agent` — самостоятельный legacy-агент. */
     role: 'graph' | 'agent';
+    /**
+     * Решение АВТОРА агента: предлагать ли его в каталоге «Доступные агенты».
+     *
+     * Источник — `visible` из frontmatter `.md` или из корня YAML-графа. Опционально
+     * сознательно: отсутствие поля = виден (дефолт backend'а), а ручные литералы
+     * `AgentEntry` в тестах и старых моках не обязаны знать про это поле.
+     * Единственное место, где флаг превращается в решение о показе, — `utils/agent-visibility.ts`.
+     */
+    visible?: boolean;
 }
 
 export interface ChatResponse {
