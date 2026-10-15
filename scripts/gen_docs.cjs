@@ -106,31 +106,49 @@ function buildToolCatalog() {
     }
   }
   md += "\n## Внешние бинарные инструменты (вызываются через `bash`)\n\n";
-  // Не MCP-серверы и не код-тулы: готовые бинарники, которые лежат в проекте и
-  // запускаются агентом напрямую. Источник — папка `src-tauri/bin/`, потому что
-  // `find_or_download_runtime` (infra/bin_downloader.rs) уже ищет рантаймы именно
-  // там, и заводить второе место для бинарей незачем.
+  // Инструменты, которые лежат НЕ в этом репозитории, а в своём собственном
+  // (`my-tauri-plugins`), и зовутся агентом напрямую через `bash`.
   //
-  // Скачанные рантаймы отделяются по соглашению об имени `{имя}-{TARGET}.exe`,
-  // которое строит сам `find_or_download_runtime`: это не инструменты агента, а
-  // исполняемые среды, и агент зовёт их только через MCP-серверы.
+  // Почему не сканируется `src-tauri/bin/`: там лежат скачанные рантаймы
+  // (deno, node, yt-dlp) с соглашением об имени `{имя}-{TARGET}.exe` — их
+  // агент напрямую не зовёт, они нужны только MCP-серверам. А держать ещё и
+  // копию `agent-tools.exe` здесь означало бы две копии одного бинаря: одна
+  // протухнет, и каталог будет вр��ть.
+  //
+  // Список — единственное место, где эти инструменты объявлены. Наличие бинаря
+  // проверяется по-настоящему: отсутствие пишется прямо, а не молча пропускается.
+  const EXTERNAL_TOOLS = [
+    {
+      name: "agent-tools",
+      repo: "D:\\Projects\\my-tauri-plugins",
+      relative: "bin\\agent-tools.exe",
+      purpose: "Карта репозитория под бюджет токенов (AST → граф → сжатый текст)",
+    },
+  ];
+  for (const tool of EXTERNAL_TOOLS) {
+    const full = path.join(tool.repo, tool.relative);
+    const exe = tool.relative.replace(/^.*\\/, "");
+    const ready = fs.existsSync(full);
+    md += `- \`${tool.name}\` [${ready ? "на месте" : "ОТСУТСТВУЕТ"}] — ${tool.purpose}. `
+      + `Путь: \`${full}\`. Запуск из корня проекта: \`${full} codemap map --path . --tokens 2048\`. `
+      + (ready
+        ? `Команды — в \`my-tauri-plugins/agent-tools/README.md\`.`
+        : `Собрать: \`scripts\\\\build_binaries.cmd\` в \`${tool.repo}\`.`);
+    md += "\n";
+  }
+  md += "\n## Скачанные рантаймы (агент напрямую их не зовёт)\n\n";
   const binDir = path.join(ROOT, "src-tauri", "bin");
   const targetSuffix = /-x86_64-pc-windows-msvc$/i;
-  const binaries = fs.existsSync(binDir)
-    ? fs.readdirSync(binDir).filter((f) => f.toLowerCase().endsWith(".exe")).sort()
+  const runtimes = fs.existsSync(binDir)
+    ? fs.readdirSync(binDir)
+        .filter((f) => f.toLowerCase().endsWith(".exe") && targetSuffix.test(path.basename(f, ".exe")))
+        .sort()
     : [];
-  const tools = binaries.filter((f) => !targetSuffix.test(path.basename(f, ".exe")));
-  const runtimes = binaries.length - tools.length;
-  if (tools.length === 0) {
-    md += "_Бинарные инструменты не найдены._\n";
+  if (runtimes.length === 0) {
+    md += "_Скачанных рантаймов нет — они подтягиваются при первом запуске._\n";
   } else {
-    for (const b of tools) {
-      md += `- \`${path.basename(b, ".exe")}\` — бинарь в \`src-tauri/bin/\`; `
-        + `запуск из корня проекта: \`src-tauri\\bin\\${b}\`. `
-        + `Команды и ограничения — в документации инструмента.\n`;
-    }
+    for (const b of runtimes) md += `- \`${b}\` — исполняемая среда для MCP-серверов.\n`;
   }
-  md += `\n_Скачанных рантаймов в той же папке (агент напрямую их не зовёт): ${runtimes}._\n`;
   md += "\n## MCP-серверы (Deno, src-tauri/mcp_servers/)\n\n";
   const servers = walk(MCP_DIR, ".ts").map((f) => path.basename(f, ".ts")).sort();
   if (servers.length === 0) {

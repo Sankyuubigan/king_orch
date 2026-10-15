@@ -27,10 +27,13 @@
 
 ## Внешние бинарные инструменты (вызываются через `bash`)
 
-- `agent-tools` — бинарь в `src-tauri/bin/`; запуск из корня проекта: `src-tauri\bin\agent-tools.exe`. Команды и ограничения — в документации инструмента.
-- `yt-dlp` — бинарь в `src-tauri/bin/`; запуск из корня проекта: `src-tauri\bin\yt-dlp.exe`. Команды и ограничения — в документации инструмента.
+- `agent-tools` [на месте] — Карта репозитория под бюджет токенов (AST → граф → сжатый текст). Путь: `D:\Projects\my-tauri-plugins\bin\agent-tools.exe`. Запуск из корня проекта: `D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap map --path . --tokens 2048`. Команды — в `my-tauri-plugins/agent-tools/README.md`.
 
-_Скачанных рантаймов в той же папке (агент напрямую их не зовёт): 3._
+## Скачанные рантаймы (агент напрямую их не зовёт)
+
+- `deno-x86_64-pc-windows-msvc.exe` — исполняемая среда для MCP-серверов.
+- `node-x86_64-pc-windows-msvc.exe` — исполняемая среда для MCP-серверов.
+- `yt-dlp-x86_64-pc-windows-msvc.exe` — исполняемая среда для MCP-серверов.
 
 ## MCP-серверы (Deno, src-tauri/mcp_servers/)
 
