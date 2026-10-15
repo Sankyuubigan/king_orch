@@ -251,12 +251,6 @@ fn deno_permissions(mcp_name: &str, bins_dir: &Path) -> Vec<String> {
             "--allow-write".to_string(),
             "--allow-env".to_string(),
         ],
-        // AST-карта: чтение проекта, запись .agents_workspace, сеть (npm-пакеты, токенизатор)
-        "ast_treesitter" => vec![
-            "--allow-read".to_string(),
-            "--allow-write".to_string(),
-            "--allow-net".to_string(),
-        ],
         // deno_runner: запуск подпроцессов + чтение/запись в sandbox-директории
         // (ребёнок получает строгие --allow-read=<sandbox> + --allow-write=<sandbox> из TS-кода)
         "deno_runner" => vec![

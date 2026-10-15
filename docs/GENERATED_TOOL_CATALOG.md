@@ -25,11 +25,17 @@
 - `lsp_get_references` [read-only] — Найти все ссылки/использования символа по позиции в файле через LSP-сервер (rust-analyzer). path — файл; line/character — позиция (0-based); include_declaration — включать ли объявление (по умолчанию true). Возвращает список локаций. Требует установленного rust-analyzer. Read-only.
 - `lsp_get_diagnostics` [read-only] — Получить диагностику (ошибки, предупреждения) для файла через LSP-сервер (rust-analyzer). path — файл. Возвращает список [SEVERITY] строка:колонка сообщение. Требует установленного rust-analyzer. Read-only.
 
+## Внешние бинарные инструменты (вызываются через `bash`)
+
+- `agent-tools` — бинарь в `src-tauri/bin/`; запуск из корня проекта: `src-tauri\bin\agent-tools.exe`. Команды и ограничения — в документации инструмента.
+- `yt-dlp` — бинарь в `src-tauri/bin/`; запуск из корня проекта: `src-tauri\bin\yt-dlp.exe`. Команды и ограничения — в документации инструмента.
+
+_Скачанных рантаймов в той же папке (агент напрямую их не зовёт): 3._
+
 ## MCP-серверы (Deno, src-tauri/mcp_servers/)
 
 - **academic_search** — инструменты: `AcademicSearch`, `academic-search-mcp`
 - **ast_analyzer** — инструменты: `analyze_file`, `ast-analyzer-mcp`, `search_code`, `trace_function`
-- **ast_treesitter** — инструменты: `ast-map-mcp`, `generate_and_save_ast`
 - **browser** — инструменты: `BrowserDownload`, `BrowserFetch`, `BrowserSearch`, `BrowserSession`, `browser`
 - **deno_runner** — инструменты: `deno-runner-mcp`, `run_sandbox`
 - **docs_fetcher** — инструменты: `FetchArticle`, `FetchGithubReadme`, `WebFetch`, `WebFetchBatch`, `docs-fetcher-mcp`
