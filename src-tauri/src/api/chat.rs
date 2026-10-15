@@ -373,11 +373,8 @@ pub async fn chat_request(
         );
     };
 
-    let bins_dir = crate::infra::bin_downloader::get_bins_dir(
-        &app.path()
-            .app_data_dir()
-            .unwrap_or_else(|_| std::path::PathBuf::from(".")),
-    );
+    let bins_dir =
+        crate::infra::bin_downloader::get_bins_dir(&crate::infra::storage::app_data_root());
     let log_cb_for_result = log_cb.clone();
     // Prompt-log: снимок точного входа модели (правило «модель видит только записанное»).
     // Путь best-effort по timestamp; если директория недоступна — лог просто не пишется.
@@ -385,10 +382,10 @@ pub async fn chat_request(
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
-    let prompt_log = app.path().app_data_dir().ok().map(|d| {
-        d.join("prompt_logs")
-            .join(format!("{}_{}.prompt_log.jsonl", agent_id, prompt_log_ts))
-    });
+    let prompt_log = Some(crate::infra::storage::app_data_root().join("prompt_logs").join(format!(
+        "{}_{}.prompt_log.jsonl",
+        agent_id, prompt_log_ts
+    )));
 
     if is_cloud {
         log_cb(format!(

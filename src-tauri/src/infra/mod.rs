@@ -12,6 +12,7 @@ pub mod data_dir;
 pub mod llm_backend;
 pub mod event_bus;
 pub mod session_manager;
+pub mod storage;
 pub mod mcp_client;
 pub mod plugins;
 pub mod bin_downloader;

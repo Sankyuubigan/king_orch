@@ -64,9 +64,8 @@ pub async fn run_iterative_test(
     let mut results = Vec::new();
     let agents_dir = infra::find_agents_dir(&app);
     let mcp_servers_dir = infra::find_mcp_servers_dir(&app);
-    let bins_dir = infra::bin_downloader::get_bins_dir(
-        &app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-    );
+    let bins_dir =
+        infra::bin_downloader::get_bins_dir(&crate::infra::storage::app_data_root());
     let agents = domain::load_agents(&agents_dir)?;
     let agent = agents
         .iter()

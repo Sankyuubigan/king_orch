@@ -33,7 +33,14 @@ pub fn save_session(
             }
         })
         .unwrap_or_else(|| "Новая сессия".to_string());
-    infra::save_session(&app, &id, &title, messages, draft, model, agent)
+    // Отказ сохранения обязан быть виден в логе: фронтенд этот Err может
+    // проглотить (core rules §2.2 — запрет молчаливых ошибок).
+    let result = infra::save_session(&app, &id, &title, messages, draft, model, agent);
+    if let Err(reason) = &result {
+        let path = infra::session_manager::sessions_dir(&app).join(format!("{}.json", id));
+        log::error!("save_session: НЕ СОХРАНЕНО — {} ({})", path.display(), reason);
+    }
+    result
 }
 
 #[tauri::command]

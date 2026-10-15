@@ -204,10 +204,16 @@ impl Default for AppConfig {
     }
 }
 
-pub fn get_config_path(app: &AppHandle) -> PathBuf {
-    let base = app.path().app_data_dir().unwrap_or_else(|_| PathBuf::from("."));
-    if !base.exists() {
-        let _ = fs::create_dir_all(&base);
+pub fn get_config_path(_app: &AppHandle) -> PathBuf {
+    let base = crate::infra::storage::app_data_root();
+    // Корень уже пробирован настоящей пробой, поэтому недоступность здесь —
+    // уже не молчание: причина написана в лог при выборе корня.
+    if let Err(e) = fs::create_dir_all(&base) {
+        log::error!(
+            "get_config_path: каталог данных {} недоступен ({}). Конфиг не будет сохранён.",
+            base.display(),
+            e
+        );
     }
     base.join("app_config.json")
 }
@@ -229,26 +235,42 @@ pub fn app_data_dir_early() -> PathBuf {
 }
 
 /// Читает конфиг ДО создания Tauri-приложения (main.rs: решение о телеметрии
-/// принимается до регистрации плагина). Если файл не читается — default
-/// (анонимные отчёты включены).
+/// принимается до регистрации плагина). Если файла нет — default (анонимные
+/// отчёты включены).
+///
+/// Чтение идёт через `ko-json-store`, а не `fs::read_to_string`: если запись
+/// оборвалась на середине, значение лежит в журнале, и прямой `fs` его не видит
+/// — пользователь получил бы настройки по умолчанию вместо своих.
 pub fn load_config_early() -> AppConfig {
-    let path = app_data_dir_early().join("app_config.json");
-    if let Ok(data) = fs::read_to_string(path) {
-        let mut cfg: AppConfig = serde_json::from_str(&data).unwrap_or_default();
-        sanitize_retired_fields(&mut cfg);
-        cfg
-    } else {
-        AppConfig::default()
-    }
+    parse_config(ko_json_store::read_text(&app_data_dir_early().join("app_config.json")))
 }
 
 pub fn load_config(app: &AppHandle) -> AppConfig {
-    if let Ok(data) = fs::read_to_string(get_config_path(app)) {
-        let mut cfg: AppConfig = serde_json::from_str(&data).unwrap_or_default();
-        sanitize_retired_fields(&mut cfg);
-        cfg
-    } else {
-        AppConfig::default()
+    parse_config(ko_json_store::read_text(&get_config_path(app)))
+}
+
+/// Разбор прочитанного текста конфига. Разбор не удался — дефолт, но причина
+/// уходит в лог: «конфиг сломан» и «конфига нет» выглядели бы одинаково, и
+/// пользователь решил бы, что настройки сохранены (core rules §2.2).
+fn parse_config(read: Result<Option<String>, std::io::Error>) -> AppConfig {
+    match read {
+        Ok(Some(data)) => {
+            match serde_json::from_str::<AppConfig>(&data) {
+                Ok(mut cfg) => {
+                    sanitize_retired_fields(&mut cfg);
+                    cfg
+                }
+                Err(e) => {
+                    log::error!("load_config: конфиг не разобран ({}). Беру значения по умолчанию; файл оставлен как есть.", e);
+                    AppConfig::default()
+                }
+            }
+        }
+        Ok(None) => AppConfig::default(),
+        Err(e) => {
+            log::error!("load_config: конфиг не прочитан ({}). Беру значения по умолчанию.", e);
+            AppConfig::default()
+        }
     }
 }
 

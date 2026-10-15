@@ -33,9 +33,8 @@ pub async fn run_coding_bench(
 ) -> Result<(), String> {
     let engine_dir = crate::infra::get_engine_dir(&app);
     let tasks_dir = infra::find_coding_tests_dir(&app);
-    let bins_dir = infra::bin_downloader::get_bins_dir(
-        &app.path().app_data_dir().unwrap_or_else(|_| std::path::PathBuf::from(".")),
-    );
+    let bins_dir =
+        crate::infra::bin_downloader::get_bins_dir(&crate::infra::storage::app_data_root());
 
     let cancel_flag = state.cancel_flag.clone();
     let status_app = app.clone();

@@ -116,7 +116,13 @@ pub fn get_data_dir(app: AppHandle) -> String {
 /// и все производные подпапки в конфиг одной записью.
 #[tauri::command]
 pub fn set_data_dir(app: AppHandle, path: String) -> Result<String, String> {
-    data_dir::apply(&app, &path).map(|p| p.to_string_lossy().to_string())
+    let applied = data_dir::apply(&app, &path).map(|p| p.to_string_lossy().to_string())?;
+    // Каталог данных приложения (сессии, app_config.json) и `KingOrchData` с
+    // движками — разные вещи. Первый выбирается дверью `storage::bootstrap` и от
+    // смены `data_dir` не зависит; второй вычисляется в `data_dir::resolve` по
+    // конфигу. Пересчитывать здесь нечего: смена пути записывается в конфиг
+    // сразу, а её результат проверяется пробой в момент установки.
+    Ok(applied)
 }
 
 #[tauri::command]

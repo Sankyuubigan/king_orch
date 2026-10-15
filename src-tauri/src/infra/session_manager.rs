@@ -35,26 +35,37 @@ pub struct ChatSession {
     pub messages: Vec<ChatMessage>,
 }
 
-pub fn sessions_dir(app: &AppHandle) -> PathBuf {
-    let base = app
-        .path()
-        .app_data_dir()
-        .unwrap_or_else(|_| PathBuf::from("."));
+/// Каталог сессий. Путь берётся из выбранного корня данных, а не напрямую из
+/// `app.path()`: каталог может оказаться недоступен для записи (уровень
+/// целостности процесса ниже уровня объекта, антивирус, квота), и тогда
+/// приложение обязано писать в другое место, а не молча терять сессии.
+/// Ошибка создания НЕ проглатывается: без каталога ни одна сессия не сохранится.
+pub fn sessions_dir(_app: &AppHandle) -> PathBuf {
+    let base = crate::infra::storage::app_data_root();
     let path = base.join("sessions");
-    if !path.exists() {
-        let _ = fs::create_dir_all(&path);
+    if let Err(e) = fs::create_dir_all(&path) {
+        log::error!(
+            "sessions_dir: НЕ СОЗДАН каталог сессий {} — сессии не будут сохраняться ({})",
+            path.display(),
+            e
+        );
     }
     path
 }
 
 /// Reads a session file, deserializes to ChatSession.
+///
+/// Чтение идёт через `ko-json-store`, а не `fs::read_to_string`: зафиксированная,
+/// но не дописанная на диск сессия лежит в журнале, и прямой `fs` её не видит —
+/// последнее сообщение пользователя молча пропадало бы.
 fn load_session(path: &PathBuf) -> Result<(Value, ChatSession), String> {
-    let content =
-        fs::read_to_string(path).map_err(|e| format!("Ошибка чтения сессии: {}", e))?;
+    let content = ko_json_store::read_text(path)
+        .map_err(|e| format!("Ошибка чтения сессии {}: {}", path.display(), e))?
+        .ok_or_else(|| format!("Сессия не найдена: {}", path.display()))?;
     let value: Value = serde_json::from_str(&content)
-        .map_err(|e| format!("Ошибка парсинга сессии: {}", e))?;
+        .map_err(|e| format!("Ошибка парсинга сессии {}: {}", path.display(), e))?;
     let session: ChatSession = serde_json::from_value(value.clone())
-        .map_err(|e| format!("Ошибка парсинга сессии: {}", e))?;
+        .map_err(|e| format!("Ошибка парсинга сессии {}: {}", path.display(), e))?;
     Ok((value, session))
 }
 
@@ -121,10 +132,21 @@ pub fn save_session(
     };
     save_session_raw(&path, &session)?;
 
-    // Save a debug copy to test/last_session.json
+    // Отладочная копия НЕ входит в транзакцию сохранения: её отказ не должен
+    // выдавать «сессия не сохранена», когда основной файл записан успешно.
     let last_path = PathBuf::from("test").join("last_session.json");
-    let _ = fs::create_dir_all("test");
-    save_session_raw(&last_path, &session)
+    if let Err(e) = fs::create_dir_all("test") {
+        log::warn!("save_session: не создана папка test/ для отладочной копии: {}", e);
+    }
+    if let Err(e) = save_session_raw(&last_path, &session) {
+        log::warn!(
+            "save_session: отладочная копия {} не записана ({}). Основная сессия {} сохранена.",
+            last_path.display(),
+            e,
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 /// Решает, какое название сохранить. Если пользователь вручную переименовал

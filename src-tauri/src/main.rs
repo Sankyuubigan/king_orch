@@ -60,6 +60,14 @@ async fn main() {
         &format!("[BOOT] early logging ready {}ms", process_started.elapsed().as_millis()),
     );
 
+    // ── Выбор корней записи ──
+    // Первым действием, ДО чтения конфига и ДО регистрации плагинов: и хост, и
+    // плагины обязаны узнать одно и то же решение, а не разрешать путь каждый
+    // сам и получать разные каталоги. Здесь же выбирается папка временных
+    // файлов — системный %TEMP% может быть закрыт (песочница, антивирус,
+    // политика), и тогда всё, что запускает дочерние процессы, ломается.
+    infra::storage::bootstrap();
+
     // ── Системный прокси: детект до любых HTTP-запросов ──
     infra::system_proxy::detect_and_set_proxy();
 
@@ -125,6 +133,10 @@ async fn main() {
             log::info!("[BOOT] setup begin {}ms", process_started.elapsed().as_millis());
             let app_handle = app.handle();
 
+            // Корни подтверждены штатным `app.path()`, данные разнесены из прежнего
+            // каталога, недописанные записи проиграны из журнала.
+            infra::storage::init(&app_handle);
+
             std::thread::spawn(|| {
                 let detection_started = Instant::now();
                 let gpu = infra::gpu_detector::detect_gpu();
@@ -158,8 +170,8 @@ async fn main() {
                 infra::network_diagnostics::run_diagnostics();
             });
 
-            let _ = infra::session_manager::sessions_dir(&app_handle);
-            log::info!("setup(): сессии и чат-лог готовы");
+            let sessions_path = infra::session_manager::sessions_dir(&app_handle);
+            log::info!("setup(): каталог сессий — {}", sessions_path.display());
 
             // ── Новая архитектура: движок llama.cpp — ОТДЕЛЬНЫЙ процесс ──
             // Приложение НЕ линкует llama.cpp нативно (нет PE-импортов и DLL

@@ -803,17 +803,7 @@ export class ChatController {
       this.triggerTokenCount();
 
     } catch (error) {
-      if (String(error).includes("Отменено") || String(error).includes("Прервано")) {
-        this.state.history.push({ type: "message", author: "system", content: "⚠️ Прервано." });
-        this.state.uidList.push(this.state.nextUid());
-      } else {
-        showToast(`Ошибка: ${error}`, "error");
-        this.state.history.push({ type: "message", author: "system", content: `⚠️ Ошибка: ${error}` });
-        this.state.uidList.push(this.state.nextUid());
-        void trackError("chat.send.runFrom", error);
-      }
-      this.renderChatFromHistory();
-      await this.persistSession();
+      await this.handleSendFailure(error, "chat.send.runFrom");
     } finally {
       this.setProcessingState(false);
     }
@@ -1191,6 +1181,52 @@ export class ChatController {
     }
   }
 
+  /**
+   * Фиксирует сообщение пользователя: DOM, очистка поля ввода, создание ID сессии
+   * и запись в историю. Вызывается ТОЛЬКО внутри `try` в handleSend — отказ
+   * персистентности не должен пройти мимо `finally` и оставить UI в «Обработке».
+   */
+  private commitUserMessage(text: string): Attachment[] {
+    const userUid = this.state.nextUid(); this.state.uidList.push(userUid);
+    const displayText = text || (this.attachments.length > 0 ? `[${this.attachments.length} файлов]` : '');
+    this.appendMessage('user', displayText, undefined, undefined, undefined, false, userUid, this.attachments);
+    this.el.chatInput.value = ""; this.el.chatInput.style.height = "auto"; clearTimeout(this.state.draftTimeout);
+    this.el.filePreview.innerHTML = '';
+    const attachments = [...this.attachments];
+    this.attachments = [];
+    this.ensureSessionId();
+    // Вкладка ещё main-режима — конвертируем в чат именно при отправке,
+    // а не на первом набранном символе (чтобы плашка ввода не «прыгала»).
+    if (!this.state.isChatTab) this.becomeChatTab();
+    this.state.history.push({ type: "message", author: "user", content: displayText, attachments });
+    return attachments;
+  }
+
+  /**
+   * Единая обработка отказа отправки (общая для handleSend и onRunFromMessage):
+   * видимая запись в чат + перерисовка + попытка сохранить её. Отказ самой
+   * персистентности обязан быть залогирован, а не проглочен (core rules §2.2).
+   */
+  private async handleSendFailure(error: unknown, scope: string) {
+    const wasCancelled = String(error).includes("Отменено") || String(error).includes("Прервано");
+    if (wasCancelled) {
+      this.state.history.push({ type: "message", author: "system", content: "⚠️ Прервано." });
+      this.state.uidList.push(this.state.nextUid());
+    } else {
+      showToast(`Ошибка: ${error}`, "error");
+      this.state.history.push({ type: "message", author: "system", content: `⚠️ Ошибка: ${error}` });
+      this.state.uidList.push(this.state.nextUid());
+      void trackError(scope, error);
+    }
+    this.renderChatFromHistory();
+    try {
+      await this.persistSession();
+    } catch (persistError) {
+      logFront(`[chat] история не сохранена после отказа отправки: ${persistError}`);
+      void trackError(`${scope}.persistFailure`, persistError);
+    }
+  }
+
   async handleSend() {
     const text = this.el.chatInput.value.trim();     if (!text && this.attachments.length === 0) return;
     if (store.isProcessing || this.state.isProcessing || this.state.isRestoringSession) return;
@@ -1201,25 +1237,16 @@ export class ChatController {
     }
     const activeAgent = this.el.agentSelect.value; const modelPath = this.el.modelSelect.value;
     if (!modelPath) { showToast("Выберите модель!", "error"); return; }
-    const userUid = this.state.nextUid(); this.state.uidList.push(userUid);
-    const displayText = text || (this.attachments.length > 0 ? `[${this.attachments.length} файлов]` : '');
-    this.appendMessage('user', displayText, undefined, undefined, undefined, false, userUid, this.attachments);
-    this.el.chatInput.value = ""; this.el.chatInput.style.height = "auto"; clearTimeout(this.state.draftTimeout);
-    this.el.filePreview.innerHTML = '';
-    const attachments = [...this.attachments];
-    this.attachments = [];
+
+    // setProcessingState(true) — ДО первого await и ДО входа в try. Только так
+    // инвариант «UI не остаётся в состоянии Обработка» держится структурно: любой
+    // await ниже, включая персистентность, обязан дойти до finally.
     this.setProcessingState(true);
-    this.ensureSessionId();
-    // Вкладка ещё main-режима — конвертируем в чат именно при отправке,
-    // а не на первом набранном символе (чтобы плашка ввода не «прыгала»).
-    if (!this.state.isChatTab) this.becomeChatTab();
-    const historyBefore = this.state.history.length;
-    void historyBefore;
-    this.state.history.push({ type: "message", author: "user", content: displayText, attachments });
-    await this.persistSession("");
-    bus.emit("session:changed");
-    const startTime = performance.now();
     try {
+      const attachments = this.commitUserMessage(text);
+      bus.emit("session:changed");
+      await this.persistSession("");
+      const startTime = performance.now();
       const _p2 = store.currentModelParams;
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value), dry_multiplier: _p2?.dry_multiplier ?? 0.0, dry_base: _p2?.dry_base ?? 1.75, dry_allowed_length: _p2?.dry_allowed_length ?? 2, dry_penalty_last_n: _p2?.dry_penalty_last_n ?? 0, xtc_probability: _p2?.xtc_probability ?? 0.0, xtc_threshold: _p2?.xtc_threshold ?? 0.1 };
       const allHistory = this.state.history.slice();
@@ -1279,20 +1306,10 @@ export class ChatController {
       }
       await this.persistSession();
     } catch (error) {
-      if (String(error).includes("Отменено") || String(error).includes("Прервано")) {
-          this.state.history.push({ type: "message", author: "system", content: "⚠️ Прервано." });
-          this.state.uidList.push(this.state.nextUid());
-      } else {
-          showToast(`Ошибка: ${error}`, "error");
-          this.state.history.push({ type: "message", author: "system", content: `⚠️ Ошибка: ${error}` });
-          this.state.uidList.push(this.state.nextUid());
-          void trackError("chat.send", error);
-      }
-      this.renderChatFromHistory();
-      await this.persistSession();
+      await this.handleSendFailure(error, "chat.send");
     } finally {
-        this.setProcessingState(false);
-        this.triggerTokenCount();
+      this.setProcessingState(false);
+      this.triggerTokenCount();
     }
   }
 
