@@ -11,8 +11,8 @@ nodes:
 - id: user_message
   type: user_message
   ui_pos:
-    x: -2274
     y: 493
+    x: -2274
 
 - id: extract_facts
   type: llm_fact_extractor
@@ -40,8 +40,8 @@ nodes:
   - validator
   - decomposer
   ui_pos:
-    x: 3183
     y: -347
+    x: 3183
 
 - id: call_soma_translator
   type: llm_worker
@@ -55,12 +55,11 @@ nodes:
 - id: call_decomposer
   type: llm_worker
   agent: decomposer
-  output_type: message
-  inject_thoughts:
+  inject_response:
   - soma_translator
   ui_pos:
-    x: 989
-    y: 506
+    x: 287
+    y: 236
 
 - id: call_validator
   type: llm_worker
@@ -87,42 +86,21 @@ nodes:
   - decomposer
   - data_collector
   ui_pos:
-    y: -451
     x: 2841
+    y: -451
 
-- id: call_focus_keeper
-  type: llm_worker
-  agent: focus_keeper
-  inject_thoughts:
-  - soma_translator
-  inject_response:
-  - decomposer
+- id: check_triage_complexity
+  type: condition_router
+  input_object: '{{ nodes.extract_facts.output }}'
+  field: triage_complexity
+  sequential_to: note_1782220193985
+  true_to: call_decomposer
+  conditions:
+  - field: triage_complexity
+    equals: cluster
   ui_pos:
-    x: 51
-    y: 330
-  llm_params: strict
-
-- id: check_focus_keeper_signal
-  type: signal_router
-  signal_name: focus_keeper
-  cases_priority:
-  - key: Конкретная проблема
-    to: note_1782220193985
-  - key: Кластер
-    to: call_decomposer
-  - key: НУЖЕН ВЫБОР МИШЕНИ
-    to: note_ask_target
-  ui_pos:
-    y: 287
-    x: 567
-
-- id: note_ask_target
-  type: note
-  input: переспрашиваем юзера, с какой мишенью работаем
-  system_message: "Специалист уже выделил мишени для работы (список выше в чате). Чтобы двигаться дальше, нам нужно определиться, с какой именно мишенью работаем. \nПожалуйста, напишите номер или название мишени, с которой хотите работать."
-  ui_pos:
-    x: 970
-    y: 751
+    x: -103
+    y: 357
 
 - id: call_pattern_finder
   type: llm_worker
@@ -174,22 +152,22 @@ nodes:
   type: note
   input: пересчитываем данные с учетом новых данных от юзера
   ui_pos:
-    x: -1215
     y: 255
+    x: -1215
 
 - id: note_1782220193985
   type: note
   input: проверка данных. развилка на доработку данных или отправку на лечение
   ui_pos:
-    x: 908
     y: 161
+    x: 908
 
 - id: note_1784427848563
   type: note
   input: вычисление типа
   ui_pos:
-    x: 2085
     y: 41
+    x: 2085
 
 - id: check_critical_elements
   type: condition_router
@@ -211,7 +189,7 @@ nodes:
 
 - id: check_somatic
   type: condition_router
-  sequential_to: call_focus_keeper
+  sequential_to: check_triage_complexity
   true_to: call_soma_translator
   conditions:
   - field: somatic_presence
@@ -303,8 +281,18 @@ nodes:
     equals: false
   logic: all
   ui_pos:
-    y: -302
     x: 2517
+    y: -302
+
+- id: call_synthesizer
+  type: llm_worker
+  agent: synthesizer
+  output_type: message
+  inject_response:
+  - decomposer
+  ui_pos:
+    y: 121
+    x: 548
 
 edges:
 
@@ -316,9 +304,6 @@ edges:
 
 - from: note_1782220193985
   to: call_validator
-
-- from: call_focus_keeper
-  to: check_focus_keeper_signal
 
 - from: note_1784427848563
   to: call_pattern_finder
@@ -337,3 +322,6 @@ edges:
 
 - from: note_1785141025138
   to: call_request_helper
+
+- from: call_decomposer
+  to: call_synthesizer

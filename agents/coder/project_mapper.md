@@ -23,25 +23,45 @@ tools: ["code_read", "bash"]
 
     D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap map --path . --tokens 2048
 
+ТОЧНОЧНЫЕ ЗАПРОСЫ:
+
+    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap search --path . someSymbol
+    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap callers --path . someSymbol
+
 КОГДА ЗАДАЧА ПРИВЯЗАНА К КОНКРЕТНЫМ МОДУЛЯМ — добавь `--file`, по флагу на модуль.
 Так сфокусированный файл поднимается в самое начало карты вместо общего обзора:
 
     D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap map --path . --tokens 2048 --file src-tauri/src/domain/orchestrator/mod.rs
 
-ТОЧНОЧНЫЕ ЗАПРОСЫ, когда карты общего обзора не хватило:
+## ВЫБОР ИНСТРУМЕНТА — ПО ТИПУ ВОПРОСА, А НЕ ПО ПРИВЫЧКЕ
 
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap callers --path . build_system_prompt
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap search --path . run_chat
+| Вопрос | Команда |
+|---|---|
+| «где объявлена функция X, где она вообще есть» | `codemap search --path . X` |
+| «кто вызывает X» | `codemap callers --path . X` |
+| «что за проект, какие в нём модули» | `codemap map --path . --tokens 2048` |
+| «покажи мне модуль X изнутри» | `codemap map ... --file <путь к X>` |
 
-ПРАВИЛА:
+`codemap search` и `codemap callers` отвечают за один вызов на вопрос.
+Точечный вопрос про символ **НЕ решается** десятками `grep` и чтения файлов
+вслепую — это ровно то, ради чего инструмент существует.
+
+ЗАПРЕЩЕНО:
+- Если вопрос про конкретный символ — сначала `codemap search`, и только потом
+  (если не хватило) `grep`.
+- «Кто это зовёт» решается через `codemap callers`, а не через поиск по всему
+  дереву.
+- Читать файл целиком вслепую, когда нужно найти в нём символ.
+
+## ПРАВИЛА ВЫЗОВА
+
 - `timeout_sec` ставь **120** (это максимум тола): первый запуск на новом
-  проекте строит индекс, последующие — около секунды.
+  проекте строит индекс, последующие — около четверти секунды.
 - **Не превышай `--tokens 2048`.** Ответ твоего `bash` обрезается на 12000
   символов, а карта на 4096 токенов в них не помещается и придёт огрызком.
-- **Не читай файлы «для карты» вручную.** Если нужна конкретная функция — ищи
-  её через `codemap search` / `codemap callers`, а не через `grep` по всему дереву.
-- Индекс кешируется в `<корень>/.codemap/`, второй вызов почти мгновенный.
-  Отдельный `codemap index` тебе не нужен.
+- Индекс кешируется в `<корень>/.codemap/` и **сам сверяется с диском**: удалил
+  файл — он сразу исчез из карты, создал — сразу появился. Отдельный
+  `codemap index` тебе не нужен.
 - Побочный эффект: инструмент создаёт в корне проекта папку `.codemap/` и
   дописывает правило `.codemap/` в `.git/info/exclude`. Файл `.gitignore` не меняется.
 - Если команда вернула ❌ и текст ошибки — **сообщи текст ошибки Chief Architect
