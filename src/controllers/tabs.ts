@@ -7,7 +7,7 @@ import { buildChatPage, buildWebviewPage, copyMarkdownToClipboard, fillAgentSele
 import type { ChatPageElements, SharedChatControls } from "../utils";
 import { showToast, confirmDialog, createWorkspaceMenu } from "../ui";
 import type { WorkspaceMenuController } from "../ui";
-import { deleteSession, openSessionFolder, fetchSessions } from "../services";
+import { deleteSession, renameSession, openSessionFolder, fetchSessions } from "../services";
 import { trackError } from "../telemetry";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { computeTargetIndex, computeShifts } from "../utils/drag";
@@ -82,7 +82,6 @@ interface TabEntry {
   type: AppTab["type"];
   sessionId: string | null;
   section: TabSection | null;
-  customTitle: string | null;
   url: string | null;
   /// Элемент-«страница» вкладки: pageRoot для main/chat/webview,
   /// собственный wrapper .section-host для section (узел раздела один
@@ -229,7 +228,7 @@ export class TabController {
 
   /** Новая пустая (главная) вкладка — экран «Новая вкладка» с logo.svg. */
   newMainTab(persist = true): AppTab {
-    const tab: AppTab = { id: genTabId(), type: "main", sessionId: null, section: null, customTitle: null, url: null };
+    const tab: AppTab = { id: genTabId(), type: "main", sessionId: null, section: null, url: null };
     this.materializeTab(tab);
     this.renderStrip();
     this.activate(tab.id, persist);
@@ -334,7 +333,7 @@ export class TabController {
       const el = this.sectionEl(tabSection);
       if (!el) return null;
     }
-    const tab: AppTab = { id: genTabId(), type: "section", sessionId: null, section: tabSection, customTitle: null, url: null };
+    const tab: AppTab = { id: genTabId(), type: "section", sessionId: null, section: tabSection, url: null };
     this.materializeTab(tab);
     const created = this.entries[this.entries.length - 1];
     if (!created || created.type !== "section" || created.section !== tabSection) {
@@ -410,7 +409,7 @@ export class TabController {
       this.activate(existing.id);
       return this.tabToApp(existing);
     }
-    const tab: AppTab = { id: genTabId(), type: "chat", sessionId: id, section: null, customTitle: null, url: null };
+    const tab: AppTab = { id: genTabId(), type: "chat", sessionId: id, section: null, url: null };
     this.materializeTab(tab);
     this.renderStrip();
     this.activate(tab.id);
@@ -442,7 +441,6 @@ export class TabController {
       type: "webview",
       sessionId: null,
       section: null,
-      customTitle: null,
       url,
       title: `Web UI · ${payload.router}`,
     };
@@ -510,7 +508,6 @@ export class TabController {
       return;
     }
     const sessionId = (tab as any).sessionId ?? (tab as any).session_id ?? null;
-    const customTitle = (tab as any).customTitle ?? (tab as any).custom_title ?? null;
     if (tab.type === "chat" && !sessionId) {
       logFront(`[tabs] init: вкладка ${tab.id} помечена как чат, но диалог не указан — открыта как новая`);
       tab = { ...tab, type: "main" };
@@ -520,7 +517,6 @@ export class TabController {
       type: tab.type,
       sessionId,
       section: tab.section ?? null,
-      customTitle,
       url: tab.url ?? null,
       viewEl: document.createElement("div"),
       stripEl: document.createElement("div"),
@@ -616,7 +612,7 @@ export class TabController {
   }
 
   private defaultTitle(tab: AppTab): string {
-    if (tab.type === "chat") return tab.customTitle || (tab as any).custom_title || (tab as any).title || "Новая сессия";
+    if (tab.type === "chat") return (tab as any).title || "Новая сессия";
     if (tab.type === "webview") return tab.title || WEBVIEW_TITLE;
     if (tab.type === "section") return this.sectionTitle(tab.section as TabSection);
     return "Новая сессия";
@@ -638,7 +634,6 @@ export class TabController {
       type: t.type,
       sessionId: t.sessionId,
       section: t.section,
-      customTitle: t.customTitle,
       url: t.url,
       title: t.title,
     };
@@ -841,14 +836,13 @@ export class TabController {
     menu.style.top = `${y}px`;
     if (entry.type === "chat" && entry.sessionId && entry.ctrl) {
       menu.appendChild(this.menuItem("✏️", "Переименовать", async () => {
-        const cur = entry.customTitle || entry.title;
-        const newT = prompt("Новое название вкладки:", cur);
-        if (newT && newT.trim() !== "" && newT !== cur) {
-          entry.customTitle = newT.trim();
-          this.refreshSessionTitle(entry);
-          this.renderStrip();
-          this.persistTabs();
-        }
+        const cur = fetchSessionTitlesCache.get(entry.sessionId as string) || entry.title;
+        const newT = prompt("Новое название:", cur);
+        if (!newT || newT.trim() === "" || newT.trim() === cur) return;
+        try {
+          await renameSession(entry.sessionId as string, newT.trim());
+          bus.emit("session:changed");
+        } catch (e) { showToast(`Ошибка: ${e}`, "error"); void trackError("tabs.rename", e); }
       }));
       menu.appendChild(this.menuItem("📋", "Копировать в буфер", () => {
         void copyMarkdownToClipboard(entry.title, entry.ctrl!.state.history);
@@ -1007,17 +1001,28 @@ export class TabController {
 
   private refreshSessionTitle(entry: TabEntry) {
     const base = fetchSessionTitlesCache.get(entry.sessionId as string);
-    entry.title = entry.customTitle || base || "Новая сессия";
+    entry.title = base || entry.title || "Новая сессия";
   }
 
   private async refreshLabels() {
     let map: Map<string, string> = new Map();
     try { map = await fetchSessionTitles(); } catch (_) { map = new Map(); }
     fetchSessionTitlesCache = map;
+    let changed = false;
     for (const t of this.entries) {
-      if (t.type === "chat") this.refreshSessionTitle(t);
+      if (t.type !== "chat") continue;
+      const before = t.title;
+      this.refreshSessionTitle(t);
+      if (t.title !== before) changed = true;
     }
     this.renderStrip();
+    // persistTabs/set_tabs читают store.tabs, а не this.entries: без синхронизации
+    // в app_config.json уедут устаревшие заголовки и вкладка после перезапуска
+    // мигнёт старым именем до ответа get_sessions.
+    if (changed) {
+      store.tabs = this.entries.map(t => this.tabToApp(t));
+      this.persistTabs();
+    }
   }
 
   // ── Шина ──

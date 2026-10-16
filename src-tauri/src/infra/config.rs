@@ -34,8 +34,6 @@ pub struct TabState {
     pub session_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub section: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "customTitle")]
-    pub custom_title: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -406,17 +404,30 @@ mod tests {
     #[test]
     fn test_tab_state_accepts_camel_and_snake_case() {
         let camel: TabState = serde_json::from_str(
-            r#"{"id":"t1","type":"chat","sessionId":"s1","customTitle":"My"}"#,
+            r#"{"id":"t1","type":"chat","sessionId":"s1"}"#,
         )
         .unwrap();
         assert_eq!(camel.session_id.as_deref(), Some("s1"));
-        assert_eq!(camel.custom_title.as_deref(), Some("My"));
 
         let snake: TabState = serde_json::from_str(
-            r#"{"id":"t1","type":"chat","session_id":"s1","custom_title":"My"}"#,
+            r#"{"id":"t1","type":"chat","session_id":"s1"}"#,
         )
         .unwrap();
         assert_eq!(snake, camel);
+    }
+
+    /// Старые app_config.json могли хранить `customTitle` — собственный ярлык
+    /// вкладки, который затенял `title` сессии. Поле удалено из схемы, и serde
+    /// обязана молча его игнорировать, а не ронять загрузку всего конфига.
+    #[test]
+    fn test_tab_state_ignores_retired_custom_title() {
+        let legacy: TabState = serde_json::from_str(
+            r#"{"id":"t1","type":"chat","sessionId":"s1","customTitle":"Мой ярлык"}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy.session_id.as_deref(), Some("s1"));
+        assert_eq!(legacy.title.as_deref(), None);
+        assert_eq!(serde_json::to_value(&legacy).unwrap().get("customTitle"), None);
     }
 
     #[test]

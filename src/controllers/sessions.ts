@@ -300,8 +300,9 @@ export class SessionController {
       if (newT && newT.trim() !== "" && newT !== cur) {
         try {
           await renameSession(s.id, newT.trim());
-          this.previewCache.delete(s.id);
-          this.loadSessionsListUI();
+          // Единый цикл обновления: собственный слушатель перезагрузит список
+          // и превью, tabs.ts — заголовки открытых вкладок.
+          bus.emit("session:changed");
         } catch (err) {
           showToast(`Ошибка: ${err}`, "error");
           void trackError("sessions.rename", err);

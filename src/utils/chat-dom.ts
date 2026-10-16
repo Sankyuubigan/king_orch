@@ -43,6 +43,7 @@ export interface ChatPageElements extends SharedChatControls {
   filePreview: HTMLDivElement;
   tokenCounter: HTMLDivElement;
   engineBadge: HTMLDivElement;
+  cloudCounter: HTMLDivElement;
   btnSetWorkdir: HTMLButtonElement;
   currentWorkdir: HTMLSpanElement;
   mainScreen: HTMLDivElement | null;
@@ -235,7 +236,7 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
     minpSlider: shared.minpSlider,
     reppenSlider: shared.reppenSlider,
     prespenSlider: shared.prespenSlider,
-  } as ChatPageElements;
+  };
 }
 
 /// Строит DOM страницы вкладки-веб-страницы (iframe 9Router Web UI).
