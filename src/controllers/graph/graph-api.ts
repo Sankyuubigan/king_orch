@@ -1,5 +1,6 @@
-import type { GraphSnapshot, GraphNodeDef, GraphEdgeDef } from "./types";
+import type { GraphSnapshot, GraphNodeDef, GraphEdgeDef, GraphGroupDef } from "./types";
 import type { GraphDiagnostic } from "../../services";
+import type { ResizeDir } from "./groups-part";
 
 export interface GraphApi {
   ensureEditor(): void;
@@ -31,9 +32,44 @@ export interface GraphApi {
   resolveEntryForEditor(wf: { entry?: string | null; nodes: GraphNodeDef[] }): string | null;
 
   showNodeEditor(nodeId: string): void;
+  showGroupEditor(groupId: string): void;
   hideSidebar(): void;
   renderCasesHtml(data: any): string;
   renderDefaultHtml(data: any): string;
+
+  // ─── Группы нод (Group) ────────────────────────────────────────────────
+  groupById(groupId: string): GraphGroupDef | undefined;
+  groupNodeIds(groupId: string): string[];
+  groupFrameRect(group: GraphGroupDef): { x: number; y: number; w: number; h: number } | null;
+  isFramePinned(group: GraphGroupDef): boolean;
+  fitGroupToNodes(groupId: string): boolean;
+  groupFusedStatus(
+    group: GraphGroupDef,
+    strategy: string | null,
+  ): { fusable: boolean; active: boolean; level: "off" | "on" | "warn"; text: string };
+  /** Проблемы схлопывания группы по вердикту бэкенда (`GROUP_FUSED_*`). */
+  groupFusedProblems(groupId: string): string[];
+  groupAtPoint(canvasX: number, canvasY: number): GraphGroupDef | null;
+  nodeSize(nodeId: string): { w: number; h: number };
+  invalidateNodeSize(nodeId: string): void;
+  ensureGroupLayer(): HTMLDivElement | null;
+  buildGroupFrame(group: GraphGroupDef): HTMLDivElement | null;
+  renderGroups(): void;
+  refreshGroupFrames(groupIds?: string[]): void;
+  generateGroupId(base: string): string;
+  createGroup(clientX: number, clientY: number): GraphGroupDef;
+  deleteGroup(groupId: string): void;
+  renameGroup(oldId: string, newId: string): boolean;
+  assignNodeToGroup(nodeId: string, groupId: string | null): void;
+  onNodeMoved(nodeId: string): void;
+  onGroupFrameClick(groupId: string): void;
+  interactiveUnderGroup(clientX: number, clientY: number): Element | null;
+  forwardMousedownTo(target: Element, ev: MouseEvent): void;
+  beginGroupDrag(groupId: string, ev: MouseEvent): void;
+  beginGroupResize(groupId: string, dir: ResizeDir, ev: MouseEvent): void;
+  adoptSelectedNodesIntoGroup(groupId: string): number;
+  serializeGroups(): GraphGroupDef[];
+  loadGroups(groups: GraphGroupDef[] | null | undefined): void;
 
   addNode(type: string, clientX?: number, clientY?: number): void;
   copyNode(nodeId: string): void;
@@ -74,6 +110,7 @@ export interface GraphApi {
   undo(): void;
   redo(): void;
   syncDirtyAfterRestore(): void;
+  groupsEqual(a: GraphGroupDef[], b: GraphGroupDef[] | undefined): boolean;
   isNodesEqual(a: Record<string, any>, b: Record<string, any>): boolean;
   resetHistory(): void;
   markDirty(): void;

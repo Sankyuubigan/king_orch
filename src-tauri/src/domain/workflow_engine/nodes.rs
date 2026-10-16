@@ -3,6 +3,7 @@ use crate::domain::workflow_engine::context::WorkflowContext;
 use crate::domain::workflow_engine::parser::{
     ConditionNode, EdgeDef, NodeDef, NodeType, WorkflowConfig, WorkflowDef,
 };
+use crate::domain::workflow_engine::step_output::StepOutput;
 use crate::domain::workflow_engine::WorkflowRunner;
 use crate::infra::{extract_model_filename, message_phase, push_report, ChatMessage, SubCall};
 
@@ -387,6 +388,7 @@ pub fn execute_node<L, S, C>(
     workflow: &WorkflowDef,
     context: &mut WorkflowContext,
     runner: &mut WorkflowRunner<L, S, C>,
+    step: &mut StepOutput,
 ) -> Result<NodeResult, String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -460,8 +462,10 @@ where
             }
 
             let report_json = serde_json::Value::Object(verdicts);
-            context
-                .signals
+            // Сигнал объявляется шагом (`step.signals`), а пишет его в шину
+            // планировщик через `handle_step_output` — единственная дверь.
+            // Сам сигнал в `messages[]` кладём ниже, авторство не меняется.
+            step.signals
                 .insert("validator_report".to_string(), report_json.clone());
 
             // Вероятности в лог — не украшение: при сравнении System-1 с
@@ -675,15 +679,11 @@ where
                     .collect();
             normalize_enum_facts(&mut parsed, &enum_keys);
 
-            // Факты — в signal bus (SSOT для ConditionRouter/SignalRouter и {{ signals }}).
-            if let Some(obj) = parsed.as_object() {
-                for (k, v) in obj {
-                    if k == "thought_process" {
-                        continue;
-                    }
-                    context.signals.insert(k.clone(), v.clone());
-                }
-            }
+            // Факты объявляются шагом (`step.signals`), запись в шину — у
+            // планировщика через `handle_step_output`: одна дверь для всех
+            // исполнителей, включая склеенный вызов группы.
+            let produced = StepOutput::from_model_object(&parsed);
+            step.signals.extend(produced.signals);
 
             Ok(NodeResult {
                 output: parsed,
@@ -790,11 +790,12 @@ where
             *runner.msg_counter += 1;
             // Сигнал сохраняется ПОСЛЕ thought для корректного порядка [thought, signal].
             if let Some(signal) = pending_signal.take() {
-                // Вставляем сигнал в signal bus — SSOT для SignalRouter/ConditionRouter
+                // В signal bus объявляет шаг, пишет планировщик — тот же путь,
+                // что у факт-экстрактора и у склеенной группы.
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal.content) {
                     if let Some(obj) = val.as_object() {
                         for (k, v) in obj {
-                            context.signals.insert(k.clone(), v.clone());
+                            step.signals.insert(k.clone(), v.clone());
                         }
                     }
                 }

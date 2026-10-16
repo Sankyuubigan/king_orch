@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::domain::{
     analyze_workflow_fidelity, resolve_entry, separate_top_level_fields, EdgeDef, FactsFile,
-    GraphDiagnostic, NodeDef, WorkflowConfig, WorkflowDef,
+    GraphDiagnostic, GroupDef, NodeDef, WorkflowConfig, WorkflowDef,
 };
 
 /// Workflow со включённым file_stem + team
@@ -21,6 +21,10 @@ pub struct GraphWorkflowDef {
     pub entry: Option<String>,
     /// Видимость графа в каталоге «Доступные агенты»: отсутствие поля = `true`.
     pub visible: bool,
+    /// Режим исполнения: `detailed` (по умолчанию) | `fused`.
+    pub strategy: Option<String>,
+    /// Группы нод (рамки на холсте + инструкции фьюжинга).
+    pub groups: Vec<GroupDef>,
     pub nodes: Vec<NodeDef>,
     pub edges: Vec<EdgeDef>,
 }
@@ -71,6 +75,8 @@ pub fn read_workflow_file(path: String) -> Result<GraphWorkflowReadResult, Strin
             config: wf.config,
             entry: wf.entry,
             visible: wf.visible,
+            strategy: wf.strategy,
+            groups: wf.groups,
             nodes: wf.nodes,
             edges: wf.edges,
         },

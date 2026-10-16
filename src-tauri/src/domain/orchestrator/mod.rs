@@ -394,6 +394,8 @@ pub fn run_chat<L, S, C, ST, RT>(
     cloud_requests: std::sync::Arc<std::sync::atomic::AtomicU64>,
     // Рабочая директория для инструментов кодера (bash/fs). None = корень проекта.
     workdir: Option<String>,
+    // Режим исполнения графа, выбранный в чате (переопределяет `strategy:` файла).
+    execution_strategy: Option<String>,
 ) -> Result<ChatRunResult, String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -690,6 +692,22 @@ where
         )
         .with_image_candidates(request_media.candidate_prompt())
         .with_request_media(request_media.clone());
+        // Переопределение режима из чата. Разбирается ОДИН раз здесь, чтобы
+        // невалидное значение упало до прогона, а не внутри цикла нод.
+        let strategy_override = match execution_strategy.as_deref() {
+            None => None,
+            Some(raw) => Some(
+                crate::domain::workflow_engine::groups::parse_strategy(Some(raw))
+                    .map_err(|e| format!("Режим исполнения из чата: {}", e))?,
+            ),
+        };
+        if let Some(s) = strategy_override {
+            log_cb(format!(
+                "🧭 Режим исполнения переопределён в чате: {}",
+                s.as_str()
+            ));
+        }
+        ctx.strategy_override = strategy_override;
         let mut runner = WorkflowRunner {
             engine: &engine,
             agents: &agents,
@@ -3929,6 +3947,7 @@ mod tests {
             None,
             std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             Some(project_dir.join("test").to_string_lossy().to_string()),
+            None,
         );
         println!("CONTEXT_RUN_RESULT: {:?}", result.as_ref().map(|_| "ok"));
         let context_line = logs

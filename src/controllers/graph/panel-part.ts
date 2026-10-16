@@ -1,3 +1,4 @@
+import { showToast } from "../../ui";
 import { NODE_COLORS, NODE_LABELS } from "./constants";
 import {
   buildKnownFields,
@@ -18,6 +19,7 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
   if (!dn) return;
   const data = dn.data;
 
+  this.inspectingGroupId = null;
   this.el.graphSidebar.classList.add("open");
   this.el.graphDetailTitle.textContent = `✏️ ${nodeId}`;
 
@@ -27,6 +29,14 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
   const isDisabled = !!data.disabled;
   const isEntry = this.currentEntryNodeId === (data.id || nodeId);
 
+  const groupOptions = [
+    `<option value=""${data.group ? "" : " selected"}>— без группы —</option>`,
+    ...this.currentGroups.map(
+      (g) =>
+        `<option value="${this.esc(g.id)}"${data.group === g.id ? " selected" : ""}>${this.esc(g.title || g.id)}</option>`,
+    ),
+  ].join("");
+
   let html = `<div class="graph-detail-section">
       <div class="detail-label">ID ноды</div>
       <input type="text" id="ge-node-id" class="ge-input" value="${this.esc(data.id || nodeId)}" />
@@ -34,6 +44,11 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
     <div class="graph-detail-section">
       <div class="detail-label">Тип</div>
       <div class="detail-value" style="border-left:4px solid ${color};padding-left:8px;">${typeLabel}</div>
+    </div>
+    <div class="graph-detail-section">
+      <div class="detail-label">Группа нод</div>
+      <select id="ge-node-group" class="ge-input">${groupOptions}</select>
+      <div class="detail-hint">Группа — это рамка на холсте. В режиме Detailed она ничего не меняет; в режиме Fused ноды группы схлопываются в один вызов LLM.</div>
     </div>
     <div class="graph-detail-section">
       <div class="detail-label">Точка входа графа</div>
@@ -244,6 +259,13 @@ if (data.type === "system1_validator") {
 
   /** Поле редактора ноды в границах ЭТОГО сайдбара (не по всему документу). */
   const getField = <T extends Element>(id: string): T => editorRoot.querySelector<T>(`#${id}`) as T;
+
+  const groupSelect = getField<HTMLSelectElement>("ge-node-group");
+  if (groupSelect) {
+    groupSelect.addEventListener("change", () => {
+      this.assignNodeToGroup(nodeId, groupSelect.value || null);
+    });
+  }
 
   const agentInput = getField<HTMLInputElement>("ge-agent");
   if (agentInput) {
@@ -602,7 +624,197 @@ export function hideSidebar(this: GraphController): void {
   if (this.el.graphSidebar.classList.contains("open")) {
     this.saveCheckpoint();
   }
+  this.inspectingGroupId = null;
   this.el.graphSidebar.classList.remove("open");
+}
+
+// ─── Редактор группы нод ───
+
+/**
+ * Сайдбар группы нод.
+ *
+ * Раньше `showNodeEditor` был ЕДИНСТВЕННЫМ писателем в `graphDetailContent`, и
+ * инспектор группы добавил бы второй формат в то же место. Он остаётся отдельной
+ * функцией, но использует ту же тройку (`.open` + заголовок + innerHTML), что и
+ * нода, — иначе закрытие сайдбара и Esc будут вести себя по-разному.
+ */
+export function showGroupEditor(this: GraphController, groupId: string): void {
+  const group = this.groupById(groupId);
+  if (!group) return;
+
+  this.inspectingGroupId = groupId;
+  this.el.graphSidebar.classList.add("open");
+  this.el.graphDetailTitle.textContent = `📦 ${group.title || group.id}`;
+
+  const memberIds = this.groupNodeIds(groupId);
+  const members = memberIds.length > 0
+    ? memberIds.map((id) => `<li>${this.esc(id)}</li>`).join("")
+    : `<li class="detail-hint">пусто — перетащи ноды в рамку или выбери группу в инспекторе ноды</li>`;
+
+  const tools = (group.tools || []).join(", ");
+  // Живая подсказка вместо молчаливой рамки: без неё группа в Detailed выглядит
+  // «нерабочей», и правильный ответ на вопрос автора («что задать, чтобы
+  // работало») приходилось держать в голове.
+  //
+  // Если бэкенд сказал, что форму макро-ноды группа не имеет, — оптимистичная
+  // строка была бы ложью («выполняется одним вызовом» при роутере внутри).
+  // Поэтому при таком вердикте показываем ЕГО текст, а не свой.
+  const problems = this.groupFusedProblems(groupId);
+  const status = this.groupFusedStatus(group, this.currentWorkflowStrategy);
+  const shownStatus =
+    problems.length > 0
+      ? { ...status, active: false, level: "warn" as const, text: problems[0] }
+      : status;
+  const moreProblems = problems.slice(1);
+  const pinned = this.isFramePinned(group);
+  const selectedCount = this.selectedNodes.size;
+  this.el.graphDetailContent.innerHTML = `
+    <div class="graph-detail-section">
+      <div class="detail-label">Что группа сделает</div>
+      <div class="ge-group-status is-${shownStatus.level}">${this.esc(shownStatus.text)}</div>
+      ${moreProblems.map((p) => `<div class="ge-group-status is-warn">${this.esc(p)}</div>`).join("")}
+      <div class="detail-hint">Режим исполнения выбирается в чате (тумблер действует на одну сессию) или полем <code>strategy:</code> в файле графа. Форму схлопывания проверяет движок — его вердикт показан выше.</div>
+    </div>
+    <div class="graph-detail-section">
+      <div class="detail-label">ID группы</div>
+      <input type="text" id="ge-group-id" class="ge-input" value="${this.esc(group.id)}" />
+      <div class="detail-hint">ID входит в YAML как ссылка из <code>nodes[].group</code>. С пробелами и спецсимволами — нет.</div>
+    </div>
+    <div class="graph-detail-section">
+      <div class="detail-label">Название</div>
+      <input type="text" id="ge-group-title" class="ge-input" value="${this.esc(group.title || "")}" />
+    </div>
+    <div class="graph-detail-section">
+      <div class="detail-label">Инструкция FUSED</div>
+      <textarea id="ge-group-fused" class="ge-input" rows="8"
+        placeholder="Опиши одним куском то, что делает вся группа. В режиме Fused группа выполняется ОДНИМ вызовом LLM по этой инструкции.">${this.esc(group.fused_instruction || "")}</textarea>
+      <div class="detail-hint">Пусто — группа работает только в режиме Detailed (рамка остаётся, схлопывания нет). Ссылки вида <code>{{ nodes.X.output }}</code> здесь запрещены: в FUSED эти ноды не выполняются по отдельности.</div>
+    </div>
+    <div class="graph-detail-section">
+      <div class="detail-label">Агент-исполнитель</div>
+      <input type="text" id="ge-group-agent" class="ge-input" value="${this.esc(group.fused_agent || "")}"
+        placeholder="например neuro_healer" />
+      <div class="detail-hint">Его <code>.md</code> даёт системный промпт и <code>mcp_servers</code>. Обязателен, если заданы инструменты.</div>
+    </div>
+    <div class="graph-detail-section">
+      <div class="detail-label">Инструменты</div>
+      <input type="text" id="ge-group-tools" class="ge-input" value="${this.esc(tools)}"
+        placeholder="ReadSection, через запятую" />
+      <div class="detail-hint">Схлопывание с инструментами пока не поддержано: в Fused такая группа даст явную ошибку и продолжит работать только в Detailed.</div>
+    </div>
+    <div class="graph-detail-section">
+      <div class="detail-label">Рамка</div>
+      <div class="detail-hint">${pinned
+        ? "Размер задан автором: растяжение и перенос двигают только рамку, ноды внутри остаются на месте."
+        : "Размер выводится из габаритов нод группы. Растяните рамку маркером — появится свободное место под новые ноды."}</div>
+      <button id="ge-group-fit" class="btn-secondary" style="width:100%; margin-top:6px;"
+        ${pinned ? "" : "disabled"}>📐 По размеру нод</button>
+    </div>
+    <div class="graph-detail-section">
+      <div class="detail-label">Ноды группы (${memberIds.length})</div>
+      <ul class="ge-group-members">${members}</ul>
+      <button id="ge-group-adopt" class="btn-secondary" style="width:100%; margin-top:6px;"
+        ${selectedCount > 0 ? "" : "disabled"}>
+        📥 Перенести выделенные ноды в группу (выделено ${selectedCount})
+      </button>
+    </div>
+    <div class="graph-detail-section">
+      <button id="ge-group-delete" class="btn-secondary" style="width:100%;">🗑 Удалить группу (ноды останутся)</button>
+    </div>`;
+
+  const root = this.el.graphDetailContent;
+  const field = <T extends Element>(id: string): T => root.querySelector<T>(`#${id}`) as T;
+
+  const fitButton = field<HTMLButtonElement>("ge-group-fit");
+  if (fitButton) {
+    fitButton.addEventListener("click", () => {
+      if (this.fitGroupToNodes(groupId)) {
+        showToast("📐 Рамка снова по размеру нод", "success");
+        this.showGroupEditor(groupId);
+      }
+    });
+  }
+
+  const adoptButton = field<HTMLButtonElement>("ge-group-adopt");
+  if (adoptButton) {
+    adoptButton.addEventListener("click", () => {
+      const moved = this.adoptSelectedNodesIntoGroup(groupId);
+      showToast(
+        moved > 0 ? `📥 В группу перенесено нод: ${moved}` : "📥 Ничего не перенесено",
+        moved > 0 ? "success" : "error",
+      );
+      this.showGroupEditor(groupId);
+    });
+  }
+
+  const idInput = field<HTMLInputElement>("ge-group-id");
+  if (idInput) {
+    idInput.addEventListener("change", () => {
+      const next = idInput.value.trim();
+      if (!next || next === group.id || this.groupById(next)) {
+        idInput.value = group.id;
+        if (next && this.groupById(next)) {
+          showToast(`❌ Группа «${next}» уже существует`, "error");
+        }
+        return;
+      }
+      this.renameGroup(groupId, next);
+      this.showGroupEditor(next);
+    });
+  }
+
+  const titleInput = field<HTMLInputElement>("ge-group-title");
+  if (titleInput) {
+    titleInput.addEventListener("input", () => {
+      group.title = titleInput.value;
+      this.refreshGroupFrames([groupId]);
+    });
+  }
+
+  const fusedTextarea = field<HTMLTextAreaElement>("ge-group-fused");
+  if (fusedTextarea) {
+    fusedTextarea.addEventListener("change", () => {
+      this.saveCheckpoint();
+      const text = fusedTextarea.value;
+      if (text.trim()) group.fused_instruction = text;
+      else delete group.fused_instruction;
+      this.renderGroups();
+      this.showGroupEditor(groupId);
+    });
+  }
+
+  const agentInput = field<HTMLInputElement>("ge-group-agent");
+  if (agentInput) {
+    agentInput.addEventListener("change", () => {
+      this.saveCheckpoint();
+      const text = agentInput.value.trim();
+      if (text) group.fused_agent = text;
+      else delete group.fused_agent;
+    });
+  }
+
+  const toolsInput = field<HTMLInputElement>("ge-group-tools");
+  if (toolsInput) {
+    toolsInput.addEventListener("change", () => {
+      this.saveCheckpoint();
+      const list = toolsInput.value
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (list.length > 0) group.tools = list;
+      else delete group.tools;
+      this.renderGroups();
+      this.showGroupEditor(groupId);
+    });
+  }
+
+  const delButton = field<HTMLButtonElement>("ge-group-delete");
+  if (delButton) {
+    delButton.addEventListener("click", () => {
+      this.deleteGroup(groupId);
+      this.hideSidebar();
+    });
+  }
 }
 
 // ─── Рендер кейсов и дефолта (общее для switch и signal_router) ───

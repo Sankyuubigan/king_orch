@@ -210,6 +210,13 @@ pub async fn chat_request(
     attachments: Vec<ChatAttachment>,
     mmproj_path: Option<String>,
     session_id: String,
+    // Режим исполнения графа, выбранный в чате: `detailed` | `fused`.
+    //
+    // `None` = «не переопределять»: решение остаётся за полем `strategy:` в файле
+    // графа (дефолт — Detailed). Переопределение нужно, чтобы попробовать Fused на
+    // одном разговоре, не правя YAML, и чтобы UI мог показывать, что режим
+    // изменён относительно файла.
+    execution_strategy: Option<String>,
 ) -> Result<ChatResponse, String> {
     let mut cfg = infra::load_config(&app);
     cfg.context_size = context_size;
@@ -456,6 +463,7 @@ pub async fn chat_request(
             cloud_endpoint,
             cloud_requests.clone(),
             cfg.workdir.clone(),
+            execution_strategy,
         );
         let app_rss_after = crate::infra::current_process_rss();
         match (app_rss_before, app_rss_after) {

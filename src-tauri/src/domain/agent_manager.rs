@@ -105,6 +105,15 @@ pub struct AgentEntry {
     /// «агента нет на диске» от «агент скрыт автором», иначе скрытие выглядело бы
     /// как удаление (см. `utils/agent-visibility.ts` — единственный предикат показа).
     pub visible: bool,
+    /// Сколько групп графа РЕАЛЬНО схлопывается в Fused.
+    ///
+    /// Считается по тем же правилам, что и рантайм (явная инструкция либо
+    /// авто-склейка ролей), поэтому UI показывает тумблер ровно там, где
+    /// переключение имеет смысл: у `.md`-агента и графа без групп здесь ноль, и
+    /// тумблер скрыт. Отдельного счёта «на стороне фронта» здесь быть не должно —
+    /// он разошёлся бы с движком.
+    #[serde(default)]
+    pub fusable_groups: usize,
 }
 
 /// Имя папки, содержимое которой — мёртвый код и НЕ должно попадать
@@ -302,6 +311,31 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
 ///
 /// Отфильтровать скрытое здесь означало бы соврать UI: «скрыт автором» стало бы
 /// неотличимо от «агента нет на диске» (см. `utils/agent-visibility.ts`).
+/// Сколько групп графа действительно схлопывается в Fused.
+///
+/// Критерий — тот же, что у рантайма: либо есть `fused_instruction`, либо роли
+/// нод склеиваются (у каждой ноды агент или `input`). Группа с роут��ром внутри
+/// сюда не попадает намеренно: она всё равно будет отклонена при запуске, и
+/// показывать пользователю тумблер под неё — значит обещать то, что не случится.
+fn fusable_groups_count(workflow: &crate::domain::workflow_engine::parser::WorkflowDef) -> usize {
+    use crate::domain::workflow_engine::groups;
+    workflow
+        .groups
+        .iter()
+        .filter(|group| {
+            let explicit = group
+                .fused_instruction
+                .as_deref()
+                .map(str::trim)
+                .is_some_and(|i| !i.is_empty());
+            let stitchable = groups::check_stitchable(workflow, group).is_ok();
+            let macro_shaped =
+                groups::ensure_macro_possible(workflow, group).is_ok();
+            (explicit || stitchable) && macro_shaped
+        })
+        .count()
+}
+
 pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
     let mut entries = Vec::new();
 
@@ -324,6 +358,7 @@ pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
                 rel_path: rel_path_of(&path, agents_dir),
                 role: "agent".to_string(),
                 visible: a.visible,
+                fusable_groups: 0,
             });
         }
     }
@@ -341,6 +376,7 @@ pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
                 rel_path: rel_path_of(&path, agents_dir),
                 role: "graph".to_string(),
                 visible: wf.visible,
+                fusable_groups: fusable_groups_count(wf),
             });
         }
     }

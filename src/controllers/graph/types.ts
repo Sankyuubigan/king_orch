@@ -1,9 +1,19 @@
-import type { WorkflowGraphDef, GraphNodeDef, GraphEdgeDef } from "../../services";
+import type {
+  WorkflowGraphDef, GraphNodeDef, GraphEdgeDef, GraphGroupDef,
+} from "../../services";
 
-export type { WorkflowGraphDef, GraphNodeDef, GraphEdgeDef };
+export type { WorkflowGraphDef, GraphNodeDef, GraphEdgeDef, GraphGroupDef };
 
+/**
+ * Снапшот отмены. `data` — данные нод Drawflow, `groups` — группы.
+ *
+ * Группы лежат ОТДЕЛЬНО от `data`: они не принадлежат ни одной ноде Drawflow
+ * (рамка — наш оверлей, а не drawflow-объект), но обязаны откатываться вместе
+ * с нодами, иначе Ctrl+Z оставил бы ноды внутри группы, которой больше нет.
+ */
 export interface GraphSnapshot {
   data: Record<string, any>;
+  groups: GraphGroupDef[];
 }
 
 export interface GraphElements {

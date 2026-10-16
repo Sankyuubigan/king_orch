@@ -25,9 +25,14 @@ export async function handleOpen(this: GraphController): Promise<void> {
 
       this.currentFilePath = selected;
       this.currentWorkflowName = wf.name;
+      this.currentWorkflowDescription = wf.description ?? null;
       this.currentWorkflowConfig = wf.config ?? null;
       // `visible` отсутствует в старых файлах — это «виден», а не «скрыт».
       this.currentWorkflowVisible = wf.visible !== false;
+      // Режим исполнения и группы — часть файла. Без их загрузки `handleSave`
+      // выбросил бы `strategy`/`groups` через serde_yaml без единой ошибки.
+      this.currentWorkflowStrategy = wf.strategy ?? null;
+      this.loadGroups(wf.groups);
       this.el.btnSaveWorkflow.disabled = false;
       this.hideSidebar();
       this.ensureEditor();
@@ -204,13 +209,17 @@ export async function handleOpen(this: GraphController): Promise<void> {
 }
 
 export function clearEditor(this: GraphController): void {
-  if (!this.editor) return;
-  this.saveCheckpoint();
-  const exportData = this.editor.export();
-  const nodes = exportData.drawflow.Home.data;
-  for (const id of Object.keys(nodes)) {
-    this.editor.removeNodeId("node-" + id);
-  }
+    if (!this.editor) return;
+    this.saveCheckpoint();
+    const exportData = this.editor.export();
+    const nodes = exportData.drawflow.Home.data;
+    for (const id of Object.keys(nodes)) {
+      this.editor.removeNodeId("node-" + id);
+    }
+    // Группы относятся к открытому файлу: с его нодами уходит и рамка, иначе
+    // следующий файл унаследовал бы чужие группы-призраки.
+    this.currentGroups = [];
+    this.refreshGroupFrames();
 }
 
 // ─── Точка входа графа ───
@@ -251,6 +260,31 @@ export function resolveEntryForEditor(
 }
 
 // ─── Сохранение ───
+
+/**
+ * Верхнеуровневые поля `WorkflowDef`, которые редактор обязан вернуть бэкенду.
+ *
+ * Список — стопка против молчаливой потери данных: `save_workflow` на бэкенде
+ * сериализует `WorkflowDef` поверх файла, и любое поле, которого нет в
+ * собранном объекте, исчезает из YAML без единой ошибки.
+ */
+export const wfTopLevelFields = [
+  "name", "description", "visible", "entry", "strategy", "config", "groups", "nodes", "edges",
+] as const;
+
+export function assertNoDroppedTopLevelFields(
+  workflow: object,
+  required: readonly string[],
+): void {
+  const record = workflow as Record<string, unknown>;
+  const missing = required.filter((field) => record[field] === undefined);
+  if (missing.length > 0) {
+    // Не молчаливый warning: файл уже записан бэкендом, и потеря необратима.
+    throw new Error(
+      `handleSave собирает объект без полей: ${missing.join(", ")} — serde_yaml выбросит их из файла`,
+    );
+  }
+}
 
 export async function handleSave(this: GraphController): Promise<void> {
     if (!this.currentFilePath || !this.editor) return;
@@ -314,7 +348,20 @@ export async function handleSave(this: GraphController): Promise<void> {
         config.facts = [];
       }
 
-      const workflow: WorkflowGraphDef = { name: this.currentWorkflowName, config, entry: entryNodeId, visible: this.currentWorkflowVisible, nodes, edges };
+      const workflow: WorkflowGraphDef = {
+        name: this.currentWorkflowName,
+        description: this.currentWorkflowDescription,
+        config,
+        entry: entryNodeId,
+        visible: this.currentWorkflowVisible,
+        strategy: this.currentWorkflowStrategy,
+        groups: this.serializeGroups(),
+        nodes,
+        edges,
+      };
+      // Страховка от потери данных: любое поле верхнего уровня, которое редактор
+      // собрал, но забыл в declare, будет молча выброшено serde_yaml на бэкенде.
+      assertNoDroppedTopLevelFields(workflow, wfTopLevelFields);
       const saveResult = await saveWorkflow(this.currentFilePath, workflow);
       void saveResult;
       this.pristineSnapshot = this.captureSnapshot();

@@ -62,6 +62,8 @@ export function addNode(this: GraphController, type: string, clientX?: number, c
   if (type === ENTRY_NODE_TYPE) this.currentEntryNodeId = id;
 
   this.updateNodeHtml(id);
+  // Нода появилась на холсте — рамка группы, под которую она попала, стала другой.
+  this.refreshGroupFrames();
 }
 
 /** Есть ли на холсте нода-источник (тип `user_message`). */
@@ -289,6 +291,9 @@ export function updateNodeHtml(this: GraphController, nodeId: string): void {
   const dn = this.editor.drawflow.drawflow.Home.data[nodeId];
   if (!dn) return;
   const data = dn.data;
+  // Тело ноды меняет её высоту, а высота нужна для габаритов рамки группы:
+  // кэш измерений обязан быть инвалидирован ДО пересчёта рамки.
+  this.invalidateNodeSize(nodeId);
   const nodeEl = this.findNodeEl(nodeId);
   const el = nodeEl?.querySelector<HTMLElement>(".drawflow_content_node");
   if (!el) return;
@@ -303,6 +308,7 @@ export function updateNodeHtml(this: GraphController, nodeId: string): void {
   }
 
   this.alignOutputsWithCases(nodeId);
+  if (data.group) this.refreshGroupFrames([data.group]);
 }
 
 // ─── Выравнивание выходов напротив строк кейсов ───

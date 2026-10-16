@@ -1,15 +1,16 @@
 import type { DrawflowExport } from "drawflow";
 import { isDynamicNode, MAX_HISTORY } from "./constants";
-import type { GraphSnapshot } from "./types";
+import type { GraphGroupDef, GraphSnapshot } from "./types";
 import type { GraphController } from "./graph-class";
 
 // ─── Undo/Redo + Dirty State ───
 
 export function captureSnapshot(this: GraphController): GraphSnapshot {
   const editor = this.editor;
-  if (!editor) return { data: {} };
+  if (!editor) return { data: {}, groups: [] };
   return {
     data: JSON.parse(JSON.stringify(editor.drawflow.drawflow.Home.data)),
+    groups: JSON.parse(JSON.stringify(this.currentGroups)),
   };
 }
 
@@ -18,6 +19,10 @@ export function applySnapshot(this: GraphController, snap: GraphSnapshot): void 
   this.isRestoring = true;
 
   const editor = this.editor;
+
+  // Группы восстанавливаем ДО импорта нод: рамки пересобираются в обработчике
+  // `import` по данным `currentGroups`, и если там ещё старые — рамки мигнут.
+  this.currentGroups = snap.groups ? JSON.parse(JSON.stringify(snap.groups)) : [];
 
   // 1. Собираем все соединения из снапшота ДО очистки
   const snapDataRaw = JSON.parse(JSON.stringify(snap.data));
@@ -139,11 +144,24 @@ export function redo(this: GraphController): void {
 export function syncDirtyAfterRestore(this: GraphController): void {
   if (!this.pristineSnapshot) return;
   const current = this.captureSnapshot();
-  if (this.isNodesEqual(current.data, this.pristineSnapshot.data)) {
+  if (this.isNodesEqual(current.data, this.pristineSnapshot.data) && groupsEqual(current.groups, this.pristineSnapshot.groups)) {
     this.markClean();
   } else {
     this.markDirty();
   }
+}
+
+/**
+ * Сравнение групп для индикатора «не сохранено».
+ *
+ * Группы живут вне `drawflow.Home.data`, поэтому `isNodesEqual` их не видит, а
+ * индикатор без этого сравнения врал бы: создал группу, отменил правку ноды,
+ * на экране «Сохранено», а в YAML группа потерялась.
+ */
+export function groupsEqual(a: GraphGroupDef[], b: GraphGroupDef[] | undefined): boolean {
+  const left = JSON.stringify(a ?? []);
+  const right = JSON.stringify(b ?? []);
+  return left === right;
 }
 
 // Сравнение только значимых полей нод (игнорируем служебные поля Drawflow)

@@ -7,7 +7,7 @@ import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks } from "../ui
 import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
-import { renderMarkdown, stripStreamArtifacts, extractChannelThought, CLOUD_ROUTER_PREFIXES, isCloudModelPath, fillModelSelect, fillAgentSelect, getAgentDisplayName, getSelectedAgentName, isGraphAgent } from "../utils";
+import { renderMarkdown, stripStreamArtifacts, extractChannelThought, CLOUD_ROUTER_PREFIXES, isCloudModelPath, fillModelSelect, fillAgentSelect, getAgentDisplayName, getSelectedAgentName, isGraphAgent, hasFusableGroups } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError } from "../telemetry";
 
@@ -110,6 +110,8 @@ export interface ChatElements {
   progressBar: HTMLDivElement;
   statusLabel: HTMLDivElement;
   agentSelect: HTMLSelectElement;
+  /** Тумблер режима исполнения графа (`Detailed` | `Fused`); скрыт без групп. */
+  strategySelect: HTMLSelectElement;
   btnAgentSettings: HTMLButtonElement;
   modelSelect: HTMLSelectElement;
   subchatHistory: HTMLDivElement;
@@ -182,6 +184,15 @@ export class ChatTabState {
   rtThoughtAuthor: string = "";
 
   isRestoringSession = false;
+
+  /**
+   * Режим исполнения графа для ЭТОЙ сессии: `detailed` | `fused` | null.
+   *
+   * `null` = «не переопределять»: решает поле `strategy:` в файле графа.
+   * Хранится в состоянии вкладки, а не в Store: переключение относится к
+   * разговору, и в соседней вкладке оно должно остаться прежним.
+   */
+  executionStrategy: "detailed" | "fused" | null = null;
 
   /** Идёт ли обработка ИМЕННО в этой вкладке. */
   isProcessing = false;
@@ -260,6 +271,7 @@ export class ChatController {
       onCloneFromThoughts: (uid) => this.onCloneFromThoughts(uid),
     };
     this.bindDomEvents();
+    this.bindStrategyToggle();
     this.bindBusEvents();
     this.refreshSendAvailability();
     setTimeout(() => {
@@ -764,7 +776,8 @@ export class ChatController {
         modelParams: params,
         attachments: [],
         mmprojPath,
-        sessionId: this.state.sessionId ?? ""
+        sessionId: this.state.sessionId ?? "",
+        executionStrategy: this.state.executionStrategy
       });
 
       if (response?.has_error) {
@@ -1324,7 +1337,11 @@ export class ChatController {
         modelParams: params,
         attachments,
         mmprojPath,
-        sessionId: this.state.sessionId ?? ""
+        sessionId: this.state.sessionId ?? "",
+        // null = «решает файл графа». Переопределение уходит только когда
+        // пользователь его сделал — иначе мы бы молча уводили разговор в другой
+        // режим молча.
+        executionStrategy: this.state.executionStrategy
       });
       if (response?.has_error) {
         void trackError("chat.send.outcome", response.has_error);
@@ -1600,6 +1617,9 @@ export class ChatController {
       this.pendingSessionAgent = null;
       this.triggerTokenCount();
       this.refreshSendAvailability();
+      // Смена агента меняет ответ на «есть ли что схлопывать» — тумблер должен
+      // появиться или исчезнуть сразу, а не после перезагрузки вкладки.
+      this.applyStrategyToggleVisibility();
       const v = this.el.agentSelect.value;
       void invoke("set_config_value", { key: "last_agent", value: v }).catch(() => {});
       if (this.state.hasSession()) this.persistSession();
@@ -1621,6 +1641,41 @@ export class ChatController {
     });
   }
 
+  /**
+   * Показать тумблер режима тогда и только тогда, когда выбранному агенту есть
+   * что схлопывать.
+   *
+   * Проверка по `fusable_groups` из каталога, а не «у графа есть секция groups»:
+   * группа может быть нефьюзируемой (роутер внутри, нечем склеивать), и тумблер
+   * под ней обещал бы режим, который движок отвергнёт.
+   *
+   * Значение при этом НЕ сбрасывается: переключил на группу, вернулся на обычного
+   * агента, ушёл — выбор сохранится. Иначе агент без групп тихо отменял бы
+   * настройку, сделанную по��ыately для другого.
+   */
+  private applyStrategyToggleVisibility() {
+    // `?.` — как у `agentSelect`: элемент строит страница чата всегда, но набор
+    // элементов в тестовых харнессах собирается вручную, и падать из-за
+    // отсутствующего декоративного селекта не должен весь контроллер.
+    const select = this.el.strategySelect;
+    if (!select) return;
+    const fusable = hasFusableGroups(this.el.agentSelect?.value);
+    select.style.display = fusable ? "" : "none";
+    if (select.value !== (this.state.executionStrategy ?? "")) {
+      select.value = this.state.executionStrategy ?? "";
+    }
+  }
+
+  private bindStrategyToggle() {
+    this.el.strategySelect?.addEventListener("change", () => {
+      const raw = this.el.strategySelect?.value ?? "";
+      this.state.executionStrategy =
+        raw === "detailed" || raw === "fused" ? raw : null;
+      logFront(`[chat] режим исполнения: ${this.state.executionStrategy ?? "как в файле"}`);
+    });
+    this.applyStrategyToggleVisibility();
+  }
+
   private bindBusEvents() {
     bus.on("model-catalog-changed", () => {
       fillModelSelect(this.el.modelSelect);
@@ -1628,6 +1683,7 @@ export class ChatController {
       if (this.applyPendingSessionSelection()) bus.emit("model:changed", this.el.modelSelect.value);
       // Каталог мог привести модель к облачной (или вернуть отложенную сессионную).
       this.applyIndicatorVisibility();
+      this.applyStrategyToggleVisibility();
       this.refreshSendAvailability();
     });
     bus.on("config:loaded", (config: any) => {
@@ -1637,6 +1693,7 @@ export class ChatController {
       fillAgentSelect(this.el.agentSelect);
       if (this.applyPendingSessionSelection()) bus.emit("model:changed", this.el.modelSelect.value);
       this.applyIndicatorVisibility();
+      this.applyStrategyToggleVisibility();
       this.refreshSendAvailability();
       this.updateAttachButtonState();
       this.triggerTokenCount();

@@ -6,11 +6,13 @@
 pub mod context;
 pub mod editor_fidelity;
 pub mod fact_extractor;
+pub mod groups;
 pub mod nodes;
 pub mod parser;
 // `reports` — общий код боевой ноды (`nodes::execute_node`) и стендов: инжект
 // отчётов собирается одной функцией, иначе стенд мерил бы не тот текст.
 pub mod reports;
+pub mod step_output;
 pub mod system1_rules;
 
 // ─── Стенды замера валидатора 9 элементов ───
@@ -64,7 +66,7 @@ pub use editor_fidelity::{analyze_workflow_fidelity, GraphDiagnostic};
 pub use parser::WorkflowConfig;
 pub use parser::{
     find_workflow_by_stem, load_workflows, parse_workflow_file, resolve_entry,
-    separate_top_level_fields, EdgeDef, FactsFile, NodeDef, NodeType, WorkflowDef,
+    separate_top_level_fields, EdgeDef, FactsFile, GroupDef, NodeDef, NodeType, WorkflowDef,
 };
 
 use crate::domain::agent_manager::AgentProfile;
@@ -415,6 +417,33 @@ where
     let mut executed_steps: usize = 0;
     let mut last_node_output: Option<serde_json::Value> = None;
 
+    // Режим исполнения определяется ОДИН раз до цикла. Режима `auto` нет:
+    // любая эвристика «модель достаточно сильная» была бы порогом без замера.
+    let (strategy, strategy_source) = groups::resolve_strategy(workflow, context.strategy_override)
+        .map_err(|e| (e, context.messages.clone()))?;
+    (runner.log_cb)(format!(
+        "[workflow] '{}': режим исполнения {} (источник: {})",
+        workflow.name,
+        strategy.as_str(),
+        strategy_source
+    ));
+    if strategy == groups::ExecutionStrategy::Fused {
+        let fusable = workflow
+            .groups
+            .iter()
+            .filter(|g| {
+                g.fused_instruction
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|i| !i.is_empty())
+            })
+            .count();
+        (runner.log_cb)(format!(
+            "[workflow] '{}': режим FUSED, схлопываемых групп: {}",
+            workflow.name, fusable
+        ));
+    }
+
     while let Some(node_id) = {
         if queue.is_empty() {
             None
@@ -465,7 +494,116 @@ where
             node.id, node.node_type
         ));
 
-        let result = if node.disabled {
+        // Отключённая нода пропускается целиком, ВКЛЮЧАЯ фьюжинг её группы:
+        // автор сказал «здесь не выполнять», и молча выполнить вместо этого всю
+        // группу означало бы проигнорировать его намерение.
+        let fused_group = if node.disabled {
+            None
+        } else {
+            groups::fused_group_for(workflow, node, strategy, &context.executed_groups)
+        };
+
+        // Выход ТЕКУЩЕГО шага и нода, из которой будет построена следующая
+        // очередь. Для макро-ноды это выход группы, для обычной — сама нода.
+        let mut step = step_output::StepOutput::empty();
+        let mut jump_to_exit: Option<String> = None;
+        // Ноды группы, свёрнутой в макро-вызов: после прыжка их не должно
+        // остаться в очереди (см. перестроение очереди ниже).
+        let mut collapsed_group: Option<std::collections::HashSet<String>> = None;
+
+        let result = if let Some(group) = fused_group {
+            // МАКРО-НОДА. Группа выполняется ОДНИМ вызовом, её внутренние ноды не
+            // попадают в очередь планировщика вообще, а прогон продолжается с
+            // выхода группы (`jump_to_exit` ниже). Это и есть «Fused»: раньше
+            // склеенный вызов делался, а внутренние ноды потом всё равно
+            // выполнялись по отдельности — группа стоила БОЛЬШЕ подробного режима.
+            groups::ensure_macro_possible(workflow, group)
+                .map_err(|e| (e, context.messages.clone()))?;
+            let (bool_keys, string_keys) =
+                groups::output_contract(workflow, group, Some(std::path::Path::new(&workflow.parent_dir)));
+            let expected: Vec<String> = bool_keys
+                .iter()
+                .chain(string_keys.iter())
+                .cloned()
+                .collect();
+            let signals_json = signals_json(context);
+            let system_prompt =
+                build_fused_system_prompt(workflow, group, &expected, &signals_json, runner.agents)
+                    .map_err(|e| (e, context.messages.clone()))?;
+            let grammar = groups::build_fused_grammar(
+                workflow,
+                group,
+                Some(std::path::Path::new(&workflow.parent_dir)),
+            );
+            let llm_nodes = groups::llm_nodes_of_group(workflow, &group.id);
+            let exit = groups::exit_node_of_group(workflow, group.id.trim())
+                .map_err(|e| (e, context.messages.clone()))?;
+            (runner.log_cb)(format!(
+                "[workflow] ⚡ группа '{}' как макро-нода: {} LLM-вызов(ов) схлопывается в 1 \
+                 (вход: {}, выход: {}, ноды: {})",
+                group.id,
+                llm_nodes.len(),
+                node.id,
+                exit,
+                llm_nodes.iter().map(|n| n.id.as_str()).collect::<Vec<_>>().join(", ")
+            ));
+            match run_fused_group(
+                workflow.config.as_ref(),
+                group,
+                &system_prompt,
+                &grammar,
+                &expected,
+                context,
+                runner,
+            ) {
+                Ok(output) => {
+                    context.executed_groups.insert(group.id.clone());
+                    // Прыжок: очередь перестроится от ВЫХОДА группы, а не от ноды,
+                    // на которой мы остановились. Внутренние ноды не попадут в
+                    // неё ни при каких обстоятельствах.
+                    jump_to_exit = Some(exit.clone());
+                    collapsed_group = Some(
+                        groups::nodes_of_group(workflow, group.id.trim())
+                            .iter()
+                            .map(|n| n.id.clone())
+                            .collect(),
+                    );
+                    step.signals.extend(output.signals);
+                    step.message = output.message.clone();
+                    nodes::NodeResult {
+                        output: serde_json::json!({
+                            "fused_group": group.id,
+                            "macro": true,
+                            "exit_node": exit,
+                        }),
+                        next_node: None,
+                        next_nodes: vec![],
+                    }
+                }
+                Err(e) => return Err((e, context.messages.clone())),
+            }
+        } else if let Some(inside) = groups::executed_group_of_node(
+            workflow,
+            node,
+            strategy,
+            &context.executed_groups,
+        ) {
+            // Внутренняя нода макро-группы, до которой дошла очередь НЕ по её
+            // входу. Так быть не должно (диагностика `GROUP_FUSED_MULTIPLE_ENTRY`
+            // ловит это в редакторе) — но если файл правили руками, честная
+            // ошибка лучше тихого повторного вызова LLM: иначе Fused снова станет
+            // дороже Detailed, и никто об этом не узнает.
+            let _ = inside;
+            return Err((
+                format!(
+                    "внутренняя нода группы '{}' попала в исполнение отдельно: группа уже \
+                     выполнена макро-вызовом в этом ходу. Проверьте, что в группу ведёт ровно \
+                     одно ребро извне (диагностика GROUP_FUSED_MULTIPLE_ENTRY)",
+                    node.group.as_deref().unwrap_or("?").trim()
+                ),
+                context.messages.clone(),
+            ));
+        } else if node.disabled {
             (runner.log_cb)(format!(
                 "[workflow] Узел '{}' отключён (disabled), пропускаем",
                 node.id
@@ -488,11 +626,16 @@ where
                 next_nodes: vec![],
             }
         } else {
-            match nodes::execute_node(node, workflow, context, runner) {
+            match nodes::execute_node(node, workflow, context, runner, &mut step) {
                 Ok(r) => r,
                 Err(e) => return Err((e, context.messages.clone())),
             }
         };
+
+        // ЕДИНСТВЕННАЯ дверь записи в signal bus. Оба пути — одиночная нода и
+        // макро-вызов группы — отдают сюда один и тот же `StepOutput`, поэтому
+        // «кто записал ключ» больше не зависит от того, какой путь выполнился.
+        step_output::handle_step_output(&step, &node.id, context);
 
         if !node.disabled {
             (runner.log_cb)(format!(
@@ -513,9 +656,22 @@ where
             let max = max_visits_map.get(nid).copied().unwrap_or(1);
             visits.get(nid).copied().unwrap_or(0) < max
         };
-        let next = find_next_node(&node_id, &workflow.edges, &result);
+        // МАКРО-ПРЫЖОК: очередь строится от ВЫХОДА группы, а не от ноды, на
+        // которой мы остановились. У результата макро-вызова нет `status` /
+        // `matched_case`, поэтому маршрут берётся по безусловным рёбрам выхода —
+        // условные после группы запрещены диагностикой и `ensure_macro_possible`.
+        let next = match &jump_to_exit {
+            Some(exit) => {
+                let plain = nodes::NodeResult {
+                    output: serde_json::Value::Null,
+                    next_node: None,
+                    next_nodes: vec![],
+                };
+                find_next_node(exit, &workflow.edges, &plain)
+            }
+            None => find_next_node(&node_id, &workflow.edges, &result),
+        };
         let mut new_queue: Vec<String> = Vec::new();
-
         if let Some(nid) = next {
             if nid != "__END__" && nid != "END" && within_visits(&nid) {
                 new_queue.push(nid);
@@ -528,7 +684,16 @@ where
             }
         }
 
+        // Остаток очереди. После макро-прыжка из неё убираются ноды СВЕРНУТОЙ
+        // группы: группа теперь одна нода, и нода внутри неё — не следующий шаг,
+        // а внутренность уже выполненной. Это не «пропуск нод», а следствие
+        // свёртки: очередь не должна содержать то, чего в графе уже нет.
         for nid in &queue {
+            if let Some(collapsed) = &collapsed_group {
+                if collapsed.contains(nid.as_str()) {
+                    continue;
+                }
+            }
             if within_visits(nid) {
                 new_queue.push(nid.clone());
             }
@@ -558,6 +723,171 @@ where
     ));
 
     Ok(final_output)
+}
+
+/// Системный промпт макро-ноды: явная инструкция автора ИЛИ авто-склейка ролей.
+///
+/// Явная `fused_instruction` — ручной оверрайд (короче и под конкретную задачу).
+/// Без неё движок берёт роль каждой ноды группы из её агента: тот же
+/// `AgentProfile.system_prompt`, из которого оркестратор строит промпт при
+/// обычном вызове. Служебные добавки `build_system_prompt` (лимит генерации,
+/// правила вызова инструментов, требование emit_signal) НЕ склеиваются: у
+/// склеенного вызова нет ни инструментов, ни отдельного вызова на агента, и эти
+/// секции противоречили бы его грамматике.
+///
+/// Берёт каталог агентов, а не весь `WorkflowRunner`: всё, что нужно, — роли.
+/// Это же делает функцию проверяемой без живого движка.
+fn build_fused_system_prompt(
+    workflow: &WorkflowDef,
+    group: &GroupDef,
+    keys: &[String],
+    signals_json: &str,
+    agents: &[AgentProfile],
+) -> Result<String, String> {
+    let explicit = group.fused_instruction.as_deref().unwrap_or("").trim();
+    if !explicit.is_empty() {
+        return Ok(groups::build_fused_prompt(group, keys, signals_json));
+    }
+
+    let ordered = groups::topo_order_of_group(workflow, group.id.trim())
+        .map_err(|e| format!("группа '{}': {}", group.id, e))?;
+    if ordered.is_empty() {
+        return Err(format!(
+            "группа '{}' пуста: нечего выполнять макро-вызовом",
+            group.id
+        ));
+    }
+    let mut stages: Vec<groups::FusedStage> = Vec::with_capacity(ordered.len());
+    for node in ordered {
+        if let Some(agent_id) = node.agent.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
+            let agent = agents.iter().find(|a| a.id == agent_id).ok_or_else(|| {
+                format!(
+                    "в группе '{}': нода '{}' ссылается на агента '{}', которого нет в каталоге",
+                    group.id, node.id, agent_id
+                )
+            })?;
+            if agent.system_prompt.trim().is_empty() {
+                return Err(format!(
+                    "в группе '{}': у агента '{}` (нода '{}') пустой системный промпт — \
+                     склеить из него этап нельзя. Заполните `.md` агента или задайте группе \
+                     `fused_instruction`",
+                    group.id, agent_id, node.id
+                ));
+            }
+            stages.push(groups::FusedStage {
+                node_id: node.id.clone(),
+                role: agent.name.clone(),
+                prompt: agent.system_prompt.clone(),
+            });
+        } else if let Some(input) = node.input.as_deref().map(str::trim).filter(|i| !i.is_empty()) {
+            stages.push(groups::FusedStage {
+                node_id: node.id.clone(),
+                role: "свободная роль ноды".to_string(),
+                prompt: input.to_string(),
+            });
+        } else {
+            return Err(format!(
+                "в группе '{}`: у ноды '{}` нет ни агента, ни `input` — склеить из неё роль \
+                 нельзя. Задайте группе `fused_instruction` явно",
+                group.id, node.id
+            ));
+        }
+    }
+    Ok(groups::build_auto_fused_prompt(group, &stages, keys, signals_json))
+}
+
+/// Выполнить одну группу нод одним вызовом LLM (МАКРО-НОДА) и вернуть её выход.
+///
+/// Возвращает `StepOutput` — тот же контракт, что и одиночная нода; в signal bus
+/// его записывает планировщик через `handle_step_output`. Сообщение в чат группа
+/// отправляет сама: её авторство (`fused_agent` ?? id группы) не совпадает с
+/// авторством обычной ноды, и решать это должен тот, кто знает id группы.
+///
+/// Форма ответа задана грамматикой `build_fused_grammar`, поэтому «текст вместо
+/// JSON» или «JSON без обязательного ключа» — честная ошибка с перечнем ключей,
+/// а не пустые all-false сигналы, которые отправили бы граф по ложной ветке.
+fn run_fused_group<L, S, C>(
+    graph_config: Option<&WorkflowConfig>,
+    group: &GroupDef,
+    system_prompt: &str,
+    grammar: &str,
+    expected: &[String],
+    context: &mut WorkflowContext,
+    runner: &mut WorkflowRunner<L, S, C>,
+) -> Result<step_output::StepOutput, String>
+where
+    L: Fn(String) + Clone + Send + Sync + 'static,
+    S: Fn(String, u8) + Clone + Send + Sync + 'static,
+    C: Fn(&SubCall) + Clone + Send + Sync + 'static,
+{
+    groups::ensure_supported(group)?;
+
+    // История переписки нужна так же, как обычной ноде: склеенный вызов отвечает
+    // юзеру в том же ходе, что и соседние ноды графа.
+    let user_text = context.resolve_template("{{ messages }}");
+    // Каскад параметров — тот же SSOT, что у обычных нод (пункт 1 взят из
+    // графа-владельца группы): свой пресет у группы не появится, иначе
+    // приоритеты пришлось бы разводить в третий раз.
+    let resolved = resolve_params_cascade(
+        &runner.sampling_presets,
+        runner.model_params,
+        &None,
+        &graph_config.cloned(),
+        None,
+    );
+    let (text, _reasoning) = runner.call_llm_direct(
+        system_prompt,
+        &user_text,
+        &resolved,
+        &format!("fused:{}", group.id),
+        Some(grammar.to_string()),
+        // Строгая грамматика JSON: размышление полезно для качества сигналов,
+        // но бюджет n_predict ушёл бы в него (см. fact_extractor::build_facts_grammar).
+        true,
+    )?;
+    let output = groups::parse_fused_output(&text, expected)?;
+
+    if !output.message.is_empty() {
+        let msg = ChatMessage {
+            id: Some(format!("msg_{}", runner.msg_counter)),
+            msg_type: "message".to_string(),
+            content: output.message.clone(),
+            sub_calls: None,
+            author: Some(group.fused_agent.clone().unwrap_or_else(|| group.id.clone())),
+            model: None,
+            time_sec: None,
+            attachments: None,
+            phase: None,
+        };
+        context.messages.push(msg);
+        *runner.msg_counter += 1;
+        context.output_emitted = true;
+    }
+    (runner.log_cb)(format!(
+        "[workflow] ⚡ группа '{}': склеенный ответ разобран, сигналов: {}, текст: {}",
+        group.id,
+        output.signals.len(),
+        if output.message.is_empty() { "нет" } else { "есть" }
+    ));
+    // В шину сигналы пишет планировщик — здесь только объявляем результат шага.
+    Ok(step_output::StepOutput {
+        message: if output.message.is_empty() {
+            None
+        } else {
+            Some(output.message.clone())
+        },
+        signals: output.signals.into_iter().collect(),
+    })
+}
+
+/// JSON текущих сигналов хода — для блока `[СИГНАЛЫ И ФАКТЫ ТЕКУЩЕГО ШАГА]`.
+///
+/// Порядок ключей стабилизирован (BTreeMap), иначе одинаковый ход давал бы
+/// разный промпт и сравнивать прогоны было бы невозможно.
+fn signals_json(context: &WorkflowContext) -> String {
+    let ordered: std::collections::BTreeMap<&String, &serde_json::Value> =
+        context.signals.iter().collect();
+    serde_json::to_string(&ordered).unwrap_or_else(|_| "{}".to_string())
 }
 
 #[cfg(test)]
@@ -620,6 +950,134 @@ mod tests {
         assert!(!sanitized.content.contains("output/image.png"));
         assert!(!sanitized.content.contains("\\\\server\\share"));
         assert_eq!(sanitized.content.matches("[filesystem path omitted]").count(), 4);
+    }
+
+    // ─── SMOKE: авто-склейка системного промпта макро-ноды ────────────────
+
+    /// Каталог агентов для склейки: роли берутся из их `.md`.
+    fn role_agent(id: &str, name: &str, prompt: &str) -> AgentProfile {
+        let mut a = test_agent(id, None);
+        a.name = name.to_string();
+        a.system_prompt = prompt.to_string();
+        a
+    }
+
+    fn chain_workflow(with_instruction: Option<&str>) -> WorkflowDef {
+        let group = GroupDef {
+            id: "group_1".to_string(),
+            title: "Декомпозиция и синтез".to_string(),
+            fused_instruction: with_instruction.map(str::to_string),
+            ..Default::default()
+        };
+        let mut workflow = WorkflowDef {
+            name: "W".to_string(),
+            description: None,
+            visible: true,
+            file_stem: String::new(),
+            parent_dir: String::new(),
+            config: None,
+            entry: None,
+            strategy: Some("fused".to_string()),
+            groups: vec![group],
+            nodes: vec![],
+            edges: vec![],
+        };
+        for (id, agent) in [("call_decomposer", "decomposer"), ("call_synthesizer", "synthesizer")] {
+            workflow.nodes.push(NodeDef {
+                id: id.to_string(),
+                node_type: NodeType::LlmWorker,
+                group: Some("group_1".to_string()),
+                agent: Some(agent.to_string()),
+                ..Default::default()
+            });
+        }
+        workflow.edges.push(EdgeDef {
+            from: "call_decomposer".to_string(),
+            to: "call_synthesizer".to_string(),
+            condition: None,
+            case: None,
+        });
+        workflow
+    }
+
+    fn smoke_agents() -> Vec<AgentProfile> {
+        vec![
+            role_agent("decomposer", "Декомпозитор", "Разбей запрос на отдельные мишени."),
+            role_agent("synthesizer", "Синтезатор", "Собери из мишеней связный ответ."),
+        ]
+    }
+
+    /// ДЫМОВОЙ ТЕСТ: автор не написал ни одной инструкции — движок сам собрал
+    /// промпт из ролей агентов, в порядке выполнения нод.
+    #[test]
+    fn smoke_group_without_instruction_stitches_agent_roles() {
+        let wf = chain_workflow(None);
+        let keys = vec![groups::MESSAGE_KEY.to_string()];
+        let prompt = build_fused_system_prompt(
+            &wf,
+            &wf.groups[0],
+            &keys,
+            r#"{"has_problem":true}"#,
+            &smoke_agents(),
+        )
+        .expect("склейка");
+
+        assert!(prompt.contains("ЭТАП 1") && prompt.contains("ЭТАП 2"), "этапов нет:\n{}", prompt);
+        assert!(prompt.contains("Разбей запрос на отдельные мишени."), "роль 1 не попала");
+        assert!(prompt.contains("Собери из мишеней связный ответ."), "роль 2 не попала");
+        assert!(
+            prompt.find("call_decomposer") < prompt.find("call_synthesizer"),
+            "этапы в неверном порядке:\n{}",
+            prompt
+        );
+        assert!(prompt.contains("has_problem"), "сигналы хода не попали");
+        assert!(prompt.contains("ТОЛЬКО JSON"), "нет требования формата");
+        assert!(prompt.contains("message"), "нет ключа message");
+    }
+
+    /// Явная инструкция автора — оверрайд: склейка не используется.
+    #[test]
+    fn smoke_explicit_instruction_wins_over_stitching() {
+        let wf = chain_workflow(Some("Сделай всё сам."));
+        let keys = vec![groups::MESSAGE_KEY.to_string()];
+        let prompt =
+            build_fused_system_prompt(&wf, &wf.groups[0], &keys, "{}", &smoke_agents())
+                .expect("инструкция");
+
+        assert!(prompt.contains("Сделай всё сам."));
+        assert!(!prompt.contains("ЭТАП 1"), "склейка не должна срабатывать:\n{}", prompt);
+    }
+
+    /// Неизвестный агент — ошибка с именем, а не молчаливая потеря этапа.
+    #[test]
+    fn smoke_unknown_agent_is_an_error_naming_it() {
+        let wf = chain_workflow(None);
+        let err = build_fused_system_prompt(
+            &wf,
+            &wf.groups[0],
+            &[groups::MESSAGE_KEY.to_string()],
+            "{}",
+            &[],
+        )
+        .expect_err("нет агентов");
+        assert!(err.contains("decomposer"), "в ошибке нет имени агента: {}", err);
+    }
+
+    /// Нода без агента и без `input` — склеить нельзя, и это сказано прямо.
+    #[test]
+    fn smoke_node_without_role_is_an_error_with_a_way_out() {
+        let mut wf = chain_workflow(None);
+        wf.nodes[0].agent = None;
+        let err = build_fused_system_prompt(
+            &wf,
+            &wf.groups[0],
+            &[groups::MESSAGE_KEY.to_string()],
+            "{}",
+            &smoke_agents(),
+        )
+        .expect_err("нечем склеивать");
+        assert!(err.contains("call_decomposer"), "{}", err);
+        assert!(err.contains("fused_instruction"), "в ошибке нет выхода: {}", err);
     }
 
     #[test]

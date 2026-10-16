@@ -22,6 +22,7 @@ pub fn analyze_workflow_fidelity(
     let mut diagnostics = Vec::new();
     collect_value_differences("workflow", source, &normalized, &mut diagnostics);
     collect_duplicate_node_ids(workflow, &mut diagnostics);
+    collect_group_diagnostics(workflow, &mut diagnostics);
     collect_entry_diagnostics(workflow, &mut diagnostics);
     collect_template_reference_diagnostics(workflow, &mut diagnostics);
     collect_node_target_diagnostics(workflow, &mut diagnostics);
@@ -209,6 +210,309 @@ fn collect_entry_diagnostics(
                 &format!("nodes[id={}]", other.id),
                 "второй узел user_message, не являющийся точкой входа: вход в граф должен быть один".to_string(),
             );
+        }
+    }
+}
+
+    /// Статическая сверка `groups:` с реальными нодами графа: группа должна
+    /// быть выполнима МАКРО-НОДОЙ (один вход, цепочка, один выход, без роутеров).
+    ///
+    /// Группа — МЕТАДАННЫЕ (рамка на холсте + инструкция фьюжинга), поэтому
+    /// большинство проблем здесь не ломают DETAILED-прогон, а делают заявленную
+    /// автором схлопываемость недостижимой. Проверяем их ДО запуска, чтобы
+    /// «Fused включён, а группа не схлопнулась» не выглядело как «Fused сломался».
+    fn collect_group_diagnostics(
+    workflow: &WorkflowDef,
+    diagnostics: &mut Vec<GraphDiagnostic>,
+) {
+    let workflow_dir = std::path::Path::new(&workflow.parent_dir);
+    // Факт-контракт вычисляется ОДИН раз на весь граф: `resolve_facts` при пустом
+    // `config.facts` читает `facts_file` с диска, и на каждый файл с группами
+    // иначе выходило бы N одинаковых чтений одного файла.
+    let facts = super::fact_extractor::resolve_facts(
+        &workflow.config.clone().unwrap_or_default(),
+        Some(workflow_dir),
+    );
+    let mut ids: HashMap<&str, usize> = HashMap::new();
+    for group in &workflow.groups {
+        let trimmed = group.id.trim();
+        if trimmed.is_empty() {
+            push_diagnostic(
+                diagnostics,
+                "GROUP_ID_MISSING",
+                "groups[]",
+                "у группы не задан `id`: группы без id невозможно удалить и переименовать".to_string(),
+            );
+            continue;
+        }
+        let count = ids.entry(trimmed).or_insert(0);
+        *count += 1;
+        if *count > 1 {
+            push_diagnostic(
+                diagnostics,
+                "GROUP_ID_DUPLICATE",
+                &format!("groups[id={}]", trimmed),
+                "две группы с одинаковым id: нода с `group:` попадёт сразу в обе".to_string(),
+            );
+        }
+    }
+
+    for node in &workflow.nodes {
+        let Some(group) = node.group.as_deref().map(str::trim).filter(|g| !g.is_empty()) else {
+            continue;
+        };
+        if !ids.contains_key(group) {
+            push_diagnostic(
+                diagnostics,
+                "GROUP_REF_MISSING",
+                &format!("nodes[id={}].group", node.id),
+                format!("группа '{}' объявлена в `group:`, но её нет в секции `groups:`", group),
+            );
+        }
+    }
+
+    for group in &workflow.groups {
+        let id = group.id.trim();
+        if id.is_empty() {
+            continue;
+        }
+        let location = format!("groups[id={}]", id);
+        let members = workflow
+            .nodes
+            .iter()
+            .filter(|n| n.group.as_deref().map(str::trim) == Some(id))
+            .count();
+
+        if members == 0 {
+            push_diagnostic(
+                diagnostics,
+                "GROUP_EMPTY",
+                &location,
+                "в группу не входит ни одна нода: рамка на холсте будет пустой, схлопывать нечего"
+                    .to_string(),
+            );
+        }
+
+        let instruction = group.fused_instruction.as_deref().map(str::trim);
+        match instruction {
+            None | Some("") => {
+                // Инструкция больше не обязательна: без неё движок склеивает
+                // системный промпт из ролей нод (`build_auto_fused_prompt`).
+                // Но если склеивать НЕЧЕГО, группа молча не схлопнется — это
+                // и есть то, о чём автор должен узнать ДО запуска.
+                if let Err(why) = super::groups::check_stitchable(workflow, group) {
+                    push_diagnostic(
+                        diagnostics,
+                        "GROUP_FUSED_NOT_STITCHABLE",
+                        &location,
+                        why,
+                    );
+                }
+                if !group.tools.is_empty() {
+                    push_diagnostic(
+                        diagnostics,
+                        "GROUP_FUSED_WITHOUT_INSTRUCTION",
+                        &location,
+                        "у группы объявлены `tools`, но нет `fused_instruction`: инструменты \
+                         группы и так не поддержаны, а авто-склейка их не воспроизводит"
+                            .to_string(),
+                    );
+                }
+            }
+Some(text) => {
+                // Инструменты группы резолвятся из `mcp_servers` её агента. Без
+                // агента их неоткуда взять, и объявление было бы ложью: пользователь
+                // прочитал бы «инструмент доступен», а вызова не произойдёт.
+                if !group.tools.is_empty()
+                    && group
+                        .fused_agent
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|a| !a.is_empty())
+                        .is_none()
+                {
+                    push_diagnostic(
+                        diagnostics,
+                        "GROUP_FUSED_TOOLS_WITHOUT_AGENT",
+                        &location,
+                        "у группы объявлены `tools`, но нет `fused_agent`: инструменты группы \
+                         берутся из `mcp_servers` агента, объявлять их без него бессмысленно"
+                            .to_string(),
+                    );
+                }
+                // Ноды вне группы, чьи отчёты внедряются внутрь неё
+                // (`inject_response`/`inject_thoughts`). В Fused внутренние ноды
+                // не выполняются, а склеенный вызов получает историю БЕЗ
+                // thought-сообщений (`llm_history` их отфильтровывает) — отчёт
+                // внешнего агента до модели просто не дойдёт.
+                let members: HashSet<&str> = super::groups::nodes_of_group(workflow, id)
+                    .iter()
+                    .map(|n| n.id.as_str())
+                    .collect();
+                let produced_inside: HashSet<&str> = members
+                    .iter()
+                    .filter_map(|member| {
+                        workflow
+                            .nodes
+                            .iter()
+                            .find(|n| n.id.as_str() == *member)
+                            .and_then(|n| n.agent.as_deref())
+                    })
+                    .collect();
+                for node in &workflow.nodes {
+                    if !members.contains(node.id.as_str()) {
+                        continue;
+                    }
+                    let mut injected: Vec<&String> = Vec::new();
+                    injected.extend(node.inject_response.iter().flatten());
+                    injected.extend(node.inject_thoughts.iter().flatten());
+                    let lost: Vec<&str> = injected
+                        .iter()
+                        .map(|a| a.trim())
+                        .filter(|a| !a.is_empty() && !produced_inside.contains(a))
+                        .collect();
+                    if let Some(first) = lost.first() {
+                        push_diagnostic(
+                            diagnostics,
+                            "GROUP_FUSED_INJECT_LOST",
+                            &format!("nodes[id={}].inject_response", node.id),
+                            format!(
+                                "нода группы внедряет отчёт агента '{}` (всего: {}), а он производится \
+                                 ВНЕ группы. В FUSED склеенный вызов получает историю без \
+                                 thought-сообщений, поэтому отчёт до модели не дойдёт. Либо уберите \
+                                 зависимость, либо опишите её в `fused_instruction`",
+                                first,
+                                lost.join(", ")
+                            ),
+                        );
+                    }
+                }
+
+                // ФОРМА макро-ноды. Группа схлопывается в ОДИН вызов, поэтому у
+                // неё обязан быть один вход, одна цепочка и один выход. Каждое
+                // нарушение — отдельный отказ с текстом «что делать», а не
+                // «Fused почему-то не схлопнулся».
+                let routers = super::groups::routers_of_group(workflow, id);
+                if !routers.is_empty() {
+                    let names: Vec<&str> = routers.iter().map(|n| n.id.as_str()).collect();
+                    let undeclared = super::groups::undeclared_routing_keys_with_facts(
+                        workflow,
+                        group,
+                        &facts,
+                    );
+                    let keys = super::groups::routing_keys_of_group(workflow, id);
+                    let mut hint = format!(
+                        "в группе есть детерминированный роутер ({}): макро-вызов выполняет всю \
+                         группу одним запросом и ветвление не принимает. Вынесите роутер и \
+                         читаемые им сигналы ({}) ИЗ группы, а в группу оставьте ту ветку, \
+                         которую роутер выбирает",
+                        names.join(", "),
+                        if keys.is_empty() {
+                            "—".to_string()
+                        } else {
+                            keys.join(", ")
+                        }
+                    );
+                    if !undeclared.is_empty() {
+                        hint.push_str(&format!(
+                            ". Часть этих сигналов не объявлена ни в фактах графа, ни в \
+                             `fused_keys`: {}",
+                            undeclared.join(", ")
+                        ));
+                    }
+                    push_diagnostic(
+                        diagnostics,
+                        "GROUP_FUSED_HAS_ROUTER",
+                        &location,
+                        hint,
+                    );
+                }
+
+                if let Err(why) = super::groups::ensure_single_entry(workflow, id) {
+                    push_diagnostic(
+                        diagnostics,
+                        "GROUP_FUSED_MULTIPLE_ENTRY",
+                        &location,
+                        why,
+                    );
+                }
+
+                if let Err(why) = super::groups::exit_node_of_group(workflow, id) {
+                    push_diagnostic(
+                        diagnostics,
+                        "GROUP_FUSED_EXIT_AMBIGUOUS",
+                        &location,
+                        why,
+                    );
+                } else if let Ok(exit) = super::groups::exit_node_of_group(workflow, id) {
+                    if super::groups::exit_has_conditional_edge(workflow, &exit, id) {
+                        push_diagnostic(
+                            diagnostics,
+                            "GROUP_FUSED_EXIT_CONDITIONAL",
+                            &format!("{}.exit", location),
+                            format!(
+                                "из выхода группы (нода '{}') выходит условное ребро \
+                                 (`condition:`/`case:`): у макро-вызова нет \
+                                 `status`/`matched_case`, чтобы его выбрать. Сделайте ребро \
+                                 безусловным или вынесите ветвление в роутер ДО группы",
+                                exit
+                            ),
+                        );
+                    }
+                }
+
+                // В FUSED внутренние ноды группы НЕ выполняются, поэтому ссылка
+                // `{{ nodes.X.output }}` в инструкции не разрешится и уедет в промпт
+                // литералом (`resolve_template` молча оставляет неизвестные плейсхолдеры).
+                let targets = referenced_node_ids(text);
+                if let Some(first) = targets.first() {
+                    push_diagnostic(
+                        diagnostics,
+                        "GROUP_FUSED_NODE_REF",
+                        &format!("{}.fused_instruction", location),
+                        format!(
+                            "ссылка {{{{ nodes.{}.output }}}} в инструкции фьюжинга не разрешится: \
+                             в FUSED эти ноды не выполняются по отдельности (всего: {})",
+                            first,
+                            targets.join(", ")
+                        ),
+                    );
+                }
+
+                // То же для потребителей СНАРУЖИ группы: нода вне группы читает
+                // выход внутренней ноды — в Fused такого выхода не будет.
+                for node in &workflow.nodes {
+                    if members.contains(node.id.as_str()) {
+                        continue;
+                    }
+                    for (field, template) in [
+                        ("input", node.input.as_deref()),
+                        ("input_object", node.input_object.as_deref()),
+                        ("task", node.task.as_deref()),
+                    ] {
+                        let Some(template) = template else { continue };
+                        let referenced = referenced_node_ids(template);
+                        let inside: Vec<&str> = referenced
+                            .iter()
+                            .filter(|t| members.contains(t.as_str()))
+                            .map(|t| t.as_str())
+                            .collect();
+                        if let Some(first) = inside.first() {
+                            push_diagnostic(
+                                diagnostics,
+                                "GROUP_FUSED_OUTPUT_CONSUMED",
+                                &format!("nodes[id={}].{}", node.id, field),
+                                format!(
+                                    "нода читает выход '{}' — внутренней ноды группы '{}': в FUSED \
+                                     группа выполняется одним вызовом и такой выход не создаётся \
+                                     (плейсхолдер уедет в промпт литералом)",
+                                    first, id
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 }

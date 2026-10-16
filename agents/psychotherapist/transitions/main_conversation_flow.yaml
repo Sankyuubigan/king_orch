@@ -6,6 +6,14 @@ config:
 
 entry: user_message
 
+groups:
+
+- id: group_1
+  title: Новая группа
+  ui_pos:
+    y: 719
+    x: -105
+
 nodes:
 
 - id: user_message
@@ -29,8 +37,8 @@ nodes:
   true_to: note_1782221436115
   false_to: note_1785141025138
   ui_pos:
-    x: -1700
     y: 495
+    x: -1700
 
 - id: call_collector
   type: llm_worker
@@ -54,12 +62,13 @@ nodes:
 
 - id: call_decomposer
   type: llm_worker
+  group: group_1
   agent: decomposer
   inject_response:
   - soma_translator
   ui_pos:
-    x: 287
-    y: 236
+    y: 486
+    x: 240
 
 - id: call_validator
   type: llm_worker
@@ -99,8 +108,8 @@ nodes:
   - field: triage_complexity
     equals: cluster
   ui_pos:
-    x: -103
-    y: 357
+    x: -42
+    y: 601
 
 - id: call_pattern_finder
   type: llm_worker
@@ -111,8 +120,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 2834
     y: 44
+    x: 2834
 
 - id: call_healer
   type: llm_worker
@@ -145,8 +154,8 @@ nodes:
   - data_collector
   - grounder
   ui_pos:
-    x: 2259
     y: -456
+    x: 2259
 
 - id: note_1782221436115
   type: note
@@ -159,15 +168,15 @@ nodes:
   type: note
   input: проверка данных. развилка на доработку данных или отправку на лечение
   ui_pos:
-    y: 161
-    x: 908
+    y: 492
+    x: 916
 
 - id: note_1784427848563
   type: note
   input: вычисление типа
   ui_pos:
-    y: 41
     x: 2085
+    y: 41
 
 - id: check_critical_elements
   type: condition_router
@@ -202,8 +211,8 @@ nodes:
       equals: false
   logic: any
   ui_pos:
-    x: -802
     y: 218
+    x: -802
 
 - id: check_need_handedness
   type: signal_router
@@ -212,8 +221,8 @@ nodes:
   - key: НУЖНА РУКОСТЬ
     to: note_1785123862689
   ui_pos:
-    y: 117
     x: -332
+    y: 117
 
 - id: note_1785123862689
   type: note
@@ -267,8 +276,8 @@ nodes:
     equals: true
   logic: all
   ui_pos:
-    x: 1967
     y: -283
+    x: 1967
 
 - id: check_elements2
   type: condition_router
@@ -286,13 +295,14 @@ nodes:
 
 - id: call_synthesizer
   type: llm_worker
+  group: group_1
   agent: synthesizer
   output_type: message
   inject_response:
   - decomposer
   ui_pos:
-    y: 121
-    x: 548
+    x: 526
+    y: 382
 
 edges:
 

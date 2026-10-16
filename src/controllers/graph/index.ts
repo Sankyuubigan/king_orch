@@ -9,6 +9,7 @@ import * as nodesPart from "./nodes-part";
 import * as panelPart from "./panel-part";
 import * as edgePart from "./edge-part";
 import * as switchLogicPart from "./switch-logic-part";
+import * as groupsPart from "./groups-part";
 import * as layoutModule from "./layout";
 import * as nodeHtmlModule from "./node-html";
 
@@ -23,6 +24,7 @@ Object.assign(GraphController.prototype, {
   ...panelPart,
   ...edgePart,
   ...switchLogicPart,
+  ...groupsPart,
   ...layoutModule,
   ...nodeHtmlModule,
 });

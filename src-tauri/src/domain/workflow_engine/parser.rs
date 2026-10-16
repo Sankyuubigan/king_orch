@@ -58,8 +58,75 @@ pub struct WorkflowDef {
     /// сохранении (порядок создания), поэтому позиция не является объявлением.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub entry: Option<String>,
+    /// Режим исполнения графа: `detailed` (по умолчанию) | `fused`.
+    ///
+    /// Дефолт ВСЕГДА `detailed`: без объявления фьюжится только то, что автор графа
+    /// явно пометил (`NodeDef.group` + `GroupDef.fused_instruction`). Режима `auto`
+    /// не существует — любая эвристика «модель достаточно сильная» была бы порогом
+    /// без замера. Экономию пользователь включает сам и осознанно.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub strategy: Option<String>,
+    /// Группы нод — аннотация графа для FUSED-режима и визуальные рамки на холсте.
+    ///
+    /// Это МЕТАДАННЫЕ, а не второй формат исполнения: плоский `nodes`/`edges` остаётся
+    /// единственным источником правды по маршрутизации. Группа не добавляет ни новых
+    /// переходов, ни новых прерываний — она только говорит «эти ноды можно схлопнуть
+    /// в один вызов LLM с такой-то инструкцией».
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<GroupDef>,
     pub nodes: Vec<NodeDef>,
     pub edges: Vec<EdgeDef>,
+}
+
+/// Группа нод — схлопываемая кучка нод внутри одного хода (Turn).
+///
+/// Терминология (docs/new_ssot_type_agents.md, раздел «Терминология и названия»):
+/// Session Stage (этап сессии, вне задачи) → Turn (ход) → **Group (группа нод)** → Node.
+///
+/// Группа НЕ хранит `on_success` и `interrupts`: переход группа→группа уже выражен
+/// обычным ребром между нодами разных групп, а прерывание на человека — обычная нода
+/// `note`. Второй источник правды разошёлся бы с рёбрами при первом же редактировании.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct GroupDef {
+    pub id: String,
+    /// Человекочитаемое имя группы (рисуется в заголовке рамки на холсте).
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub title: String,
+    /// Инструкция для FUSED-режима: вся группа выполняется одним вызовом LLM.
+    /// Пусто/нет — группа работает только в Detailed (рамка на холсте остаётся).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fused_instruction: Option<String>,
+    /// Агент-«исполнитель» группы в FUSED. Его `.md` даёт системный промпт,
+    /// личность и `mcp_servers` (без них `tools` нечем разрешить).
+    /// Если не задан — системным промптом служит сам `fused_instruction`,
+    /// а `tools` обязан быть пустым.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fused_agent: Option<String>,
+    /// Инструменты, доступные склеенному вызову группы (allowlist по именам).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<String>,
+    /// Дополнительные ключи выхода, которые группа возвращает помимо фактов
+    /// из `config.facts_file`: детерминированные роутеры графа читают их из
+    /// `context.signals`, и склеенный вызов обязан их заполнить.
+    ///
+    /// Переиспользует контракт `FactDef` без нового типа: пустой `values` —
+    /// boolean-ключ грамматики, непустой — строковый. `criteria` (если задан)
+    /// уходит в промпт как объяснение ключа.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "deserialize_fused_keys")]
+    pub fused_keys: Vec<FactDef>,
+    /// Явные координаты рамки. Приоритет: явное объявление > производное от bbox нод
+    /// (нужно для создания пустой группы, у которой ещё нет нод).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_pos: Option<HashMap<String, i32>>,
+    /// Явный размер рамки (`w`/`h`). Появляется, как только автор РАСТЯНУЛ рамку:
+    /// до этого её геометрия выводится из bbox нод-участников, и хранить нечего.
+    ///
+    /// Наличие `ui_size` — это и есть признак «рамкой владеет автор»: без него
+    /// рамка следует за нодами сама, с ним — перестаёт. Растяжение рамки двигает
+    /// ТОЛЬКО рамку (как frame в Figma/Blender), поэтому свободное место внутри
+    /// неё появляется само собой.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_size: Option<HashMap<String, i32>>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -123,7 +190,9 @@ pub struct FactsFile {
     pub output_fields: Vec<OutputFieldDef>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// `Default`/`PartialEq` — чтобы `FactDef` можно было переиспользовать как
+/// описание ключа выхода склеенного вызова группы (`GroupDef.fused_keys`).
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct FactDef {
     pub id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -235,11 +304,48 @@ where
     }
 }
 
+/// Десериализатор `fused_keys`: принимает и короткую форму `[имя_ключа, ...]`
+/// (boolean-ключ), и полную `[{id: ..., values: [...]}, ...]` (string/enum-ключ
+/// с необязательным пояснением `criteria`).
+///
+/// Короткая форма нужна для массового случая: большинство ключей — обычные
+/// boolean-факты, и заставлять автора писать по строке на каждый — чисто шум.
+fn deserialize_fused_keys<'de, D>(deserializer: D) -> Result<Vec<FactDef>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum KeyItem {
+        Short(String),
+        Full(FactDef),
+    }
+
+    let items: Vec<KeyItem> = Vec::deserialize(deserializer)?;
+    Ok(items
+        .into_iter()
+        .map(|item| match item {
+            KeyItem::Short(id) => FactDef {
+                id,
+                ..Default::default()
+            },
+            KeyItem::Full(def) => def,
+        })
+        .collect())
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeDef {
     pub id: String,
     #[serde(rename = "type")]
     pub node_type: NodeType,
+    /// Принадлежность к группе нод (`WorkflowDef.groups[].id`).
+    ///
+    /// В DETAILED-режиме поле ничего не меняет — это чистая аннотация для холста.
+    /// В FUSED-режиме ноды одной группы схлопываются в один вызов LLM по
+    /// `GroupDef.fused_instruction`. Пусто — нода вне групп, всегда отдельным вызовом.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -418,9 +524,15 @@ fn discover_workflow_file(path: &Path) -> Result<Option<WorkflowDef>, String> {
 /// `nodes` — это ровно то, чем файл ДЕКЛАРИРУЕТ себя как граф. Отсутствие
 /// ключа означает «это не граф», и файл не является ошибкой загрузки.
 /// Никаких списков папок/имён: признак берётся из самого документа.
+///
+/// Ключ `groups` тоже объявляет граф. Объявление секции `groups:` при
+/// отсутствующем `nodes:` — это сломанный фазовый граф (есть рамки, нечего
+/// исполнять), и он обязан дать ЧЕСТНУЮ ошибку загрузки, а не раствориться
+/// среди файлов данных: молчаливый пропуск выглядел бы как «файла нет».
 fn declares_graph(source: &serde_yaml::Value) -> bool {
     source.as_mapping().is_some_and(|m| {
         m.contains_key(&serde_yaml::Value::String("nodes".into()))
+            || m.contains_key(&serde_yaml::Value::String("groups".into()))
     })
 }
 
@@ -653,6 +765,139 @@ mod tests {
                     node.id,
                     path,
                     input
+                );
+            }
+        }
+    }
+
+    /// ГЕЙТ ФОРМЫ МАКРО-НОДЫ на настоящем боевом графе.
+    ///
+    /// `group_1` — цепочка `call_decomposer → call_synthesizer`: один вход,
+    /// один выход, только LLM-ноды. Роутер `check_triage_complexity` вынесен из
+    /// группы наружу именно потому, что макро-вызов не умеет ветвиться.
+    /// Тест фиксирует оба конца: роутер не вернётся в группу, и форма группы
+    /// останется макро-узлом.
+    #[test]
+    fn production_group_is_a_macro_chain_without_a_router_inside() {
+        let path = graph_path("agents/psychotherapist/transitions/main_conversation_flow.yaml");
+        let wf = parse_workflow_file(&path)
+            .unwrap_or_else(|e| panic!("Парсинг {:?} не удался: {}", path, e));
+        assert!(
+            !wf.groups.is_empty(),
+            "в боевом графе нет ни одной группы — гейт проверяет не то"
+        );
+
+        for group in &wf.groups {
+            let id = group.id.trim();
+            let members: Vec<&str> = crate::domain::workflow_engine::groups::nodes_of_group(&wf, id)
+                .iter()
+                .map(|n| n.id.as_str())
+                .collect();
+            assert!(
+                !members.is_empty(),
+                "группа '{}' без нод — рамка пустая",
+                id
+            );
+            let routers: Vec<&str> =
+                crate::domain::workflow_engine::groups::routers_of_group(&wf, id)
+                    .iter()
+                    .map(|n| n.id.as_str())
+                    .collect();
+            assert!(
+                routers.is_empty(),
+                "{:?}: роутер {:?} снова внутри группы '{}' — её нельзя выполнить одним \
+                 вызовом (Fused станет дороже Detailed)",
+                path,
+                routers,
+                id
+            );
+            crate::domain::workflow_engine::groups::ensure_macro_possible(&wf, group)
+                .unwrap_or_else(|e| panic!("{:?}: группа '{}' не имеет формы макро-узла: {}", path, id, e));
+        }
+
+        // Роутер остался в графе — просто ВНЕ группы, и он выполняется до неё.
+        assert!(
+            wf.nodes
+                .iter()
+                .any(|n| n.id == "check_triage_complexity" && n.group.is_none()),
+            "роутер должен остаться в графе вне группы"
+        );
+    }
+
+    /// Известное и ОГОВОРЁННОЕ ограничение авто-склейки на этом же графе.
+    ///
+    /// `call_decomposer` внедряет отчёт `soma_translator`, а тот производится
+    /// ВНЕ группы. В FUSED склеенный вызов получает историю без
+    /// thought-сообщений, поэтому отчёт до модели не дойдёт. Это не поломка
+    /// движка, а свойство склейки — и автор обязан знать о нём ДО включения
+    /// Fused, поэтому здесь оно зафиксировано диагностикой.
+    #[test]
+    fn production_group_reports_lost_external_injects() {
+        use crate::domain::workflow_engine::editor_fidelity::analyze_workflow_fidelity;
+
+        let path = graph_path("agents/psychotherapist/transitions/main_conversation_flow.yaml");
+        let content = std::fs::read_to_string(&path).expect("чтение YAML");
+        let source: serde_yaml::Value = serde_yaml::from_str(&content).expect("YAML");
+        let mut wf: WorkflowDef = serde_yaml::from_value(source.clone()).expect("workflow");
+        for group in wf.groups.iter_mut() {
+            group.fused_instruction = Some("Сделай всё.".to_string());
+        }
+        let mut with_instruction = source.clone();
+        if let Some(seq) = with_instruction
+            .get_mut("groups")
+            .and_then(|g| g.as_sequence_mut())
+        {
+            for item in seq.iter_mut() {
+                if let Some(map) = item.as_mapping_mut() {
+                    map.insert(
+                        serde_yaml::Value::String("fused_instruction".into()),
+                        serde_yaml::Value::String("Сделай всё.".into()),
+                    );
+                }
+            }
+        }
+
+        let diagnostics =
+            analyze_workflow_fidelity(&with_instruction, &wf).expect("анализ");
+        let lost: Vec<&str> = diagnostics
+            .iter()
+            .filter(|d| d.code == "GROUP_FUSED_INJECT_LOST")
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(
+            !lost.is_empty(),
+            "потеря внешнего отчёта не диагностирована — автор включит Fused и получит \
+             другой ответ, не зная почему. Диагностики: {:?}",
+            diagnostics.iter().map(|d| d.code.as_str()).collect::<Vec<_>>()
+        );
+        assert!(
+            lost[0].contains("soma_translator"),
+            "диагностика не называет потерянный отчёт: {}",
+            lost[0]
+        );
+    }
+
+    /// Все боевые группы, объявленные схлопываемыми, обязаны иметь форму макро-узла.
+    ///
+    /// Это гейт «Fused не может оказаться дороже Detailed»: любая группа из
+    /// `agents/` обязана быть сворачиваема безоговорочно.
+    #[test]
+    fn every_production_group_is_macro_shaped_or_explicitly_not_fusable() {
+        for rel in PRODUCTION_GRAPHS {
+            let path = graph_path(rel);
+            let wf = parse_workflow_file(&path)
+                .unwrap_or_else(|e| panic!("Парсинг {:?} не удался: {}", path, e));
+            for group in &wf.groups {
+                let instruction = group.fused_instruction.as_deref().unwrap_or("").trim();
+                if instruction.is_empty() {
+                    continue; // рамка без инструкции в Fused не участвует
+                }
+                assert!(
+                    crate::domain::workflow_engine::groups::ensure_macro_possible(&wf, group)
+                        .is_ok(),
+                    "{:?}: группа '{}' объявлена схлопываемой, но не имеет формы макро-узла",
+                    path,
+                    group.id
                 );
             }
         }
@@ -1616,6 +1861,8 @@ edges: []
             parent_dir: String::new(),
             entry: None,
             config: None,
+            strategy: None,
+            groups: vec![],
             nodes: vec![node],
             edges: vec![],
         };
@@ -1657,6 +1904,8 @@ edges: []
             parent_dir: String::new(),
             entry: None,
             config: None,
+            strategy: None,
+            groups: vec![],
             nodes: vec![node],
             edges: vec![],
         };
@@ -1705,6 +1954,8 @@ edges: []
             parent_dir: String::new(),
             entry: None,
             config: None,
+            strategy: None,
+            groups: vec![],
             nodes: vec![node1, node2],
             edges: vec![],
         };
@@ -1850,6 +2101,8 @@ edges: []
                 extractor_prompt: Some("извлеки факты".to_string()),
                 ..Default::default()
             }),
+            strategy: None,
+            groups: vec![],
             nodes,
             edges: vec![
                 EdgeDef {
@@ -2264,6 +2517,8 @@ edges: []
             parent_dir: String::new(),
             entry: None,
             config: None,
+            strategy: None,
+            groups: vec![],
             nodes: vec![node],
             edges: vec![],
         };
@@ -2272,5 +2527,307 @@ edges: []
         let wf2: WorkflowDef = serde_yaml::from_str(&yaml_final)
             .expect("❌ Пайплайн save_workflow сгенерировал невалидный YAML!");
         assert_eq!(wf2.nodes[0].input.as_deref(), Some(input));
+    }
+
+    // =======================================================================
+    // ГРУППЫ НОД (Group) — секция `groups:` + поле `group:` у ноды
+    // =======================================================================
+
+    const GRAPH_WITH_GROUPS: &str = r#"
+name: Группы
+entry: user_message
+
+strategy: fused
+
+# Явный пустой config: без него редактор дописал бы `config: null`, и файл
+# отличался бы от нормализованного (диагностика YAML_FIELD_ADDED).
+config: {}
+
+groups:
+  - id: intake_group
+    title: "Первичный анализ"
+    fused_instruction: "Извлеки факты."
+    fused_keys:
+      - id: has_problem
+  - id: healing_group
+    title: "Исцеление"
+    fused_agent: neuro_healer
+    tools: [ReadSection]
+    fused_instruction: "Найди паттерн и вызови ReadSection."
+    # Рамку растянули вручную: автор владеет её геометрией, свободное место
+    # внутри неё — под новые ноды.
+    ui_pos: { x: 40, y: 60 }
+    ui_size: { w: 640, h: 320 }
+
+nodes:
+  - id: user_message
+    type: user_message
+    group: intake_group
+  - id: extract_facts
+    type: llm_fact_extractor
+    group: intake_group
+    input: '{{ nodes.user_message.output.text }}'
+  - id: call_healer
+    type: llm_worker
+    group: healing_group
+    agent: neuro_healer
+
+edges:
+  - from: user_message
+    to: extract_facts
+  - from: extract_facts
+    to: call_healer
+"#;
+
+    use crate::domain::workflow_engine::editor_fidelity::analyze_workflow_fidelity;
+
+    #[test]
+    fn groups_survive_save_workflow_roundtrip() {
+        // ГЕЙТ G2: если `groups`/`group` не попадут в `WorkflowDef`, `save_workflow`
+        // (serde_yaml → to_string) выбросит секцию из файла МОЛЧА, и всё управление
+        // группами с холста будет теряться при первом же сохранении.
+        let wf = wf_from_yaml(GRAPH_WITH_GROUPS);
+        assert_eq!(wf.groups.len(), 2);
+        assert_eq!(wf.strategy.as_deref(), Some("fused"));
+
+        let yaml = separate_top_level_fields(&serde_yaml::to_string(&wf).expect("ser"));
+        assert!(yaml.contains("groups:"), "секция groups потерялась:\n{}", yaml);
+        assert!(yaml.contains("group: intake_group"), "поле group потерялось:\n{}", yaml);
+
+        let wf2: WorkflowDef = serde_yaml::from_str(&yaml).expect("reparse");
+        assert_eq!(wf2.groups, wf.groups, "группы не равны после round-trip");
+        assert_eq!(
+            wf2.nodes.iter().map(|n| n.group.clone()).collect::<Vec<_>>(),
+            vec![
+                Some("intake_group".to_string()),
+                Some("intake_group".to_string()),
+                Some("healing_group".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn group_ui_size_survives_roundtrip() {
+        // Геометрия растянутой рамки — единственное, что отличает её от
+        // производной от bbox нод. Потеряется в YAML → рамка «схлопнется» сама
+        // при следующем открытии файла, и автор потеряет свободное место,
+        // которое сам отрисовал.
+        let wf = wf_from_yaml(GRAPH_WITH_GROUPS);
+        let healing = wf.groups.iter().find(|g| g.id == "healing_group").unwrap();
+        let size = healing.ui_size.as_ref().expect("ui_size прочитан");
+        assert_eq!(size.get("w"), Some(&640));
+        assert_eq!(size.get("h"), Some(&320));
+        assert_eq!(healing.ui_pos.as_ref().unwrap().get("x"), Some(&40));
+
+        let yaml = serde_yaml::to_string(&wf).expect("ser");
+        assert!(yaml.contains("ui_size"), "ui_size потерялся:\n{}", yaml);
+        let wf2: WorkflowDef = serde_yaml::from_str(&yaml).expect("reparse");
+        assert_eq!(
+            wf2.groups.iter().find(|g| g.id == "healing_group").unwrap().ui_size,
+            healing.ui_size,
+            "размер рамки не равен после round-trip"
+        );
+    }
+
+    #[test]
+    fn group_without_ui_size_keeps_the_key_out_of_yaml() {
+        // Старый файл без `ui_size` обязан открываться, а сохранение не должно
+        // дописывать в него поле, которого автор не задавал (тот же контракт,
+        // что у `visible` и `strategy`).
+        //
+        // Проверяем БЛОК конкретной группы, а не весь YAML: у `healing_group`
+        // в общей фикстуре `ui_size` есть, и поиск подстроки по файлу «поймал»
+        // бы чужую группу — тест проверял не то, что думал.
+        let wf = wf_from_yaml(GRAPH_WITH_GROUPS);
+        let intake = wf.groups.iter().find(|g| g.id == "intake_group").unwrap();
+        assert_eq!(intake.ui_size, None);
+        assert_eq!(intake.ui_pos, None);
+
+        let yaml = serde_yaml::to_string(&wf).expect("ser");
+        let reparsed: serde_yaml::Value = serde_yaml::from_str(&yaml).expect("yaml -> value");
+        let intake_block = reparsed
+            .get("groups")
+            .and_then(|g| g.as_sequence())
+            .and_then(|list| {
+                list.iter()
+                    .find(|item| item.get("id").and_then(|v| v.as_str()) == Some("intake_group"))
+            })
+            .expect("секция groups разобрана");
+        assert!(
+            intake_block.get("ui_size").is_none(),
+            "рамка без явного размера получила ui_size:\n{:?}",
+            intake_block
+        );
+        assert!(intake_block.get("ui_pos").is_none());
+    }
+
+    #[test]
+    fn group_tools_and_fused_keys_are_read() {
+        let wf = wf_from_yaml(GRAPH_WITH_GROUPS);
+        let healing = wf.groups.iter().find(|g| g.id == "healing_group").unwrap();
+        assert_eq!(healing.tools, vec!["ReadSection".to_string()]);
+        let intake = wf.groups.iter().find(|g| g.id == "intake_group").unwrap();
+        let ids: Vec<&str> = intake.fused_keys.iter().map(|k| k.id.as_str()).collect();
+        assert_eq!(ids, vec!["has_problem"]);
+        assert_eq!(intake.title, "Первичный анализ");
+    }
+
+    #[test]
+    fn flat_graphs_have_no_groups_and_serialize_without_the_key() {
+        // ГЕЙТ G1: у 6 существующих плоских графов секции `groups:` быть не должно
+        // НИ В ПАРСЕ, НИ В СГЕНЕРИРОВАННОМ YAML — иначе редактор допишет пустую
+        // секцию в файлы, которые её не просили.
+        let wf = wf_from_yaml("name: X\nentry: n\nnodes:\n  - id: n\n    type: user_message\nedges: []\n");
+        assert!(wf.groups.is_empty());
+        let yaml = serde_yaml::to_string(&wf).expect("ser");
+        assert!(
+            !yaml.contains("groups:") && !yaml.contains("group:"),
+            "пустые группы попали в YAML:\n{}",
+            yaml
+        );
+    }
+
+    #[test]
+    fn groups_section_alone_is_a_broken_graph_not_a_data_file() {
+        // Объявление `groups:` без `nodes:` — сломанный фазовый граф. Молчаливый
+        // пропуск выглядел бы как «файла нет»; честная ошибка — как диагноз.
+        let src: serde_yaml::Value =
+            serde_yaml::from_str("name: X\ngroups:\n  - id: g\n    title: t\n").unwrap();
+        assert!(
+            declares_graph(&src),
+            "секция groups обязана объявлять файл графом"
+        );
+        let err = into_workflow(src, Path::new("broken.yaml")).expect_err("граф сломан");
+        assert!(err.contains("nodes"), "ошибка не про отсутствие nodes: {}", err);
+    }
+
+    #[test]
+    fn data_files_are_still_not_graphs() {
+        // Регресс `declares_graph`: расширение признака на `groups` не должно
+        // превратить файлы данных (facts.yaml, rules.yaml) в графы.
+        for rel in DATA_FILES {
+            let path = workspace_root().join("agents").join(rel);
+            let source = read_yaml_source(&path).expect("валидный YAML");
+            assert!(!declares_graph(&source), "{} ошибочно объявлен графом", rel);
+        }
+    }
+
+    #[test]
+    fn group_reference_to_missing_group_is_diagnosed() {
+        let src: serde_yaml::Value = serde_yaml::from_str(
+            "name: X\nentry: n\ngroups:\n  - id: g1\n    title: t\nnodes:\n  - id: n\n    type: user_message\n    group: ghost\nedges: []\n",
+        )
+        .unwrap();
+        let wf: WorkflowDef = serde_yaml::from_value(src.clone()).unwrap();
+        let diagnostics = analyze_workflow_fidelity(&src, &wf).unwrap();
+        let codes: Vec<&str> = diagnostics.iter().map(|d| d.code.as_str()).collect();
+        assert!(codes.contains(&"GROUP_REF_MISSING"), "коды: {:?}", codes);
+    }
+
+    #[test]
+    fn empty_group_and_duplicate_ids_are_diagnosed() {
+        let src: serde_yaml::Value = serde_yaml::from_str(
+            "name: X\nentry: n\ngroups:\n  - id: g1\n    title: t\n  - id: g1\n    title: t2\nnodes:\n  - id: n\n    type: user_message\n    group: g1\nedges: []\n",
+        )
+        .unwrap();
+        let wf: WorkflowDef = serde_yaml::from_value(src.clone()).unwrap();
+        let diagnostics = analyze_workflow_fidelity(&src, &wf).unwrap();
+        let codes: Vec<&str> = diagnostics.iter().map(|d| d.code.as_str()).collect();
+        assert!(codes.contains(&"GROUP_ID_DUPLICATE"), "коды: {:?}", codes);
+
+        // Пустая группа (нод нет) — тоже диагностика: рамке нечего обводить.
+        let src2: serde_yaml::Value = serde_yaml::from_str(
+            "name: X\nentry: n\ngroups:\n  - id: solo\n    title: t\n    fused_instruction: \"сделай\"\nnodes:\n  - id: n\n    type: user_message\nedges: []\n",
+        )
+        .unwrap();
+        let wf2: WorkflowDef = serde_yaml::from_value(src2.clone()).unwrap();
+        let d2 = analyze_workflow_fidelity(&src2, &wf2).unwrap();
+        let codes2: Vec<&str> = d2.iter().map(|d| d.code.as_str()).collect();
+        assert!(codes2.contains(&"GROUP_EMPTY"), "коды: {:?}", codes2);
+    }
+
+    #[test]
+    fn node_reference_inside_fused_instruction_is_diagnosed() {
+        // В FUSED ноды группы не выполняются по отдельности, поэтому `{{ nodes.X.output }}`
+        // в fused_instruction уедет в промпт литералом (resolve_template молча
+        // оставляет неизвестные плейсхолдеры). Отказ должен быть виден ДО запуска.
+        let src: serde_yaml::Value = serde_yaml::from_str(
+            "name: X\nentry: n\ngroups:\n  - id: g\n    title: t\n    fused_instruction: \"Возьми {{ nodes.extract_facts.output }} и сделай вывод\"\nnodes:\n  - id: n\n    type: user_message\n    group: g\nedges: []\n",
+        )
+        .unwrap();
+        let wf: WorkflowDef = serde_yaml::from_value(src.clone()).unwrap();
+        let diagnostics = analyze_workflow_fidelity(&src, &wf).unwrap();
+        let codes: Vec<&str> = diagnostics.iter().map(|d| d.code.as_str()).collect();
+        assert!(codes.contains(&"GROUP_FUSED_NODE_REF"), "коды: {:?}", codes);
+    }
+
+    #[test]
+    fn group_without_instruction_but_with_tools_is_diagnosed() {
+        let src: serde_yaml::Value = serde_yaml::from_str(
+            "name: X\nentry: n\ngroups:\n  - id: g\n    title: t\n    tools: [ReadSection]\nnodes:\n  - id: n\n    type: user_message\n    group: g\nedges: []\n",
+        )
+        .unwrap();
+        let wf: WorkflowDef = serde_yaml::from_value(src.clone()).unwrap();
+        let diagnostics = analyze_workflow_fidelity(&src, &wf).unwrap();
+        let codes: Vec<&str> = diagnostics.iter().map(|d| d.code.as_str()).collect();
+        assert!(
+            codes.contains(&"GROUP_FUSED_WITHOUT_INSTRUCTION"),
+            "коды: {:?}",
+            codes
+        );
+    }
+
+    #[test]
+    fn fused_keys_accept_short_and_full_forms() {
+        // Короткая форма — для обычных boolean-ключей; полная нужна только
+        // когда у ключа есть `values` (строковый) или пояснение `criteria`.
+        let short: WorkflowDef = wf_from_yaml(
+            "name: X\nentry: n\ngroups:\n  - id: g\n    title: t\n    fused_instruction: \"сделай\"\n    fused_keys: [need_handedness]\nnodes:\n  - id: n\n    type: user_message\n    group: g\nedges: []\n",
+        );
+        let key = &short.groups[0].fused_keys[0];
+        assert_eq!(key.id, "need_handedness");
+        assert!(key.values.is_empty(), "короткая форма = boolean-ключ");
+
+        let full: WorkflowDef = wf_from_yaml(
+            "name: X\nentry: n\ngroups:\n  - id: g\n    title: t\n    fused_instruction: \"сделай\"\n    fused_keys:\n      - id: target_kind\n        values: [one, many]\nnodes:\n  - id: n\n    type: user_message\n    group: g\nedges: []\n",
+        );
+        let key = &full.groups[0].fused_keys[0];
+        assert_eq!(key.values, vec!["one".to_string(), "many".to_string()]);
+    }
+
+    #[test]
+    fn group_tools_without_fused_agent_is_diagnosed() {
+        // Инструменты группы резолвятся из `mcp_servers` агента. Без агента их
+        // неоткуда взять — объявление было бы ложью.
+        let src: serde_yaml::Value = serde_yaml::from_str(
+            "name: X\nentry: n\ngroups:\n  - id: g\n    title: t\n    fused_instruction: \"сделай\"\n    tools: [ReadSection]\nnodes:\n  - id: n\n    type: user_message\n    group: g\nedges: []\n",
+        )
+        .unwrap();
+        let wf: WorkflowDef = serde_yaml::from_value(src.clone()).unwrap();
+        let diagnostics = analyze_workflow_fidelity(&src, &wf).unwrap();
+        let codes: Vec<&str> = diagnostics.iter().map(|d| d.code.as_str()).collect();
+        assert!(
+            codes.contains(&"GROUP_FUSED_TOOLS_WITHOUT_AGENT"),
+            "коды: {:?}",
+            codes
+        );
+    }
+
+    #[test]
+    fn valid_groups_produce_no_diagnostics() {
+        let src: serde_yaml::Value =
+            serde_yaml::from_str(GRAPH_WITH_GROUPS).unwrap();
+        let wf: WorkflowDef = serde_yaml::from_value(src.clone()).unwrap();
+        let diagnostics = analyze_workflow_fidelity(&src, &wf).unwrap();
+        let codes: Vec<&str> = diagnostics.iter().map(|d| d.code.as_str()).collect();
+        assert!(
+            codes.is_empty(),
+            "корректный фазовый граф не должен давать диагностику: {:?} @ {:?}",
+            codes,
+            diagnostics
+                .iter()
+                .map(|d| format!("{} ({})", d.location, d.message))
+                .collect::<Vec<_>>()
+        );
     }
 }

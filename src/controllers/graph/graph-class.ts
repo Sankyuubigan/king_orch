@@ -3,6 +3,7 @@ import "drawflow/dist/drawflow.min.css";
 import type { DrawflowNode } from "drawflow";
 import type { GraphDiagnostic } from "../../services";
 import type { GraphElements, GraphSnapshot } from "./types";
+import type { GraphGroupDef } from "./types";
 import type { GraphApi } from "./graph-api";
 
 export class GraphController {
@@ -10,7 +11,34 @@ export class GraphController {
   editor: Drawflow | null = null;
   currentFilePath: string | null = null;
   currentWorkflowName: string = "";
+  /**
+   * Описание графа (`description:` в YAML). Едет через редактор по той же причине,
+   * что и `groups`: `save_workflow` сериализует `WorkflowDef` поверх файла, и
+   * забытое поле молча исчезает. У 4 из 6 боевых графов описание заполнено.
+   */
+  currentWorkflowDescription: string | null = null;
   currentWorkflowConfig: any = null;
+  /** Режим исполнения графа: `detailed` (дефолт) | `fused`. */
+  currentWorkflowStrategy: string | null = null;
+  /**
+   * Группы нод текущего графа — единственное состояние групп на фронте.
+   *
+   * Данные ноды (`dn.data.group`) и рамки на холсте — ПРОИЗВОДНЫЕ от этого
+   * массива, второй источник правды заведён быть не должен.
+   */
+  currentGroups: GraphGroupDef[] = [];
+  /** Группа, рамка которой сейчас перетаскивается за заголовок. */
+  draggingGroupId: string | null = null;
+  /**
+   * Группа, которую сейчас показывает сайдбар (`null` — нода или ничего).
+   *
+   * Нужен, чтобы смена режима исполнения перерисовала открытый инспектор: без
+   * него подсказка «граф в режиме Detailed» осталась бы на экране после
+   * переключения селекта — то есть редактор говорил бы неправду (§2.2).
+   */
+  inspectingGroupId: string | null = null;
+  /** Кэш измеренных размеров нод: пересчёт рамок не должен читать layout на каждый mousemove. */
+  nodeSizeCache: Map<string, { w: number; h: number }> = new Map();
   /**
    * Видимость графа в каталоге «Доступные агенты» (`visible` в корне YAML).
    *

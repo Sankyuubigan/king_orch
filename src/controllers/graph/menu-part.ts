@@ -35,6 +35,10 @@ export function setupContextMenu(this: GraphController): void {
           <span class="ctx-icon">📌</span>
           Вставить ноду
         </div>
+        <div class="ctx-item" data-action="create-group">
+          <span class="ctx-icon">📦</span>
+          Создать группу нод
+        </div>
         <div class="ctx-item has-submenu" data-action="create">
           <span class="ctx-icon">➕</span>
           Создать
@@ -75,6 +79,14 @@ export function setupContextMenu(this: GraphController): void {
         ev.stopPropagation();
         if (!this.copiedNode) return;
         this.pasteNode(cmX, cmY);
+        this.ctxMenu?.classList.remove('open');
+      });
+
+      // Создание группы нод. Пункт живёт ВНЕ `.ctx-submenu-list`: перебор подпунктов
+      // там безусловно зовёт addNode, и группа (не нода) была бы создана как нода.
+      this.ctxMenu!.querySelector('[data-action="create-group"]')?.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        this.createGroup(cmX, cmY);
         this.ctxMenu?.classList.remove('open');
       });
       return;

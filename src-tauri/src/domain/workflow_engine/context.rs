@@ -25,6 +25,21 @@ pub struct WorkflowContext {
     /// не гидрируются (это не SSOT-заявление про messages, а про доставку).
     /// SSOT для SignalRouter/ConditionRouter и {{ signals }} шаблона.
     pub signals: HashMap<String, serde_json::Value>,
+    /// Группы нод, уже выполненные склеенным вызовом в ЭТОМ ходе.
+    ///
+    /// Инвариант фьюжинга: группа исполняется один раз за ход (`groups::fused_group_for`).
+    /// Повторный вход в ту же группу идёт по её детерминированным нодам — сигналы
+    /// уже лежат в `signals`, второй вызов LLM дал бы тот же результат за те же деньги.
+    pub executed_groups: std::collections::HashSet<String>,
+    /// Режим исполнения, выбранный пользователем В ЧАТЕ для этой сессии.
+    ///
+    /// Перекрывает `strategy:` файла графа, но только когда пользователь сделал
+    /// явный выбор (тумблер в чате). `None` = «не переопределять»: файл главный,
+    /// и UI не имеет права молча увести разговор в другой режим.
+    pub strategy_override: Option<super::groups::ExecutionStrategy>,
+    /// Лог последней смены режима — чтобы вкладка «Логи» показала, что режим
+    /// взят из чата, а не из файла (§2.2: UI не должен молчать о подмене).
+    pub strategy_source: &'static str,
     pub image_candidates: String,
     pub request_media: Arc<RequestMedia>,
 }
@@ -42,6 +57,9 @@ impl WorkflowContext {
             history,
             output_emitted: false,
             signals: HashMap::new(),
+            executed_groups: std::collections::HashSet::new(),
+            strategy_override: None,
+            strategy_source: "файл графа",
             image_candidates: String::new(),
             request_media: Arc::new(RequestMedia::empty()),
         }

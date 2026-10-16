@@ -587,15 +587,15 @@ pub struct AgentMetaDto {
 | :--- | :--- | :--- | :--- |
 | **1. Глобальный (Чат)** | Состояние сессии сквозь десятки сообщений («Анамнез», «Диагностика», «Лечение») | **Этап сессии** / `Session Stage` (или `Stage`) | В памяти сессии / БД диалога (`state.stage`) |
 | **2. Локальный прогон** | Один цикл: сообщение юзера -> ответ агента | **Ход** / `Turn` (или `Run`) | В рантайме выполнения запроса |
-| **3. Группировка на холсте** | Схлопываемые куски нод внутри одного `Turn` для FUSED-режима | **Блок** / `Block` (или **Группа** / `Group`) | В структуре YAML и на визуальном холсте |
+| **3. Группировка на холсте** | Схлопываемые куски нод внутри одного `Turn` для FUSED-режима | **Группа** / `Group` | В структуре YAML и на визуальном холсте |
 | **4. Атомарный узел** | Конкретная микро-нода | **Узел** / `Node` | На холсте и в коде |
 
 ---
 
 ### Как это меняет YAML (Чисто и понятно)
 
-Мы заменяем сомнительное слово `phase` на **`block`** (или **`group`**). 
-В визуальных средах (Blender, Unreal Engine Blueprints, ComfyUI, ReactFlow) это стандарт: ноды объединяются в **Группы (Groups)** или **Блоки (Blocks)**.
+Мы заменяем сомнительное слово `phase` на **`group`**. 
+В визуальных средах (Blender, Unreal Engine Blueprints, ComfyUI, ReactFlow) это стандарт: ноды объединяются в **Группы (Groups)**.
 
 В YAML это выглядит идеально понятно:
 
@@ -603,40 +603,40 @@ pub struct AgentMetaDto {
 name: Психотерапевт
 entry: user_message
 
-# ВЕРХНИЙ УРОВЕНЬ: Блоки схлопывания (для Fused-режима)
-blocks:
-  - id: intake_block
+# ВЕРХНИЙ УРОВЕНЬ: Группы схлопывания (для Fused-режима)
+groups:
+  - id: intake_group
     title: "Первичный анализ"
     fused_instruction: "Извлеки факты. Если проблемы нет — верни request_helper."
 
-  - id: soma_focus_block
+  - id: soma_focus_group
     title: "Соматика и Мишень"
     fused_instruction: "Расшифруй соматику по НГМ. Выдели мишени..."
 
-  - id: diagnosis_block
+  - id: diagnosis_group
     title: "Диагностика элементов"
     fused_instruction: "Оцени e1-e9 через shadow_worker и grounder..."
 
-  - id: healing_block
+  - id: healing_group
     title: "Исцеление"
     tools: [ReadSection]
     fused_instruction: "Найди паттерн, вызови ReadSection и дай ответ."
 
-# ПЛОСКИЙ СПИСОК НОД: У каждой просто указан её block
+# ПЛОСКИЙ СПИСОК НОД: у каждой просто указан её group
 nodes:
   - id: extract_facts
     type: llm_fact_extractor
-    block: intake_block         # <-- Принадлежность к блоку
+    group: intake_group          # <-- Принадлежность к группе
     ui_pos: { x: -1990, y: 493 }
 
   - id: check_has_problem
     type: condition_check
-    block: intake_block         # <-- Тоже в intake_block
+    group: intake_group          # <-- Тоже в intake_group
     ui_pos: { x: -1700, y: 495 }
 
   - id: call_soma_translator
     type: llm_worker
-    block: soma_focus_block     # <-- Уже в следующем блоке
+    group: soma_focus_group      # <-- Уже в следующей группе
     ui_pos: { x: -561, y: 210 }
     
 edges:
@@ -648,15 +648,15 @@ edges:
 ### Что это дает на всех уровнях:
 
 1. **На визуальном холсте (Tauri GUI):**
-   * Термин: **«Блок нод»** или **«Группа» (Node Group)**.
+   * Термин: **«Группа нод»** / **«Group»**.
    * На холсте это буквально визуальная цветная рамка вокруг связанных нод.
-   * Кликнул на заголовок блока — открылась боковая панель с полем `fused_instruction`.
+   * Кликнул на заголовок группы — открылась боковая панель с полем `fused_instruction`.
 
 2. **В кодовой базе Rust:**
    * `TurnExecutor` — движок исполнения одного хода (`Turn`).
-   * `Block` / `NodeGroup` — структура метаданных схлопывания:
+   * `Group` / `NodeGroup` — структура метаданных схлопывания:
      ```rust
-     pub struct Block {
+     pub struct Group {
          pub id: String,
          pub title: String,
          pub fused_instruction: Option<String>,

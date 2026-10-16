@@ -522,6 +522,17 @@ input[type="text"], select { flex: 1; padding: 8px 10px; border: 1px solid var(-
 input[type="text"]:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent); }
 input[type="range"] { accent-color: var(--primary); }
 .agent-select, .model-select { flex: 0 1 auto; min-width: 100px; max-width: 250px; padding: 6px 8px; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
+/* Тумблер режима графа в чате. Размеры и шрифт — как у соседних селектов,
+   но это ОТДЕЛЬНЫЙ контроллер: класс `.agent-select` зарезервирован за
+   выбором агента, и под ним тумблер маскировался бы под него (по этому классу
+   и UI, и тесты находят селекты агентов). */
+.execution-strategy-select {
+  flex: 0 1 auto; min-width: 100px; max-width: 170px;
+  padding: 6px 8px; font-size: 13px;
+  text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
+  border-color: var(--border); color: var(--text); opacity: 0.92;
+}
+.execution-strategy-select:focus { opacity: 1; }
 .btn-icon { background: none; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 18px; line-height: 1; color: var(--text); transition: background 0.2s; display: flex; align-items: center; justify-content: center; }
 .btn-icon:hover { background: var(--session-hover); }
 .btn-icon.btn-attach-inactive { opacity: 0.35; cursor: not-allowed; filter: grayscale(1); }
@@ -688,6 +699,109 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
   pointer-events: none;
 }
 .graph-layout { flex: 1; position: relative; overflow: hidden; }
+
+/* ─── Рамки групп нод (Group) ───────────────────────────────────────────────
+   Слой лежит ВНУТРИ `.drawflow` (precanvas), поэтому наследует его
+   `transform: translate(...) scale(...)` и корректно едет вместе с pan/zoom.
+   z-index — ЕДИНСТВЕННОЕ место, где рамка может стоять над рёбрами и под нодами:
+   svg-соединения у Drawflow z-index:0, ноды z-index:2. Проверено в
+   node_modules/drawflow/dist/drawflow.min.css. При z-index:0 (и вставке первым
+   child) рамка оказывалась ПОД соединениями, а `.connection .main-path` с
+   `pointer-events:all` перехватывал клик — «кликаю ЛКМ, ничего не происходит».
+   Тело рамки кликабельно: клик открывает инспектор группы. Ребро под рамкой при
+   этом остаётся живым — `interactiveUnderGroup` отдаёт ему mousedown. */
+.graph-group-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.graph-group {
+  position: absolute;
+  border: 2px dashed #7e57c2;
+  border-radius: 10px;
+  background: rgba(126, 87, 194, 0.06);
+  pointer-events: auto;
+  cursor: default;
+  box-sizing: border-box;
+}
+
+.graph-group.is-selected { border-style: solid; }
+
+/* Маркеры растяжения: 8 штук по краям и углам. Ловятся мышью, поэтому у слоя
+   рамки pointer-events:auto, а сам слой — none (иначе рамка перехватывала бы
+   клики по всему холсту мимо нод). */
+.graph-group-resize {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  background: #7e57c2;
+  border: 1px solid #ede7f6;
+  border-radius: 2px;
+  pointer-events: auto;
+  box-sizing: border-box;
+}
+.graph-group-resize[data-dir="nw"] { left: -5px; top: -5px; cursor: nwse-resize; }
+.graph-group-resize[data-dir="n"]  { left: 50%; top: -5px; margin-left: -5px; cursor: ns-resize; }
+.graph-group-resize[data-dir="ne"] { right: -5px; top: -5px; cursor: nesw-resize; }
+.graph-group-resize[data-dir="e"]  { right: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; }
+.graph-group-resize[data-dir="se"] { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.graph-group-resize[data-dir="s"]  { left: 50%; bottom: -5px; margin-left: -5px; cursor: ns-resize; }
+.graph-group-resize[data-dir="sw"] { left: -5px; bottom: -5px; cursor: nesw-resize; }
+.graph-group-resize[data-dir="w"]  { left: -5px; top: 50%; margin-top: -5px; cursor: ew-resize; }
+
+.graph-group-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px;
+  border-bottom: 1px dashed #7e57c2;
+  border-radius: 8px 8px 0 0;
+  background: rgba(126, 87, 194, 0.16);
+  color: #ede7f6;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: move;
+  pointer-events: auto;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+.graph-group-icon { flex: 0 0 auto; }
+.graph-group-title {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.graph-group-badge { flex: 0 0 auto; color: #ffd54f; }
+/* Инструкция FUSED есть, но граф в Detailed: рамка не схлопнется — гасим значок. */
+.graph-group-badge.is-idle { color: #7e57c2; opacity: 0.65; }
+.graph-group-count { flex: 0 0 auto; opacity: 0.7; font-weight: 400; }
+
+/* Подсказка в инспекторе группы: что группа (не) сделает в текущем режиме. */
+.ge-group-status { font-size: 12px; line-height: 1.45; }
+.ge-group-status.is-off { color: #b0bec5; }
+.ge-group-status.is-on { color: #80cbc4; }
+.ge-group-status.is-warn { color: #ffb74d; }
+
+/* Инспектор группы */
+.ge-group-members {
+  margin: 0;
+  padding-left: 18px;
+  max-height: 180px;
+  overflow: auto;
+  font-size: 12px;
+  opacity: 0.85;
+}
+.ge-group-members li { margin: 2px 0; }
+.ge-group-members .detail-hint { list-style: none; margin-left: -18px; }
 /* Хост холста. Наш класс — здесь, на элементе ВНЕ drawflow-узла: библиотека
    опознаёт свой контейнер по ПЕРВОМУ классу (`classList[0] === "parent-drawflow"`),
    поэтому наш класс на переданном ей узле тихо ломает панорамирование

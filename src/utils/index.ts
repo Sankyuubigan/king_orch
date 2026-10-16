@@ -21,6 +21,7 @@ export {
 export {
   isAgentVisible,
   isGraphAgent,
+  hasFusableGroups,
   findAgentEntry,
   visibleAgentEntries,
   agentOptionLabel,

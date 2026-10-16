@@ -1,8 +1,24 @@
 import { invoke } from "@tauri-apps/api/core";
 
+/**
+ * ЗЕРКАЛО схемы YAML. Владелец схемы — `parser.rs` (`WorkflowDef` / `NodeDef` /
+ * `GroupDef`); этот файл — его TypeScript-отражение и он НЕ является вторым
+ * источником правды.
+ *
+ * Расхождение ловится гейтом `test/graph.maximal-roundtrip.test.ts`: Rust отдаёт
+ * YAML со всеми возможными полями, фронт прогоняет open→save и обязан вернуть
+ * их без потерь. Добавляешь поле в Rust — падает тест, пока не проверишь здесь.
+ */
 export interface GraphNodeDef {
   id: string;
   type: string;
+  /**
+   * Принадлежность к группе нод (`WorkflowGraphDef.groups[].id`).
+   *
+   * В Detailed ничего не меняет. В Fused ноды одной группы схлопываются в один
+   * вызов LLM. Пусто — нода вне групп.
+   */
+  group?: string;
   agent?: string;
   task?: string;
   input?: string;
@@ -21,6 +37,9 @@ export interface GraphNodeDef {
   ui_pos?: { x: number; y: number };
   signal_name?: string;
   field?: string;
+  switch_field?: string;
+  statuses?: any;
+  problems?: string;
   sequential_to?: string;
   true_to?: string;
   false_to?: string;
@@ -43,6 +62,41 @@ export interface GraphEdgeDef {
   case?: string;
 }
 
+/** Ключ выхода склеенного вызова группы: контракт `FactDef` без нового типа. */
+export interface GraphFusedKeyDef {
+  id: string;
+  criteria?: string | null;
+  values?: string[];
+}
+
+/**
+ * Группа нод — аннотация графа для FUSED-режима и визуальная рамка на холсте.
+ *
+ * Группы НЕ хранят `on_success`/`interrupts`: переход группа→группа уже выражен
+ * обычным ребром между нодами разных групп, а прерывание на человека — нода
+ * `note`. Второй источник правды разошёлся бы с рёбрами при первом редактировании.
+ */
+export interface GraphGroupDef {
+  id: string;
+  title?: string;
+  fused_instruction?: string | null;
+  /** Агент-исполнитель группы: его `.md` даёт системный промпт и `mcp_servers`. */
+  fused_agent?: string | null;
+  tools?: string[];
+  fused_keys?: GraphFusedKeyDef[];
+  /** Явные координаты рамки; приоритет над производным bbox нод. */
+  ui_pos?: { x: number; y: number };
+  /**
+   * Явный размер рамки: появляется, когда автор растянул её.
+   *
+   * Пара с `ui_pos` = «рамкой владеет автор» (в Figma/Blender так ведёт себя
+   * frame): растяжение двигает только рамку, ноды внутри остаются на месте, и
+   * свободное место под новые ноды появляется само собой. Без этой пары рамка
+   * производная от bbox нод.
+   */
+  ui_size?: { w: number; h: number };
+}
+
 export interface WorkflowGraphDef {
   team?: string;
   name: string;
@@ -62,6 +116,14 @@ export interface WorkflowGraphDef {
    * Отсутствие поля = `true` (дефолт backend'а).
    */
   visible?: boolean;
+  /** Режим исполнения: `detailed` (по умолчанию) | `fused`. Режима `auto` нет. */
+  strategy?: string | null;
+  /**
+   * Группы нод. Поле обязано ездить через редактор: `save_workflow` сериализует
+   * `WorkflowDef` поверх файла, поэтому забытое здесь `groups` выбросило бы всю
+   * секцию из YAML при первом сохранении из визуального редактора.
+   */
+  groups?: GraphGroupDef[];
   nodes: GraphNodeDef[];
   edges: GraphEdgeDef[];
 }

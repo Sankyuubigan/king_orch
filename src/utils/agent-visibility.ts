@@ -86,6 +86,18 @@ export function isGraphAgent(id: string | null | undefined): boolean {
 }
 
 /**
+ * Есть ли у агента что схлопывать в Fused — то есть показывать ли тумблер режима.
+ *
+ * Источник — счётчик `fusable_groups` из каталога (его считает бэкенд теми же
+ * правилами, что и движок). Отдельного подсчёта «на стороне фронта» здесь быть
+ * не должно: он разошёлся бы с рантаймом при первой же правке движка.
+ */
+export function hasFusableGroups(id: string | null | undefined): boolean {
+  if (!id) return false;
+  return (findAgentEntry(id)?.fusable_groups ?? 0) > 0;
+}
+
+/**
  * Отображаемое имя выбранного агента для заголовка ответа.
  * Берётся из каталога (frontmatter `name`), а не вырезается из текста
  * `<option>` регуляркой по иконке.
