@@ -32,6 +32,8 @@ pub struct ChatSession {
     pub model: Option<String>,
     #[serde(default)]
     pub agent: Option<String>,
+    #[serde(default)]
+    pub cloud_requests: u64,
     pub messages: Vec<ChatMessage>,
 }
 
@@ -106,6 +108,7 @@ pub fn save_session(
     draft: String,
     model: Option<String>,
     agent: Option<String>,
+    cloud_requests: u64,
 ) -> Result<(), String> {
     let path = sessions_dir(app).join(format!("{}.json", id));
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs();
@@ -119,6 +122,11 @@ pub fn save_session(
         }
     }
 
+    let final_cloud_requests = std::cmp::max(
+        cloud_requests,
+        old_session.as_ref().map_or(0, |s| s.cloud_requests),
+    );
+
     let session = ChatSession {
         id: id.to_string(),
         title: resolve_title(old_session.as_ref(), title),
@@ -128,6 +136,7 @@ pub fn save_session(
         title_manual: old_session.as_ref().map_or(false, |s| s.title_manual),
         model: model.or_else(|| old_session.as_ref().and_then(|s| s.model.clone())),
         agent: agent.or_else(|| old_session.as_ref().and_then(|s| s.agent.clone())),
+        cloud_requests: final_cloud_requests,
         messages,
     };
     save_session_raw(&path, &session)?;
@@ -298,6 +307,7 @@ fn sample_session(title: &str, title_manual: bool) -> ChatSession {
         title_manual,
         model: None,
         agent: None,
+        cloud_requests: 0,
         messages: Vec::new(),
     }
 }

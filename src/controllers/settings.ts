@@ -7,7 +7,7 @@ import { bus } from "../events";
 import { showToast } from "../ui";
 import { setTelemetryEnabled, trackError } from "../telemetry";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
-import { CLOUD_ROUTER_PREFIXES } from "../utils";
+import { CLOUD_ROUTER_PREFIXES, isCloudModelPath } from "../utils";
 import { getActiveChatController } from "./tabs";
 
 export interface SettingsElements {
@@ -65,7 +65,7 @@ export class SettingsController {
     const p = getActiveChatController()?.modelSelectValue ?? store.lastModel;
     if (!p) return;
     // Комбо облачных роутеров — облачная модель: локальные параметры сэмплинга не храним.
-    if (Object.values(CLOUD_ROUTER_PREFIXES).some(prefix => p.startsWith(prefix))) return;
+    if (isCloudModelPath(p)) return;
     let params: any;
     try {
       params = await getModelParams(p);
@@ -85,7 +85,7 @@ export class SettingsController {
   private async saveModelParams() {
     const p = getActiveChatController()?.modelSelectValue ?? store.lastModel;
     if (!p) return;
-    if (Object.values(CLOUD_ROUTER_PREFIXES).some(prefix => p.startsWith(prefix))) return;
+    if (isCloudModelPath(p)) return;
     const base = store.currentModelParams;
     await setModelParams(p, {
       temperature: parseFloat(this.el.tempSlider.value),
@@ -106,7 +106,7 @@ export class SettingsController {
   private async resetDefaults() {
     try {
       const model = getActiveChatController()?.modelSelectValue ?? store.lastModel;
-      const modelReset = model && !Object.values(CLOUD_ROUTER_PREFIXES).some(prefix => model.startsWith(prefix))
+      const modelReset = model && !isCloudModelPath(model)
         ? (async () => {
             await resetModelParams(model);
             await this.loadModelParams();

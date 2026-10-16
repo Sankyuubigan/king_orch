@@ -1,5 +1,5 @@
 use std::fs;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tauri_plugin_cloud_routers::router::client::{self, ChatMessage, ChatRequest};
@@ -67,6 +67,7 @@ struct CloudEngine {
     model: String,
     stream_cb: Arc<dyn Fn(String) + Send + Sync>,
     pending_tools: Mutex<Option<Vec<ToolDefinition>>>,
+    requests: Arc<AtomicU64>,
 }
 
 impl CloudEngine {
@@ -140,7 +141,11 @@ impl CloudEngine {
         };
         log_cb(format!("☁️ 9Router: один вызов модели «{}»", self.model));
         let stream_cb = self.stream_cb.clone();
-        let result = client::chat_completion_stream_result(
+        // Запрос засчитывается ТОЛЬКО по факту ответа роутера: обрыв, таймаут,
+        // 4xx/5xx (client.rs отдаёт их как Err) — до провайдера дело не дошло,
+        // квота не потрачена. Обрезанный по `length` ответ — реально оплаченный
+        // расход, приходит Ok и считается.
+        let result = match client::chat_completion_stream_result(
             &self.endpoint.base_url,
             self.endpoint.api_key.as_deref(),
             &request,
@@ -152,7 +157,21 @@ impl CloudEngine {
                     stream_cb(delta.reasoning);
                 }
             },
-        )?;
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                log_cb(format!(
+                    "☁️ [cloud-counter] Ответ от облака не получен — запрос НЕ засчитан: {}",
+                    error
+                ));
+                return Err(error);
+            }
+        };
+        let total = self.requests.fetch_add(1, Ordering::Relaxed) + 1;
+        log_cb(format!(
+            "☁️ [cloud-counter] Засчитано запросов к облаку за этот чат: {}",
+            total
+        ));
         progress_cb(1.0, "done");
         let tool_calls: Vec<ToolCall> = result
             .tool_calls
@@ -202,6 +221,7 @@ impl LlmEngine {
         endpoint: CloudEndpoint,
         model: String,
         stream_cb: Arc<dyn Fn(String) + Send + Sync>,
+        requests: Arc<AtomicU64>,
     ) -> Self {
         Self {
             backend: LlmBackend::Cloud(CloudEngine {
@@ -209,12 +229,28 @@ impl LlmEngine {
                 model,
                 stream_cb,
                 pending_tools: Mutex::new(None),
+                requests,
             }),
         }
     }
 
     pub fn is_cloud(&self) -> bool {
         matches!(self.backend, LlmBackend::Cloud(_))
+    }
+
+    /// Умеет ли движок ПРИНУДИТЕЛЬНО ограничивать форму ответа (GBNF/JSON-schema).
+    ///
+    /// Локальный llama-server — да. Облачный роутер — нет: у него нет поля
+    /// грамматики в запросе, `set_grammar` для него no-op. Любой механизм,
+    /// который держится на принудительной грамматике (двухфазное мышление,
+    /// JSON-повтор Phase 2, финальный вердиктный проход), ОБЯЗАН спросить это
+    /// здесь. Иначе он молча превращается в платный повтор без механизма —
+    /// именно так в облаке появился второй запрос на агента.
+    pub fn supports_grammar(&self) -> bool {
+        match &self.backend {
+            LlmBackend::Local(_) => true,
+            LlmBackend::Cloud(_) => false,
+        }
     }
 
     pub fn model_path(&self) -> &str {
@@ -487,12 +523,109 @@ mod tests {
             },
             "combo".to_string(),
             Arc::new(|_| {}),
+            Arc::new(AtomicU64::new(0)),
         );
         assert!(engine.is_cloud());
         assert_eq!(engine.model_path(), "combo");
+        // Облако не умеет принуждать форму ответа — на этой capability держатся
+        // все решения оркестратора про грамматикозависимые механизмы.
+        assert!(!engine.supports_grammar());
         assert!(!engine.is_multimodal());
         assert_eq!(engine.engine_mode(), "cloud");
         assert_eq!(engine.engine_mode_detail(), "9Router");
         assert_eq!(engine.tok_per_sec(), 0.0);
+    }
+
+    /// Конструктор облачного движка для тестов счётчика: считает только то,
+    /// что реально ушло в роутер.
+    fn cloud_with_counter(base_url: &str, counter: Arc<AtomicU64>) -> LlmEngine {
+        LlmEngine::cloud(
+            CloudEndpoint {
+                base_url: base_url.to_string(),
+                api_key: None,
+            },
+            "combo".to_string(),
+            Arc::new(|_| {}),
+            counter,
+        )
+    }
+
+    fn one_user_message() -> Vec<LlmMessage> {
+        vec![LlmMessage {
+            role: "user".to_string(),
+            content: "привет".to_string(),
+            ..Default::default()
+        }]
+    }
+
+    /// Ответ не получен (порт закрыт) → квота не потрачена, счётчик НЕ растёт.
+    #[test]
+    fn cloud_request_without_response_is_not_counted() {
+        let counter = Arc::new(AtomicU64::new(0));
+        let engine = cloud_with_counter("http://127.0.0.1:1", counter.clone());
+
+        let result = engine.run_chat_completions(
+            &one_user_message(),
+            None,
+            16,
+            &ModelParams::default(),
+            &[],
+            None,
+            false,
+            Arc::new(AtomicBool::new(false)),
+            "test",
+            None,
+            None,
+            |_, _: &str| {},
+            |_: String| {},
+        );
+
+        assert!(result.is_err(), "закрытый порт обязан дать ошибку");
+        assert_eq!(counter.load(Ordering::Relaxed), 0, "неотвеченный запрос не засчитывается");
+    }
+
+    /// Роутер ответил (локальный SSE-стенд) → запрос засчитан ровно один раз.
+    #[test]
+    fn cloud_request_with_response_is_counted_once() {
+        use std::io::{Read, Write};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut sink = [0u8; 4096];
+            let _ = stream.read(&mut sink);
+            let body = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n\
+                        data: [DONE]\n\n";
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        });
+
+        let counter = Arc::new(AtomicU64::new(4));
+        let engine = cloud_with_counter(&format!("http://{}", addr), counter.clone());
+        let result = engine.run_chat_completions(
+            &one_user_message(),
+            None,
+            16,
+            &ModelParams::default(),
+            &[],
+            None,
+            false,
+            Arc::new(AtomicBool::new(false)),
+            "test",
+            None,
+            None,
+            |_, _: &str| {},
+            |_: String| {},
+        );
+        server.join().ok();
+
+        assert!(result.is_ok(), "ответ стенда должен приниматься: {result:?}");
+        assert_eq!(counter.load(Ordering::Relaxed), 5, "засчитан ровно один новый запрос");
     }
 }

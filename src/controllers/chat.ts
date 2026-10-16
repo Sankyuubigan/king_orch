@@ -7,7 +7,7 @@ import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks } from "../ui
 import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
-import { renderMarkdown, stripStreamArtifacts, extractChannelThought, CLOUD_ROUTER_PREFIXES, fillModelSelect, fillAgentSelect, getAgentDisplayName, getSelectedAgentName, isGraphAgent } from "../utils";
+import { renderMarkdown, stripStreamArtifacts, extractChannelThought, CLOUD_ROUTER_PREFIXES, isCloudModelPath, fillModelSelect, fillAgentSelect, getAgentDisplayName, getSelectedAgentName, isGraphAgent } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError } from "../telemetry";
 
@@ -129,6 +129,7 @@ export interface ChatElements {
   filePreview: HTMLDivElement;
   tokenCounter: HTMLDivElement;
   engineBadge: HTMLDivElement;
+  cloudCounter: HTMLDivElement;
   btnSetWorkdir: HTMLButtonElement;
   currentWorkdir: HTMLSpanElement;
 }
@@ -184,6 +185,7 @@ export class ChatTabState {
 
   /** Идёт ли обработка ИМЕННО в этой вкладке. */
   isProcessing = false;
+  cloudRequests = 0;
 
   /** «Вкладка имеет реальную сессию» — для таб-ленты (типы main/chat). */
   hasSession(): boolean {
@@ -208,6 +210,7 @@ export class ChatTabState {
     this.rtThoughtAuthor = "";
     this.isRestoringSession = false;
     this.isProcessing = false;
+    this.cloudRequests = 0;
     this.processingStartedAt = 0;
     this.lastActivityAt = 0;
   }
@@ -463,7 +466,7 @@ export class ChatController {
     }
     if (!modelPath || !agentId) return;
     // Облачные комбо роутеров: локальный счётчик токенов/VRAM неприменим.
-    if (Object.values(CLOUD_ROUTER_PREFIXES).some(p => modelPath.startsWith(p))) {
+    if (isCloudModelPath(modelPath)) {
       if (this.el.tokenCounter) this.el.tokenCounter.innerText = "";
       return;
     }
@@ -767,6 +770,7 @@ export class ChatController {
       if (response?.has_error) {
         void trackError("chat.send.runFrom.outcome", response.has_error);
       }
+      this.applyCloudRequestsFromResponse(response);
 
       const dur = ((performance.now() - startTime) / 1000);
       const newMessages = response.messages || [];
@@ -860,7 +864,47 @@ export class ChatController {
     this.el.chatHistory.appendChild(msgEl); this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
   }
 
+  private isCloud(): boolean {
+    return isCloudModelPath(this.el.modelSelect?.value);
+  }
+
+  /** Единственная точка обновления счётчика из ответа `chat_request`.
+   *  Бэкенд присылает СУММУ за сессию, поэтому это не «+N», а присваивание.
+   *  Ответ без поля (локальная модель) накопленное значение не трогает. */
+  private applyCloudRequestsFromResponse(response: any) {
+    const total = response?.cloud_requests;
+    if (typeof total !== "number" || !isFinite(total)) return;
+    this.state.cloudRequests = total;
+    this.renderCloudCounter();
+  }
+
+  private renderCloudCounter() {
+    if (!this.el.cloudCounter) return;
+    this.el.cloudCounter.textContent = `☁ ${this.state.cloudRequests} запр.`;
+  }
+
+  /** Единая точка выбора индикатора под полем ввода.
+   *  cloud=true → облако: счётчик запросов вместо бейджа движка. */
+  private setIndicatorMode(cloud: boolean) {
+    if (this.el.engineBadge) {
+      this.el.engineBadge.style.display = cloud ? "none" : "";
+    }
+    if (this.el.cloudCounter) {
+      this.el.cloudCounter.style.display = cloud ? "" : "none";
+      if (cloud) this.renderCloudCounter();
+    }
+  }
+
+  /** Видимость по ВЫБРАННОЙ модели: переключение модели, открытие сессии, конфиг. */
+  private applyIndicatorVisibility() {
+    this.setIndicatorMode(this.isCloud());
+  }
+
   private setEngineBadge(cls: string, text: string, title: string) {
+    if (this.isCloud()) {
+      this.setIndicatorMode(true);
+      return;
+    }
     const b = this.el.engineBadge;
     if (!b) return;
     b.className = `engine-badge ${cls}`;
@@ -870,6 +914,8 @@ export class ChatController {
 
   /** Начальное состояние бейджа по get_engine_status (до первого запроса) */
   private async refreshEngineBadgeInit() {
+    this.applyIndicatorVisibility();
+    if (this.isCloud()) return;
     let st: any;
     try {
       st = await getEngineStatus();
@@ -902,8 +948,15 @@ export class ChatController {
     this.setEngineBadge("engine-idle", "GPU · …", `Бекенд: ${st.resolved_variant || variant}. Точный режим появится после первого запроса.`);
   }
 
-  /** Обновление бейджа по событию engine_mode после каждого запроса */
+  /** Обновление бейджа по событию engine_mode после каждого запроса.
+   *  `mode === "cloud"` — авторитетный факт о том, как реально шёл прогон:
+   *  бейдж движка (GPU/CPU, tok/s) к облаку отношения не имеет и обязан уйти,
+   *  даже если модель в селекте ещё не успела переключиться. */
   private updateEngineBadge(mode: string, tokPerSec: number, detail: string) {
+    if (mode === "cloud" || this.isCloud()) {
+      this.setIndicatorMode(true);
+      return;
+    }
     const tok = (Number.isFinite(tokPerSec) && tokPerSec > 0 && tokPerSec < 10_000)
       ? ` · ${Math.round(tokPerSec)} tok/s`
       : "";
@@ -996,9 +1049,9 @@ export class ChatController {
       return store.cloudRouterCombos[router[0]]?.some(combo => `${router[1]}${combo.name}` === value) ?? false;
     };
     const savedCloudPending = this.el.modelSelect.dataset.modelExplicit !== "true"
-      && !!store.lastModel && Object.values(CLOUD_ROUTER_PREFIXES).some(p => store.lastModel!.startsWith(p))
+      && !!store.lastModel && isCloudModelPath(store.lastModel)
       && !cloudModelAvailable(store.lastModel);
-    const modelReady = !savedCloudPending && (Object.values(CLOUD_ROUTER_PREFIXES).some(p => model.startsWith(p))
+    const modelReady = !savedCloudPending && (isCloudModelPath(model)
       ? cloudModelAvailable(model)
       : store.models.includes(model));
     let reason = "";
@@ -1166,7 +1219,10 @@ export class ChatController {
     try {
       const session = await loadSession(id);
       this.state.sessionId = session.id ?? id;
+      this.state.cloudRequests = session.cloud_requests || 0;
       this.restoreSessionSelection(session.model, session.agent);
+      // ПОСЛЕ восстановления выбора модели: индикатор выбирается по модели.
+      this.applyIndicatorVisibility();
       if (session.draft) {
         this.el.chatInput.value = session.draft;
         this.el.chatInput.style.height = "auto";
@@ -1250,7 +1306,7 @@ export class ChatController {
       const _p2 = store.currentModelParams;
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value), dry_multiplier: _p2?.dry_multiplier ?? 0.0, dry_base: _p2?.dry_base ?? 1.75, dry_allowed_length: _p2?.dry_allowed_length ?? 2, dry_penalty_last_n: _p2?.dry_penalty_last_n ?? 0, xtc_probability: _p2?.xtc_probability ?? 0.0, xtc_threshold: _p2?.xtc_threshold ?? 0.1 };
       const allHistory = this.state.history.slice();
-      const isCloudRouter = Object.values(CLOUD_ROUTER_PREFIXES).some(p => modelPath.startsWith(p));
+      const isCloudRouter = isCloudModelPath(modelPath);
       let mmprojPath: string | null = null;
       if (!isCloudRouter && attachments.length > 0) {
         try { mmprojPath = await getMmprojPath(modelPath); } catch (_) {}
@@ -1273,6 +1329,7 @@ export class ChatController {
       if (response?.has_error) {
         void trackError("chat.send.outcome", response.has_error);
       }
+      this.applyCloudRequestsFromResponse(response);
       const dur = ((performance.now() - startTime) / 1000);
       const newMessages = response.messages || [];
       console.log("DBG chat_request -> newMessages.len=", newMessages.length, "newMessages=", JSON.stringify(newMessages.map((m: any) => ({ t: m.type, a: m.author }))), "response.text?", !!response.text);
@@ -1336,10 +1393,14 @@ export class ChatController {
       // Единый источник правды: ID сессии из файла (совпадает с ключом вкладки).
       this.state.sessionId = session.id ?? id;
       this.state.history = session.messages;
+      // Счётчик облачных запросов приходит уже поднятым бэкендом (load_session).
+      this.state.cloudRequests = session.cloud_requests || 0;
       this.state.uidCounter = 0; this.state.uidList = this.state.history.map(() => this.state.nextUid());
       this.el.chatInput.value = session.draft || "";
       setTimeout(() => { this.el.chatInput.style.height = "auto"; this.el.chatInput.style.height = `${this.el.chatInput.scrollHeight}px`; }, 0);
       this.restoreSessionSelection(session.model, session.agent);
+      // ПОСЛЕ восстановления выбора модели: индикатор выбирается по модели.
+      this.applyIndicatorVisibility();
       this.renderChatFromHistory();
       bus.emit("session:changed");
       this.becomeChatTab();
@@ -1357,7 +1418,7 @@ export class ChatController {
     const btn = this.el.btnAttach;
     const modelPath = this.el.modelSelect?.value;
     if (!modelPath) { btn.disabled = true; this.modelAudioCapable = false; btn.classList.remove('btn-attach-active'); btn.classList.add('btn-attach-inactive'); btn.title = 'Сначала выберите модель'; return; }
-    if (Object.values(CLOUD_ROUTER_PREFIXES).some(p => modelPath.startsWith(p))) {
+    if (isCloudModelPath(modelPath)) {
       btn.disabled = false;
       this.modelAudioCapable = true;
       btn.classList.remove('btn-attach-inactive');
@@ -1529,6 +1590,7 @@ export class ChatController {
       this.el.modelSelect.dataset.modelExplicit = "true";
       this.pendingSessionModel = null;
       bus.emit("model:changed", this.el.modelSelect.value);
+      this.applyIndicatorVisibility();
       this.updateAttachButtonState(); this.triggerTokenCount(); this.refreshSendAvailability();
       const v = this.el.modelSelect.value;
       void invoke("set_last_model", { path: v }).catch(() => {});
@@ -1564,6 +1626,8 @@ export class ChatController {
       fillModelSelect(this.el.modelSelect);
       fillAgentSelect(this.el.agentSelect);
       if (this.applyPendingSessionSelection()) bus.emit("model:changed", this.el.modelSelect.value);
+      // Каталог мог привести модель к облачной (или вернуть отложенную сессионную).
+      this.applyIndicatorVisibility();
       this.refreshSendAvailability();
     });
     bus.on("config:loaded", (config: any) => {
@@ -1572,6 +1636,7 @@ export class ChatController {
       fillModelSelect(this.el.modelSelect);
       fillAgentSelect(this.el.agentSelect);
       if (this.applyPendingSessionSelection()) bus.emit("model:changed", this.el.modelSelect.value);
+      this.applyIndicatorVisibility();
       this.refreshSendAvailability();
       this.updateAttachButtonState();
       this.triggerTokenCount();

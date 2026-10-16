@@ -158,8 +158,12 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
   const engineBadge = py("div", "engine-badge engine-idle") as HTMLDivElement;
   engineBadge.textContent = "…";
   engineBadge.title = "Режим движка (GPU/CPU)";
+  const cloudCounter = py("div", "engine-badge engine-cloud") as HTMLDivElement;
+  cloudCounter.textContent = "☁ 0";
+  cloudCounter.title = "Количество запросов к облачной LLM за этот чат";
+  cloudCounter.style.display = "none";
 
-  left.append(btnAttach, fileInput, btnSetWorkdir, currentWorkdir, agentSelect, btnAgentSettings, modelSelect, btnAddModel, tokenCounter, engineBadge);
+  left.append(btnAttach, fileInput, btnSetWorkdir, currentWorkdir, agentSelect, btnAgentSettings, modelSelect, btnAddModel, tokenCounter, engineBadge, cloudCounter);
 
   const right = py("div", "chat-input-controls-right");
   const btnStop = document.createElement("button");
@@ -220,6 +224,7 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
     filePreview,
     tokenCounter,
     engineBadge,
+    cloudCounter,
     btnSetWorkdir,
     currentWorkdir,
     mainScreen,

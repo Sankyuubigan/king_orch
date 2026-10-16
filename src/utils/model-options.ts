@@ -16,6 +16,11 @@ export const CLOUD_ROUTER_PREFIXES: Record<string, string> = {
   "omniroute": "omniroute:",
 };
 
+export function isCloudModelPath(path?: string | null): boolean {
+  if (!path) return false;
+  return Object.values(CLOUD_ROUTER_PREFIXES).some(prefix => path.startsWith(prefix));
+}
+
 function capabilityIcons(meta?: { uncen?: boolean; vision?: boolean; audio?: boolean }): string {
   const out: string[] = [];
   if (meta?.uncen) out.push("😈");

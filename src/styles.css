@@ -354,6 +354,8 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .engine-badge.engine-idle::before { background: #90a4ae; }
 .engine-badge.engine-none { color: #888; opacity: 0.8; }
 .engine-badge.engine-none::before { background: #888; }
+.engine-badge.engine-cloud { color: #1e88e5; border-color: #1565c0; }
+.engine-badge.engine-cloud::before { background: #2196f3; box-shadow: 0 0 6px #2196f3; }
 
 /* ───────────────────────── Панель «Агенты в чате» ───────────────────────── */
 /* Две колонки: слева выбранное (порядок = порядок в чате), справа каталог. */

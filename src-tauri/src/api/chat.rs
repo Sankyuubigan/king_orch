@@ -35,6 +35,8 @@ pub struct ChatResponse {
     /// None — успешный прогон. Позволяет фронту отличать «ошибку» от «нормального
     /// ответа», даже когда подробности уже показаны системным сообщением в чате.
     has_error: Option<String>,
+    /// Суммарное число запросов к облачной LLM за этот чат (сессию).
+    cloud_requests: u64,
 }
 
 fn parse_thought_from_log(msg: &str) -> Option<(String, String, f32)> {
@@ -417,6 +419,8 @@ pub async fn chat_request(
         ));
     }
 
+    let cloud_requests = state.cloud_counter(&session_id);
+    let session_id_for_block = session_id.clone();
     let run_result = tokio::task::spawn_blocking(move || {
         // ── Контроль утечек: RSS приложения до и после запроса ──
         // Рост между последовательными запросами = утечка в приложении.
@@ -448,8 +452,9 @@ pub async fn chat_request(
             cancel_flag,
             stream_meta,
             prompt_log,
-            session_id,
+            session_id_for_block,
             cloud_endpoint,
+            cloud_requests.clone(),
             cfg.workdir.clone(),
         );
         let app_rss_after = crate::infra::current_process_rss();
@@ -508,6 +513,8 @@ pub async fn chat_request(
         }),
     );
 
+    let total_cloud = state.cloud_total(&session_id);
+
     Ok(ChatResponse {
         text: result.text,
         sub_calls: result.sub_calls,
@@ -516,6 +523,7 @@ pub async fn chat_request(
         engine_tok_per_sec: result.engine_tok_per_sec,
         engine_mode_detail: result.engine_mode_detail,
         has_error: result.has_error,
+        cloud_requests: total_cloud,
     })
 }
 

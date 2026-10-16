@@ -10,6 +10,7 @@ export { buildSessionMarkdown, copyMarkdownToClipboard } from './session-clipboa
 // отсюда для обратной совместимости.
 export {
   CLOUD_ROUTER_PREFIXES,
+  isCloudModelPath,
   fillModelSelect,
   fillAgentSelect,
   renderCloudRouterOptions,

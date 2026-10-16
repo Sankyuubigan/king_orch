@@ -391,6 +391,7 @@ pub fn run_chat<L, S, C, ST, RT>(
     prompt_log: Option<std::path::PathBuf>,
     session_id: String,
     cloud_endpoint: Option<CloudEndpoint>,
+    cloud_requests: std::sync::Arc<std::sync::atomic::AtomicU64>,
     // Рабочая директория для инструментов кодера (bash/fs). None = корень проекта.
     workdir: Option<String>,
 ) -> Result<ChatRunResult, String>
@@ -575,7 +576,7 @@ where
         }.to_string();
         // Облачный роутер отдаёт мысли через тот же `stream_cb` (паритет с
         // локальным движком), поэтому отдельный сток тут не нужен.
-        LlmEngine::cloud(endpoint, model, Arc::new(stream_cb))
+        LlmEngine::cloud(endpoint, model, Arc::new(stream_cb), cloud_requests)
     } else if any_vision_agent && mmproj_path.is_some() {
         // Проектор поднимаем ТОЛЬКО когда в графе есть агент со зрением: иначе
         // mmproj занимает ~2.4 ГБ VRAM впустую (в логе: прирост 8862 МБ с
@@ -1382,12 +1383,13 @@ where
             gbnf: Some(grammar),
             json_schema: None,
         }));
-        if engine.is_cloud() {
-            // Честный лог: для облака set_grammar — no-op (llm_backend.rs:283),
-            // контракт сигнала держится на системном промпте + native tools.
-            log_cb(format!("🎯 Агент '{}': облако — грамматика не поддерживается, сигнал по промпту + native tools", agent.id));
-        } else {
+        if engine.supports_grammar() {
             log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены), граница размышления: {:?} симв.", agent.id, agent.think_budget_chars));
+        } else {
+            // set_grammar для такого движка — no-op (см. LlmEngine::supports_grammar).
+            // Контракт сигнала держится на системном промпте + native tools, и все
+            // механизмы, требующие принудительной грамматики, обязаны быть выключены.
+            log_cb(format!("🎯 Агент '{}': движок не применяет грамматику (облако) — сигнал по промпту + native tools", agent.id));
         }
     } else {
         engine.set_grammar(None);
@@ -1494,7 +1496,12 @@ where
     // Размышления Phase 1 — внутренний контекст агента для ЕГО Phase 2:
     // в сессию кладутся как thought (юзер раскрывает в GUI), но НЕ попадают
     // в контекст других агентов (llm_history() фильтрует type != "message").
-    let two_phase_thinking = !engine.is_cloud()
+    //
+    // Гейт — ВОЗМОЖНОСТЬ, а не транспорт: Phase 2 существует ради строгой
+    // грамматики envelope-json. Движок без грамматики (облачный роутер) её не
+    // применяет, поэтому режим для него структурно запрещён: иначе мышление
+    // шло бы «в никуда», а его цена (2 запроса) платилась бы впустую.
+    let two_phase_thinking = engine.supports_grammar()
         && (two_phase_thinking || crate::infra::load_config_early().two_phase_default);
     // true, если Phase 1 прошла → Phase 2 отвечает БЕЗ думателя (enable_thinking=false)
     // для ЛЮБОЙ грамматики, включая freeform-агентов.
@@ -2467,7 +2474,17 @@ where
     // Финальный вердикт агент выдаёт строгим JSON по своей роли: отдельный вызов
     // с per-agent GBNF (hybrid_gbnf), tools отключены, disable_reasoning=true.
     // Если цикл так и не вызвал инструменты — GUARD уже отработал свои ретраи.
-    if let Some(hybrid_gbnf) = ctx.hybrid_gbnf.clone() {
+    // Пасс существует ради ПРИНУДИТЕЛЬНОЙ грамматики → движку без грамматики
+    // он недоступен (иначе это платный запрос без механизма).
+    let can_enforce_grammar = engine.supports_grammar();
+    if ctx.hybrid_gbnf.is_some() && !can_enforce_grammar {
+        log_cb(format!(
+            "⏭ [{}] Hybrid: финальный вердиктный проход отключён — движок не применяет грамматику",
+            agent.name
+        ));
+        ctx.restore_grammar();
+    }
+    if let Some(hybrid_gbnf) = ctx.hybrid_gbnf.clone().filter(|_| can_enforce_grammar) {
         log_cb(format!(
             "📜 [{}] Hybrid: финальный вердиктный grammar-пасс ({} символов GBNF)...",
             agent.name,
@@ -2547,11 +2564,25 @@ where
     }
 
     // ── Phase 2: JSON-only fallback для signal-агентов ──
-    // Если Phase 1 (hybrid grammar think + JSON) не дала JSON envelope,
-    // делаем второй вызов с JSON-only grammar. Модель видит тот же контекст
-    // (system + user + assistant с think-block из Phase 1), grammar
-    // принуждает к JSON сразу.
-    if !ctx.signal_saved && signal_contract.is_some() {
+    // Если первый вызов не дал конверт сигнала, делаем второй — с JSON-only
+    // грамматикой: модель видит тот же контекст, а грамматика ПРИНУЖДАЕТ к
+    // JSON сразу.
+    //
+    // Механизм повтора — именно грамматика. У движка без грамматики (облачный
+    // роутер) повтор не имеет чего принуждать: он деградирует до «ещё один
+    // платный запрос с более настойчивой инструкцией». Замерено 15.10.2026:
+    // агент Психосоматолог на облаке — 62 секунды и запрос, после которых JSON
+    // так и не появился (стоп: length). Поэтому для движка без грамматики
+    // повтор запрещён структурно, а не «редко полезен».
+    let phase2_pending = !ctx.signal_saved && signal_contract.is_some();
+    if phase2_pending && !can_enforce_grammar {
+        log_cb(format!(
+            "⏭ [{}] Phase 2 JSON-fallback отключён: движок не применяет грамматику, \
+             повтор не смог бы принудить конверт сигнала — запрос сэкономлен",
+            agent.name
+        ));
+    }
+    if phase2_pending && can_enforce_grammar {
         let contract = signal_contract.as_ref().unwrap();
         log_cb(format!(
             "🔄 [{}] Phase 2: JSON-only fallback (grammar: envelope-json)...",
@@ -3896,6 +3927,7 @@ mod tests {
             None,
             "test-context-23513".to_string(),
             None,
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             Some(project_dir.join("test").to_string_lossy().to_string()),
         );
         println!("CONTEXT_RUN_RESULT: {:?}", result.as_ref().map(|_| "ok"));

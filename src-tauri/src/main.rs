@@ -8,8 +8,6 @@ mod domain;
 mod infra;
 
 use api::AppState;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 use std::time::Instant;
 
 #[tokio::main]
@@ -126,9 +124,7 @@ async fn main() {
         // одну сессию на процесс; критерии и пороги остаются в хосте.
         .plugin(tauri_plugin_system1::init())
 
-        .manage(AppState {
-            cancel_flag: Arc::new(AtomicBool::new(false)),
-        })
+        .manage(AppState::new())
         .setup(move |app| {
             log::info!("[BOOT] setup begin {}ms", process_started.elapsed().as_millis());
             let app_handle = app.handle();
