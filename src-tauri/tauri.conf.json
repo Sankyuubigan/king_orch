@@ -71,9 +71,6 @@
     "about-updates": {
       "repo": "Sankyuubigan/king_orch",
       "support_url": "https://interesting-knowledges.vercel.app/docs/otblagodarit-avtora.-pomosch-proektam"
-    },
-    "system1": {
-      "autoDownload": true
     }
   }
 }

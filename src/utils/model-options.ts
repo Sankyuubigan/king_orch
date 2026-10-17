@@ -95,6 +95,9 @@ export function fillAgentSelect(select: HTMLSelectElement | null) {
     hint.disabled = true;
     select.appendChild(hint);
     select.value = "";
+    // Показывать нечего: нет агента — нет и его пути (иначе title давно
+    // выбранного другого остался бы висеть поверх пустого состояния).
+    select.title = "";
     return;
   }
 
@@ -102,6 +105,11 @@ export function fillAgentSelect(select: HTMLSelectElement | null) {
     const o = document.createElement("option");
     o.value = e.id;
     o.text = agentOptionLabel(e);
+    // Подсказка «где физически лежит файл агента»: рисует ФАКТИЧЕСКИЙ путь,
+    // а не сваренный из иконки отображаемый заголовок пункта. `source_path`
+    // приходит от бэкенда (он знает agents_dir); в ручных литералах/старых
+    // моках поля нет — тогда показываем относительный, но не молчим.
+    o.title = e.source_path || e.rel_path;
     select.appendChild(o);
   }
   if (prev && Array.from(select.options).some(o => o.value === prev)) select.value = prev;
@@ -110,4 +118,9 @@ export function fillAgentSelect(select: HTMLSelectElement | null) {
     // Выбранный агент исчез из списка (пользователь убрал его в настройках).
     console.warn(`[fillAgentSelect] Агент «${prev}» больше не выбран — переключение на первый доступный`);
   }
+  // Тултип на ЗАКРЫТОМ селекте — путь выбранного агента (наведение на свёрнутый
+  // список тоже показывает, какой файл редактируешь; option.title исключает
+  // лишь сам момент, когда список раскрыт).
+  const selected = Array.from(select.options).find(o => o.value === select.value);
+  select.title = selected?.value ? (selected.title || "") : "";
 }

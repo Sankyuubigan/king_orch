@@ -24,14 +24,6 @@ async fn main() {
     tauri_plugin_llama_engine::engine::config::set_app_data_dir_name("com.kingorch.app");
     // Шлюз облачных роутеров делит тот же app_config.json (секция cloud_routers).
     tauri_plugin_cloud_routers::set_app_data_dir_name("com.kingorch.app");
-    // System-1 кладёт модель в `app_config.data_dir` — тот же корень, что у
-    // движков llama.cpp / stable-diffusion / 9router. Без этого вызова модель
-    // искалась бы в `<папка программы>/KingOrchData`, которой не существует.
-    if let Some(data_dir) = infra::config::load_config_early().data_dir {
-        if !data_dir.trim().is_empty() {
-            tauri_plugin_system1::set_data_dir(std::path::PathBuf::from(data_dir));
-        }
-    }
 
     tauri_plugin_logs::early_log(
         "INFO",
@@ -120,9 +112,6 @@ async fn main() {
         // Движок изображений stable-diffusion.cpp (SSOT). Регистрирует
         // команды движка/бандла/генерации, owns процесс sd-server (kill на выходе).
         .plugin(tauri_plugin_image_engine::init())
-        // Рантайм быстрых решений System-1 (SSOT). Переносит модель ONNX и держит
-        // одну сессию на процесс; критерии и пороги остаются в хосте.
-        .plugin(tauri_plugin_system1::init())
 
         .manage(AppState::new())
         .setup(move |app| {

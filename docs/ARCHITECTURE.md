@@ -185,10 +185,9 @@ Module-scope helper'ы:
 | `orchestrator/dispatch.rs` | Диспетчеризация инструментов. Ветка код-тулов (до MCP): **capability-проверка `is_tool_granted`** (тул должен быть выдан в промпт — defense-in-depth), затем `execute_tool` |
 | `workflow_engine/mod.rs` | **Графовый движок маршрутизации.** Исполняет YAML-графы (workflows). Точка входа — `run_workflow()` |
 | `workflow_engine/parser.rs` | Парсинг YAML workflow файлов, структуры `WorkflowDef` (включая `entry` — точку входа), `NodeDef`, `EdgeDef`, `resolve_entry`, поиск по `file_stem` |
-| `workflow_engine/nodes.rs` | Исполнение узлов графа: `user_message` (точка входа, LLM не вызывается), `llm_worker`, `llm_fact_extractor`, `system1_validator` (быстрые решения, LLM не вызывается), `system_condition`, `sub_workflow`, `switch`, `note` (pass-through), `return` |
+| `workflow_engine/nodes.rs` | Исполнение узлов графа: `user_message` (точка входа, LLM не вызывается), `llm_worker`, `llm_fact_extractor`, `llm_freeform`, `system_condition`, `sub_workflow`, `switch`, `note` (pass-through), `return` |
 | `workflow_engine/context.rs` | Контекст выполнения: проход `{{ template }}` переменных, хранение outputs узлов |
 | `workflow_engine/fact_extractor.rs` | **Built-in** fact-экстрактор (не требует отдельного .md файла). Факты инжектятся runtime из YAML |
-| `workflow_engine/system1_rules.rs` | Парсер файла критериев System-1 (`elements` как отображение `1..9` или как список; `id` обязателен). Порог `p_true >= threshold` применяется здесь, в хосте: плагин возвращает вероятности и о вердиктах не знает |
 | `parsers.rs` | Распаковка JSON от LLM, очистка think-тегов |
 | `agent_manager.rs` | Парсинг .md файлов агентов, обработка INCLUDE, каталог entry points (`load_entry_points`: id, name, description, entry_type, folder, rel_path, role). Исключает `archive/` на уровне сканера. Парсит `replace_report` (только последний отчёт агента в сессии, legacy `single_report` тоже распознаётся) в `AgentProfile` |
 

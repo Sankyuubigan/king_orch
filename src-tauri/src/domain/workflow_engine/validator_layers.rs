@@ -260,19 +260,23 @@ mod tests {
         let layers = load(&team_dir()).expect("файл воронки прочитан");
         assert!(!layers.is_empty());
 
-        let covered = covered_elements(&layers);
-        let ids = crate::domain::workflow_engine::system1_rules::load_rules(
-            &crate::domain::workflow_engine::system1_rules::resolve_rules_path(
-                &team_dir().parent().expect("agents"),
-                "psychotherapist/database/element_validation_rules_system1.yaml",
-            ),
-        )
-        .expect("критерии System-1 прочитаны");
-        let from_criteria: BTreeSet<String> = ids.iter().map(|rule| rule.id.clone()).collect();
-
-        assert_eq!(
-            covered, from_criteria,
-            "воронка обязана закрывать ровно те же элементы, что и критерии System-1"
+        // Элемент не обязан жить в одном слое, но обязан упоминаться РОВНО ОДИН
+        // раз во всей воронке: дубликат означал бы, что один и тот же элемент
+        // проверяется двумя агентами с разными контекстами, и вердикт в
+        // `signals` зависел бы от порядка слоёв.
+        let mut seen = std::collections::BTreeSet::new();
+        let mut duplicates = Vec::new();
+        for layer in &layers {
+            for element in &layer.elements {
+                if !seen.insert(element.clone()) {
+                    duplicates.push(format!("{}:{}", layer.agent, element));
+                }
+            }
+        }
+        assert!(
+            duplicates.is_empty(),
+            "элементы дублируются между слоями: {:?}",
+            duplicates
         );
     }
 

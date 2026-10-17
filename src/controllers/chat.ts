@@ -110,8 +110,8 @@ export interface ChatElements {
   progressBar: HTMLDivElement;
   statusLabel: HTMLDivElement;
   agentSelect: HTMLSelectElement;
-  /** Тумблер режима исполнения графа (`Detailed` | `Fused`); скрыт без групп. */
-  strategySelect: HTMLSelectElement;
+  /** Тумблер режима исполнения графа (`Fused` = checked); заблокирован без групп. */
+  strategyToggle: HTMLInputElement;
   btnAgentSettings: HTMLButtonElement;
   modelSelect: HTMLSelectElement;
   subchatHistory: HTMLDivElement;
@@ -186,13 +186,16 @@ export class ChatTabState {
   isRestoringSession = false;
 
   /**
-   * Режим исполнения графа для ЭТОЙ сессии: `detailed` | `fused` | null.
+   * Режим исполнения графа для ЭТОЙ вкладки: `detailed` | `fused`.
    *
-   * `null` = «не переопределять»: решает поле `strategy:` в файле графа.
+   * Третьего состояния нет: ВЫКЛ тумблера = подробное исполнение, и это
+   * отправляется в бэкенд как явный выбор, а не как «как в файле». У агента
+   * без схлопываемых групп состояние принудительно `detailed` (переключать
+   * нечего — значит «неопределено» равносильно «подробно»).
    * Хранится в состоянии вкладки, а не в Store: переключение относится к
    * разговору, и в соседней вкладке оно должно остаться прежним.
    */
-  executionStrategy: "detailed" | "fused" | null = null;
+  executionStrategy: "detailed" | "fused" = "detailed";
 
   /** Идёт ли обработка ИМЕННО в этой вкладке. */
   isProcessing = false;
@@ -937,6 +940,12 @@ export class ChatController {
       void trackError("chat.engineBadgeInit", _);
       return;
     }
+    // Форма ответа проверяется до доступа к полям: нет объекта — нет свойства.
+    if (!st) {
+      this.setEngineBadge("engine-none", "—", "Не удалось определить состояние движка");
+      void trackError("chat.engineBadgeInit", new Error("getEngineStatus вернул пустой ответ"));
+      return;
+    }
     if (!st.installed) {
       this.setEngineBadge("engine-none", "Нет движка", "Движок llama.cpp не установлен. Откройте Настройки → «Движок запуска нейромоделей».");
       return;
@@ -1619,7 +1628,7 @@ export class ChatController {
       this.refreshSendAvailability();
       // Смена агента меняет ответ на «есть ли что схлопывать» — тумблер должен
       // появиться или исчезнуть сразу, а не после перезагрузки вкладки.
-      this.applyStrategyToggleVisibility();
+      this.applyStrategyToggleState();
       const v = this.el.agentSelect.value;
       void invoke("set_config_value", { key: "last_agent", value: v }).catch(() => {});
       if (this.state.hasSession()) this.persistSession();
@@ -1642,38 +1651,42 @@ export class ChatController {
   }
 
   /**
-   * Показать тумблер режима тогда и только тогда, когда выбранному агенту есть
-   * что схлопывать.
+   * Синхронизировать тумблер режима с выбранным агентом.
    *
    * Проверка по `fusable_groups` из каталога, а не «у графа есть секция groups»:
    * группа может быть нефьюзируемой (роутер внутри, нечем склеивать), и тумблер
-   * под ней обещал бы режим, который движок отвергнёт.
+   * над ней обещал бы режим, который движок отвергнёт.
    *
-   * Значение при этом НЕ сбрасывается: переключил на группу, вернулся на обычного
-   * агента, ушёл — выбор сохранится. Иначе агент без групп тихо отменял бы
-   * настройку, сделанную по��ыately для другого.
+   * У агента без схлопываемых групп тумблер виден, но неактивен и выключен,
+   * а состояние принудительно `detailed`: «мы могли бы, но не смешиваем» —
+   * честный ответ агента без групп, а не молчаливое «как в файле».
    */
-  private applyStrategyToggleVisibility() {
+  private applyStrategyToggleState() {
     // `?.` — как у `agentSelect`: элемент строит страница чата всегда, но набор
     // элементов в тестовых харнессах собирается вручную, и падать из-за
-    // отсутствующего декоративного селекта не должен весь контроллер.
-    const select = this.el.strategySelect;
-    if (!select) return;
+    // отсутствующего декоративного контрола не должен весь контроллер.
+    const toggle = this.el.strategyToggle;
+    if (!toggle) return;
     const fusable = hasFusableGroups(this.el.agentSelect?.value);
-    select.style.display = fusable ? "" : "none";
-    if (select.value !== (this.state.executionStrategy ?? "")) {
-      select.value = this.state.executionStrategy ?? "";
+    toggle.disabled = !fusable;
+    toggle.checked = fusable && this.state.executionStrategy === "fused";
+    if (!fusable) {
+      // Лог — ТОЛЬКО при реальном сбросе: applyStrategyToggleState вызывается и на
+      // перерисовках каталога (model-catalog-changed), где состояние уже detailed,
+      // и порция одинаковых строк каждое событие скрывала бы настоящий смысл.
+      if (this.state.executionStrategy === "fused") {
+        logFront("[chat] у агента без схлопываемых групп режим сброшен на «подробно (Detailed)»");
+      }
+      this.state.executionStrategy = "detailed";
     }
   }
 
   private bindStrategyToggle() {
-    this.el.strategySelect?.addEventListener("change", () => {
-      const raw = this.el.strategySelect?.value ?? "";
-      this.state.executionStrategy =
-        raw === "detailed" || raw === "fused" ? raw : null;
-      logFront(`[chat] режим исполнения: ${this.state.executionStrategy ?? "как в файле"}`);
+    this.el.strategyToggle?.addEventListener("change", () => {
+      this.state.executionStrategy = this.el.strategyToggle?.checked ? "fused" : "detailed";
+      logFront(`[chat] режим исполнения: ${this.state.executionStrategy === "fused" ? "схлопнуто (Fused)" : "подробно (Detailed)"}`);
     });
-    this.applyStrategyToggleVisibility();
+    this.applyStrategyToggleState();
   }
 
   private bindBusEvents() {
@@ -1683,7 +1696,7 @@ export class ChatController {
       if (this.applyPendingSessionSelection()) bus.emit("model:changed", this.el.modelSelect.value);
       // Каталог мог привести модель к облачной (или вернуть отложенную сессионную).
       this.applyIndicatorVisibility();
-      this.applyStrategyToggleVisibility();
+      this.applyStrategyToggleState();
       this.refreshSendAvailability();
     });
     bus.on("config:loaded", (config: any) => {
@@ -1693,7 +1706,7 @@ export class ChatController {
       fillAgentSelect(this.el.agentSelect);
       if (this.applyPendingSessionSelection()) bus.emit("model:changed", this.el.modelSelect.value);
       this.applyIndicatorVisibility();
-      this.applyStrategyToggleVisibility();
+      this.applyStrategyToggleState();
       this.refreshSendAvailability();
       this.updateAttachButtonState();
       this.triggerTokenCount();

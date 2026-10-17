@@ -756,9 +756,13 @@ export class TabController {
       }
     });
     this.actionsEl.appendChild(button);
+    // «Новая вкладка» из бургера удалена: единственный способ создать вкладку —
+    // кнопка «＋» на панели вкладок. Пользователи сначала открывали бургер из
+    // привычки (люди ищут старые точки входа где попало), и пункт рядом с
+    // навигационными разделами обещал поведение, которое он не выполняет:
+    // по воздуху висел как переключатель раздела, значит и мёртвый вес.
     this.navigationMenu = createWorkspaceMenu(button, [
-      { id: "new-tab", label: "Новая вкладка", icon: "＋", action: () => this.newMainTab() },
-      { id: "sessions", label: "История сессий", icon: "🕘", separatorBefore: true, action: () => { this.openSection("sessions"); } },
+      { id: "sessions", label: "История сессий", icon: "🕘", action: () => { this.openSection("sessions"); } },
       { id: "agent-studio", label: "Студия агентов", icon: "🧪", action: () => { this.openSection("agent-studio"); } },
       { id: "engines", label: "Движки", icon: "🚂", badge: true, action: () => { this.openSection("engines"); } },
       { id: "settings", label: "Настройки", icon: "⚙️", badge: true, action: () => { this.openSection("settings"); } },

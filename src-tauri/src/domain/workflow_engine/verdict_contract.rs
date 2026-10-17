@@ -1,36 +1,43 @@
-//! Контракт «вердикты по правилам» — общий для System-1 и System-2.
+//! Контракт «вердикты по правилам» — общий код для стендов замера элементов.
 //!
 //! # Зачем отдельный модуль
 //!
-//! Файл критериев (`element_validation_rules_system1.yaml`) — единственный
-//! источник правды об элементах (AGENTS.md §2.1). Из него вырастают ДВА разных
-//! способа спросить модель об одном и том же:
+//! Критерии — ДАННЫЕ стенда: список `RuleDef` из `test_cases/new_tests_for_validator/`
+//! (и раньше — `system1_rules.rs`, удалённого вместе с System-1). Из одного
+//! списка правил вырастает способ спросить генеративную модель:
 //!
-//! - **System-1 (Лайя):** ONNX-классификатор. Правило превращается в
-//!   бинарный вопрос `TypedQuestion` с полюсами
-//!   [`System1Rule::to_typed_question`], движок возвращает вероятность положительного.
-//! - **System-2 (генеративная модель):** правило превращается в инструкцию
-//!   в промпте, а форма выхода задаётся грамматикой с теми же ключами.
-//!
-//! Общая часть — разбор ответа и подсчёт — живёт здесь, чтобы System-1 и
-//! System-2 мерились по **одной** метрике. Копия счёта в стендах означала бы
-//! расхождение чисел на единицу и невозможность честного сравнения.
+//! - правило превращается в инструкцию в промпте, а форма выхода задаётся
+//!   грамматикой с теми же ключами;
+//! - разбор ответа и подсчёт — общие тут, чтобы все стенды мерились по
+//!   **одной** метрике. Копия счёта в отдельном стенде означала бы расхождение
+//!   чисел на единицу и невозможность честного сравнения.
 //!
 //! Модуль ничего не знает ни про невроз, ни про девять элементов: всё приходит
-//! из списка правил. Набор и имена правил — данные графа, а не константа движа.
+//! из списка правил. Набор и имена правил — данные, а не константа движа.
 
 use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use super::system1_rules::System1Rule;
+/// Минимальное правило критерия для стендов замера (id + формулировки полюсов).
+///
+/// Раньше это был `system1_rules::System1Rule` с полем `threshold` под ONNX-
+/// классификатор System-1. Плагин и тип удалены; генеративным стендам порог не
+/// нужен, поэтому поля сведены к тому, что реально читают промпт и счёт.
+#[derive(Debug, Clone)]
+pub struct RuleDef {
+    pub id: String,
+    pub name: String,
+    pub question: String,
+    pub true_criteria: String,
+    pub false_criteria: String,
+}
 
-/// Промпт System-2: те же поля правила, что видит System-1, но как инструкция.
+/// Промпт стенда: те же поля правила, что формирует нода боевого валидатора.
 ///
 /// Формулировки `question` / `true_criteria` / `false_criteria` переиспользуются
-/// дословно. Правка файла критериев меняет System-1 и System-2 одновременно —
-/// иначе «одни и те же критерии» перестали бы быть одними и теми же.
-pub fn build_verdict_prompt(rules: &[System1Rule]) -> String {
+/// дословно из данных.
+pub fn build_verdict_prompt(rules: &[RuleDef]) -> String {
     let mut prompt = String::from(
         "Ты — строгий аналитик. Для каждого элемента определи, назван ли он в тексте \
          сообщения пользователя СОБСТВЕННЫМИ словами пользователя.\n\n",
@@ -85,7 +92,7 @@ pub const DEFAULT_THINK_BUDGET_CHARS: usize = 1400;
 ///
 /// `think_budget = None` — без размышления (ответ сразу JSON). `Some(n)` —
 /// с размышлением, ограниченным `n` символами.
-pub fn build_verdict_grammar(rules: &[System1Rule], think_budget: Option<usize>) -> String {
+pub fn build_verdict_grammar(rules: &[RuleDef], think_budget: Option<usize>) -> String {
     let bool_keys: Vec<String> = rules.iter().map(|rule| rule.id.clone()).collect();
     let base = crate::infra::build_json_object_grammar_with_keys(&bool_keys, &[]);
     let Some(budget) = think_budget else {
@@ -128,7 +135,7 @@ impl RawChannels {
 /// Поэтому проверяются оба канала — как это делает боевая нода экстрактора.
 pub fn parse_verdicts(
     channels: &RawChannels,
-    rules: &[System1Rule],
+    rules: &[RuleDef],
 ) -> Result<BTreeMap<String, bool>, String> {
     let mut last_error = String::new();
     for (channel, raw) in [
@@ -250,14 +257,13 @@ pub fn score_failed_case(
 mod tests {
     use super::*;
 
-    fn rule(id: &str) -> System1Rule {
-        System1Rule {
+    fn rule(id: &str) -> RuleDef {
+        RuleDef {
             id: id.to_string(),
             name: "n".to_string(),
             question: "q".to_string(),
             true_criteria: "t".to_string(),
             false_criteria: "f".to_string(),
-            threshold: None,
         }
     }
 

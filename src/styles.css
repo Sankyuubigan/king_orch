@@ -522,17 +522,40 @@ input[type="text"], select { flex: 1; padding: 8px 10px; border: 1px solid var(-
 input[type="text"]:focus, select:focus { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent); }
 input[type="range"] { accent-color: var(--primary); }
 .agent-select, .model-select { flex: 0 1 auto; min-width: 100px; max-width: 250px; padding: 6px 8px; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; overflow: hidden; }
-/* Тумблер режима графа в чате. Размеры и шрифт — как у соседних селектов,
-   но это ОТДЕЛЬНЫЙ контроллер: класс `.agent-select` зарезервирован за
-   выбором агента, и под ним тумблер маскировался бы под него (по этому классу
-   и UI, и тесты находят селекты агентов). */
-.execution-strategy-select {
-  flex: 0 1 auto; min-width: 100px; max-width: 170px;
-  padding: 6px 8px; font-size: 13px;
-  text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
-  border-color: var(--border); color: var(--text); opacity: 0.92;
+/* Тумблер режима графа в чате (ВКЛ = Fused, ВЫКЛ = Detailed).
+   Размеры и шрифт подписи — как у соседних селектов, но это ОТДЕЛЬНЫЙ
+   контроллер: класс `.agent-select` зарезервирован за выбором агента,
+   и под ним тумблер маскировался бы под него (по этому классу и UI,
+   и тесты находят селекты агентов). */
+.strategy-switch-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 8px; font-size: 13px; color: var(--text);
+  border: 1px solid var(--border); border-radius: var(--radius-sm);
+  cursor: pointer; user-select: none; opacity: 0.92;
+  white-space: nowrap; overflow: hidden;
 }
-.execution-strategy-select:focus { opacity: 1; }
+.strategy-switch-label:hover { background: var(--session-hover); }
+.strategy-switch-label.disabled,
+.strategy-switch-label:has(.strategy-switch:disabled) { opacity: 0.45; cursor: not-allowed; }
+.strategy-switch { display: none; }
+.strategy-switch-track {
+  position: relative; display: inline-block; flex: 0 0 auto;
+  width: 30px; height: 16px; border-radius: 999px;
+  background: var(--input-bg); border: 1px solid var(--border);
+  transition: background 0.2s, border-color 0.2s;
+}
+.strategy-switch-track::after {
+  content: ''; position: absolute; top: 1px; left: 1px;
+  width: 12px; height: 12px; border-radius: 50%;
+  background: var(--text); opacity: 0.75;
+  transition: transform 0.2s, background 0.2s;
+}
+.strategy-switch:checked + .strategy-switch-track {
+  background: var(--primary); border-color: var(--primary);
+}
+.strategy-switch:checked + .strategy-switch-track::after {
+  transform: translateX(14px); background: #fff; opacity: 1;
+}
 .btn-icon { background: none; border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; cursor: pointer; font-size: 18px; line-height: 1; color: var(--text); transition: background 0.2s; display: flex; align-items: center; justify-content: center; }
 .btn-icon:hover { background: var(--session-hover); }
 .btn-icon.btn-attach-inactive { opacity: 0.35; cursor: not-allowed; filter: grayscale(1); }

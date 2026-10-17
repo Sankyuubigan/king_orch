@@ -35,8 +35,8 @@ export interface ChatPageElements extends SharedChatControls {
   agentSelect: HTMLSelectElement;
   btnAgentSettings: HTMLButtonElement;
   modelSelect: HTMLSelectElement;
-  /** Тумблер режима исполнения графа; скрыт, если схлопывать нечего. */
-  strategySelect: HTMLSelectElement;
+  /** Тумблер режима исполнения графа: ВКЛ = Fused, ВЫКЛ = Detailed. */
+  strategyToggle: HTMLInputElement;
   subchatHistory: HTMLDivElement;
   subchatTitle: HTMLSpanElement;
   btnBackChat: HTMLButtonElement;
@@ -165,26 +165,24 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
   cloudCounter.textContent = "☁ 0";
   cloudCounter.title = "Количество запросов к облачной LLM за этот чат";
   cloudCounter.style.display = "none";
-  // Тумблер режима исполнения графа. Показывается ТОЛЬКО если у выбранного
-  // агента есть схлопываемые группы: переключать нечего — значит и обещать
-  // выбор незачем. «По умолчанию» означает «решает файл графа», и это видно
-  // подписью — молчаливый третий режим был бы враньём.
-  const strategySelect = document.createElement("select");
-  // Класс намеренно НЕ `.agent-select`: селекты агентов находятся по этому
-  // классу в UI и в тестах, и новый контроллер под ним маскировался бы под
-  // выбор агента — это ровно тот «второй источник правды о том, что выбрано»,
-  // который тут и ловится.
-  strategySelect.className = "execution-strategy-select";
-  strategySelect.title = "Режим исполнения графа: подробно по нодам или группами одним вызовом";
-  for (const [value, label] of [["", "Режим: как в файле"], ["detailed", "Подробно"], ["fused", "Схлопнуто ⚡"]] as const) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = label;
-    strategySelect.appendChild(option);
-  }
-  strategySelect.style.display = "none";
+  // Тумблер режима исполнения графа: ВКЛ = Fused (группы одним вызовом),
+  // ВЫКЛ = Detailed (подробно по нодам). У агента без схлопываемых групп
+  // переключать нечего — контроллер держит тумблер выключенным и заблокированным.
+  // Класс `.strategy-switch-label` не `.agent-select`: селекты агентов
+  // находятся по этому классу в UI и в тестах, и новый контроллер под ним
+  // маскировался бы под выбор агента.
+  const strategyToggle = document.createElement("input");
+  strategyToggle.type = "checkbox";
+  strategyToggle.className = "strategy-switch";
+  const strategyToggleLabel = document.createElement("label");
+  strategyToggleLabel.className = "strategy-switch-label";
+  strategyToggleLabel.title = "Режим исполнения графа: подробно по нодам или группами одним вызовом";
+  const strategyToggleTrack = py("span", "strategy-switch-track");
+  const strategyToggleText = py("span", "strategy-switch-text");
+  strategyToggleText.textContent = "Схлопнуто ⚡";
+  strategyToggleLabel.append(strategyToggle, strategyToggleTrack, strategyToggleText);
 
-  left.append(btnAttach, fileInput, btnSetWorkdir, currentWorkdir, agentSelect, btnAgentSettings, modelSelect, btnAddModel, strategySelect, tokenCounter, engineBadge, cloudCounter);
+  left.append(btnAttach, fileInput, btnSetWorkdir, currentWorkdir, agentSelect, btnAgentSettings, modelSelect, btnAddModel, strategyToggleLabel, tokenCounter, engineBadge, cloudCounter);
 
   const right = py("div", "chat-input-controls-right");
   const btnStop = document.createElement("button");
@@ -237,7 +235,7 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
     agentSelect,
     btnAgentSettings,
     modelSelect,
-    strategySelect,
+    strategyToggle,
     subchatHistory,
     subchatTitle,
     btnBackChat,

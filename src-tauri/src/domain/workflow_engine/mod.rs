@@ -13,7 +13,6 @@ pub mod parser;
 // отчётов собирается одной функцией, иначе стенд мерил бы не тот текст.
 pub mod reports;
 pub mod step_output;
-pub mod system1_rules;
 
 // ─── Стенды замера валидатора 9 элементов ───
 //
@@ -99,11 +98,7 @@ pub struct WorkflowRunner<'a, L, S, C> {
     pub bins_dir: &'a Path,
     /// agents/<папка>/grammars/ — per-agent GBNF для llm_worker узлов
     pub grammars_dir: &'a Path,
-    /// Корень `agents/` — от него резолвятся файлы агентов (критерии System-1).
-    ///
-    /// Раньше нода `system1_validator` искала критерии через
-    /// `../../../test_cases/...`, то есть относительный путь от каталога
-    /// workflow. В установленной программе `test_cases/` нет, и путь ломался.
+    /// Корень `agents/` — от него резолвятся файлы агентов (grammars/, layers/).
     pub agents_dir: &'a Path,
     pub all_sub_calls: &'a mut Vec<SubCall>,
     pub msg_counter: &'a mut u32,

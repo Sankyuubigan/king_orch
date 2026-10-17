@@ -58,12 +58,6 @@ flate2 = "1.0"
 url = "2"
 log = "0.4"
 base64 = "0.22"
-# Рантайм System-1 (Laya) живёт в переиспользуемом плагине my-tauri-plugins.
-# Крейты ort/tokenizers/ndarray больше НЕ нужны хосту напрямую: инференс целиком
-# в плагине, хост знает только про `TypedQuestion` и `DecisionResult`.
-# За подробностями про load-dynamic и про то, почему не download-binaries,
-# см. docs/README.md плагина my-tauri-plugins/tauri-plugin-system1.
-tauri-plugin-system1 = { path = "../../my-tauri-plugins/tauri-plugin-system1" }
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = ["Win32_Networking_WinHttp", "Win32_Foundation"] }
 

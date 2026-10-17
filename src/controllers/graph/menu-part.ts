@@ -52,7 +52,6 @@ export function setupContextMenu(this: GraphController): void {
             <div class="ctx-item" data-type="condition_check">🎯 Condition</div>
             <div class="ctx-item" data-type="condition_router">🔀 Condition Router</div>
             <div class="ctx-item" data-type="llm_fact_extractor">📋 Extractor</div>
-            <div class="ctx-item" data-type="system1_validator">🧠 System-1 Validator</div>
             <div class="ctx-item" data-type="llm_freeform">💬 Freeform</div>
             <div class="ctx-item" data-type="note">📝 Note</div>
           </div>

@@ -92,6 +92,15 @@ pub struct AgentEntry {
     /// Путь относительно `agents/` (например `coder/primary_coder.md`).
     /// Позволяет UI показать, где лежит агент, и отличить воркер от точки входа.
     pub rel_path: String,
+    /// ПОЛНЫЙ абсолютный путь файла на диске — для подсказки при наведении
+    /// на агента в выпадающем списке чата: пользователь видит, какой фактически
+    /// файл редактирует. Frontend сам его получить не может — он не знает
+    /// `agents_dir` (в dev он в репозитории, в релизе — рядом с exe),
+    /// поэтому путь приходит готовым. Канонизация выполняется на уровне
+    /// базового каталога (`load_entry_points` → `display_abs_dir`): база
+    /// раскрывается один раз, пути файлов строятся `join`'ом к ней —
+    /// без мусорных `..`/`.`-сегментов и `\\?\`-приставки от Windows.
+    pub source_path: String,
     /// Роль агента: `"graph"` — узел workflow-графа, `"agent"` — самостоятельный
     /// legacy-агент (в т.ч. корень `agents/*.md`, запускается напрямую).
     pub role: String,
@@ -143,6 +152,34 @@ fn team_folder_of(path: &Path, agents_dir: &Path) -> Option<String> {
         .map(|c| c.as_os_str().to_string_lossy().to_string())
 }
 
+/// Windows-canonicalize добавляет к дисковым путям приставку `\\?\`
+/// (у сетевых — `\\?\UNC\`): в подсказке для пользователя это только шум.
+fn strip_unc(path: &Path) -> PathBuf {
+    let s = path.to_string_lossy();
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{rest}"))
+    } else if let Some(rest) = s.strip_prefix(r"\\?\") {
+        PathBuf::from(rest)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// Канонический абсолютный путь директории для построения путей записей.
+///
+/// `find_agents_dir` в dev возвращает путь с подъёмами (`target/<profile>/../../../agents`):
+/// если именно его отдавать в подсказке, пути усеяны `..`-сегментами.
+/// `canonicalize` раскрывает `.`/`..`/ссылки один раз — дальше все пути строятся
+/// `join`'ом к чистой абсолютной базе и точек не содержат. Падение
+/// `canonicalize` (каталог исчез между проверкой и вызовом, сеть) не фатально:
+/// отдаём каталог как есть — записи всё равно построились бы с этим путём.
+fn display_abs_dir(dir: &Path) -> PathBuf {
+    match fs::canonicalize(dir) {
+        Ok(canonical) => strip_unc(&canonical),
+        Err(_) => dir.to_path_buf(),
+    }
+}
+
 fn collect_md_files(dir: &Path, files: &mut Vec<PathBuf>) {
     if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -179,15 +216,26 @@ fn process_includes(base_path: &Path, content: &str) -> String {
     }).to_string()
 }
 
-pub fn load_agents(agents_dir: &Path) -> Result<Vec<AgentProfile>, String> {
-    let mut agents = Vec::new();
-    if !agents_dir.exists() { return Ok(agents); }
+/// Профили агентов вместе с фактическим путём их `.md`-файла — для каталога
+/// entry points. Восстановить путь по `folder + id` нельзя: файл бывает вложен
+/// глубже одного каталога (`agents/media/backend/image_editor.md` → folder
+///=`media`, а реконструкция `media/<id>.md` указывает мимо файла).
+fn load_agents_with_files(agents_dir: &Path) -> Vec<(AgentProfile, PathBuf)> {
+    if !agents_dir.exists() { return Vec::new(); }
     let mut md_files = Vec::new();
     collect_md_files(agents_dir, &mut md_files);
-    for path in md_files {
-        if let Some(agent) = parse_agent_file(&path, agents_dir) { agents.push(agent); }
-    }
-    Ok(agents)
+    md_files
+        .into_iter()
+        .filter_map(|path| parse_agent_file(&path, agents_dir).map(|agent| (agent, path)))
+        .collect()
+}
+
+pub fn load_agents(agents_dir: &Path) -> Result<Vec<AgentProfile>, String> {
+    if !agents_dir.exists() { return Ok(Vec::new()); }
+    Ok(load_agents_with_files(agents_dir)
+        .into_iter()
+        .map(|(agent, _)| agent)
+        .collect())
 }
 
 fn parse_agent_file(path: &Path, agents_dir: &Path) -> Option<AgentProfile> {
@@ -337,36 +385,38 @@ fn fusable_groups_count(workflow: &crate::domain::workflow_engine::parser::Workf
 }
 
 pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
+    // Подсказка UI обязана быть ПОЛНЫМ путём без `..`-сегментов: базу
+    // канонизируем один раз, все записи строятся от неё.
+    let agents_dir = &display_abs_dir(agents_dir);
     let mut entries = Vec::new();
 
-    // .md агенты
-    if let Ok(agents) = load_agents(agents_dir) {
-        for a in agents {
-            let path = agents_dir.join(
-                a.folder
-                    .as_ref()
-                    .map(|f| PathBuf::from(f).join(&a.id))
-                    .unwrap_or_else(|| PathBuf::from(&a.id))
-                    .with_extension("md"),
-            );
-            entries.push(AgentEntry {
-                id: a.id,
-                name: a.name,
-                description: a.description,
-                entry_type: "agent".to_string(),
-                folder: a.folder.clone(),
-                rel_path: rel_path_of(&path, agents_dir),
-                role: "agent".to_string(),
-                visible: a.visible,
-                fusable_groups: 0,
-            });
-        }
+    // .md агенты — путь не реконструируется, а берётся фактический из скана
+    for (a, path) in load_agents_with_files(agents_dir) {
+        entries.push(AgentEntry {
+            id: a.id,
+            name: a.name,
+            description: a.description,
+            entry_type: "agent".to_string(),
+            folder: a.folder.clone(),
+            rel_path: rel_path_of(&path, agents_dir),
+            source_path: path.to_string_lossy().to_string(),
+            role: "agent".to_string(),
+            visible: a.visible,
+            fusable_groups: 0,
+        });
     }
 
     // YAML графы
     if let Ok(workflows) = load_workflows(agents_dir) {
         for wf in &workflows {
             let path = PathBuf::from(&wf.parent_dir).join(format!("{}.yaml", wf.file_stem));
+            // parent_dir бывает и относительным (тестовые фикстуры) — абсолютный
+            // путь обязателен по контракту поля: якорим на agents_dir.
+            let source_abs = if path.is_absolute() {
+                path.clone()
+            } else {
+                agents_dir.join(&path)
+            };
             entries.push(AgentEntry {
                 id: wf.file_stem.clone(),
                 name: wf.name.clone(),
@@ -374,6 +424,7 @@ pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
                 entry_type: "workflow".to_string(),
                 folder: team_folder_of(&path, agents_dir),
                 rel_path: rel_path_of(&path, agents_dir),
+                source_path: source_abs.to_string_lossy().to_string(),
                 role: "graph".to_string(),
                 visible: wf.visible,
                 fusable_groups: fusable_groups_count(wf),
@@ -470,6 +521,74 @@ mod tests {
         assert_eq!(zero.think_budget_chars, None);
         let junk = parse("---\nname: Junk\nthink_budget: много\n---\nbody\n");
         assert_eq!(junk.think_budget_chars, None);
+    }
+
+    /// `find_agents_dir` в dev возвращает путь с подъёмами
+    /// (`target/<profile>/../../../agents`): если его отдавать в подсказку,
+    /// пути усеяны `..`. Контракт `source_path` — ПОЛНЫЙ путь без
+    /// `..`-сегментов и без `\\?\`-приставки: фронт показывает его как есть.
+    fn agents_dir_dotted() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("корень проекта")
+            .join("src-tauri")
+            .join("..")
+            .join("agents")
+    }
+
+    #[test]
+    fn display_abs_dir_resolves_dot_segments() {
+        let clean = display_abs_dir(&agents_dir_dotted());
+        let shown = clean.to_string_lossy().to_string();
+        assert!(clean.is_absolute(), "путь подсказки обязан быть абсолютным: {shown}");
+        assert!(!shown.contains(".."), "подъёмы раскрыты: {shown}");
+        assert!(!shown.starts_with(r"\\?\"), "UNC-приставка срезана: {shown}");
+        assert_eq!(
+            clean,
+            display_abs_dir(
+                &Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap()
+                    .join("agents")
+            ),
+            "раскрытие `..` совпадает с прямой папкой"
+        );
+    }
+
+    #[test]
+    fn entry_source_paths_are_full_clean_file_paths() {
+        let dotted = agents_dir_dotted();
+        assert!(dotted.exists(), "фикстура — настоящая папка агентов репозитория");
+        let entries = load_entry_points(&dotted);
+        assert!(!entries.is_empty(), "каталог агентов не пуст");
+        for entry in &entries {
+            let source = PathBuf::from(&entry.source_path);
+            assert!(
+                source.is_absolute(),
+                "source_path обязан быть абсолютным: {}",
+                entry.source_path
+            );
+            assert!(
+                !entry.source_path.contains(".."),
+                "без подъёмов в подсказке: {}",
+                entry.source_path
+            );
+            assert!(
+                !entry.source_path.starts_with(r"\\?\"),
+                "без UNC-приставки: {}",
+                entry.source_path
+            );
+            assert!(
+                fs::metadata(&source).map(|m| m.is_file()).unwrap_or(false),
+                "путь указывает на фактический файл: {}",
+                entry.source_path
+            );
+            assert!(
+                !entry.rel_path.starts_with('/') && !entry.rel_path.starts_with('\\'),
+                "rel_path остаётся относительным: {}",
+                entry.rel_path
+            );
+        }
     }
 
     /// Файлы отчётов и замеров лежат под `agents/`, потому что относятся к этому

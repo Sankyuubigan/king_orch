@@ -413,14 +413,6 @@ pub struct NodeDef {
     /// узел перевыполняется до лимита, выход из цикла — через switch/condition_check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_visits: Option<u32>,
-    /// Файл критериев System-1 для узла `system1_validator`.
-    ///
-    /// Относительный путь считается от каталога агентов (тот, что уже есть в
-    /// инсталле), абсолютный берётся как есть. Количество правил и их
-    /// идентификаторы определяются файлом, а не движком: узел ничего не знает
-    /// про конкретный набор критериев агента.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rules_file: Option<String>,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -450,8 +442,6 @@ pub enum NodeType {
     #[serde(rename = "condition_router")]
     ConditionRouter,
     Note,
-    #[serde(rename = "system1_validator")]
-    System1Validator,
     /// Точка входа графа — текст, который пользователь отправил в чат.
     /// Источник данных: 0 входов, 1 выход, LLM не вызывается.
     UserMessage,
@@ -698,16 +688,6 @@ mod tests {
     /// ломает граф в рантайме, а не в редакторе.
     const PRODUCTION_GRAPHS: &[&str] = &[
         "agents/psychotherapist/transitions/main_conversation_flow.yaml",
-        // Граф, который правится руками в редакторе графа: контракт `entry`
-        // и читаемость входа экстрактором проверяются на нём же, а не только
-        // на шаблонных графах команд.
-        //
-        // Лежит в `experiments/`, а не в `transitions/`: это вариант графа с
-        // нодой System-1 (Лайя) и гейтом `mental_presence`, а не основной
-        // пайплайн. Загрузчик `collect_yaml_files` пропускает только папку
-        // `archive`, поэтому из `experiments/` граф всё равно регистрируется и
-        // доступен в выборе агента — перенос не отключает его.
-        "agents/psychotherapist/experiments/psychotherapist.yaml",
         "agents/coder/transitions/analyst-team.yaml",
         "agents/coder/transitions/coding-team.yaml",
         "agents/research/transitions/search-specialist.yaml",
@@ -1142,7 +1122,6 @@ edges: []
         "psychotherapist/transitions/facts.yaml",
         "research/transitions/facts.yaml",
         "psychotherapist/database/element_validation_rules.yaml",
-        "psychotherapist/database/element_validation_rules_system1.yaml",
     ];
 
     /// Регрессия: файл данных не должен попадать в загрузку графов и не должен
@@ -1193,6 +1172,9 @@ edges: []
     }
 
     /// Настоящий граф обязан распознаваться как граф и грузиться.
+    ///
+    /// На 17.10.26 в `agents/` живёт 5 графов; вариант психотерапевта из
+    /// `experiments/` удалён коммитом `83e37f9` вместе с нодой System-1.
     #[test]
     fn real_graphs_are_still_discovered() {
         let agents_dir = workspace_root().join("agents");
@@ -1209,7 +1191,6 @@ edges: []
                 "coding-team",
                 "main_conversation_flow",
                 "media-flow",
-                "psychotherapist",
                 "search-specialist",
             ],
             "фильтр не должен терять или подменять реальные графы"

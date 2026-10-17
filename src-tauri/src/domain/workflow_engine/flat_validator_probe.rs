@@ -18,9 +18,9 @@
 //!
 //! Измеренные там 0.697 — не замер боевой ноды `call_validator` (этот стенд
 //! вынесен в `test/laya_probe/experiments/ornith_validator_probe.rs`). Он брал
-//! промпт `verdict_contract::build_verdict_prompt()` из
-//! `element_validation_rules_system1.yaml` (бинарные критерии Лайи) и ждал голый
-//! `{e1..e9}` без конверта `emit_signal`. Это другая система; сравнивать её с
+//! промпт `verdict_contract::build_verdict_prompt()` из критериев Лайи
+//! (исторический `element_validation_rules_system1.yaml`, файл удалён) и ждал
+//! голый `{e1..e9}` без конверта `emit_signal`. Это другая система; сравнивать её с
 //! воронкой нельзя. Здесь промпт — боевой `.md` агента, а ответ — конверт
 //! `emit_signal` с ключом `validator_report`, ровно как у `call_validator`.
 //!

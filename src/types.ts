@@ -54,6 +54,13 @@ export interface AgentEntry {
     folder?: string | null;
     /** Путь относительно `agents/`, например `coder/primary_coder.md`. */
     rel_path: string;
+    /**
+     * Абсолютный путь файла на диске — для подсказки при наведении на агента
+     * в списке чата. Опционально сознательно: ручные литералы в тестах и старых
+     * моках могут его не знать; UI обязано переживать отсутствие (fallback —
+     * показать `rel_path`).
+     */
+    source_path?: string;
     /** `graph` — узел workflow-графа, `agent` — самостоятельный legacy-агент. */
     role: 'graph' | 'agent';
     /**

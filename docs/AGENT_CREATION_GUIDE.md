@@ -234,7 +234,7 @@ nodes:
     type: user_message
 
   - id: node_name
-    type: user_message | llm_worker | llm_fact_extractor | llm_freeform | system1_validator | system_condition | sub_workflow | switch | llm_sequential_switch | condition_check | condition_router | signal_router | return | note
+    type: user_message | llm_worker | llm_fact_extractor | llm_freeform | system_condition | sub_workflow | switch | llm_sequential_switch | condition_check | condition_router | signal_router | return | note
     # тип-специфичные поля...
 
 edges:
@@ -266,7 +266,6 @@ edges:
 | `llm_worker` | Вызывает `.md` агента с задачей. Результат — `thought` (свёрнутый отчёт) или `message` (в чат), управляется `output_type` | `agent`, `task`, `output_type`, `inject_response`, `llm_params` |
 | `llm_fact_extractor` | Generic экстрактор фактов (один на граф, сразу после входа — см. «Главное правило №2»). Факты + критерии из `config.facts` / `config.facts_file`. Возвращает JSON `{"fact_id": true/false, ...}` | `input` (обязателен: `{{ nodes.user_message.output.text }}`) |
 | `llm_freeform` | Зовёт LLM без системного промпта (только история чата) — для off-topic | `input` |
-| `system1_validator` | **Быстрые решения (System-1, модель Laya).** Задаёт модели типизированные вопросы из файла критериев и публикует сигнал `validator_report` (`{e1: true, …}`). LLM не вызывается. Не динамическая нода: маршрут идёт обычными рёбрами | `rules_file` (обязателен), `input` (обязателен) |
 | `system_condition` | Rust-side проверка состояния сессии / агрегация отчётов | `action`, `required` |
 | `sub_workflow` | Рекурсивный вызов другого YAML графа (по file_stem) | `workflow` |
 | `switch` | Маршрутизация (3 режима, ниже) | `input`/`input_object`, `switch_field`, `cases_priority`, `default` |
@@ -287,59 +286,6 @@ edges:
 - `max_visits: N` — максимум выполнений узла за один прогон workflow (default 1 = ровно один раз, прежнее поведение). Значение > 1 разрешает циклы через рёбра графа (см. «Циклы в графах»).
 - `ui_pos: {x, y}` — координаты в редакторе графов (генерируется редактором).
 - `system_condition, switch, condition_check` — подробности ниже.
-
-### Нода `system1_validator` (System-1 / быстрые решения)
-
-Заменяет LLM-валидатор там, где вердикт по 9 элементам невроза решает модель
-`Laya` вместо текстовой LLM. Инференс идёт через плагин
-`tauri-plugin-system1`; хост владеет только критериями и порогами.
-
-```yaml
-  # 1. Собрать текст для проверки (обычно — консолидатор фактов)
-  - id: call_fact_consolidator
-    type: llm_worker
-    agent: fact_consolidator
-
-  # 2. Спросить у модели по критериям из файла
-  - id: validate_system1
-    type: system1_validator
-    rules_file: psychotherapist/database/element_validation_rules_system1.yaml
-    input: "{{ nodes.call_fact_consolidator.output.result }}"
-
-  # 3. Читать результат как обычный сигнал
-  - id: check_critical_elements
-    type: condition_router
-    conditions:
-      - field: validator_report.e3
-        equals: false
-```
-
-| Поле | Обязательное | Что значит |
-|------|--------------|------------|
-| `rules_file` | да | YAML с критериями. Относительный путь — от каталога агентов, абсолютный — как есть. Набор элементов, их `id`, `question`, `true_criteria`/`false_criteria` и `threshold` задаёт **файл**, а не движок |
-| `input` | да | Шаблон текста, который увидит модель. Пустое или неразрешимое значение — **ошибка прогона**, а не «все элементы false» |
-
-Что нода публикует:
-- сигнал `validator_report` — `{e1: true, e2: false, …}`, тот же ключ и формат, что
-  у LLM-валидатора, поэтому `condition_router` с полями `validator_report.e3`
-  работают без изменений;
-- свой вывод `{report, elements, rules_file, elapsed_ms, load_ms, device}`, где
-  `elements.<id>` содержит `verdict`, `p_true`, `answer_confidence`, `name`,
-  `threshold` — за ними видно, на какой вероятности стоял каждый вердикт.
-
-Обязательные условия, без которых вердикт будет ложным:
-- **Текст на входе — дословный и без служебной разметки.** Модель 322M — матчер
-  тем и совпадений слов, а не смысловой судья; заголовок вроде «Корневой страх:»
-  даёт ложное срабатывание на `e7` (справ. `tauri-plugin-system1/docs/LAYA_MODEL.md` §11.2).
-- **Текст должен помещаться в бюджет.** Последовательность обрезается до 2048
-  токенов, и обрезка идёт **с начала** — хвост жалобы теряется. Переполнение
-  пишется в лог плагином (`[system1] вопрос "...": состояние не поместилось…`).
-- **Модель и ONNX Runtime должны быть скачаны** (вкладка настроек, панель
-  `<system1-panel>`). Если их нет — прогон падает с текстом ошибки, а не
-  возвращает «все элементы false».
-
-Правка критериев без прогона стенда `python tools\laya_probe.py --onnx --labels both`
-= правка вслепую: файл критериев влияет на продакшн-валидатор.
 
 ### Параметр `output_type` (для `llm_worker`)
 
