@@ -25,9 +25,6 @@ export function buildNodeInnerHtml(this: GraphController, data: any, fallbackId:
   if (data.type === "llm_worker" && data.output_type) {
     agentLine += `<div class="gn-agent">${this.esc(data.output_type)}</div>`;
   }
-  if (data.type === "llm_worker" && data.inject_thoughts && data.inject_thoughts.length > 0) {
-    agentLine += `<div class="gn-agent" style="color:#2196f3">🧠 Мысли: ${data.inject_thoughts.length}</div>`;
-  }
   if (data.type === "llm_worker" && data.inject_response && data.inject_response.length > 0) {
     agentLine += `<div class="gn-agent" style="color:#2196f3">📎 Ответы: ${data.inject_response.length}</div>`;
   }

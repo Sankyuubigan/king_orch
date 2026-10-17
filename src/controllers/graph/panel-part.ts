@@ -84,11 +84,7 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
       </select>
     </div>`;
     html += `<div class="graph-detail-section">
-      <div class="detail-label">Инжект мысли (фаза 1, ID агентов)</div>
-      <input type="text" id="ge-inject-thoughts" class="ge-input" placeholder="через запятую: soma_translator" value="${this.esc((data.inject_thoughts || []).join(', '))}" />
-    </div>`;
-    html += `<div class="graph-detail-section">
-      <div class="detail-label">Инжект ответы (фаза 2, ID агентов)</div>
+      <div class="detail-label">Инжект ответов (ID агентов)</div>
       <input type="text" id="ge-inject-response" class="ge-input" placeholder="через запятую: validator, synthesizer" value="${this.esc((data.inject_response || []).join(', '))}" />
     </div>`;
   }
@@ -288,16 +284,6 @@ if (data.type === "system1_validator") {
     outputTypeSelect.addEventListener("change", () => {
       this.saveCheckpoint();
       data.output_type = outputTypeSelect.value === "thought" ? undefined : outputTypeSelect.value;
-      this.updateNodeHtml(nodeId);
-    });
-  }
-
-  const thoughtsInput = getField<HTMLInputElement>("ge-inject-thoughts");
-  if (thoughtsInput) {
-    thoughtsInput.addEventListener("change", () => {
-      this.saveCheckpoint();
-      const val = thoughtsInput.value.trim();
-      data.inject_thoughts = val ? val.split(',').map((s: string) => s.trim()) : undefined;
       this.updateNodeHtml(nodeId);
     });
   }

@@ -31,7 +31,6 @@ export interface GraphNodeDef {
   conditions?: ConditionNode[];
   logic?: string;
   input_object?: string;
-  inject_thoughts?: string[];
   inject_response?: string[];
   output_type?: string;
   ui_pos?: { x: number; y: number };

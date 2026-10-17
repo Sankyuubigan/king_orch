@@ -341,7 +341,7 @@ Some(text) => {
                     );
                 }
                 // Ноды вне группы, чьи отчёты внедряются внутрь неё
-                // (`inject_response`/`inject_thoughts`). В Fused внутренние ноды
+                // (`inject_response`). В Fused внутренние ноды
                 // не выполняются, а склеенный вызов получает историю БЕЗ
                 // thought-сообщений (`llm_history` их отфильтровывает) — отчёт
                 // внешнего агента до модели просто не дойдёт.
@@ -365,7 +365,6 @@ Some(text) => {
                     }
                     let mut injected: Vec<&String> = Vec::new();
                     injected.extend(node.inject_response.iter().flatten());
-                    injected.extend(node.inject_thoughts.iter().flatten());
                     let lost: Vec<&str> = injected
                         .iter()
                         .map(|a| a.trim())

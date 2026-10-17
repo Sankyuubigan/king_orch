@@ -393,8 +393,6 @@ pub struct NodeDef {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub statuses: Option<serde_yaml::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inject_thoughts: Option<Vec<String>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inject_response: Option<Vec<String>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub problems: Option<String>,
@@ -1589,9 +1587,9 @@ edges: []
         // Ключевая проверка бага: реальный файл графа должен проходить
         // надёжный конвейер save_workflow (нативный serde_yaml + безопасные
         // разделители) и обратно парситься, ПРИЧЁМ структура
-        // (узлы, рёбра, вложенные поля ui_pos/inject_thoughts, тексты
+        // (узлы, рёбра, вложенные поля ui_pos/inject_response, тексты
         // task/input) должна совпасть побайтово. Этот тест ловит
-        // «валидный, но сломанный» YAML (напр. inject_thoughts,
+        // «валидный, но сломанный» YAML (напр. inject_response,
         // уехавший внутрь task, или ui_pos, потерявший отступ).
         let yaml_str = serde_yaml::to_string(&wf).expect("ser");
         let yaml_final = separate_top_level_fields(&yaml_str);
@@ -1612,11 +1610,6 @@ edges: []
             assert_eq!(n1.task, n2.task, "task узла {}", n1.id);
             assert_eq!(n1.input, n2.input, "input узла {}", n1.id);
             assert_eq!(n1.output_type, n2.output_type, "output_type узла {}", n1.id);
-            assert_eq!(
-                n1.inject_thoughts, n2.inject_thoughts,
-                "inject_thoughts узла {}",
-                n1.id
-            );
             assert_eq!(
                 n1.inject_response, n2.inject_response,
                 "inject_response узла {}",

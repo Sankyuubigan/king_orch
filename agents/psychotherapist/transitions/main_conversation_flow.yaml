@@ -19,15 +19,15 @@ nodes:
 - id: user_message
   type: user_message
   ui_pos:
-    y: 493
     x: -2274
+    y: 493
 
 - id: extract_facts
   type: llm_fact_extractor
   input: '{{ nodes.user_message.output.text }}'
   ui_pos:
-    x: -1990
     y: 493
+    x: -1990
   llm_params: strict
 
 - id: check_has_problem
@@ -37,8 +37,8 @@ nodes:
   true_to: note_1782221436115
   false_to: note_1785141025138
   ui_pos:
-    y: 495
     x: -1700
+    y: 495
 
 - id: call_collector
   type: llm_worker
@@ -48,8 +48,8 @@ nodes:
   - validator
   - decomposer
   ui_pos:
-    y: -347
     x: 3183
+    y: -347
 
 - id: call_soma_translator
   type: llm_worker
@@ -67,8 +67,8 @@ nodes:
   inject_response:
   - soma_translator
   ui_pos:
-    y: 486
     x: 240
+    y: 486
 
 - id: call_validator
   type: llm_worker
@@ -79,8 +79,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 1345
     y: 152
+    x: 1345
   llm_params: strict
 
 - id: call_grounder
@@ -88,12 +88,11 @@ nodes:
   agent: grounder
   task: Проанализируй отчёты коллег и жалобу пользователя. Выдай несколько конкретных, приземлённых бытовых сценариев возможных МЕНТАЛЬНЫХ причин проблемы (6-й элемент невроза, а не соматика). Если данных не хватает — задай пользователю уточняющие вопросы.
   output_type: message
-  inject_thoughts:
-  - soma_translator
   inject_response:
   - validator
   - decomposer
   - data_collector
+  - soma_translator
   ui_pos:
     x: 2841
     y: -451
@@ -139,20 +138,19 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 3468
-    y: -5
+    x: 3202
+    y: 26
 
 - id: call_shadow_worker
   type: llm_worker
   agent: shadow_worker
   output_type: message
-  inject_thoughts:
-  - soma_translator
   inject_response:
   - validator
   - decomposer
   - data_collector
   - grounder
+  - soma_translator
   ui_pos:
     y: -456
     x: 2259
@@ -161,22 +159,22 @@ nodes:
   type: note
   input: пересчитываем данные с учетом новых данных от юзера
   ui_pos:
-    y: 255
     x: -1215
+    y: 255
 
 - id: note_1782220193985
   type: note
   input: проверка данных. развилка на доработку данных или отправку на лечение
   ui_pos:
-    y: 492
     x: 916
+    y: 492
 
 - id: note_1784427848563
   type: note
   input: вычисление типа
   ui_pos:
-    x: 2085
     y: 41
+    x: 2085
 
 - id: check_critical_elements
   type: condition_router
@@ -229,8 +227,8 @@ nodes:
   input: уточнение рукости у юзера
   system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
   ui_pos:
-    x: -57
     y: 10
+    x: -57
 
 - id: note_1785141025138
   type: note
@@ -276,8 +274,8 @@ nodes:
     equals: true
   logic: all
   ui_pos:
-    y: -283
     x: 1967
+    y: -283
 
 - id: check_elements2
   type: condition_router
@@ -301,8 +299,8 @@ nodes:
   inject_response:
   - decomposer
   ui_pos:
-    x: 526
     y: 382
+    x: 526
 
 edges:
 

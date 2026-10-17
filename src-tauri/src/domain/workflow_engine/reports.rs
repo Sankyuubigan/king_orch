@@ -1,5 +1,4 @@
-//! Инжект отчётов коллег в системный промпт узла: `inject_thoughts` и
-//! `inject_response`.
+//! Инжект отчётов коллег в системный промпт узла: `inject_response`.
 //!
 //! # Почему отдельный модуль
 //!
@@ -18,34 +17,16 @@
 use crate::domain::workflow_engine::parser::NodeDef;
 use crate::infra::{message_phase, ChatMessage};
 
-/// Собирает блок инжекта для узла: мысли (фаза 1) и ответы (фаза 2).
+/// Собирает блок инжекта для узла: ответы (и сигналы) перечисленных агентов.
 ///
 /// Пустая строка — если узел ничего не инжектит; вызывающий код тогда не
 /// добавляет раздел в системный промпт.
 pub fn build_injected_reports(node: &NodeDef, messages: &[ChatMessage]) -> String {
     let mut reports = String::new();
 
-    if let Some(aids) = node.inject_thoughts.as_ref() {
-        if !aids.is_empty() {
-            reports.push_str("### [РАЗМЫШЛЕНИЯ КОЛЛЕГ (ФАЗА 1)]\n");
-            for agent_id in aids {
-                let report = messages
-                    .iter()
-                    .rev()
-                    .find(|m| {
-                        m.author.as_deref() == Some(agent_id.as_str())
-                            && crate::infra::llm_types::message_phase(m) == Some(1)
-                    })
-                    .map(|m| m.content.clone())
-                    .unwrap_or_else(|| "[Размышления не найдены]".to_string());
-                reports.push_str(&format!("--- Мысли от {} ---\n{}\n\n", agent_id, report));
-            }
-        }
-    }
-
     if let Some(aids) = node.inject_response.as_ref() {
         if !aids.is_empty() {
-            reports.push_str("### [ОТВЕТЫ КОЛЛЕГ (ФАЗА 2)]\n");
+            reports.push_str("### [ОТВЕТЫ КОЛЛЕГ]\n");
             for agent_id in aids {
                 let report = messages
                     .iter()
@@ -91,9 +72,8 @@ mod tests {
         }
     }
 
-    fn worker(inject_thoughts: Option<Vec<String>>, inject_response: Option<Vec<String>>) -> NodeDef {
+    fn worker(inject_response: Option<Vec<String>>) -> NodeDef {
         NodeDef {
-            inject_thoughts,
             inject_response,
             ..NodeDef::default()
         }
@@ -101,7 +81,7 @@ mod tests {
 
     #[test]
     fn response_injection_prefers_signal_over_text() {
-        let node = worker(None, Some(vec!["validator_surface".to_string()]));
+        let node = worker(Some(vec!["validator_surface".to_string()]));
         // Порядок сообщений: signal ПОСЛЕ thought — signal должен выиграть.
         let messages = vec![
             message("validator_surface", "thought", 2, "текстовый разбор элемента"),
@@ -113,7 +93,7 @@ mod tests {
             ),
         ];
         let reports = build_injected_reports(&node, &messages);
-        assert!(reports.contains("### [ОТВЕТЫ КОЛЛЕГ (ФАЗА 2)]"), "{}", reports);
+        assert!(reports.contains("### [ОТВЕТЫ КОЛЛЕГ]"), "{}", reports);
         assert!(reports.contains("validator_surface"), "{}", reports);
         assert!(reports.contains("e1"), "в инжект попал не сигнал: {}", reports);
         assert!(
@@ -125,7 +105,7 @@ mod tests {
 
     #[test]
     fn missing_report_is_declared_not_skipped() {
-        let node = worker(None, Some(vec!["validator_facade".to_string()]));
+        let node = worker(Some(vec!["validator_facade".to_string()]));
         let reports = build_injected_reports(&node, &[]);
         assert!(
             reports.contains("[Ответ не найден]"),
@@ -136,7 +116,7 @@ mod tests {
 
     #[test]
     fn no_injection_yields_empty_block() {
-        let node = worker(None, None);
+        let node = worker(None);
         assert!(build_injected_reports(&node, &[]).is_empty());
     }
 }

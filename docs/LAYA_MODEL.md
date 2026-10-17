@@ -33,7 +33,7 @@ note_1782220193985 → call_fact_consolidator → validate_system1 → check_cri
 
 | Нода | Что делает |
 |------|-----------|
-| `call_fact_consolidator` | `llm_worker` на агента `fact_consolidator`: собирает из переписки дословный текст жалобы. `inject_thoughts: [decomposer]` обязателен — отчёт декомпозитора это `thought`, а `llm_history` отбрасывает thought, поэтому в историю он сам не попадает |
+| `call_fact_consolidator` | `llm_worker` на агента `fact_consolidator`: собирает из переписки дословный текст жалобы. Раньше использовал `inject_thoughts: [decomposer]` (поле удалено 17.10.2026); сейчас аналог — `inject_response: [decomposer]`, т.к. отчёт декомпозитора это `thought`, а `llm_history` отбрасывает thought, поэтому в историю он сам не попадает |
 | `validate_system1` | `system1_validator`: читает критерии, спрашивает модель, публикует сигнал `validator_report` |
 | `check_critical_elements` и далее | `condition_router` по `validator_report.eX` — не изменены, сигнал тот же ключ и формат, что у System-2 |
 

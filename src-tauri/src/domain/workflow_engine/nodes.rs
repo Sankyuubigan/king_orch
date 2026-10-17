@@ -711,10 +711,10 @@ where
                 task
             };
 
-            // ── inject_thoughts / inject_response: отчёты коллег в system prompt ──
-            // inject_thoughts  → размышления (фаза 1) перечисленных агентов.
-            // inject_response  → финальные ответы (фаза 2): сигнал, если есть,
-            //                    иначе последний thought/message фазы 2.
+            // ── inject_response: отчёты коллег в system prompt ──
+            // inject_response → ответы перечисленных агентов: сигнал, если есть,
+            //                   иначе последний thought/message без сырых мыслей
+            //                   (сообщения с фазой 1 фильтруются).
             //
             // Сборка живёт в `reports::build_injected_reports`: её использует и
             // стенд замеров, иначе измерялся бы не боевой текст инжекта.
