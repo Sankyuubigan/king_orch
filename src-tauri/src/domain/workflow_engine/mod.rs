@@ -211,7 +211,6 @@ where
         allow_stream: bool,
         resolved_params: &ModelParams,
         out_pending_signal: &mut Option<ChatMessage>,
-        two_phase_thinking: bool,
     ) -> Result<String, String> {
         let mcp_pool: crate::infra::mcp_client::McpPool =
             std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::<
@@ -252,7 +251,6 @@ where
             self.write_root.clone(),
             self.write_outside,
             out_pending_signal,
-            two_phase_thinking,
         )
     }
 

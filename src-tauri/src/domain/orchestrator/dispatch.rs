@@ -839,7 +839,6 @@ where
                 write_root.clone(),
                 *write_outside,
                 &mut sub_pending_signal,
-                false, // two_phase_thinking — только для signal-агентов из workflow
             )?;
             let end_len = (**all_sub_calls).len();
             let node_sub_calls = if start_len < end_len {

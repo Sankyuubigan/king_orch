@@ -415,11 +415,6 @@ pub struct NodeDef {
     /// узел перевыполняется до лимита, выход из цикла — через switch/condition_check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_visits: Option<u32>,
-    /// Двухфазный вызов: Phase 1 (свободные размышления без грамматики) +
-    /// Phase 2 (строгий JSON с envelope-json грамматикой). Только для signal-агентов.
-    /// Фаза 1 использует max_gen_tokens для размышлений, фаза 2 — для JSON.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub two_phase_thinking: bool,
     /// Файл критериев System-1 для узла `system1_validator`.
     ///
     /// Относительный путь считается от каталога агентов (тот, что уже есть в

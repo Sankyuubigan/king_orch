@@ -182,7 +182,6 @@ pub async fn run_iterative_test(
             agents_dir.parent().unwrap_or(&agents_dir).to_path_buf(), // write_root
             crate::infra::WriteOutside::Prompt,
             &mut pending_signal,
-            false, // two_phase_thinking
         ) {
             Ok(response) => {
                 append_test_log(&format!("✅ Ответ LLM: {}", response));

@@ -48,7 +48,6 @@ export interface GraphNodeDef {
   llm_params?: string;
   max_visits?: number;
   rules_file?: string;
-  two_phase_thinking?: boolean;
 }
 
 export type ConditionNode =

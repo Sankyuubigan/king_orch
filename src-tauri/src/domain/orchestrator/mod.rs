@@ -226,81 +226,6 @@ fn push_continuation_for_cutoff(
     Ok(false)
 }
 
-/// Завершающий user-ход, закрывающий Фазу 1 (размышления) перед Phase 2.
-const PHASE1_DONE_PROMPT: &str = "Выше — твой внутренний черновик. Пользователь его НЕ видел, ничего ещё НЕ выполнено и НЕ отправлено. Считай дело несделанным: выполни работу заново от начала до конца. Запрещено писать «готово», пересказывать черновик или выдумывать результаты. Теперь сформулируй финальный ответ.";
-
-/// Метки черновика Фазы 1: модель должна видеть, что assistant-текст выше —
-/// невидимые пользователю мысли, а не отправленный ответ.
-const PHASE1_DRAFT_OPEN: &str = "[МОЙ ЧЕРНОВИК — пользователь его НЕ видел, ничего НЕ выполнено]";
-const PHASE1_DRAFT_CLOSE: &str = "[КОНЕЦ ЧЕРНОВИКА]";
-
-/// Оборачивает черновик Фазы 1 в явные метки невидимости для пользователя.
-fn wrap_phase1_draft(text: &str) -> String {
-    format!(
-        "{}\n{}\n{}",
-        PHASE1_DRAFT_OPEN,
-        text.trim(),
-        PHASE1_DRAFT_CLOSE
-    )
-}
-
-/// Помечает уже лежащие в истории assistant-куски Фазы 1 как черновик.
-/// Идемпотентно: повторно не оборачивает. User-подсказки не трогает.
-fn mark_phase1_range_as_draft(messages: &mut [LlmMessage], start: usize) {
-    for m in messages.iter_mut().skip(start) {
-        if m.role == "assistant" && !m.content.contains(PHASE1_DRAFT_OPEN) {
-            m.content = wrap_phase1_draft(&m.content);
-        }
-    }
-}
-
-/// Закрывает Фазу 1 перед Phase 2.
-///
-/// Завершающий кусок размышлений (`pending_tail`) не попадает в историю через
-/// `push_continuation_for_cutoff` — тот кладёт только оборванные куски. Добавляем
-/// его симметрично, чтобы Phase 2 видела мысль целиком, а не обрезанное начало.
-///
-/// Если были докачки (`had_continuations`), завершающий ход ставим всегда: иначе
-/// последней репликой остаётся подсказка «продолжи с места обрыва», и Phase 2
-/// строит итоговый JSON «на глаз» по неполным размышлениям.
-///
-/// Возвращает `true`, если завершающий ход добавлен (для лога).
-fn finalize_phase1_context(
-    messages: &mut Vec<LlmMessage>,
-    pending_tail: Option<String>,
-    had_continuations: bool,
-) -> bool {
-    if let Some(tail) = pending_tail {
-        if !tail.trim().is_empty() {
-            messages.push(LlmMessage {
-                role: "assistant".to_string(),
-                content: wrap_phase1_draft(&tail),
-                ..Default::default()
-            });
-        }
-    }
-    // Висящий assistant-хвост — черновик Фазы 1, а не отправленный ответ:
-    // помечаем метками, чтобы Phase 2 не приняла его за сделанное дело.
-    // Идемпотентно (повторная обёртка исключена проверкой).
-    if let Some(last) = messages.last_mut() {
-        if last.role == "assistant" && !last.content.contains(PHASE1_DRAFT_OPEN) {
-            let raw = std::mem::take(&mut last.content);
-            last.content = wrap_phase1_draft(&raw);
-        }
-    }
-    let last_is_assistant = messages.last().map_or(false, |m| m.role == "assistant");
-    if last_is_assistant || had_continuations {
-        messages.push(LlmMessage {
-            role: "user".to_string(),
-            content: PHASE1_DONE_PROMPT.to_string(),
-            ..Default::default()
-        });
-        true
-    } else {
-        false
-    }
-}
-
 /// Режим графа: системный промпт самого «тяжёлого» агента графа (worst-case).
 /// Пиковая VRAM определяется одним LLM-вызовом (движок работает последовательно),
 /// поэтому берём агента с самым длинным системным промптом. Sub-workflow узлы
@@ -840,7 +765,6 @@ where
             write_root.clone(),
             write_outside,
             &mut pending_signal,
-            false, // two_phase_thinking — только для signal-агентов из workflow
         )?;
 
         // Fail-fast: если primary-агент вернул ошибку — не сохраняем её как ответ
@@ -997,7 +921,6 @@ pub(crate) fn run_agent_node<L, S, C>(
     // Поведение при записи вне write_root (Prompt | Deny).
     write_outside: crate::infra::WriteOutside,
     out_pending_signal: &mut Option<ChatMessage>,
-    two_phase_thinking: bool,
 ) -> Result<String, String>
 where
     L: Fn(String) + Clone + Send + Sync + 'static,
@@ -1504,226 +1427,6 @@ where
         hybrid_gbnf,
     };
 
-    // ── Two-Phase Thinking: Phase 1 (свободные размышления) ──
-    // Включение: YAML-флаг узла two_phase_thinking ИЛИ глобальный конфиг
-    // two_phase_default (по умолчанию ВКЛЮЧЁН для ВСЕХ агентов). Сигнальные
-    // агенты думают свободно, затем отвечают envelope-json (без think-block);
-    // per-agent GBNF и freeform-агенты (pattern_finder и др.) — отвечают
-    // с enable_thinking=false (фикс думателя Gemma-4: мысли жгут
-    // --reasoning-budget, content остаётся пустым, оркестратор падает).
-    // Размышления Phase 1 — внутренний контекст агента для ЕГО Phase 2:
-    // в сессию кладутся как thought (юзер раскрывает в GUI), но НЕ попадают
-    // в контекст других агентов (llm_history() фильтрует type != "message").
-    //
-    // Гейт — ВОЗМОЖНОСТЬ, а не транспорт: Phase 2 существует ради строгой
-    // грамматики envelope-json. Движок без грамматики (облачный роутер) её не
-    // применяет, поэтому режим для него структурно запрещён: иначе мышление
-    // шло бы «в никуда», а его цена (2 запроса) платилась бы впустую.
-    let two_phase_thinking = engine.supports_grammar()
-        && (two_phase_thinking || crate::infra::load_config_early().two_phase_default);
-    // true, если Phase 1 прошла → Phase 2 отвечает БЕЗ думателя (enable_thinking=false)
-    // для ЛЮБОЙ грамматики, включая freeform-агентов.
-    let mut phase2_disable_reasoning = false;
-    if two_phase_thinking {
-        engine.set_grammar(None);
-        log_cb(format!(
-            "🧠 [{}] Phase 1: свободные размышления (лимит: {} токенов)...",
-            agent.name, max_gen_tokens
-        ));
-
-        let ctx_label_p1 = format!("{}:{}#phase1", mem_mode, agent.name);
-        // Начало диапазона Фазы 1: всё assistant-ниже — черновик, невидимый юзеру.
-        // Помечаем метками в финализации, чтобы Phase 2 не приняла его за ответ.
-        let phase1_start = ctx.llm_messages.len();
-        // Докачка обрыва Фазы 1 (аналог основного цикла): если модель упёрлась в
-        // лимит токенов (MAX_TOKENS), размышления продолжаются РОВНО с места обрыва,
-        // а не режутся — иначе Фаза 2 дописывает JSON на глаз (баг e6=true у валидатора).
-        let mut phase1_full = String::new();
-        let mut phase1_raw = String::new();
-        let mut phase1_mark: Option<usize> = None;
-        let mut phase1_cont = 0usize;
-        let mut phase1_stalled = 0usize;
-        let mut phase1_last_len = 0isize;
-        let mut thinking_text = String::new();
-        // Завершающий кусок размышлений (тот, после которого движок сам остановился).
-        // Оборванные куски в историю кладёт push_continuation_for_cutoff, а этот —
-        // помещаем после цикла, чтобы Phase 2 видела размышления целиком.
-        let mut phase1_pending: Option<String> = None;
-        loop {
-            match engine.generate_chat(
-                &ctx.llm_messages,
-                max_gen_tokens,
-                model_params,
-                format_type,
-                false, // disable_reasoning = false — модель думает
-                cancel_flag.clone(),
-                &ctx_label_p1,
-                None,
-                |p, _| {
-                    status_cb(
-                        format!("{} думает (Фаза 1)...", agent.name),
-                        20 + (p * 0.1) as u8,
-                    );
-                },
-                log_cb.clone(),
-            ) {
-                Ok(gen) => {
-                    let chunk = gen.text.clone();
-                    // До успешной докачки хвост ещё не в истории — кандидат на
-                    // добавление после цикла; при успешной докачке сбрасываем.
-                    phase1_pending = Some(chunk.clone());
-                    log_cb(format!(
-                        "<<< [{}] Phase 1: чанк {} символов, стоп: {}",
-                        agent.name,
-                        chunk.len(),
-                        gen.stop_reason
-                    ));
-                    thinking_text = if phase1_full.is_empty() {
-                        chunk.clone()
-                    } else {
-                        // В докачке каждый чанк — продолжение с места обрыва.
-                        format!("{}\n{}", phase1_full, chunk)
-                    };
-                    phase1_full = thinking_text.clone();
-                    // Phase 2 в любом случае отвечает без думателя: размышления уже
-                    // собраны, модель должна выдать итоговый результат.
-                    phase2_disable_reasoning = true;
-                    // Естественный конец (EOS и пр.) или пустой чанк — размышления полные.
-                    if gen.stop_reason != "MAX_TOKENS" || chunk.trim().is_empty() {
-                        break;
-                    }
-                    // Обрыв по лимиту: докачиваем с места обрыва.
-                    let grew = thinking_text.chars().count() as isize - phase1_last_len;
-                    phase1_last_len = thinking_text.chars().count() as isize;
-                    if phase1_cont > 0 && grew < MIN_THINKING_GROWTH_CHARS {
-                        phase1_stalled += 1;
-                        log_cb(format!(
-                            "⚠️ [{}] Phase 1 докачка #{}: размышления не растут (+{} симв.) — застой {}/{}",
-                            agent.name, phase1_cont, grew, phase1_stalled, MAX_STALLED_CONTINUATIONS
-                        ));
-                        if phase1_stalled >= MAX_STALLED_CONTINUATIONS {
-                            log_cb(format!("🛑 [{}] Phase 1: докачка забуксовала — используем накопленные размышления.", agent.name));
-                            break;
-                        }
-                    }
-                    let parse_target = clean_thought_tags(&thinking_text);
-                    let exhausted = push_continuation_for_cutoff(
-                        &log_cb,
-                        &agent.id,
-                        engine,
-                        model_params,
-                        format_type,
-                        cancel_flag.clone(),
-                        &ctx_label_p1,
-                        stream_meta.clone(),
-                        &thinking_text,
-                        &parse_target,
-                        &chunk,
-                        &mut ctx.llm_messages,
-                        &mut phase1_raw,
-                        &mut phase1_mark,
-                        &mut phase1_cont,
-                    )?;
-                    if exhausted {
-                        log_cb(format!("⚠️ [{}] Phase 1 не смог завершить размышления после {} докачек — используем накопленные.", agent.name, MAX_CONTINUATIONS));
-                        break;
-                    }
-                    // Кусок успешно уложен в историю докачки — хвост больше не висит.
-                    phase1_pending = None;
-                }
-                Err(e) => {
-                    log_cb(format!(
-                        "⚠️ [{}] Phase 1 ошибка: {} — стандартный режим (думатель по грамматике)",
-                        agent.name, e
-                    ));
-                    break;
-                }
-            }
-        }
-        if !thinking_text.trim().is_empty() {
-            // При докачке чанки уже лежат в llm_messages (assistant + подсказка),
-            // цельный текст не дублируем — важен только для сессии и следующей Фазы 1.
-            if phase1_cont == 0 {
-                ctx.llm_messages.push(LlmMessage {
-                    role: "assistant".to_string(),
-                    content: wrap_phase1_draft(&thinking_text),
-                    ..Default::default()
-                });
-            } else {
-                // Докачки: оборванные куски уже в истории — помечаем весь
-                // диапазон Фазы 1 как черновик.
-                mark_phase1_range_as_draft(&mut ctx.llm_messages, phase1_start);
-            }
-            // Сохраняем размышления в сессию как thought (раскрытие в GUI).
-            // Полный текст: лимит THOUGHT_STORE_MAX_CHARS не применяем — иначе
-            // инжект мыслей коллегам (inject_thoughts) теряет большую часть анализа.
-            ctx.phase1_thinking = Some(thinking_text.clone());
-            ctx.messages.push(ChatMessage {
-                id: Some(format!("msg_{}", *ctx.msg_counter)),
-                msg_type: "thought".to_string(),
-                content: thinking_text.clone(),
-                sub_calls: None,
-                author: Some(agent.id.clone()),
-                model: Some(extract_model_filename(engine.model_path())),
-                time_sec: None,
-                attachments: None,
-                phase: Some(1),
-            });
-            *ctx.msg_counter += 1;
-        } else {
-            log_cb(format!(
-                "⚠️ [{}] Phase 1: пустые размышления — Phase 2 сразу без думателя",
-                agent.name
-            ));
-        }
-
-        // ── Финализация Фазы 1 → Phase 2 ──
-        // Завершающий кусок размышлений и завершающий ход «теперь отвечай»:
-        // см. `finalize_phase1_context`. При докачках хвост берём из pending,
-        // при обычной выдаче мысль уже лежит в истории как assistant.
-        if two_phase_thinking && phase2_disable_reasoning {
-            let tail = if phase1_cont > 0 {
-                phase1_pending.take()
-            } else {
-                None
-            };
-            if finalize_phase1_context(&mut ctx.llm_messages, tail, phase1_cont > 0) {
-                log_cb(format!(
-                    "🎯 [{}] Phase 2: Фаза 1 закрыта, завершающий ход добавлен (хвост размышлений + «отвечай»)",
-                    agent.name
-                ));
-            }
-        }
-
-        // Phase 2 грамматика для signal-агентов: envelope-json БЕЗ think-block
-        // (размышления уже были в Phase 1). Per-agent GBNF и freeform не трогаем:
-        // restore_grammar() в цикле восстановит их для первого вызова Phase 2.
-        if two_phase_thinking && phase2_disable_reasoning {
-            if let Some(contract) = &signal_contract {
-                let grammar = build_signal_envelope_json_only_grammar(contract);
-                engine.set_grammar(Some(GrammarSpec {
-                    gbnf: Some(grammar.clone()),
-                    json_schema: None,
-                }));
-                ctx.active_grammar = Some(GrammarSpec {
-                    gbnf: Some(grammar),
-                    json_schema: None,
-                });
-                log_cb(format!(
-                    "🎯 [{}] Phase 2: JSON-грамматика ({} символов)",
-                    agent.name,
-                    ctx.active_grammar
-                        .as_ref()
-                        .unwrap()
-                        .gbnf
-                        .as_ref()
-                        .unwrap()
-                        .len()
-                ));
-            }
-        }
-    }
-
     for iter in 1..=30 {
         if cancel_flag.load(Ordering::SeqCst) {
             return Err("Прервано пользователем".to_string());
@@ -1814,13 +1517,11 @@ where
         // Обёртка генерации с детектом переполнения контекста и повтором (item 4).
         // Method 3 агенты (signal_contract): disable_reasoning = false — модель думает в  thinking.
         // Per-agent GBNF агенты (без signal_contract): disable_reasoning = true.
-        // Двухфазный режим: Phase 2 ОТВЕЧАЕТ без думателя для ЛЮБОЙ грамматики
-        // (enable_thinking=false на уровне запроса) — фикс думателя Gemma-4.
         // force_no_thinking — Cell: поднимается в ретрай-обёртках (думатель без
         // ответа), т.к. attempt_generate живёт вне цикла (заимствует ctx_label).
         let uses_method_3 = signal_contract.is_some();
         let has_agent_grammar = agent_grammar.is_some() && !uses_method_3;
-        let force_no_thinking = std::cell::Cell::new(phase2_disable_reasoning);
+        let force_no_thinking = std::cell::Cell::new(false);
         let enforce_tool_choice = if has_native_tools {
             // Native (coder/research): "auto" — модель сама решает вызвать тул.
             // "required" багован на Qwen3 (#27767/#27217, падает/молчит); принуждение
@@ -2835,102 +2536,6 @@ mod tests {
             "Согласно данным, у вас есть симптомы"
         ));
         assert!(!starts_with_ellipsis(""));
-    }
-
-    fn msg(role: &str, content: &str) -> LlmMessage {
-        LlmMessage {
-            role: role.to_string(),
-            content: content.to_string(),
-            ..Default::default()
-        }
-    }
-
-    #[test]
-    fn finalize_phase1_appends_tail_and_closing_turn_after_continuations() {
-        // Докачки были: в истории — оборванный кусок + подсказка «продолжай»,
-        // завершающий кусок лежит в pending_tail и в историю ещё не попал.
-        let mut messages = vec![
-            msg("system", "sys"),
-            msg("assistant", "оборванный кусок размышлений"),
-            msg("user", "продолжи ровно с места обрыва"),
-        ];
-        let added = finalize_phase1_context(
-            &mut messages,
-            Some("завершающий кусок размышлений".to_string()),
-            true,
-        );
-
-        assert!(added, "после докачек завершающий ход обязателен");
-        assert_eq!(messages.len(), 5);
-        assert_eq!(messages[3].role, "assistant");
-        assert_eq!(messages[3].content, wrap_phase1_draft("завершающий кусок размышлений"));
-        assert!(messages[3].content.contains(PHASE1_DRAFT_OPEN));
-        assert_eq!(messages[4].role, "user");
-        assert_eq!(messages[4].content, PHASE1_DONE_PROMPT);
-    }
-
-    #[test]
-    fn finalize_phase1_closes_phase_even_with_empty_tail() {
-        // Докачки были, но финальный чанк пуст: история заканчивается подсказкой
-        // «продолжай». Всё равно закрываем фазу ходом «отвечай».
-        let mut messages = vec![
-            msg("assistant", "оборванный кусок"),
-            msg("user", "продолжи ровно с места обрыва"),
-        ];
-        let added = finalize_phase1_context(&mut messages, Some("   ".to_string()), true);
-
-        assert!(added);
-        assert_eq!(messages.len(), 3);
-        assert_eq!(messages.last().unwrap().content, PHASE1_DONE_PROMPT);
-    }
-
-    #[test]
-    fn finalize_phase1_closes_trailing_assistant_without_continuations() {
-        // Обычная выдача: вся мысль уже в истории как assistant, докачек не было.
-        // Хвост помечается черновиком, чтобы Phase 2 не приняла его за ответ.
-        let mut messages = vec![msg("system", "sys"), msg("assistant", "мысль целиком")];
-        let added = finalize_phase1_context(&mut messages, None, false);
-
-        assert!(
-            added,
-            "хвост-ассистент нужно закрыть user-ходом (prefill-guard)"
-        );
-        assert_eq!(messages.len(), 3);
-        assert_eq!(messages[1].content, wrap_phase1_draft("мысль целиком"));
-        assert_eq!(messages.last().unwrap().content, PHASE1_DONE_PROMPT);
-    }
-
-    #[test]
-    fn finalize_phase1_noop_when_nothing_to_close() {
-        // Мысли нет, pending пуст, последняя реплика не assistant — трогать нечего.
-        let mut messages = vec![msg("system", "sys"), msg("user", "вопрос")];
-        let added = finalize_phase1_context(&mut messages, None, false);
-
-        assert!(!added);
-        assert_eq!(messages.len(), 2);
-    }
-
-    #[test]
-    fn mark_phase1_range_wraps_only_assistant_and_idempotent() {
-        let mut messages = vec![
-            msg("system", "sys"),
-            msg("user", "вопрос"),
-            msg("assistant", "кусок один"),
-            msg("user", "продолжи ровно с места обрыва"),
-            msg("assistant", "кусок два"),
-        ];
-        mark_phase1_range_as_draft(&mut messages, 2);
-        assert_eq!(messages[0].content, "sys");
-        assert_eq!(messages[1].content, "вопрос");
-        assert_eq!(messages[2].content, wrap_phase1_draft("кусок один"));
-        assert_eq!(messages[3].content, "продолжи ровно с места обрыва");
-        assert_eq!(messages[4].content, wrap_phase1_draft("кусок два"));
-        // Повторно — без двойной обёртки.
-        mark_phase1_range_as_draft(&mut messages, 2);
-        assert_eq!(
-            messages[2].content.matches(PHASE1_DRAFT_OPEN).count(),
-            1
-        );
     }
 
     #[test]

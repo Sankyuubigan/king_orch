@@ -37,5 +37,4 @@
 - `data_dir`: `Option<String>`
 - `sdcpp_dir`: `Option<String>`
 - `image_bundle_dir`: `Option<String>`
-- `two_phase_default`: `bool`
 

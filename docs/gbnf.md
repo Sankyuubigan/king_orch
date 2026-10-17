@@ -19,12 +19,15 @@
 > - Программно сгенерированных грамматик в `signals.rs` (`build_signal_envelope_grammar()`, `build_value_grammar()`)
 > - Гибридных GBNF-обёрток в `get_hybrid_grammar()`
 
-> **Применение к сигналам `emit_signal`:** в двухфазном режиме свободные рассуждения
-> собираются в **Phase 1** (без грамматики), а **Phase 2** ставит строгий JSON-конверт
+> **Применение к сигналам `emit_signal`:** свободные рассуждения и строгий JSON-конверт
 > `{ "tool": "emit_signal", "arguments": {...} }` из контракта (`signals/root.schema.json`)
-> через `build_signal_envelope_schema()`. Структура сигнала (напр. `e1`) защищена
+> живут в ОДНОМ запросе под гибридной грамматикой `build_signal_envelope_grammar()`
+> (think-block + envelope-json). Структура сигнала (напр. `e1`) защищена
 > `enum`/`required` — модель не исказит имена/значения полей. Поля `thought` в конверте
-> НЕТ. Правила и разбор бага «тихо упал»: [docs/SIGNAL_CONTRACTS.md](./SIGNAL_CONTRACTS.md).
+> НЕТ. Если сигнал не доставлен за ход — автономный JSON-only retry
+> (`build_signal_envelope_json_only_grammar()`, `enable_thinking=false`). Двухфазный
+> режим (отдельный Phase 1 без грамматики) удалён 17.10.2026. Правила и разбор бага
+> «тихо упал»: [docs/SIGNAL_CONTRACTS.md](./SIGNAL_CONTRACTS.md).
 
 
 # Методы снижения тупости моделей от грамматики:

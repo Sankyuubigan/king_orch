@@ -741,7 +741,6 @@ where
                 allow_stream,
                 &resolved_params,
                 &mut pending_signal,
-                node.two_phase_thinking,
             )?;
             let end_len = runner.all_sub_calls.len();
 

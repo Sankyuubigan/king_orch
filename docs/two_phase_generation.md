@@ -1,5 +1,17 @@
 # Two-Phase Generation Research: Findings
 
+> **⚠️ Статус 17.10.2026:** механизм `two_phase_thinking` (двухфазный запрос:
+> Phase 1 — свободные размышления, Phase 2 — ответ со строгой грамматикой)
+> **удалён из приложения**. Замена — однофазное управление мышлением на уровне
+> движка: `enable_thinking=false` (`chat_template_kwargs` для llama-server,
+> `--reasoning-budget 0`), Composite GBNF с think-block (`verdict_contract`),
+> independent Phase-2 JSON-only retry для signal-агентов (`orchestrator/mod.rs`).
+> Основание: клиентский двухфазный вызов не является индустриальным стандартом
+> — все провайдеры/движки (OpenAI, Anthropic, Gemini, DeepSeek, llama.cpp,
+> vLLM) решают это в ОДНОМ запросе; единственное исключение (Ollama) реализует
+> две фазы ВНУТРИ движка, прозрачно для клиента. Исследование ниже сохранено
+> как исторический контекст.
+
 ## Executive Summary
 
 Three major open-source projects implement "two-phase generation" (thinking + structured output in one request) using **fundamentally different approaches**, none of which are truly "one inference call" in the purest sense. The key finding: **no project achieves true single-request two-phase generation without either a composite grammar or a two-pass mechanism**. Each has tradeoffs.

@@ -135,13 +135,6 @@ pub struct AppConfig {
     /// Папка бандла весов ImageGEN (ключ плагина image-engine).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_bundle_dir: Option<String>,
-    /// Двухфазный режим генерации по умолчанию (для ВСЕХ агентов, а не только
-    /// signal-агентов с YAML-флагом two_phase_thinking): Phase 1 — свободные
-    /// размышления без грамматики, Phase 2 — ответ с enable_thinking=false
-    /// (думатель выключен на уровне запроса). Чинит «пустой думатель» моделей
-    /// вроде Gemma-4 (мысли жгут --reasoning-budget, ответ пуст).
-    #[serde(default = "default_two_phase_default")]
-    pub two_phase_default: bool,
 }
 
 fn default_translator_lang() -> String {
@@ -162,7 +155,6 @@ fn default_show_advanced_features() -> bool { false }
 fn default_agent_visibility() -> Vec<String> { vec!["basic".to_string()] }
 fn default_allow_error_reports() -> bool { true }
 fn default_chat_font_scale() -> f32 { 1.0 }
-fn default_two_phase_default() -> bool { true }
 
 impl Default for AppConfig {
     fn default() -> Self {
@@ -197,7 +189,6 @@ impl Default for AppConfig {
             data_dir: None,
             sdcpp_dir: None,
             image_bundle_dir: None,
-            two_phase_default: default_two_phase_default(),
         }
     }
 }
@@ -428,6 +419,22 @@ mod tests {
         assert_eq!(legacy.session_id.as_deref(), Some("s1"));
         assert_eq!(legacy.title.as_deref(), None);
         assert_eq!(serde_json::to_value(&legacy).unwrap().get("customTitle"), None);
+    }
+
+    /// Старые app_config.json хранили `two_phase_default` — двухфазный режим
+    /// генерации удалён из приложения (см. tasks/17.10.26). serde обязана
+    /// молча игнорировать неизвестный ключ, а не ронять загрузку конфига.
+    #[test]
+    fn test_app_config_ignores_retired_two_phase_default() {
+        let cfg: AppConfig = serde_json::from_str(
+            r#"{"models": [], "last_model": null, "two_phase_default": false, "theme": "dark"}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.theme, "dark");
+        assert_eq!(
+            serde_json::to_value(&cfg).unwrap().get("two_phase_default"),
+            None
+        );
     }
 
     #[test]
