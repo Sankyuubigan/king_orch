@@ -1310,7 +1310,10 @@ where
         // Сигнальные агенты: Method 3 из docs/gbnf.md — гибридная GBNФ.
         // think-block ( düşünce <think>...</think>) + envelope-json. Модель думает
         // свободно, грамматика направляет к JSON после </think>.
-        // disable_reasoning НЕ включается — см. has_agent_grammar ниже.
+        // disable_reasoning = true на локальном движке (см. resolve_disable_reasoning
+        // ниже по файлу): чат-шаблон reasoning-моделей без этого сам открывает think,
+        // и весь конверт уходит в reasoning_content. Рассуждению сигнала служат
+        // draft-блоки самой грамматики.
         //
         // Граница размышления берётся из frontmatter агента (`think_budget:`).
         // Без неё модель может выжечь весь n_predict в think и не вернуть сигнал
@@ -1427,6 +1430,17 @@ where
         hybrid_gbnf,
     };
 
+    // force_no_thinking — Cell ВНЕ цикла итераций: поднятый ретрай-обёрткой
+    // («думатель без ответа») флаг обязан действовать и на следующей попытке.
+    // Раньше Cell объявлялась внутри тела цикла и пересоздавалась на каждой
+    // итерации: «ПРИНУДИТЕЛЬНО отключаем думатель» логировался, а следующий
+    // вызов снова шёл с thinking (доказано логом 17.10.26 18:03).
+    let force_no_thinking = std::cell::Cell::new(false);
+    // Per-agent GBNF агенты (без signal_contract) выключают внешний think
+    // (старое правило e1695e7). Облачные движки не применяют грамматику —
+    // сигнал у них держится на промпте + native tools, см. has_agent_grammar
+    // ниже по функции.
+    let has_agent_grammar = agent_grammar.is_some() && !uses_method_3;
     for iter in 1..=30 {
         if cancel_flag.load(Ordering::SeqCst) {
             return Err("Прервано пользователем".to_string());
@@ -1515,13 +1529,10 @@ where
         ));
         let ctx_label = format!("{}:{}#{}", mem_mode, agent.name, iter);
         // Обёртка генерации с детектом переполнения контекста и повтором (item 4).
-        // Method 3 агенты (signal_contract): disable_reasoning = false — модель думает в  thinking.
-        // Per-agent GBNF агенты (без signal_contract): disable_reasoning = true.
-        // force_no_thinking — Cell: поднимается в ретрай-обёртках (думатель без
-        // ответа), т.к. attempt_generate живёт вне цикла (заимствует ctx_label).
-        let uses_method_3 = signal_contract.is_some();
-        let has_agent_grammar = agent_grammar.is_some() && !uses_method_3;
-        let force_no_thinking = std::cell::Cell::new(false);
+        // Расчёт disable_reasoning — в resolve_disable_reasoning() ниже: signal-контракт
+        // на локальном движке теперь принудительно без внешнего think (причина —
+        // «думатель без ответа» на Ornith, 17.10.26). force_no_thinking и
+        // has_agent_grammar объявлены вне цикла (см. выше по функции).
         let enforce_tool_choice = if has_native_tools {
             // Native (coder/research): "auto" — модель сама решает вызвать тул.
             // "required" багован на Qwen3 (#27767/#27217, падает/молчит); принуждение
@@ -1539,8 +1550,13 @@ where
             // появится вовсе (измерено на `tasks/09.10.26 …md` §7: слой вернул
             // 0 токенов ответа и 2042 токена думателя). Агент, которому формат
             // важнее рассуждения, объявляет это во frontmatter.
-            let disable_reasoning =
-                force_no_thinking.get() || has_agent_grammar || agent.disable_reasoning;
+            let disable_reasoning = resolve_disable_reasoning(
+                force_no_thinking.get(),
+                has_agent_grammar,
+                agent.disable_reasoning,
+                uses_method_3,
+                engine.is_cloud(),
+            );
             if !attachments.is_empty() && (engine.is_multimodal() || engine.is_cloud()) {
                 engine.generate_chat_multimodal(
                     msgs,
@@ -2351,7 +2367,12 @@ where
             max_gen_tokens,
             model_params,
             format_type,
-            false, // disable_reasoning — grammar не пустит в think
+            // disable_reasoning=true: без kwarg enable_thinking=false чат-шаблон
+            // reasoning-моделей сам открывает think и уводит ВЕСЬ генерат — в том
+            // числе grammar-принуждённый конверт — в reasoning_content («думатель
+            // без ответа» и на этом fallback; Ornith, 17.10.26). Здесь только
+            // движки с грамматикой (облако отсечено выше через can_enforce_grammar).
+            true,
             cancel_flag.clone(),
             &ctx_label_2,
             None,
@@ -2493,6 +2514,33 @@ where
     Ok(ctx.final_response)
 }
 
+/// Итоговый `disable_reasoning` (управляет `chat_template_kwargs {"enable_thinking": false}`)
+/// для одного LLM-вызова агента.
+///
+/// Правила:
+/// - жёсткий формат вывода (per-agent GBNF, а с 17.10.26 и `signal_contract`)
+///   на ЛОКАЛЬНОМ движке — думатель отключается: чат-шаблоны reasoning-моделей
+///   без этого сами открывают think, и весь грамматически валидный генерат
+///   уходит в `reasoning_content` («думатель без ответа»; Ornith, 17.10.26).
+///   Рассуждению сигнала служит drafts-block его грамматики;
+/// - явный frontmatter-флаг агента (`disable_reasoning`) или поднятый
+///   ретрай-обёрткой `force_no_thinking` («думатель без ответа» дважды)
+///   действуют на любом движке;
+/// - облачные signal-агенты (native tools, без грамматики) не затрагиваются:
+///   их поведение зафиксировано отдельными фиксами 09.10.26.
+pub(crate) fn resolve_disable_reasoning(
+    force_no_thinking: bool,
+    has_agent_grammar: bool,
+    agent_disable_reasoning: bool,
+    uses_method_3_signal_contract: bool,
+    engine_is_cloud: bool,
+) -> bool {
+    force_no_thinking
+        || has_agent_grammar
+        || agent_disable_reasoning
+        || (uses_method_3_signal_contract && !engine_is_cloud)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2522,6 +2570,26 @@ mod tests {
 
     fn parse_wf(yaml: &str) -> WorkflowDef {
         serde_yaml::from_str(yaml).expect("Не удалось распарсить тестовый workflow")
+    }
+
+    #[test]
+    fn resolve_disable_reasoning_truth_table() {
+        // Signal-контракт на ЛОКАЛЬНОМ движке: think отключён — иначе чат-шаблон
+        // reasoning-моделей уводит весь грамматически валидный конверт в
+        // reasoning_content («думатель без ответа», Ornith 17.10.26).
+        assert!(resolve_disable_reasoning(false, false, false, true, false));
+        // Облачный signal-агент: НЕ трогаем (native tools, без грамматики).
+        assert!(!resolve_disable_reasoning(false, false, false, true, true));
+        // Per-agent GBNF: старое правило остаётся на любом движке.
+        assert!(resolve_disable_reasoning(false, true, false, false, false));
+        assert!(resolve_disable_reasoning(false, true, false, false, true));
+        // Явный frontmatter-флаг агента.
+        assert!(resolve_disable_reasoning(false, false, true, false, false));
+        // Ретрай: поднятый force_no_thinking действует на любой модели.
+        assert!(resolve_disable_reasoning(true, false, false, false, false));
+        assert!(resolve_disable_reasoning(true, false, false, true, true));
+        // Ничего не запрошено — think разрешён (обычные текстовые агенты).
+        assert!(!resolve_disable_reasoning(false, false, false, false, false));
     }
 
     #[test]
