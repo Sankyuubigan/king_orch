@@ -279,6 +279,7 @@ where
                 time_sec: None,
                 attachments: None,
                 phase: None,
+                author_name: None,
             });
             *self.msg_counter += 1;
         }
@@ -690,6 +691,7 @@ where
                     time_sec: None,
                     attachments: None,
                     phase: None,
+                    author_name: None,
                 });
                 *self.msg_counter += 1;
             }
@@ -862,6 +864,7 @@ where
                     time_sec: None,
                     attachments: None,
                     phase: Some(2),
+                    author_name: None,
                 };
                 push_report(&mut **messages, err_msg, subagent.replace_report, Some(2));
                 **msg_counter += 1;
@@ -879,6 +882,7 @@ where
                 time_sec: None,
                 attachments: None,
                 phase: Some(2),
+                author_name: None,
             };
             push_report(&mut **messages, msg, subagent.replace_report, Some(2));
             **msg_counter += 1;
@@ -1015,6 +1019,7 @@ where
                 time_sec: None,
                 attachments: None,
                 phase: Some(2),
+                author_name: None,
             };
             self.pending_signal = Some(signal_msg);
             *self.msg_counter += 1;

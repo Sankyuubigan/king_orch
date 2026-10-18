@@ -51,6 +51,7 @@ pub(crate) fn write_todos(
         time_sec: None,
         attachments: None,
         phase: None,
+        author_name: None,
     });
 }
 

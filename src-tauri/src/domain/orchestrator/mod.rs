@@ -700,6 +700,7 @@ where
                     time_sec: None,
                     attachments: None,
                     phase: None,
+                    author_name: None,
                 });
             }
         }
@@ -791,6 +792,7 @@ where
             time_sec: None,
             attachments: None,
             phase: Some(2),
+            author_name: None,
         };
         let current_sub_calls = final_message.sub_calls.clone().unwrap_or_default();
         let attached = crate::infra::attach_saved_images_from_sub_calls(
@@ -2030,6 +2032,7 @@ where
                     time_sec: None,
                     attachments: None,
                     phase: Some(1),
+                    author_name: None,
                 });
                 *ctx.msg_counter += 1;
             }
@@ -2054,6 +2057,7 @@ where
                         time_sec: None,
                         attachments: None,
                         phase: Some(1),
+                        author_name: None,
                     });
                     *ctx.msg_counter += 1;
                 }
@@ -2464,6 +2468,7 @@ where
                     time_sec: None,
                     attachments: None,
                     phase: Some(2),
+                    author_name: None,
                 };
                 // Сигнал отдаём через pending_signal — единый канал доставки в
                 // signal bus + messages[] (nodes.rs:518 для воркера, dispatch.rs:887
@@ -3545,6 +3550,7 @@ mod tests {
             time_sec: None,
             attachments: None,
             phase: None,
+            author_name: None,
         }];
         let user_text = synthetic_text(1177);
         let (with_history, has_tools) = build_worst_agent_prompt(&agents, workflow, &history);

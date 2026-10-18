@@ -477,6 +477,7 @@ where
                 time_sec: None,
                 attachments: None,
                 phase: Some(2),
+                author_name: None,
             };
             let current_sub_calls = msg.sub_calls.clone().unwrap_or_default();
             let attached = crate::infra::attach_saved_images_from_sub_calls(
@@ -675,6 +676,7 @@ where
                         time_sec: None,
                         attachments: None,
                         phase: None,
+                        author_name: None,
                     };
                     context.messages.push(msg);
                     *runner.msg_counter += 1;
@@ -1164,6 +1166,7 @@ where
                         time_sec: None,
                         attachments: None,
                         phase: None,
+                        author_name: None,
                     };
                     context.messages.push(msg);
                     *runner.msg_counter += 1;
@@ -1647,6 +1650,7 @@ mod tests {
             time_sec: None,
             attachments: None,
             phase: Some(2),
+            author_name: None,
         }
     }
 
@@ -1794,6 +1798,7 @@ mod tests {
             time_sec: None,
             attachments: None,
             phase: None,
+            author_name: None,
         };
         let signal_msg = ChatMessage {
             id: None,
@@ -1805,6 +1810,7 @@ mod tests {
             time_sec: None,
             attachments: None,
             phase: None,
+            author_name: None,
         };
         let messages = vec![empty_msg, signal_msg];
         assert!(!leaf_matches(

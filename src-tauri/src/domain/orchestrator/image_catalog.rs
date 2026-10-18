@@ -343,6 +343,7 @@ mod tests {
             time_sec: None,
             attachments: Some(images),
             phase: Some(2),
+            author_name: None,
         }
     }
 

@@ -194,6 +194,7 @@ fn attach_saved_images_uses_only_current_subcalls() {
         time_sec: None,
         attachments: None,
         phase: Some(2),
+        author_name: None,
     };
     let old_sub_calls = vec![sub_call(&old_id)];
 

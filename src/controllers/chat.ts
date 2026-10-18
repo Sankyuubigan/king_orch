@@ -1023,7 +1023,11 @@ export class ChatController {
         thoughtsItems = []; thoughtsUids = []; lastAssistantUid = undefined;
       }
       const role = (msg.author && msg.author !== 'user') ? (msg.author === 'system' ? 'system' : 'agent') : 'user' as Role;
-      const agentName = (msg.author && msg.author !== 'user' && msg.author !== 'system') ? getAgentDisplayName(msg.author) : undefined;
+      // Имя автора: готовое `author_name` имеет приоритет (машиный ключ
+      // `author` может не резолвиться через каталог, напр. у fused-группы).
+      const agentName = (msg.author && msg.author !== 'user' && msg.author !== 'system')
+        ? (msg.author_name ?? getAgentDisplayName(msg.author))
+        : undefined;
       const hasMenu = uid && (role === 'user' || role === 'agent');
       const timeText = msg.time_sec ? `${msg.time_sec.toFixed(1)} сек` : undefined;
       // Скрываем служебные теги LLM в сохранённых ответах (defence in depth).

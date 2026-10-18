@@ -11,6 +11,7 @@ pub mod config;
 pub mod data_dir;
 pub mod llm_backend;
 pub mod event_bus;
+pub mod messages;
 pub mod session_manager;
 pub mod storage;
 pub mod mcp_client;
@@ -33,6 +34,7 @@ pub use tauri_plugin_llama_engine::get_engine_dir;
 // ─── Публичные типы ───
 pub use config::{AppConfig, SamplingPresets, TabState};
 pub use llm_backend::{CloudEndpoint, LlmEngine};
+pub use messages::{llm_history, message_phase, push_report, ChatMessage, SubCall, ToolCallInfo};
 pub use session_manager::{ChatSession, SessionMeta};
 pub use mcp_client::{McpClient, McpPool, SharedMcpClient};
 

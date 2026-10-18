@@ -76,8 +76,8 @@ use crate::domain::orchestrator;
 use crate::domain::orchestrator::RequestMedia;
 use crate::domain::parsers::clean_thought_tags;
 use crate::infra::{
-    build_json_only_grammar, ChatMessage, GrammarSpec, LlmEngine, LlmMessage, ModelParams,
-    SamplingPresets, SubCall,
+    build_json_only_grammar, push_report, ChatMessage, GrammarSpec, LlmEngine, LlmMessage,
+    ModelParams, SamplingPresets, SubCall,
 };
 use nodes::find_next_node;
 use std::path::Path;
@@ -274,6 +274,7 @@ where
             time_sec: None,
             attachments: None,
             phase: None,
+            author_name: None,
         });
         let directive = crate::domain::orchestrator::prompt::language_directive(&lang_messages);
 
@@ -424,19 +425,33 @@ where
         strategy_source
     ));
     if strategy == groups::ExecutionStrategy::Fused {
+        // Счётчик — ФАКТИЧЕСКИЙ: группа схлопывается, если она явная
+        // (`fused_instruction`) или собирается авто-склейкой по ролям
+        // (у всех этапов есть агент или `input`), и на неё не входят
+        // барьеры (`ensure_macro_possible`). Иначе лог говорил «0», а группа
+        // схлопывалась — пользователь искал решение в соседнем измерении.
         let fusable = workflow
             .groups
             .iter()
             .filter(|g| {
-                g.fused_instruction
+                let explicit = g
+                    .fused_instruction
                     .as_deref()
                     .map(str::trim)
-                    .is_some_and(|i| !i.is_empty())
+                    .is_some_and(|i| !i.is_empty());
+                let stitchable = if explicit {
+                    Ok(())
+                } else {
+                    groups::check_stitchable(workflow, g).map(|_| ())
+                };
+                stitchable.is_ok() && groups::ensure_macro_possible(workflow, g).is_ok()
             })
             .count();
         (runner.log_cb)(format!(
-            "[workflow] '{}': режим FUSED, схлопываемых групп: {}",
-            workflow.name, fusable
+            "[workflow] '{}': режим FUSED, схлопываемых групп: {} (из {} объявленных)",
+            workflow.name,
+            fusable,
+            workflow.groups.len()
         ));
     }
 
@@ -523,6 +538,7 @@ where
                 .cloned()
                 .collect();
             let signals_json = signals_json(context);
+            let stage_specs = groups::stage_output_specs(workflow, group);
             let system_prompt =
                 build_fused_system_prompt(workflow, group, &expected, &signals_json, runner.agents)
                     .map_err(|e| (e, context.messages.clone()))?;
@@ -549,10 +565,11 @@ where
                 &system_prompt,
                 &grammar,
                 &expected,
+                &stage_specs,
                 context,
                 runner,
             ) {
-                Ok(output) => {
+                Ok(_output) => {
                     context.executed_groups.insert(group.id.clone());
                     // Прыжок: очередь перестроится от ВЫХОДА группы, а не от ноды,
                     // на которой мы остановились. Внутренние ноды не попадут в
@@ -564,8 +581,10 @@ where
                             .map(|n| n.id.clone())
                             .collect(),
                     );
-                    step.signals.extend(output.signals);
-                    step.message = output.message.clone();
+                    // Сигналы и текст пользователя уже объявлены в `step`
+                    // (`StepOutput` от `run_fused_group`). Здесь это не
+                    // перезаписывается: второй источник выхода шага создал бы
+                    // расход контрактов.
                     nodes::NodeResult {
                         output: serde_json::json!({
                             "fused_group": group.id,
@@ -753,6 +772,13 @@ fn build_fused_system_prompt(
             group.id
         ));
     }
+    // SSOT правил этапов: и здесь (роль этапа), и в грамматике/парсере
+    // (`stage_output_specs`) этапы строятся из одних и тех же нод группы.
+    let mut specs_by_node: std::collections::HashMap<String, groups::StageSpec> =
+        groups::stage_output_specs(workflow, group)
+            .into_iter()
+            .map(|s| (s.node_id.clone(), s))
+            .collect();
     let mut stages: Vec<groups::FusedStage> = Vec::with_capacity(ordered.len());
     for node in ordered {
         if let Some(agent_id) = node.agent.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
@@ -770,16 +796,29 @@ fn build_fused_system_prompt(
                     group.id, agent_id, node.id
                 ));
             }
+            let spec = specs_by_node.remove(node.id.as_str()).ok_or_else(|| {
+                format!(
+                    "в группе '{}': нода '{}' есть в этапах промпта, но нет в контракте выхода — \
+                     расход SSOT, видимая ошибка",
+                    group.id, node.id
+                )
+            })?;
             stages.push(groups::FusedStage {
-                node_id: node.id.clone(),
+                spec,
                 role: agent.name.clone(),
                 prompt: agent.system_prompt.clone(),
             });
         } else if let Some(input) = node.input.as_deref().map(str::trim).filter(|i| !i.is_empty()) {
             stages.push(groups::FusedStage {
-                node_id: node.id.clone(),
                 role: "свободная роль ноды".to_string(),
                 prompt: input.to_string(),
+                spec: specs_by_node.remove(node.id.as_str()).ok_or_else(|| {
+                    format!(
+                        "в группе '{}': нода '{}' есть в этапах промпта, но нет в контракте выхода — \
+                         расход SSOT, видимая ошибка",
+                        group.id, node.id
+                    )
+                })?,
             });
         } else {
             return Err(format!(
@@ -795,19 +834,22 @@ fn build_fused_system_prompt(
 /// Выполнить одну группу нод одним вызовом LLM (МАКРО-НОДА) и вернуть её выход.
 ///
 /// Возвращает `StepOutput` — тот же контракт, что и одиночная нода; в signal bus
-/// его записывает планировщик через `handle_step_output`. Сообщение в чат группа
-/// отправляет сама: её авторство (`fused_agent` ?? id группы) не совпадает с
-/// авторством обычной ноды, и решать это должен тот, кто знает id группы.
+/// его записывает планировщик через `handle_step_output`. Сообщения в чат группа
+/// отправляет сама: этапы авто-склейки публикуются с автором = id агента
+/// этапа (по нему же `inject_response` находит отчёты), а явная
+/// `fused_instruction`-группа — с машин-ключом (`fused_agent` ?? id группы) и
+/// живым именем в `author_name`.
 ///
 /// Форма ответа задана грамматикой `build_fused_grammar`, поэтому «текст вместо
-/// JSON» или «JSON без обязательного ключа» — честная ошибка с перечнем ключей,
-/// а не пустые all-false сигналы, которые отправили бы граф по ложной ветке.
+/// JSON», «JSON без обязательного ключа» или «пропущенный этап» — честная ошибка
+/// с перечнем ключей, а не пустые all-false сигналы.
 fn run_fused_group<L, S, C>(
     graph_config: Option<&WorkflowConfig>,
     group: &GroupDef,
     system_prompt: &str,
     grammar: &str,
     expected: &[String],
+    stage_specs: &[groups::StageSpec],
     context: &mut WorkflowContext,
     runner: &mut WorkflowRunner<L, S, C>,
 ) -> Result<step_output::StepOutput, String>
@@ -841,36 +883,112 @@ where
         // но бюджет n_predict ушёл бы в него (см. fact_extractor::build_facts_grammar).
         true,
     )?;
-    let output = groups::parse_fused_output(&text, expected)?;
+    let output = groups::parse_fused_output(&text, expected, stage_specs)?;
 
+    // Отчёты этапов — по правилам detailed: каждый этап публикуется Отдельным
+    // сообщением с автором = id агента этапа (по нему же `inject_response`
+    // находит отчёт валидатор/сборщик). Фаза 2 — «внутренний шаг текущего
+    // прогона», как у обычных нод в `nodes.rs`. Этап без агента (`llm_freeform`)
+    // не публикуется: его отчёта нет и в detailed (LlmFreeform ничего не пишет).
+    let mut published: Vec<String> = Vec::new();
+    let mut user_message: Option<String> = None;
+    for stage in &output.stages {
+        let Some(author) = stage.spec.author.as_deref() else {
+            continue;
+        };
+        let replace_report = runner
+            .agents
+            .iter()
+            .find(|a| a.id == author)
+            .map(|a| a.replace_report)
+            .unwrap_or(false);
+        let msg = ChatMessage {
+            id: Some(format!("msg_{}", runner.msg_counter)),
+            msg_type: stage.spec.msg_type.clone(),
+            content: stage.text.clone(),
+            sub_calls: None,
+            author: Some(author.to_string()),
+            model: None,
+            time_sec: None,
+            attachments: None,
+            phase: Some(2),
+            author_name: None,
+        };
+        push_report(&mut context.messages, msg, replace_report, Some(2));
+        *runner.msg_counter += 1;
+        published.push(format!(
+            "{} → {} ({})",
+            stage.spec.node_id, author, stage.spec.msg_type
+        ));
+        if stage.spec.msg_type == "message" && user_message.is_none() {
+            user_message = Some(stage.text.clone());
+            context.output_emitted = true;
+        }
+    }
+
+    // Явная `fused_instruction`-группа: прежняя форма — ОДИН общий текст;
+    // `author` остаётся машинным ключом (`fused_agent` ?? id группы), а
+    // живое имя кладётся в `author_name`: машина-ключ по нему ищут
+    // `inject_response` и сигнальные фильтры, а в чате показывают имя.
     if !output.message.is_empty() {
+        let author = group
+            .fused_agent
+            .clone()
+            .unwrap_or_else(|| group.id.clone());
+        let author_name = runner
+            .agents
+            .iter()
+            .find(|a| a.id == author)
+            .map(|a| a.name.clone())
+            .or_else(|| {
+                let title = group.title.trim();
+                if title.is_empty() {
+                    None
+                } else {
+                    Some(title.to_string())
+                }
+            })
+            .unwrap_or_else(|| "Схлопнутый шаг".to_string());
         let msg = ChatMessage {
             id: Some(format!("msg_{}", runner.msg_counter)),
             msg_type: "message".to_string(),
             content: output.message.clone(),
             sub_calls: None,
-            author: Some(group.fused_agent.clone().unwrap_or_else(|| group.id.clone())),
+            author: Some(author),
             model: None,
             time_sec: None,
             attachments: None,
             phase: None,
+            author_name: Some(author_name),
         };
-        context.messages.push(msg);
+        push_report(&mut context.messages, msg, false, None);
         *runner.msg_counter += 1;
         context.output_emitted = true;
     }
     (runner.log_cb)(format!(
-        "[workflow] ⚡ группа '{}': склеенный ответ разобран, сигналов: {}, текст: {}",
+        "[workflow] ⚡ группа '{}': склеенный ответ разобран: этапов {}, опубликовано {}, \
+         сигналов {}, message: {}",
         group.id,
+        output.stages.len(),
+        published.len(),
         output.signals.len(),
         if output.message.is_empty() { "нет" } else { "есть" }
     ));
+    if !published.is_empty() {
+        (runner.log_cb)(format!(
+            "[workflow] ⚡ группа '{}': отчёты этапов: [{}]",
+            group.id,
+            published.join(", ")
+        ));
+    }
     // В шину сигналы пишет планировщик — здесь только объявляем результат шага.
+    // Текст пользователю: явная группа отвечает своим `message`; авто-склейка —
+    // этапом с `output_type: message`.
     Ok(step_output::StepOutput {
-        message: if output.message.is_empty() {
-            None
-        } else {
+        message: if !output.message.is_empty() {
             Some(output.message.clone())
+        } else {
+            user_message.clone()
         },
         signals: output.signals.into_iter().collect(),
     })
@@ -939,6 +1057,7 @@ mod tests {
             time_sec: None,
             attachments: None,
             phase: None,
+            author_name: None,
         };
         let sanitized = sanitized_llm_message(&message);
         assert!(!sanitized.content.contains("D:\\private"));
@@ -1008,7 +1127,12 @@ mod tests {
     #[test]
     fn smoke_group_without_instruction_stitches_agent_roles() {
         let wf = chain_workflow(None);
-        let keys = vec![groups::MESSAGE_KEY.to_string()];
+        // Ключи — из реального контракта авто-группы (output_contract):
+        // этапные канавки вместо `message`.
+        let keys = vec![
+            "out_call_decomposer".to_string(),
+            "out_call_synthesizer".to_string(),
+        ];
         let prompt = build_fused_system_prompt(
             &wf,
             &wf.groups[0],
@@ -1027,8 +1151,17 @@ mod tests {
             prompt
         );
         assert!(prompt.contains("has_problem"), "сигналы хода не попали");
+        assert!(
+            prompt.contains("out_call_decomposer") && prompt.contains("out_call_synthesizer"),
+            "канавки этапов не попали в промпт:\n{}",
+            prompt
+        );
         assert!(prompt.contains("ТОЛЬКО JSON"), "нет требования формата");
-        assert!(prompt.contains("message"), "нет ключа message");
+        assert!(
+            !prompt.contains("`message`"),
+            "у авто-склейки не должно быть канавки message:\n{}",
+            prompt
+        );
     }
 
     /// Явная инструкция автора — оверрайд: склейка не используется.

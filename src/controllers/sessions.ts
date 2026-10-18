@@ -403,7 +403,7 @@ export class SessionController {
       if (role === "agent" && msg.author) {
         const name = document.createElement("span");
         name.className = "preview-agent-name";
-        name.textContent = getAgentDisplayName(msg.author) ?? "";
+        name.textContent = msg.author_name ?? getAgentDisplayName(msg.author) ?? "";
         bubble.appendChild(name);
       }
       const content = document.createElement("div");

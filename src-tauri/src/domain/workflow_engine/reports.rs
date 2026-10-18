@@ -69,6 +69,7 @@ mod tests {
             time_sec: None,
             attachments: None,
             phase: Some(phase),
+            author_name: None,
         }
     }
 

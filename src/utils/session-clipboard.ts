@@ -11,7 +11,7 @@ export function buildSessionMarkdown(title: string, messages: any[]): string {
     let role = "Ассистент";
     if (msg.author === "user") role = "Пользователь";
     else if (msg.author === "system") role = "Система";
-    else if (msg.author) role = String(msg.author);
+    else if (msg.author) role = String(msg.author_name ?? msg.author);
     out += `### ${role}\n\n${content}\n\n`;
   }
   return out.trim() + "\n";

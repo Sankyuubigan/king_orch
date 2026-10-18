@@ -27,7 +27,7 @@ export function createMessageElement(
   if (role === 'agent' && agentName) {
     const nameSpan = document.createElement("span");
     nameSpan.className = "agent-name";
-    nameSpan.innerText = agentName;
+    nameSpan.textContent = agentName;
     msgDiv.appendChild(nameSpan);
   }
 

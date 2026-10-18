@@ -414,6 +414,7 @@ impl FunnelHarness {
                         time_sec: None,
                         attachments: None,
                         phase: Some(2),
+                        author_name: None,
                     });
                 }
                 Err(error) => {
@@ -920,6 +921,7 @@ mod tests {
             time_sec: None,
             attachments: None,
             phase: Some(2),
+            author_name: None,
         }];
 
         let injected = build_injected_reports(

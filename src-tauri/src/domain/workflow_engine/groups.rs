@@ -10,6 +10,14 @@ use super::parser::{FactDef, GroupDef, NodeDef, WorkflowDef};
 /// которая отвечать не должна, честно возвращает пустую строку.
 pub const MESSAGE_KEY: &str = "message";
 
+/// Префикс ключа обязательного вывода одного этапа авто-склейки.
+///
+/// Каждый этап склеенного вызова получает своё строковое поле
+/// `out_<node_id>` в JSON-ответе: пропуск этапа перестаёт быть возможным
+/// форматом (грамматика требует все ключи), а отчёты этапов разделяются
+/// (иначе оба текста замешивались бы в единственный `message`).
+pub const STAGE_KEY_PREFIX: &str = "out_";
+
 /// Режим исполнения графа.
 ///
 /// Ровно два значения. Режима `auto` не существует намеренно: любая эвристика
@@ -501,7 +509,9 @@ fn group_extracts_facts(workflow: &WorkflowDef, group_id: &str) -> bool {
 /// Контракт выхода группы: `(bool_keys, string_keys)` для грамматики.
 ///
 /// boolean — факты без `values` и `fused_keys` без `values`; строковые — факты
-/// с `values`, строковые `fused_keys`, ключи роутеров группы и служебный `message`.
+/// с `values` и строковые `fused_keys`; далее для авто-склейки — обязательные
+/// этапные ключи `out_<node_id>`, для явной `fused_instruction` — служебный
+/// `message`.
 /// Ключи дедуплируются по id: один и тот же факт может быть объявлен и в
 /// facts.yaml, и в fused_keys.
 pub fn output_contract(
@@ -546,8 +556,22 @@ pub fn output_contract(
     // Проверка остаётся в диагностике (`GROUP_FUSED_HAS_ROUTER` называет ключи,
     // которые читали роутеры группы), чтобы автор видел, что переносить наружу.
 
-    if !string_keys.iter().any(|k| k == MESSAGE_KEY) {
-        string_keys.push(MESSAGE_KEY.to_string());
+    if is_explicit_fused(group) {
+        // Явная инструкция: автор сам объяснил формирование текста, ключ
+        // `message` остаётся единственной канавкой итогового текста.
+        if !string_keys.iter().any(|k| k == MESSAGE_KEY) {
+            string_keys.push(MESSAGE_KEY.to_string());
+        }
+    } else {
+        // Авто-склейка: у КАЖДОГО этапа своя обязательная канавка, чтобы пропуск
+        // этапа был невозможен форматом (грамматика требует все ключи). Общий
+        // `message` не объявляется: текст пользователю — этапная нода, у которой
+        // `output_type: message` (её текст публикуется отдельным сообщением).
+        for spec in stage_output_specs(workflow, group) {
+            if !string_keys.iter().any(|k| k == &spec.key) {
+                string_keys.push(spec.key);
+            }
+        }
     }
     (bool_keys, string_keys)
 }
@@ -607,12 +631,84 @@ pub fn node_calls_llm(node: &NodeDef) -> bool {
 /// Один этап авто-склейки: нода группы и роль, которая на ней работает.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FusedStage {
-    /// id ноды — чтобы автор видел в промпте, откуда этап.
-    pub node_id: String,
+    /// Квота этапа: ключ выхода, автор публикации и тип сообщения.
+    ///
+    /// SSOT: строится из тех же нод группы, из которых строится контракт
+    /// (`stage_output_specs`), поэтому грамматика, промпт, parse и публикация
+    /// не могут разойтись — второго списка этапов не существует.
+    pub spec: StageSpec,
     /// Имя агента (или `llm_freeform`, если у ноды свой `input`).
     pub role: String,
     /// Системный промпт роли: содержимое `.md` агента либо текст `input`.
     pub prompt: String,
+}
+
+/// Правила вывода ОДНОГО этапа авто-склейки.
+///
+/// Производная величина от нод группы (`topo_order_of_group` + `agent` +
+/// `output_type`): ключ `out_<node_id>` форсируется грамматикой, автора и
+/// `msg_type` читает публикация отчётов в `run_fused_group`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StageSpec {
+    /// Ключ JSON-ответа: `out_<node_id>`.
+    pub key: String,
+    /// Нода-этап, для диагностики.
+    pub node_id: String,
+    /// Автор публикации отчёта — id агента ноды. `None` — этап без агента
+    /// (`llm_freeform`): его отчёт в сессию не публикуется (как и в detailed).
+    pub author: Option<String>,
+    /// Тип публикации этапа с агентом: `output_type` ноды или `thought`.
+    pub msg_type: String,
+}
+
+/// Явная ли fused-группа: у неё собственная инструкция склейки.
+///
+/// Для таких групп контракт остаётся прежним `{message, ...}` — автор сам
+/// объяснил формирование текста, и «канавки этапов» там не производятся.
+pub fn is_explicit_fused(group: &GroupDef) -> bool {
+    group
+        .fused_instruction
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|i| !i.is_empty())
+}
+
+/// Этапные обязательные ключи выхода авто-склейки.
+///
+/// Один этап = одна нода группы, которая сама зовёт LLM и имеет роль
+/// (агент либо собственный `input`). Факт-экстрактор этапом не считается: его
+/// выход — не текст, его ключи уже объявлены в факт-контракте. Порядок —
+/// топологический, тот же, что и у этапов в склеенном промпте.
+pub fn stage_output_specs(workflow: &WorkflowDef, group: &GroupDef) -> Vec<StageSpec> {
+    use super::parser::NodeType;
+    if is_explicit_fused(group) {
+        return Vec::new();
+    }
+    let ordered = match topo_order_of_group(workflow, group.id.trim()) {
+        Ok(ordered) => ordered,
+        // Цикл в группе — для сборки промпта всё равно ошибка; здесь честно
+        // отдаём пусто, чтобы контракт не выдал провалившейся склейке те же
+        // ключи дважды.
+        Err(_) => return Vec::new(),
+    };
+    ordered
+        .iter()
+        .filter(|n| matches!(n.node_type, NodeType::LlmWorker | NodeType::LlmFreeform))
+        .map(|n| StageSpec {
+            key: format!("{}{}", STAGE_KEY_PREFIX, n.id),
+            node_id: n.id.clone(),
+            author: n
+                .agent
+                .as_deref()
+                .map(str::trim)
+                .filter(|a| !a.is_empty())
+                .map(ToOwned::to_owned),
+            msg_type: n
+                .output_type
+                .clone()
+                .unwrap_or_else(|| "thought".to_string()),
+        })
+        .collect()
 }
 
 /// Склеить системный промпт макро-ноды из ролей её этапов.
@@ -639,7 +735,7 @@ pub fn build_auto_fused_prompt(
         prompt.push_str(&format!(
             "\n\n---\nЭТАП {}: Роль [{} / {}]\n{}\n---",
             idx + 1,
-            stage.node_id,
+            stage.spec.node_id,
             stage.role,
             stage.prompt.trim()
         ));
@@ -660,24 +756,78 @@ pub fn build_auto_fused_prompt(
         );
         prompt.push_str(signals_json.trim());
     }
-    if !keys.is_empty() {
+
+    let stage_keys: Vec<&str> = stages.iter().map(|s| s.spec.key.as_str()).collect();
+    if !stage_keys.is_empty() {
+        // Канавка этапа: полный текст именно этого этапа, а не смесь всех.
+        // Пропуск этапа форсируется грамматикой (`out_*` ключи обязательны),
+        // но модель ещё и предупреждается: смешивать этапы в одном поле нельзя.
+        prompt.push_str("\n\n[РЕЗУЛЬТАТЫ ЭТАПОВ]");
+        prompt.push_str(
+            "\nДля каждого этапа — своё поле с ПОЛНЫМ готовым ответом этого этапа. \
+             Смешивать несколько этапов в одном поле запрещено: каждое поле проходит \
+             свою проверку.",
+        );
+        for (idx, stage) in stages.iter().enumerate() {
+            let closing = if stage.spec.msg_type == "message" {
+                "; это итоговое сообщение, которое увидит пользователь"
+            } else {
+                ""
+            };
+            prompt.push_str(&format!(
+                "\n- `{}` — полный ответ этапа {} «{}»{}",
+                stage.spec.key,
+                idx + 1,
+                stage.role,
+                closing
+            ));
+        }
+    }
+
+    if keys.iter().any(|k| k == MESSAGE_KEY) {
+        if !keys.is_empty() {
+            prompt.push_str("\n\n[ОБЯЗАТЕЛЬНЫЕ КЛЮЧИ ОТВЕТА]");
+            prompt.push_str(
+                "\nКаждый ключ обязателен. Если для ключа нет данных — укажи правдивое \
+                 значение по критерию, а не выдумывай.",
+            );
+            for key in keys {
+                if stage_keys.contains(&key.as_str()) {
+                    continue;
+                }
+                prompt.push_str(&format!("\n- {}", key));
+            }
+        }
+        prompt.push_str(&format!(
+            "\n- `{}` — текст для пользователя, если в этом шаге есть что сказать; иначе пустая строка.",
+            MESSAGE_KEY
+        ));
+    } else if !keys.is_empty() {
+        // Остальные (не этапные, не message) ключи — факты/сигналы: прежние правила.
         prompt.push_str("\n\n[ОБЯЗАТЕЛЬНЫЕ КЛЮЧИ ОТВЕТА]");
         prompt.push_str(
             "\nКаждый ключ обязателен. Если для ключа нет данных — укажи правдивое \
              значение по критерию, а не выдумывай.",
         );
         for key in keys {
+            if stage_keys.contains(&key.as_str()) {
+                continue;
+            }
             prompt.push_str(&format!("\n- {}", key));
         }
     }
-    prompt.push_str(
-        "\n\n[ФОРМАТ]\nВерни ТОЛЬКО JSON-объект с указанными ключами. \
-         Никакого текста вокруг JSON.",
-    );
-    prompt.push_str(&format!(
-        "\n- `{}` — текст для пользователя, если в этом шаге есть что сказать; иначе пустая строка.",
-        MESSAGE_KEY
-    ));
+
+    if stage_keys.is_empty() {
+        prompt.push_str(
+            "\n\n[ФОРМАТ]\nВерни ТОЛЬКО JSON-объект с указанными ключами. \
+             Никакого текста вокруг JSON.",
+        );
+    } else {
+        prompt.push_str(
+            "\n\n[ФОРМАТ]\nВерни ТОЛЬКО JSON-объект. У каждого этапа — своё поле из \
+             раздела [РЕЗУЛЬТАТЫ ЭТАПОВ]; никакой вставки этапов друг в друга.",
+        );
+    }
     prompt
 }
 
@@ -800,8 +950,22 @@ pub fn ensure_macro_possible(workflow: &WorkflowDef, group: &GroupDef) -> Result
 pub struct FusedOutput {
     /// Ключи → значения. Сольются в `context.signals`, откуда их читают роутеры.
     pub signals: Vec<(String, serde_json::Value)>,
-    /// Текст для пользователя; пусто — группа не отвечает сама.
+    /// Текст для пользователя; заполняется только у ЯВНЫХ `fused_instruction`
+    /// групп — у авто-склейки канавки `message` нет, итоговый текст живёт
+    /// в этапных полях.
     pub message: String,
+    /// Полные тексты этапов в SSOT-порядке (`stage_output_specs`).
+    /// Публикует `run_fused_group` в отдельные сообщения по `author`/`msg_type`.
+    pub stages: Vec<FusedStageOutput>,
+}
+
+/// Текст одного этапа склеенного вызова.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FusedStageOutput {
+    /// Правила этапа (ключ/автор/msg_type) — тот же `StageSpec`, что в грамматике.
+    pub spec: StageSpec,
+    /// Полный текст этапа.
+    pub text: String,
 }
 
 /// Разобрать JSON склеенного вызова.
@@ -809,19 +973,42 @@ pub struct FusedOutput {
 /// Пустой/невалидный ответ — ОШИБКА с перечнем ожидаемых ключей, а не «пустые
 /// сигналы»: молчаливые all-false сигналы отправляли бы граф по ложной ветке
 /// (ровно тот баг, что описана в `build_json_object_grammar_with_keys`).
-pub fn parse_fused_output(raw: &str, expected: &[String]) -> Result<FusedOutput, String> {
+///
+/// Отсутствующий/пустой этапный ключ — тоже ошибка: канавка этапа объявлена
+/// грамматикой, значит пропуск этапа — нарушение формы, а не «меньше данных».
+pub fn parse_fused_output(
+    raw: &str,
+    expected: &[String],
+    stage_specs: &[StageSpec],
+) -> Result<FusedOutput, String> {
     let value: serde_json::Value = serde_json::from_str(raw.trim())
         .map_err(|e| format!("ответ склеенного вызова не JSON: {}", e))?;
     let obj = value
         .as_object()
         .ok_or_else(|| "ответ склеенного вызова — не JSON-объект".to_string())?;
 
-    let mut signals = Vec::new();
-    for (key, val) in obj {
-        if key == MESSAGE_KEY {
-            continue;
+    let mut stages = Vec::with_capacity(stage_specs.len());
+    for spec in stage_specs {
+        let Some(val) = obj.get(&spec.key) else {
+            return Err(format!("в ответе склеенного вызова нет ключей: {}", spec.key));
+        };
+        let Some(text) = val.as_str() else {
+            return Err(format!(
+                "ключ '{}' должен быть строкой с полным ответом этапа",
+                spec.key
+            ));
+        };
+        let text = text.trim();
+        if text.is_empty() {
+            return Err(format!(
+                "этап '{}' (ключ '{}') пуст — этап обязан вернуть свой полный отчёт",
+                spec.node_id, spec.key
+            ));
         }
-        signals.push((key.clone(), val.clone()));
+        stages.push(FusedStageOutput {
+            spec: spec.clone(),
+            text: text.to_string(),
+        });
     }
 
     let missing: Vec<&str> = expected
@@ -836,6 +1023,15 @@ pub fn parse_fused_output(raw: &str, expected: &[String]) -> Result<FusedOutput,
         ));
     }
 
+    let is_stage_key = |key: &str| stage_specs.iter().any(|s| s.key == key);
+    let mut signals = Vec::new();
+    for (key, val) in obj {
+        if key == MESSAGE_KEY || is_stage_key(key) {
+            continue;
+        }
+        signals.push((key.clone(), val.clone()));
+    }
+
     let message = obj
         .get(MESSAGE_KEY)
         .and_then(|v| v.as_str())
@@ -843,7 +1039,11 @@ pub fn parse_fused_output(raw: &str, expected: &[String]) -> Result<FusedOutput,
         .trim()
         .to_string();
 
-    Ok(FusedOutput { signals, message })
+    Ok(FusedOutput {
+        signals,
+        message,
+        stages,
+    })
 }
 
 #[cfg(test)]
@@ -1200,25 +1400,30 @@ mod tests {
         assert!(err.contains("цикл"), "{}", err);
     }
 
-    /// Собранный промпт содержит роль каждого этапа и общий вывод по JSON.
+    /// Собранный промпт содержит роль каждого этапа и канавку каждого этапа,
+    /// и НЕ обещает `message` (у авто-склейки итоговый текст живёт в этапах).
     #[test]
     fn auto_stitched_prompt_contains_every_stage_role() {
         let stages = vec![
             FusedStage {
-                node_id: "call_decomposer".to_string(),
+                spec: stage_spec("call_decomposer", Some("decomposer"), "thought"),
                 role: "Декомпозитор".to_string(),
                 prompt: "Разбей запрос на мишени.".to_string(),
             },
             FusedStage {
-                node_id: "call_synthesizer".to_string(),
+                spec: stage_spec("call_synthesizer", Some("synthesizer"), "message"),
                 role: "Синтезатор".to_string(),
                 prompt: "Собери ответ.".to_string(),
             },
         ];
+        let keys = vec![
+            "out_call_decomposer".to_string(),
+            "out_call_synthesizer".to_string(),
+        ];
         let prompt = build_auto_fused_prompt(
             &group("g1", None),
             &stages,
-            &[MESSAGE_KEY.to_string()],
+            &keys,
             r#"{"has_problem":true}"#,
         );
 
@@ -1226,7 +1431,21 @@ mod tests {
         assert!(prompt.contains("call_synthesizer") && prompt.contains("Синтезатор"));
         assert!(prompt.find("Декомпозитор") < prompt.find("Синтезатор"), "этапы переставлены:\n{}", prompt);
         assert!(prompt.contains("has_problem"), "сигналы хода не попали в промпт");
-        assert!(prompt.contains(MESSAGE_KEY), "в промпте нет ключа message");
+        assert!(
+            prompt.contains("[РЕЗУЛЬТАТЫ ЭТАПОВ]"),
+            "нет блока этапных канавок:\n{}",
+            prompt
+        );
+        assert!(
+            prompt.contains("итоговое сообщение"),
+            "у message-этапа не сказано, что он увидит пользователь:\n{}",
+            prompt
+        );
+        assert!(
+            !prompt.contains("`message`"),
+            "у авто-склейки не должно быть канавки message:\n{}",
+            prompt
+        );
         assert!(prompt.contains("ТОЛЬКО JSON"), "в промпте нет требования формата");
     }
 
@@ -1361,37 +1580,197 @@ mod tests {
         assert!(grammar.contains("root ::="), "это не GBNF:\n{}", grammar);
     }
 
+    // ── Этапные канавки авто-склейки ───────────────────────────────────────
+
+    fn agent_node(id: &str, node_type: NodeType, group: Option<&str>, agent: Option<&str>) -> NodeDef {
+        NodeDef {
+            id: id.to_string(),
+            node_type,
+            group: group.map(str::to_string),
+            agent: agent.map(str::to_string),
+            output_type: None,
+            ..Default::default()
+        }
+    }
+
+    /// Этапные канавки — SSOT авто-склейки: топопорядок, авторы, msg_type.
+    #[test]
+    fn stage_output_specs_are_topological_and_describe_publishing() {
+        let mut wf = workflow(
+            vec![group("g1", None)],
+            vec![
+                agent_node("second", NodeType::LlmWorker, Some("g1"), Some("synthesizer")),
+                agent_node("first", NodeType::LlmWorker, Some("g1"), Some("decomposer")),
+            ],
+        );
+        wf.edges = vec![edge("first", "second")];
+        wf.nodes
+            .iter_mut()
+            .find(|n| n.id == "second")
+            .expect("нода second")
+            .output_type = Some("message".to_string());
+
+        let specs = stage_output_specs(&wf, &wf.groups[0]);
+        assert_eq!(specs.len(), 2, "каждый этап — своя канавка");
+        assert_eq!(specs[0].key, "out_first");
+        assert_eq!(specs[0].author.as_deref(), Some("decomposer"));
+        assert_eq!(specs[0].msg_type, "thought", "без output_type этап — внутренний отчёт");
+        assert_eq!(specs[1].key, "out_second");
+        assert_eq!(specs[1].author.as_deref(), Some("synthesizer"));
+        assert_eq!(specs[1].msg_type, "message", "output_type ноды задаёт тип публикации");
+    }
+
+    /// Явная `fused_instruction`-группа канавок этапов не создаёт: автор сам
+    /// объяснил формирование текста.
+    #[test]
+    fn explicit_group_has_no_stage_specs() {
+        let wf = workflow(
+            vec![group("g1", Some("сделай всё одним словом"))],
+            vec![agent_node("a", NodeType::LlmWorker, Some("g1"), Some("x"))],
+        );
+        assert!(stage_output_specs(&wf, &wf.groups[0]).is_empty());
+    }
+
+    /// Контракт авто-группы требует КАЖДЫЙ этап и не требует message:
+    /// пропуск этапа должен быть невозможен форматом, а `message` для юзера
+    /// берётся из этапа, у которого `output_type: message`.
+    #[test]
+    fn auto_contract_requires_stage_keys_and_no_message() {
+        let wf = workflow(
+            vec![group("g1", None)],
+            vec![
+                agent_node("call_decomposer", NodeType::LlmWorker, Some("g1"), Some("decomposer")),
+                agent_node("call_synthesizer", NodeType::LlmWorker, Some("g1"), Some("synthesizer")),
+            ],
+        );
+        let (_, strings) = output_contract(&wf, &wf.groups[0], None);
+        assert!(strings.contains(&"out_call_decomposer".to_string()), "{}", strings.join(","));
+        assert!(strings.contains(&"out_call_synthesizer".to_string()), "{}", strings.join(","));
+        assert!(
+            !strings.iter().any(|k| k == MESSAGE_KEY),
+            "у авто-группы не должно быть канавки message: {:?}",
+            strings
+        );
+        // Грамматика собирается из того же контракта — этапные ключи в ней.
+        let grammar = build_fused_grammar(&wf, &wf.groups[0], None);
+        assert!(grammar.contains("out_call_decomposer"), "{}", grammar);
+        assert!(grammar.contains("out_call_synthesizer"), "{}", grammar);
+        assert!(
+            !grammar.contains(r#" "message" "#),
+            "грамматика авто-группы не должна объявлять message:\n{}",
+            grammar
+        );
+    }
+
     // ── Разбор ответа ─────────────────────────────────────────────────────
 
     #[test]
     fn parse_fused_output_splits_signals_and_message() {
         let raw = r#"{"has_problem": true, "message": "  текст юзеру  "}"#;
-        let out = parse_fused_output(raw, &["has_problem".to_string()]).unwrap();
+        let out = parse_fused_output(raw, &["has_problem".to_string()], &[]).unwrap();
         assert_eq!(out.message, "текст юзеру", "сообщение должно бытьtrimнутым");
         assert_eq!(out.signals.len(), 1);
         assert_eq!(out.signals[0].0, "has_problem");
         assert_eq!(out.signals[0].1, serde_json::json!(true));
+        assert!(out.stages.is_empty(), "stage_specs пуст — этапов нет");
     }
 
     #[test]
     fn parse_fused_output_reports_missing_keys_instead_of_empty_signals() {
         // Молчаливые all-false сигналы отправили бы граф по ложной ветке.
-        let err = parse_fused_output(r#"{"message": ""}"#, &["has_problem".to_string()])
+        let err = parse_fused_output(r#"{"message": ""}"#, &["has_problem".to_string()], &[])
             .expect_err("пустой ответ обязан быть ошибкой");
         assert!(err.contains("has_problem"), "в ошибке нет списка ключей: {}", err);
     }
 
     #[test]
     fn parse_fused_output_rejects_non_json_and_non_object() {
-        assert!(parse_fused_output("просто текст", &[]).is_err());
-        assert!(parse_fused_output("[1,2]", &[]).is_err());
+        assert!(parse_fused_output("просто текст", &[], &[]).is_err());
+        assert!(parse_fused_output("[1,2]", &[], &[]).is_err());
     }
 
     #[test]
     fn message_only_answer_is_allowed_when_no_keys_expected() {
-        let out = parse_fused_output(r#"{"message": "готово"}"#, &[]).unwrap();
+        let out = parse_fused_output(r#"{"message": "готово"}"#, &[], &[]).unwrap();
         assert_eq!(out.message, "готово");
         assert!(out.signals.is_empty());
+        assert!(out.stages.is_empty());
+    }
+
+    fn stage_spec(node_id: &str, agent: Option<&str>, msg_type: &str) -> StageSpec {
+        StageSpec {
+            key: format!("{}{}", STAGE_KEY_PREFIX, node_id),
+            node_id: node_id.to_string(),
+            author: agent.map(ToOwned::to_owned),
+            msg_type: msg_type.to_string(),
+        }
+    }
+
+    #[test]
+    fn parse_fused_output_collects_stages_in_ssot_order_and_keeps_signals_separate() {
+        let specs = vec![
+            stage_spec("call_decomposer", Some("decomposer"), "thought"),
+            stage_spec("call_synthesizer", Some("synthesizer"), "message"),
+        ];
+        let raw = r#"{"out_call_decomposer": "разбор", "out_call_synthesizer": "итог", "has_problem": true}"#;
+        let expected = vec![
+            "has_problem".to_string(),
+            "out_call_decomposer".to_string(),
+            "out_call_synthesizer".to_string(),
+        ];
+        let out = parse_fused_output(raw, &expected, &specs).unwrap();
+        assert_eq!(out.stages.len(), 2);
+        assert_eq!(out.stages[0].spec.node_id, "call_decomposer");
+        assert_eq!(out.stages[0].text, "разбор");
+        assert_eq!(out.stages[1].spec.node_id, "call_synthesizer");
+        assert_eq!(out.stages[1].text, "итог");
+        // Этапные ключи НЕ попадают в signals (иначе роутерам пришёл бы мусор).
+        assert_eq!(out.signals.len(), 1);
+        assert_eq!(out.signals[0].0, "has_problem");
+        assert!(out.message.is_empty(), "у авто-группы канавки message нет");
+    }
+
+    #[test]
+    fn parse_fused_output_fails_when_a_stage_key_is_missing_or_empty() {
+        let specs = vec![
+            stage_spec("call_decomposer", Some("decomposer"), "thought"),
+            stage_spec("call_synthesizer", Some("synthesizer"), "message"),
+        ];
+        // Все этапы на месте — разбор успешен.
+        let ok = r#"{"out_call_decomposer": "разбор", "out_call_synthesizer": "итог"}"#;
+        assert!(
+            parse_fused_output(
+                ok,
+                &["out_call_decomposer".to_string(), "out_call_synthesizer".to_string()],
+                &specs,
+            )
+            .is_ok(),
+            "оба этапа доставлены — пропуска нет"
+        );
+
+        // Пропущенный ключ этапа — форма, которой не стало быть можно.
+        let no = r#"{"out_call_decomposer": "разбор", "hidden": true}"#;
+        let err = match parse_fused_output(
+            no,
+            &["out_call_decomposer".to_string(), "out_call_synthesizer".to_string()],
+            &specs,
+        ) {
+            Ok(_) => panic!("пропуск этапа обязан быть ошибкой"),
+            Err(e) => e,
+        };
+        assert!(err.contains("out_call_synthesizer"), "в ошибке нет пропущенного этапа: {}", err);
+
+        // Пустая строка — тот же пропуск, только замаскированный.
+        let empty = r#"{"out_call_decomposer": "разбор", "out_call_synthesizer": "   "}"#;
+        let err = match parse_fused_output(
+            empty,
+            &["out_call_decomposer".to_string(), "out_call_synthesizer".to_string()],
+            &specs,
+        ) {
+            Ok(_) => panic!("пустой этап обязан быть ошибкой"),
+            Err(e) => e,
+        };
+        assert!(err.contains("call_synthesizer"), "в ошибке нет имени этапа: {}", err);
     }
 
     // ── Контракт не должен требовать от группы чужого ──────────────────────

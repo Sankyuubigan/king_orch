@@ -7,7 +7,7 @@ use std::os::windows::process::CommandExt;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager};
 
-use crate::infra::llm::ChatMessage;
+use crate::infra::ChatMessage;
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct SessionMeta {
