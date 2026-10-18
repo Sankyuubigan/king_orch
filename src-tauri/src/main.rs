@@ -122,6 +122,24 @@ async fn main() {
             // каталога, недописанные записи проиграны из журнала.
             infra::storage::init(&app_handle);
 
+            // ── Санитария хвостов sidecar-локов (SQLite hot-journal-паттерн) ──
+            // Лок интересен только на время операции записи; после успеха он
+            // удаляется сам (`CrossLock::drop`), но хвост от обрыва процесса
+            // возможен — его подбирает свип при старте. Занятость определяется
+            // захватом fs2-блокировки, а не наличием файла: живой лок
+            // соседнего процесса свип не тронет. Здесь, а не до Tauri: до init
+            // плагина логов `log::info!` выбрасывался, строка свипа в лог не
+            // попадала (кейс первого прогона 18.10.26).
+            {
+                let data_root = infra::storage::app_data_root();
+                for dir in [data_root.clone(), data_root.join("sessions")] {
+                    if let Err(e) = ko_json_store::sweep_stale_locks(&dir) {
+                        // Не фатально: хвосты безвредны, повторим на следующем старте.
+                        log::warn!("санитария хвостов {} не прошла: {}", dir.display(), e);
+                    }
+                }
+            }
+
             std::thread::spawn(|| {
                 let detection_started = Instant::now();
                 let gpu = infra::gpu_detector::detect_gpu();

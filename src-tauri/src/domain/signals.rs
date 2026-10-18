@@ -404,7 +404,7 @@ pub fn validate_signal_value(contract: &SignalContract, value: &Value) -> Result
 /// Поддерживаемые виды `value_schema`:
 /// - `enum` (массив строк) → первая совпавшая строка;
 /// - `object` со свойствами-`enum` → объект из совпавших свойств;
-/// - `pattern` вида `^[1-9]$` → первый символ из набора (synthesizer: destructor_type).
+/// - `pattern` вида `^[1-9]$` → первый символ из набора.
 /// Возвращает `None`, если ничего не нашлось (тогда сигнал не сохраняется).
 pub fn extract_signal_value_from_text(contract: &SignalContract, text: &str) -> Option<Value> {
     let schema = &contract.value_schema;
@@ -505,7 +505,7 @@ mod tests {
         let text = std::fs::read_to_string(schema_path()).expect("root.schema.json прочитать");
         let root: Value = serde_json::from_str(&text).expect("root.schema.json — валидный JSON");
         let agents = root.get("agents").expect("ключ agents");
-        for id in ["validator", "focus_keeper", "soma_translator", "synthesizer"] {
+        for id in ["validator", "focus_keeper", "soma_translator"] {
             let a = agents.get(id).unwrap_or_else(|| panic!("агент {id} в контракте"));
             assert!(a.get("key").is_some(), "{id}: key");
             assert!(a.get("value").is_some(), "{id}: value");
@@ -693,7 +693,6 @@ mod tests {
             "validator_core",
             "focus_keeper",
             "soma_translator",
-            "synthesizer",
             "destructor_detector",
         ] {
             assert!(
@@ -986,7 +985,7 @@ mod tests {
         assert!(!grammar.contains("bool_members ::="), "не должно быть пустого bool_members");
     }
 
-    /// Гипотеза 5: Pattern-контракт (synthesizer) — должен содержать цифры 1-9
+    /// Гипотеза 5: Pattern-контрат стринг — должен содержать цифры 1-9
     #[test]
     fn hypothesis_pattern_contract_digits() {
         let c = SignalContract {

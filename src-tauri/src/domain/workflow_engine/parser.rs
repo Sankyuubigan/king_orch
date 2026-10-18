@@ -539,7 +539,29 @@ fn into_workflow(source: serde_yaml::Value, path: &Path) -> Result<WorkflowDef, 
         .unwrap_or(Path::new("."))
         .to_string_lossy()
         .to_string();
+    // «Сломанный граф не должен выглядеть рабочим» (тот же стиль, что у
+    // отсутствующего entry): мёртвый signal-контракт виден в логе при
+    // загрузке, а не только после того, как Model 3 вернул пустой ответ.
+    log_dead_signal_contracts(&wf);
     Ok(wf)
+}
+
+/// Один агрегированный `log::error!` на граф: список мёртвых пар одной
+/// строкой, чтобы не флудить лог на каждый узел.
+fn log_dead_signal_contracts(wf: &WorkflowDef) {
+    let dead = super::signal_consumer_check::collect_dead_signal_diagnostics(wf);
+    if dead.is_empty() {
+        return;
+    }
+    let summary: Vec<String> = dead
+        .iter()
+        .map(|d| format!("{}: {}", d.location, d.message))
+        .collect();
+    log::error!(
+        "[workflow_engine] график '{}' содержит мёртвые signal-контракты: {}",
+        wf.name,
+        summary.join(" | ")
+    );
 }
 
 fn collect_yaml_files(dir: &Path, files: &mut Vec<PathBuf>) {

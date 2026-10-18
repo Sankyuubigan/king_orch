@@ -202,6 +202,7 @@ infra/    — Инфраструктура (LLM, сессии, MCP, конфиг
 - ⚠️ У грамматики факт-экстрактора think **структурно разрешён и НЕ ограничен** (`[^<]*`), поэтому от размышления удерживает только подсказка движка. Если chat-template её проигнорирует, бюджет `n_predict` уйдёт в `<think>` и узод остановит workflow (`nodes.rs`, «Не удалось извлечь факты даже после повтора»). Конструктивная защита (граница think в грамматике) написана в `verdict_contract::DEFAULT_THINK_BUDGET_CHARS`, но в бою **не применена** — см. `tasks/08.10.26 …md` §2.5
 - Грамматика восстанавливается через единую `ctx.restore_grammar()` (не散点 вызовы)
 - Signal contracts: `agents/*/signals/root.schema.json` → `build_signal_envelope_grammar()` → hybrid GBNF
+- Signal-контракт — только агентам, чей key реально потребляется графом (signal_router/condition field-путь/`{{ signals.<key> }}`); фронтенд-агент с `output_type: message` контракту несовместим (пустой ответ, кейс synthesizer 17.10.26). Диагностика: `SIGNAL_CONTRACT_UNCONSUMED` (`workflow_engine/signal_consumer_check.rs`) в `analyze_workflow_fidelity` и при `load_workflows`; см. `docs/SIGNAL_CONTRACTS.md` §«Правило развода»
 - Fact extractor: `build_facts_grammar()` → `get_hybrid_grammar()` → hybrid GBNF
 - Промпты, где модель выносит вердикт по критериям, берут **один** каноничный блок трактовки — `fact_extractor::CRITERIA_INTERPRETATION_BLOCK`. Копий правил в стендах быть не должно: своя редакция в `verdict_contract` дала замер, не соответствующий боевому поведению
 

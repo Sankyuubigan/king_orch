@@ -94,13 +94,6 @@
         "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"]
       }
     },
-    "synthesizer": {
-      "key": "destructor_type",
-      "value": {
-        "type": "string",
-        "pattern": "^[1-9]$"
-      }
-    },
     "destructor_detector": {
       "key": "diagnostic_report",
       "value": {

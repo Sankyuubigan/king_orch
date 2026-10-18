@@ -27,6 +27,11 @@ pub fn analyze_workflow_fidelity(
     collect_template_reference_diagnostics(workflow, &mut diagnostics);
     collect_node_target_diagnostics(workflow, &mut diagnostics);
     collect_edge_diagnostics(workflow, &mut diagnostics);
+    // «Мёртвый signal-контракт»: агент вызывает контракта, ключ никто
+    // не читает — Method 3 отправит ответ в сигнал, а чат останется пустым.
+    diagnostics.extend(super::signal_consumer_check::collect_dead_signal_diagnostics(
+        workflow,
+    ));
     deduplicate(&mut diagnostics);
     Ok(diagnostics)
 }

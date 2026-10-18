@@ -87,6 +87,25 @@ and Structured Output», и устоявшаяся практика constrained 
 проскочит, **честно вернуть ошибку** (`validate_signal_value`), а не молча маршрутизировать
 в обход.
 
+## Правило развода: фронтенд-агент vs signal-контракт (17.10.26)
+
+1. **Signal-контракт даётся ТОЛЬКО агенту, чей `key` реально потребляется** —
+   `signal_router.signal_name`, condition field-путь (`key` / `key.<sub>`),
+   `cases_priority` или шаблоном `{{ signals.<key> }}` в графе, который его
+   вызывает: контракт ни с одним потребителем = мёртвый сигнал (работа
+   выбрасывается, ответ в чат не попадает).
+2. **Фронтенд-агент, обязанный писать отчёт пользователю, и signal-контракт
+   несовместимы.** Method 3 оформляет ответ конвертом `emit_signal` — при
+   `output_type: message` на выходе оказывается пустое сообщение (кейс
+   `synthesizer` 17.10.26: контракт `destructor_type` без консьюмера, пустой
+   msg_5 в `sessions/1792249465685.json`). Оставила frontmatter-запись
+   `tools: [emit_signal]` — значит агент НЕ фронтенд-агент, и наоборот.
+3. **Диагностика**: `workflow_engine/signal_consumer_check.rs` → код
+   `SIGNAL_CONTRACT_UNCONSUMED` — `GraphDiagnostic` в
+   `editor_fidelity::analyze_workflow_fidelity` и `log::error!` при
+   `load_workflows` (одной строкой, агрегированно). Если она сработала —
+   чинить корень (убрать контракт или добавить потребителя), а не порог.
+
 ## Чек-лист при добавлении нового сигнального агента
 
 1. Добавить запись в `signals/root.schema.json` (`key` + `value`-схема, обязательные поля
@@ -95,4 +114,9 @@ and Structured Output», и устоявшаяся практика constrained 
 3. В графе `signal_router` читает ровно те поля, что в контракте (SSOT — не дублировать
    строковые литералы полей в YAML, если можно вывести из контракта).
 4. НЕ добавлять `default` к `signal_router` «на всякий случай».
-5. Запустить тесты `domain/signals.rs` (`validate_signal_value_*`, `envelope_schema_*`).
+5. **Проверить потребителя**: в графе, который вызывает агента, его ключ
+   должен реально читаться (`signal_router` / condition-путь / шаблон).
+   Диагностика `SIGNAL_CONTRACT_UNCONSUMED` при загрузке графа — сигнал
+   «чинить раньше, чем запускать».
+6. Запустить тесты `domain/signals.rs` (`validate_signal_value_*`, `envelope_schema_*`)
+   и `workflow_engine/signal_consumer_check` (`dead_contract_*`, `production_graph_*`).
