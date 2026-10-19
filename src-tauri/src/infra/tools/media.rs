@@ -90,7 +90,7 @@ pub fn resolve_ref_paths(
     for attachment in attachments {
         if attachment.is_dir.unwrap_or(false) {
             return Err(format!(
-                "Для edit_image прикрепите конкретный файл, а не папку: {}",
+                "Работа с изображением требует конкретный файл, а не папку: {}",
                 attachment.file_name
             ));
         }
@@ -108,7 +108,7 @@ pub fn resolve_ref_paths(
         }
     }
     if paths.is_empty() {
-        return Err("Для edit_image не выбрано изображение".to_string());
+        return Err("Не выбрано изображение для операции".to_string());
     }
     Ok(paths)
 }
@@ -173,13 +173,59 @@ fn session_outputs_dir(session_id: &str) -> std::path::PathBuf {
 }
 
 /// Результат тула: путь к PNG (агент показывает его + кладёт в attachments ответа).
+fn resolve_bundle_for_tools() -> Result<tauri_plugin_image_engine::engine::ImageBundleEntry, ToolError> {
+    // Выбор юзера: активный бандл из конфига, иначе дефолт каталога.
+    // НЕ тихий фолбэк: если активный бандл скачан не полностью — честная ошибка
+    // с требованием докачать (иначе агент получил бы «пустой» прогон).
+    let cfg = tauri_plugin_image_engine::engine::load_image_config_early();
+    let selected = cfg.selected_bundle.clone().unwrap_or_default();
+    let entry = if selected.is_empty() {
+        tauri_plugin_image_engine::engine::default_bundle_entry()
+            .ok_or_else(|| ToolError::NotFound(
+                "В каталоге нет бандла изображений по умолчанию".to_string(),
+            ))?
+    } else {
+        tauri_plugin_image_engine::engine::bundle_by_name(&selected)
+            .ok_or_else(|| ToolError::NotFound(format!(
+                "Активный бандл «{}» отсутствует в каталоге — выберите другой в Настройки → «Движок изображений».",
+                selected
+            )))?
+    };
+    let dir = tauri_plugin_image_engine::engine::bundle_dir_early();
+    let missing: Vec<&str> = entry
+        .files
+        .iter()
+        .filter(|f| !dir.join(&f.filename).exists())
+        .map(|f| f.filename.as_str())
+        .collect();
+    if !missing.is_empty() {
+        log::warn!(
+            "[IMG-TOOL] активный бандл «{}» (label={}): нет файлов {}",
+            entry.name,
+            entry.label,
+            missing.join(", ")
+        );
+        return Err(ToolError::NotFound(format!(
+            "Активный бандл «{}» скачан не полностью: нет файлов {}. Скачайте его в Настройки → «Наборы моделей» (движок изображений).",
+            entry.name,
+            missing.join(", ")
+        )));
+    }
+    Ok(entry)
+}
+
 fn run_generate(
     prompt_en: &str,
     ref_paths: &[String],
     ctx: &ToolCtx,
 ) -> Result<ImageRunOutput, ToolError> {
-    let entry = tauri_plugin_image_engine::engine::default_bundle_entry()
-        .ok_or_else(|| ToolError::NotFound("В каталоге нет бандла изображений по умолчанию".to_string()))?;
+    let entry = resolve_bundle_for_tools()?;
+    if !ref_paths.is_empty() && !entry.files.iter().any(|f| f.role == "mmproj") {
+        return Err(ToolError::Usage(format!(
+            "edit_image требует бандл с mmproj (vision-энкодер), а активный бандл «{}» его не содержит. Выберите полный набор в Настройки → «Движок изображений».",
+            entry.name
+        )));
+    }
     let cfg = tauri_plugin_image_engine::engine::load_image_config_early();
     let engine_dir = tauri_plugin_image_engine::engine::engine_dir_early();
     let bundle_dir = tauri_plugin_image_engine::engine::bundle_dir_early();
@@ -229,6 +275,46 @@ fn run_generate(
     }
 }
 
+/// Апскейл найд-ных исходников через img2img ×2 плагина (init_image + strength
+/// по дефолту `UPSCALE_STRENGTH_DEFAULT`). Референсы не задаются (несовместимо).
+fn run_upscale(
+    prompt_en: &str,
+    source_path: &str,
+    ctx: &ToolCtx,
+) -> Result<ImageRunOutput, ToolError> {
+    let entry = resolve_bundle_for_tools()?;
+    let cfg = tauri_plugin_image_engine::engine::load_image_config_early();
+    let engine_dir = tauri_plugin_image_engine::engine::engine_dir_early();
+    let bundle_dir = tauri_plugin_image_engine::engine::bundle_dir_early();
+
+    if !tauri_plugin_image_engine::engine::sdcpp_installer::has_any_installed(&engine_dir) {
+        return Err(ToolError::NotFound(
+            "Движок изображений не установлен. Откройте Настройки → «Движок изображений» и нажмите «Установить движок».".to_string(),
+        ));
+    }
+
+    let out_dir = session_outputs_dir(ctx.session_id);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .map_err(|error| ToolError::Io(format!("Некорректное системное время: {}", error)))?;
+    let sequence = OUTPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    let out_path = out_dir.join(format!("img_{ts}_{sequence}.png"));
+    let log_cb = |msg: String| log::info!("[IMG-TOOL] {}", msg);
+
+    tauri_plugin_image_engine::engine::upscale_image_files(
+        &engine_dir, &bundle_dir, &entry,
+        cfg.image_engine_variant.as_deref(),
+        prompt_en,
+        tauri_plugin_image_engine::engine::UPSCALE_STRENGTH_DEFAULT,
+        source_path,
+        entry.preset.seed,
+        &out_path, None, log_cb,
+    )
+    .map(|r| ImageRunOutput { path: r.path, time_sec: r.time_sec })
+    .map_err(ToolError::Io)
+}
+
 pub fn extract_saved_image_id(tool_output: &str) -> Option<String> {
     let start = tool_output.find("[IMAGE_SAVED id=")? + "[IMAGE_SAVED id=".len();
     let end = tool_output[start..].find(']')?;
@@ -264,7 +350,10 @@ pub fn attach_saved_images_from_sub_calls(
     let mut artifacts: Vec<(String, String)> = Vec::new();
     for sub_call in sub_calls {
         for tool_call in &sub_call.tool_calls {
-            if !matches!(tool_call.tool_name.as_str(), "generate_image" | "edit_image") {
+            if !matches!(
+                tool_call.tool_name.as_str(),
+                "generate_image" | "edit_image" | "upscale_image"
+            ) {
                 continue;
             }
             if let Some(id) = extract_saved_image_id(&tool_call.result) {
@@ -372,6 +461,36 @@ impl Tool for EditImage {
     }
 }
 
+pub struct UpscaleImage;
+
+impl Tool for UpscaleImage {
+    fn name(&self) -> &str {
+        "upscale_image"
+    }
+    fn description(&self) -> &str {
+        "Увеличить разрешение одного изображения из чата в 2 раза (до 2048px по стороне) с дорисовкой деталей (denoise 0.45, Qwen Image 2.1 img2img). Обязательно передавай source_image_ids с ОДНИМ id из блока доступных изображений. Промпт на английском: что сохранить и какую детализацию усилить."
+    }
+    fn parameters(&self) -> Value {
+        serde_json::json!({
+            "type": "object",
+            "properties": {
+                "prompt_en": {"type": "string", "description": "Английский промпт апскейла: сохранить композицию/сюжет/стиль оригинала и усилить мелкую детализацию (micro-detail, texture, sharpness). Если известен исходный промпт картинки — используй его, дополнив 'ultra-detailed, preserve exact composition'."},
+                "source_image_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 1, "description": "РОВНО один ID изображения из блока доступных изображений. Файловые пути запрещены."}
+            },
+            "required": ["prompt_en", "source_image_ids"]
+        })
+    }
+    fn is_readonly(&self) -> bool {
+        false
+    }
+    fn execute(&self, _args: &Value, _ctx: &ToolCtx) -> Result<String, ToolError> {
+        Err(ToolError::Usage(
+            "upscale_image требует source_image_ids, разрешённые доменным каталогом изображений"
+                .to_string(),
+        ))
+    }
+}
+
 /// Схемы image-тулов для промпта агента (мета-имя "media").
 pub fn image_tool_schemas(agent_tools: &[String]) -> Vec<(String, String, Value)> {
     let mut out = Vec::new();
@@ -383,6 +502,12 @@ pub fn image_tool_schemas(agent_tools: &[String]) -> Vec<(String, String, Value)
     }
     if agent_tools.iter().any(|t| t == "edit_image") {
         let t = EditImage;
+        out.push(("media".to_string(), t.name().to_string(), serde_json::json!({
+            "name": t.name(), "description": t.description(), "inputSchema": t.parameters(),
+        })));
+    }
+    if agent_tools.iter().any(|t| t == "upscale_image") {
+        let t = UpscaleImage;
         out.push(("media".to_string(), t.name().to_string(), serde_json::json!({
             "name": t.name(), "description": t.description(), "inputSchema": t.parameters(),
         })));
@@ -399,7 +524,7 @@ pub fn execute_image_tool(
     attachments: &[crate::infra::ChatAttachment],
 ) -> Option<Result<String, ToolError>> {
     match name {
-        "generate_image" | "edit_image" => {
+        "generate_image" | "edit_image" | "upscale_image" => {
             let prompt = args
                 .get("prompt_en")
                 .and_then(|value| value.as_str())
@@ -416,6 +541,22 @@ pub fn execute_image_tool(
             } else {
                 Vec::new()
             };
+            if name == "upscale_image" {
+                let refs = match resolve_ref_paths(attachments, ctx.session_id) {
+                    Ok(refs) => refs,
+                    Err(error) => return Some(Err(ToolError::Usage(error))),
+                };
+                if refs.len() != 1 {
+                    return Some(Err(ToolError::Usage(format!(
+                        "upscale_image принимает РОВНО один исходник ({} передано). Передай source_image_ids с одним id.",
+                        refs.len()
+                    ))));
+                }
+                return Some(
+                    run_upscale(prompt, &refs[0], ctx)
+                        .and_then(|output| format_image_result(output, name, ctx)),
+                );
+            }
             Some(
                 run_generate(prompt, &refs, ctx)
                     .and_then(|output| format_image_result(output, name, ctx)),

@@ -149,6 +149,142 @@ fn folder_attachment_is_rejected_for_edit_image() {
 }
 
 #[test]
+fn upper_schema_declares_single_source_cap() {
+    let schemas = image_tool_schemas(&["upscale_image".to_string()]);
+    assert_eq!(schemas.len(), 1);
+    assert_eq!(schemas[0].1, "upscale_image");
+    let ids = schemas[0]
+        .2
+        .pointer("/inputSchema/properties/source_image_ids")
+        .unwrap()
+        .clone();
+    assert_eq!(ids.get("minItems").and_then(|v| v.as_u64()), Some(1));
+    assert_eq!(ids.get("maxItems").and_then(|v| v.as_u64()), Some(1));
+}
+
+#[test]
+fn upscale_without_refs_is_usage_error() {
+    let ctx = ToolCtx {
+        workspace_root: std::path::Path::new("."),
+        write_root: std::path::Path::new("."),
+        write_outside: crate::infra::tools::WriteOutside::Prompt,
+        session_id: "test",
+        approver: crate::infra::permissions::test_approver(),
+        agent_id: "test_agent",
+        bins_dir: std::path::Path::new("."),
+        image_artifacts: None,
+    };
+    let err = execute_image_tool(
+        "upscale_image",
+        &serde_json::json!({"prompt_en": "x", "source_image_ids": ["req_0"]}),
+        &ctx,
+        &[],
+    )
+    .expect("upscale_image обрабатывается")
+    .unwrap_err();
+    assert!(matches!(err, ToolError::Usage(_)));
+}
+
+#[test]
+fn upscale_requires_exactly_one_source() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("manifest parent")
+        .join("test");
+    let mk = |name: &str| {
+        let path = dir.join(name);
+        std::fs::write(&path, b"image").unwrap();
+        crate::infra::ChatAttachment {
+            file_name: name.to_string(),
+            mime_type: "image/png".to_string(),
+            data_base64: String::new(),
+            file_path: Some(path.to_string_lossy().to_string()),
+            is_dir: Some(false),
+        }
+    };
+    let a1 = mk("media_upsc_test_a.png");
+    let a2 = mk("media_upsc_test_b.png");
+    let ctx = ToolCtx {
+        workspace_root: std::path::Path::new("."),
+        write_root: std::path::Path::new("."),
+        write_outside: crate::infra::tools::WriteOutside::Prompt,
+        session_id: "test",
+        approver: crate::infra::permissions::test_approver(),
+        agent_id: "test_agent",
+        bins_dir: std::path::Path::new("."),
+        image_artifacts: None,
+    };
+    let err = execute_image_tool(
+        "upscale_image",
+        &serde_json::json!({"prompt_en": "x", "source_image_ids": ["req_0", "req_1"]}),
+        &ctx,
+        &[a1, a2],
+    )
+    .expect("upscale_image обрабатывается")
+    .unwrap_err();
+    let msg = match err {
+        ToolError::Usage(m) => m,
+        other => panic!("ожидался Usage, получено: {other:?}"),
+    };
+    assert!(msg.contains("РОВНО один"), "сообщение: {}", msg);
+    let _ = std::fs::remove_file(dir.join("media_upsc_test_a.png"));
+    let _ = std::fs::remove_file(dir.join("media_upsc_test_b.png"));
+}
+
+#[test]
+fn upscale_artifacts_attach_like_other_tools() {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "king_orch_media_upsc_{}_{stamp}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("up.png");
+    std::fs::write(&path, b"up").unwrap();
+    let registry = ImageArtifactRegistry::new();
+    let id = registry
+        .register(path.to_string_lossy().to_string(), "upscale_image")
+        .unwrap();
+    let sub_call = crate::infra::SubCall {
+        agent_name: "image_upscaler".to_string(),
+        prompt: String::new(),
+        response: String::new(),
+        time_sec: 0.0,
+        tool_calls: vec![crate::infra::ToolCallInfo {
+            tool_name: "upscale_image".to_string(),
+            arguments: "{}".to_string(),
+            result: format!("[IMAGE_SAVED id={id}]"),
+        }],
+        thinking: None,
+    };
+    let mut message = crate::infra::ChatMessage {
+        id: Some("msg_1".to_string()),
+        msg_type: "message".to_string(),
+        content: String::new(),
+        sub_calls: Some(vec![sub_call]),
+        author: Some("image_upscaler".to_string()),
+        model: None,
+        time_sec: None,
+        attachments: None,
+        phase: Some(2),
+        author_name: None,
+    };
+    let current_sub_calls = message.sub_calls.clone().unwrap_or_default();
+    let attached = attach_saved_images_from_sub_calls(
+        &mut message,
+        &current_sub_calls,
+        &registry,
+    )
+    .unwrap();
+    assert_eq!(attached, 1);
+    assert_eq!(message.attachments.as_ref().unwrap()[0].file_name, "up.png");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
 fn attach_saved_images_uses_only_current_subcalls() {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)

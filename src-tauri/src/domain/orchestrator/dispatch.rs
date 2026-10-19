@@ -440,12 +440,12 @@ where
                 tool_output = Some(super::vram::tool_error_to_output(
                     tool_name,
                     crate::infra::ToolError::Usage(
-                        "К текущему запросу прикреплены изображения. Используйте 'edit_image' с указанием 'source_image_ids' вместо генерации с нуля.".to_string()
+                        "К текущему запросу прикреплены изображения. Используйте 'edit_image' или 'upscale_image' с указанием 'source_image_ids' вместо генерации с нуля.".to_string()
                     ),
                 ));
             }
             let mut selected_attachments = Vec::new();
-            if tool_output.is_none() && tool_name == "edit_image" {
+            if tool_output.is_none() && matches!(tool_name, "edit_image" | "upscale_image") {
                 let requested_ids = arguments
                     .get("source_image_ids")
                     .and_then(serde_json::Value::as_array)

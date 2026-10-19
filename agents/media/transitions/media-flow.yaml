@@ -1,5 +1,5 @@
-name: Фотошопер (изображения)
-description: Генерация и редактирование изображений по текстовому описанию или вложенным фото.
+name: Работа с изображениями
+description: Генерация, редактирование и увеличение разрешения изображений по текстовому описанию или вложенным фото.
 
 config:
   facts_file: facts.yaml
@@ -16,25 +16,16 @@ nodes:
       x: -320
       y: 40
 
-  # ── Детерминированная проверка свежих вложений (без LLM) ──
-  - id: check_attachments
-    type: system_condition
-    action: media_state
-
-  - id: route_media_state
-    type: switch
-    input_object: "{{ nodes.check_attachments.output }}"
-    cases_priority:
-      - key: has_current_images
-        to: edit_image
-    default: extract_facts
-
-  # ── Классификация через LLM (для текста и истории) ──
+  # ── Классификация через LLM (вложения и история оцениваются экстрактором
+  #    через блок {{ image_candidates }} — short-circuit УБРАН 19.10.2026) ──
 
   - id: extract_facts
     type: llm_fact_extractor
     input: "{{ nodes.user_message.output.text }}"
     llm_params: strict
+    ui_pos:
+      x: -80
+      y: 40
 
   - id: route
     type: switch
@@ -42,9 +33,14 @@ nodes:
     cases_priority:
       - key: needs_image_edit
         to: edit_image
+      - key: needs_image_upscale
+        to: upscale_image
       - key: needs_image_generate
         to: generate_image
     default: no_image_task
+    ui_pos:
+      x: 140
+      y: 40
 
   # ── Ветка редактирования (терминальная) ──
 
@@ -56,6 +52,24 @@ nodes:
 
       Правка: {{ nodes.user_message.output.text }}
     output_type: message
+    ui_pos:
+      x: 360
+      y: -80
+
+  # ── Ветка увеличения разрешения (терминальная) ──
+
+  - id: upscale_image
+    type: llm_worker
+    agent: image_upscaler
+    task: |
+      Увеличь разрешение изображения, на которое пользователь указал в переписке или прикрепил к сообщению.
+
+      Уточнение задачи: {{ nodes.extract_facts.output.rewritten_query }}
+      Исходный текст пользователя: {{ nodes.user_message.output.text }}
+    output_type: message
+    ui_pos:
+      x: 360
+      y: 40
 
   # ── Ветка генерации (терминальная) ──
 
@@ -68,6 +82,9 @@ nodes:
       Описание задачи: {{ nodes.extract_facts.output.rewritten_query }}
       Исходный текст пользователя: {{ nodes.user_message.output.text }}
     output_type: message
+    ui_pos:
+      x: 360
+      y: 160
 
   # ── Не image-запрос: честный выход ──
 
@@ -75,22 +92,26 @@ nodes:
     type: llm_worker
     agent: image_generator
     task: |
-      Пользователь НЕ просил изображение (классификатор: ни generate, ни edit).
-      Ответь честно одной строкой: что ты умеешь (генерация с нуля и редактирование
-      прикреплённых картинок) и попроси описать задачу. НЕ вызывай инструменты.
+      Пользователь НЕ просил изображение (классификатор: ни edit, ни upscale, ни generate).
+      Ответь честно одной строкой: что ты умеешь (генерация с нуля, редактирование
+      прикреплённых/прошлых картинок, увеличение их разрешения) и попроси описать
+      задачу. НЕ вызывай инструменты.
     output_type: message
+    ui_pos:
+      x: 360
+      y: 280
 
 edges:
   - from: user_message
-    to: check_attachments
-
-  - from: check_attachments
-    to: route_media_state
+    to: extract_facts
 
   - from: extract_facts
     to: route
 
   - from: edit_image
+    to: END
+
+  - from: upscale_image
     to: END
 
   - from: generate_image
