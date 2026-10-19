@@ -3,6 +3,7 @@
 //! Отвечает за выполнение YAML-графов (workflows).
 //! Каждый workflow — это направленный граф узлов (nodes) и рёбер (edges).
 
+pub mod agent_frame;
 pub mod context;
 pub mod editor_fidelity;
 pub mod fact_extractor;
@@ -206,6 +207,9 @@ where
         task: &str,
         messages: &mut Vec<ChatMessage>,
         injected_reports: &str,
+        // Фрейм ноды (NodeDef.system_prompt_file): доп. сообщение сразу после
+        // system-промпта агента, перед историей. None — нода без фрейма.
+        agent_frame: Option<agent_frame::AgentFrame>,
         allow_stream: bool,
         resolved_params: &ModelParams,
         out_pending_signal: &mut Option<ChatMessage>,
@@ -241,6 +245,7 @@ where
             messages,
             self.msg_counter,
             injected_reports.to_string(),
+            agent_frame,
             self.stream_meta.clone(),
             allow_stream,
             self.prompt_log.clone(),
@@ -795,6 +800,20 @@ fn build_fused_system_prompt(
                      `fused_instruction`",
                     group.id, agent_id, node.id
                 ));
+            }
+            // Авто-склейка без fused_instruction может включить ноду с фреймом:
+            // per-node фрейм на склеенном этапе неприменим — предупреждаем ГРОМКО.
+            if node
+                .system_prompt_file
+                .as_deref()
+                .map_or(false, |s| !s.trim().is_empty())
+            {
+                log::warn!(
+                    "[agent_frame] Фрейм ноды '{}' (группа '{}') не применится: \
+                     этап выполняется склеенным вызовом FUSED",
+                    node.id,
+                    group.id
+                );
             }
             let spec = specs_by_node.remove(node.id.as_str()).ok_or_else(|| {
                 format!(

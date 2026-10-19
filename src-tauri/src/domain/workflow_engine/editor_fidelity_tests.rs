@@ -290,3 +290,136 @@ edges: []
         .iter()
         .any(|d| d.code == "TEMPLATE_NODE_REF_MISSING"));
 }
+
+#[test]
+fn accepts_agent_frame_on_llm_worker_without_fused_group() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: user_input
+groups:
+  - id: plain
+    title: Место работы рамки
+nodes:
+  - id: user_input
+    type: user_message
+  - id: worker
+    type: llm_worker
+    agent: test
+    system_prompt_file: ../system_frame.md
+    system_prompt_delivery: user_prefix
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(!diagnostics
+        .iter()
+        .any(|d| d.code.starts_with("SYSTEM_PROMPT_")));
+}
+
+#[test]
+fn rejects_agent_frame_delivery_without_file() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+  - id: worker
+    type: llm_worker
+    agent: test
+    system_prompt_delivery: user_prefix
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics.iter().any(|d| {
+        d.code == "SYSTEM_PROMPT_DELIVERY_WITHOUT_FILE"
+            && d.location == "nodes[id=worker]"
+    }));
+}
+
+#[test]
+fn rejects_agent_frame_unknown_delivery() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+  - id: worker
+    type: llm_worker
+    agent: test
+    system_prompt_file: ../system_frame.md
+    system_prompt_delivery: в_воздухе
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics.iter().any(|d| {
+        d.code == "SYSTEM_PROMPT_DELIVERY_UNKNOWN"
+            && d.location == "nodes[id=worker]"
+            && d.message.contains("неизвестное значение")
+    }));
+}
+
+#[test]
+fn rejects_agent_frame_on_non_worker_node() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+  - id: memo
+    type: note
+    input: заметка
+    system_prompt_file: ../system_frame.md
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics.iter().any(|d| {
+        d.code == "SYSTEM_PROMPT_FILE_UNSUPPORTED_NODE" && d.location == "nodes[id=memo]"
+    }));
+}
+
+#[test]
+fn rejects_agent_frame_inside_explicit_fused_group() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: user_input
+groups:
+  - id: fused_group
+    title: Склеенная группа
+    fused_instruction: одним вызовом
+nodes:
+  - id: user_input
+    type: user_message
+  - id: worker
+    type: llm_worker
+    group: fused_group
+    agent: test
+    system_prompt_file: ../system_frame.md
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics.iter().any(|d| {
+        d.code == "SYSTEM_PROMPT_FILE_IN_GROUP" && d.location == "nodes[id=worker]"
+    }));
+}

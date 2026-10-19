@@ -174,6 +174,7 @@ pub async fn run_iterative_test(
             &mut current_chat_messages,
             &mut msg_counter,
             String::new(), // injected_reports
+            None,          // agent_frame
             std::sync::Arc::new(std::sync::Mutex::new(domain::StreamMeta::default())),
             false,
             None,

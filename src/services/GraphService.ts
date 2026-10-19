@@ -46,6 +46,14 @@ export interface GraphNodeDef {
   disabled?: boolean;
   llm_params?: string;
   max_visits?: number;
+  /**
+   * Опциональный ДОПОЛНИТЕЛЬНЫЙ системный промпт ноды: путь к markdown-файлу
+   * относительно папки YAML-графа (прецедент `config.facts_file`). Зеркало
+   * `NodeDef.system_prompt_file`; вставка — `agent_frame.rs`.
+   */
+  system_prompt_file?: string;
+  /** Слот доставки фрейма: `system` | `user_prefix` (дефолт `system`). */
+  system_prompt_delivery?: string;
 }
 
 export type ConditionNode =

@@ -437,12 +437,17 @@ where
             // Остальные (thought по умолчанию) стримят мысли в блок «Мысли агентов».
             let allow_stream = node.output_type.as_deref() == Some("message");
             let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config, Some(agent));
+            // Фрейм ноды (`NodeDef.system_prompt_file`): отчёт об ошибке чтения —
+            // честная ошибка ноды (fail-fast), а не молчаливое отсутствие рамки.
+            let workflow_dir = std::path::Path::new(&workflow.parent_dir);
+            let agent_frame = super::agent_frame::resolve_node_frame(node, Some(workflow_dir))?;
             let mut pending_signal = None;
             let result = runner.call_agent(
                 agent,
                 &task,
                 &mut context.messages,
                 &injected_reports,
+                agent_frame,
                 allow_stream,
                 &resolved_params,
                 &mut pending_signal,

@@ -833,6 +833,7 @@ where
                 &mut **messages,
                 &mut **msg_counter,
                 String::new(),
+                None,
                 stream_meta.clone(),
                 false,
                 prompt_log.clone(),

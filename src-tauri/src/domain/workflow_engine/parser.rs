@@ -408,6 +408,21 @@ pub struct NodeDef {
     /// Имя пресета параметров LLM из sampling_presets.json (переопределяет default_llm_params)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub llm_params: Option<String>,
+    /// Опциональный ДОПОЛНИТЕЛЬНЫЙ системный промпт ноды: путь к markdown-файлу
+    /// относительно папки YAML-графа (прецедент `config.facts_file`).
+    ///
+    /// Текст — бизнес-логика автора агента; движок вставляет его отдельным
+    /// сообщением сразу после главного системного промпта агента и ПЕРЕД всей
+    /// историей переписки (`agent_frame::resolve_node_frame`). Слоты доставки
+    /// (`system_prompt_delivery`): `system` (отдельное system-сообщение, дефолт)
+    /// и `user_prefix` (user-сообщение в той же позиции). Позиция «до контента» —
+    /// часть контракта, см. `agent_frame.rs` (модульная док-строка).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt_file: Option<String>,
+    /// Слот доставки фрейма: `system` | `user_prefix` (дефолт `system`).
+    /// Валидация значения — через `agent_frame::FrameDelivery::parse`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt_delivery: Option<String>,
     /// Максимум выполнений узла за один прогон workflow (default 1 = ровно один раз,
     /// как было с visited-логикой). Значение >1 разрешает циклы через рёбра графа:
     /// узел перевыполняется до лимита, выход из цикла — через switch/condition_check.
@@ -715,6 +730,59 @@ mod tests {
         "agents/research/transitions/search-specialist.yaml",
         "agents/media/transitions/media-flow.yaml",
     ];
+
+    #[test]
+    fn parses_agent_frame_fields_on_llm_worker() {
+        let wf = wf_from_yaml(
+            r#"
+name: test
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+  - id: worker
+    type: llm_worker
+    agent: test
+    system_prompt_file: ../system_frame.md
+    system_prompt_delivery: user_prefix
+edges: []
+"#,
+        );
+        let node = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "worker")
+            .expect("нода worker");
+        assert_eq!(node.system_prompt_file.as_deref(), Some("../system_frame.md"));
+        assert_eq!(
+            node.system_prompt_delivery.as_deref(),
+            Some("user_prefix")
+        );
+    }
+
+    #[test]
+    fn agent_frame_fields_absent_by_default() {
+        let wf = wf_from_yaml(
+            r#"
+name: test
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+  - id: worker
+    type: llm_worker
+    agent: test
+edges: []
+"#,
+        );
+        let node = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "worker")
+            .expect("нода worker");
+        assert!(node.system_prompt_file.is_none());
+        assert!(node.system_prompt_delivery.is_none());
+    }
 
     #[test]
     fn production_graphs_declare_resolvable_entry() {

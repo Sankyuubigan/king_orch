@@ -3,6 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tauri_plugin_cloud_routers::router::client::{self, ChatMessage, ChatRequest};
+use tauri_plugin_cloud_routers::router::client_error::{CloudStreamError, CLOUD_EMPTY_STREAM_MARKER};
 use tauri_plugin_llama_engine::engine::llm_types::GenerationResult;
 use tauri_plugin_llama_engine::engine::{
     ChatAttachment, GrammarSpec, LlmMessage, LlamaEngine, ModelParams, ToolCall, ToolDefinition,
@@ -13,6 +14,17 @@ pub struct CloudEndpoint {
     pub base_url: String,
     pub api_key: Option<String>,
 }
+
+/// Распознавание класса «облако вернуло пустой успех» (HTTP 200 без данных).
+///
+/// Дверной хелпер (§7 архитектуры): домен обязан работать с инфраструктурой
+/// через `crate::infra`, а не импортировать плагин напрямую. Маркер берётся
+/// единственной константой из плагина — строковых литералов здесь быть
+/// не должно (SSOT).
+pub fn is_cloud_empty_stream_error(err: &str) -> bool {
+    err.contains(CLOUD_EMPTY_STREAM_MARKER)
+}
+
 
 fn attachment_data_url(attachment: &ChatAttachment) -> Result<String, String> {
     if !attachment.data_base64.is_empty() {
@@ -96,6 +108,27 @@ impl CloudEngine {
             ),
             None => None,
         };
+        // Инвариант формы запроса (инцидент 20.10.2026): `tool_choice` без
+        // непустого `tools[]` — невалидный запрос по контракту OpenAI.
+        // Локальный движок поле молча игнорирует, а облако форвардит
+        // буквально — и провайдер отдаёт мгновенный пустой стрим
+        // (роутер-лог: validator ×3 «IN 8763 · OUT 0» ≈0.6с). Семантику
+        // домена принуждения переводим в валидную форму на этой границе:
+        // нет тулов на wire — нет и принуждения.
+        let tool_choice = match tools.as_deref() {
+            Some(items) if !items.is_empty() => tool_choice,
+            _ => {
+                if tool_choice.is_some() {
+                    log::warn!(
+                        "☁️ tool_choice проигнорирован: на wire нет tools[] — вместо невалидного запроса уходит обычный выбор модели"
+                    );
+                    log_cb(
+                        "☁️ [cloud-guard] tool_choice сброшен: инструментов в запросе нет".into(),
+                    );
+                }
+                None
+            }
+        };
         let mut messages: Vec<ChatMessage> = messages
             .iter()
             .map(|message| ChatMessage {
@@ -141,10 +174,11 @@ impl CloudEngine {
         };
         log_cb(format!("☁️ 9Router: один вызов модели «{}»", self.model));
         let stream_cb = self.stream_cb.clone();
-        // Запрос засчитывается ТОЛЬКО по факту ответа роутера: обрыв, таймаут,
-        // 4xx/5xx (client.rs отдаёт их как Err) — до провайдера дело не дошло,
-        // квота не потрачена. Обрезанный по `length` ответ — реально оплаченный
-        // расход, приходит Ok и считается.
+        // Счётчик = «роутер вернул полезный ответ». Ok стрима и «пустой успех»
+        // (HTTP 200 без данных — был подтверждён обмен) засчитываются; ошибке
+        // HTTP, внутреннему error-кадру и мусорному стриму — нет. Для «пустого
+        // успеха» правда в том, что квота МОГЛА быть списана — это оговорено
+        // в warn-логе рядом со счётчиком.
         let result = match client::chat_completion_stream_result(
             &self.endpoint.base_url,
             self.endpoint.api_key.as_deref(),
@@ -159,15 +193,45 @@ impl CloudEngine {
             },
         ) {
             Ok(result) => result,
+            Err(CloudStreamError::EmptySuccess) => {
+                // Провайдер формально ответил 200, но контента не было (инцидент
+                // 18.10.2026: ×5 пустых 200 у validator). Структурно невозможный
+                // раньше пустой Ok пофиксен на уровне плагина (client.rs
+                // `classify_sse_result`) — сюда попадает классифицированный Err.
+                let total = self.requests.fetch_add(1, Ordering::Relaxed) + 1;
+                log_cb(format!(
+                    "☁️ [cloud-counter] Пустой успех (HTTP 200 без данных) — засчитано запросов к облаку: {}. Квота могла быть списана.",
+                    total
+                ));
+                log::warn!(
+                    "☁️ [cloud-counter] EmptySuccess — квота могла быть списана (маркер {})",
+                    CLOUD_EMPTY_STREAM_MARKER
+                );
+                return Err(CloudStreamError::EmptySuccess.to_string());
+            }
             Err(error) => {
                 log_cb(format!(
                     "☁️ [cloud-counter] Ответ от облака не получен — запрос НЕ засчитан: {}",
                     error
                 ));
-                return Err(error);
+                return Err(error.to_string());
             }
         };
         let total = self.requests.fetch_add(1, Ordering::Relaxed) + 1;
+        // Телеметрия ПОСЛЕ разбора (логирование после трансформации):
+        // если провайдер отдал обрезанный/подозрительный ответ — причина станет
+        // видимой из last_logs.txt без дополнительных расследований.
+        log_cb(format!(
+            "☁️ stream: content={} симв, reasoning={} симв, tool_calls={}, finish_reason={}",
+            result.content.chars().count(),
+            result.reasoning.chars().count(),
+            result.tool_calls.len(),
+            if result.finish_reason.is_empty() {
+                "< отсутствует >".to_string()
+            } else {
+                result.finish_reason.clone()
+            }
+        ));
         log_cb(format!(
             "☁️ [cloud-counter] Засчитано запросов к облаку за этот чат: {}",
             total
@@ -582,6 +646,201 @@ mod tests {
 
         assert!(result.is_err(), "закрытый порт обязан дать ошибку");
         assert_eq!(counter.load(Ordering::Relaxed), 0, "неотвеченный запрос не засчитывается");
+    }
+
+    fn serve_cloud_body(body: &'static str) -> (std::net::SocketAddr, std::thread::JoinHandle<()>) {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut sink = [0u8; 4096];
+            let _ = stream.read(&mut sink);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        });
+        (addr, server)
+    }
+
+    fn run_cloud(engine: &LlmEngine) -> Result<GenerationResult, String> {
+        run_cloud_with(engine, None, None)
+    }
+
+    /// Вариант `run_cloud` с явными tool_choice/tools (для GP2 — wire-инвариант).
+    fn run_cloud_with(
+        engine: &LlmEngine,
+        tool_choice: Option<&str>,
+        tools: Option<Vec<ToolDefinition>>,
+    ) -> Result<GenerationResult, String> {
+        engine.run_chat_completions(
+            &one_user_message(),
+            None,
+            16,
+            &ModelParams::default(),
+            &[],
+            None,
+            false,
+            Arc::new(AtomicBool::new(false)),
+            "test",
+            tool_choice,
+            tools.as_deref(),
+            |_, _: &str| {},
+            |_: String| {},
+        )
+    }
+
+    /// SSE-стенд, запоминающий фактическое wire-тело запроса: читает заголовки,
+    /// потом ровно Content-Length (read-until-0 завис бы — соединение
+    /// держится открытым в ожидании ответа).
+    fn serve_cloud_capture(
+        body: &'static str,
+    ) -> (
+        std::net::SocketAddr,
+        std::thread::JoinHandle<()>,
+        Arc<Mutex<String>>,
+    ) {
+        use std::io::{Read, Write};
+        let capture = Arc::new(Mutex::new(String::new()));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let cap = capture.clone();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut buf = Vec::new();
+            let mut chunk = [0u8; 4096];
+            let mut target: Option<usize> = None; // конец тела: header_end + content_len
+            loop {
+                let n = stream.read(&mut chunk).unwrap_or(0);
+                if n == 0 {
+                    break;
+                }
+                buf.extend_from_slice(&chunk[..n]);
+                if target.is_none() {
+                    if let Some(pos) = find_bytes(&buf, b"\r\n\r\n") {
+                        let head = String::from_utf8_lossy(&buf[..pos]);
+                        let len = head
+                            .lines()
+                            .find_map(|line| {
+                                let (k, v) = line.split_once(':')?;
+                                k.eq_ignore_ascii_case("content-length")
+                                    .then(|| v.trim().parse::<usize>().ok())?
+                            });
+                        target = len.map(|len| pos + 4 + len);
+                    }
+                }
+                if target.is_some_and(|t| buf.len() >= t) {
+                    break;
+                }
+            }
+            let body_start = find_bytes(&buf, b"\r\n\r\n")
+                .map(|pos| pos + 4)
+                .unwrap_or(buf.len());
+            *cap.lock().expect("capture lock") =
+                String::from_utf8_lossy(&buf[body_start..]).to_string();
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        });
+        (addr, server, capture)
+    }
+
+    fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        if needle.is_empty() || haystack.len() < needle.len() {
+            return None;
+        }
+        (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
+    }
+
+    /// «Пустой успех» (HTTP 200 без данных — инцидент 18.10.2026) — обмен с
+    /// роутером состоялся: счётчик растёт ровно на один запрос, а в тексте
+    /// ошибки обязан быть машиночитаемый маркер класса.
+    #[test]
+    fn cloud_empty_success_counted_once_and_surfaces_marker() {
+        let (addr, server) = serve_cloud_body("data: [DONE]\n\n");
+        let counter = Arc::new(AtomicU64::new(2));
+        let engine = cloud_with_counter(&format!("http://{}", addr), counter.clone());
+        let result = run_cloud(&engine);
+        server.join().ok();
+
+        match result {
+            Err(err) => {
+                assert!(
+                    err.contains(CLOUD_EMPTY_STREAM_MARKER),
+                    "в ошибке обязан быть маркер класса: {err}"
+                );
+            }
+            Ok(_) => panic!("пустой успех обязан быть ошибкой (инвариант G5)"),
+        }
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            3,
+            "обмен состоялся — засчитан ровно один запрос"
+        );
+    }
+
+    /// Error-кадр внутри 200 — это отказ провайдера: счётчик НЕ растёт
+    /// (контракт «не засчитан»), а тело ошибки провайдера видно в тексте.
+    #[test]
+    fn cloud_error_frame_is_not_counted() {
+        let (addr, server) = serve_cloud_body(
+            "data: {\"error\":{\"message\":\"You exceeded your current quota\"}}\n\n\
+             data: [DONE]\n\n",
+        );
+        let counter = Arc::new(AtomicU64::new(0));
+        let engine = cloud_with_counter(&format!("http://{}", addr), counter.clone());
+        let result = run_cloud(&engine);
+        server.join().ok();
+
+        match result {
+            Err(err) => {
+                assert!(
+                    err.contains("You exceeded your current quota"),
+                    "тело ошибки провайдера обязано дойти до текста: {err}"
+                );
+            }
+            Ok(_) => panic!("error-кадр обязан быть ошибкой, а не «успехом с пустым текстом»"),
+        }
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            0,
+            "error-кадр не считается полезным ответом"
+        );
+    }
+
+    /// GP2 (wire-инвариант, инцидент 20.10.2026): домен хочет
+    /// `tool_choice="required"`, но wire-тулов нет → инфра обязан собрать
+    /// ВАЛИДНЫЙ запрос: поле `tool_choice` в фактическом теле отсутствует.
+    /// Раньше невалидный запрос уходил на провайдер и получал в ответ
+    /// мгновенный пустой стрим (validator ×3 «IN 8763 · OUT 0» ≈0.6с).
+    #[test]
+    fn cloud_request_without_wire_tools_drops_tool_choice() {
+        let (addr, server, capture) =
+            serve_cloud_capture("data: {\"choices\":[{\"delta\":{\"content\":\"ок\"},\"finish_reason\":\"stop\"}]}\n\n\
+                                 data: [DONE]\n\n");
+        let counter = Arc::new(AtomicU64::new(0));
+        let engine = cloud_with_counter(&format!("http://{}", addr), counter.clone());
+        let result = run_cloud_with(&engine, Some("required"), None);
+        server.join().ok();
+
+        result.expect("валидная форма запроса обязана пройти");
+
+        let wire = capture.lock().expect("capture lock").clone();
+        let value: serde_json::Value =
+            serde_json::from_str(&wire).expect("wire-тело обязано быть JSON");
+        assert!(
+            value.get("tool_choice").is_none(),
+            "tool_choice обязан быть снят с wire при отсутствии tools[]: {wire}"
+        );
+        assert!(value.get("messages").is_some(), "wire: {wire}");
     }
 
     /// Роутер ответил (локальный SSE-стенд) → запрос засчитан ровно один раз.

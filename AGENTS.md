@@ -253,6 +253,7 @@ pub struct ChatMessage {
 | **Маршрутизация** | `.yaml` файлы в `workflows/` | YAML граф | `main_conversation_flow.yaml` |
 | **Классификация контекста** | Узлы workflow графа (факт-экстрактор + маршрутизация) | YAML + Rust | `fact_extractor.rs` (`llm_fact_extractor`) + `nodes.rs` (`LlmSequentialSwitch`, `switch`, `condition_check`, `signal_router`) |
 | **Ввод пользователя** | Нода-вход графа + явное поле `entry` | YAML | `type: user_message`, `entry: <id>` |
+| **Доп. промпт ноды (фрейм)** | Опциональные поля `system_prompt_file` + `system_prompt_delivery` (`system` \| `user_prefix`) на llm-ноде; контент — бизнес-логика агента в отдельном `.md` | YAML + Rust | `agent_frame.rs`, кейс графа психотерапевта |
 
 ### Запрет хардкода конкретных кейсов в бизнес-логике агентов (НАРУШЕНИЕ = КРИТИЧЕСКАЯ ОШИБКА)
 

@@ -43,6 +43,8 @@ nodes:
 - id: call_collector
   type: llm_worker
   agent: data_collector
+  system_prompt_file: ../system_frame.md
+  system_prompt_delivery: user_prefix
   output_type: message
   inject_response:
   - validator
@@ -54,6 +56,8 @@ nodes:
 - id: call_soma_translator
   type: llm_worker
   agent: soma_translator
+  system_prompt_file: ../system_frame.md
+  system_prompt_delivery: user_prefix
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
     x: -561
@@ -64,6 +68,8 @@ nodes:
   type: llm_worker
   group: group_1
   agent: decomposer
+  system_prompt_file: ../system_frame.md
+  system_prompt_delivery: user_prefix
   inject_response:
   - soma_translator
   ui_pos:
@@ -73,6 +79,8 @@ nodes:
 - id: call_validator
   type: llm_worker
   agent: validator
+  system_prompt_file: ../system_frame.md
+  system_prompt_delivery: user_prefix
   inject_response:
   - decomposer
   - shadow_worker
@@ -86,6 +94,8 @@ nodes:
 - id: call_grounder
   type: llm_worker
   agent: grounder
+  system_prompt_file: ../system_frame.md
+  system_prompt_delivery: user_prefix
   task: Проанализируй отчёты коллег и жалобу пользователя. Выдай несколько конкретных, приземлённых бытовых сценариев возможных МЕНТАЛЬНЫХ причин проблемы (6-й элемент невроза, а не соматика). Если данных не хватает — задай пользователю уточняющие вопросы.
   output_type: message
   inject_response:
@@ -113,6 +123,8 @@ nodes:
 - id: call_pattern_finder
   type: llm_worker
   agent: pattern_finder_by_elements
+  system_prompt_file: ../system_frame.md
+  system_prompt_delivery: user_prefix
   inject_response:
   - decomposer
   - shadow_worker
@@ -125,6 +137,8 @@ nodes:
 - id: call_healer
   type: llm_worker
   agent: neuro_healer
+  system_prompt_file: ../system_frame.md
+  system_prompt_delivery: user_prefix
   task: |
     Из отчёта pattern_finder_by_elements возьми номер типа паттерна.
     Затем выполни ШАГ 2 — прочитай описание этого паттерна в базе знаний инструментом ReadSection.
@@ -144,6 +158,8 @@ nodes:
 - id: call_shadow_worker
   type: llm_worker
   agent: shadow_worker
+  system_prompt_file: ../system_frame.md
+  system_prompt_delivery: user_prefix
   output_type: message
   inject_response:
   - validator
@@ -252,6 +268,8 @@ nodes:
 - id: call_request_helper
   type: llm_worker
   agent: request_helper
+  system_prompt_file: ../system_frame.md
+  system_prompt_delivery: user_prefix
   output_type: message
   ui_pos:
     x: -808
@@ -295,6 +313,8 @@ nodes:
   type: llm_worker
   group: group_1
   agent: synthesizer
+  system_prompt_file: ../system_frame.md
+  system_prompt_delivery: user_prefix
   output_type: message
   inject_response:
   - decomposer

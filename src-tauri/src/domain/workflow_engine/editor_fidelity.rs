@@ -27,6 +27,7 @@ pub fn analyze_workflow_fidelity(
     collect_template_reference_diagnostics(workflow, &mut diagnostics);
     collect_node_target_diagnostics(workflow, &mut diagnostics);
     collect_edge_diagnostics(workflow, &mut diagnostics);
+    collect_agent_frame_diagnostics(workflow, &mut diagnostics);
     // «Мёртвый signal-контракт»: агент вызывает контракта, ключ никто
     // не читает — Method 3 отправит ответ в сигнал, а чат останется пустым.
     diagnostics.extend(super::signal_consumer_check::collect_dead_signal_diagnostics(
@@ -128,8 +129,89 @@ fn mapping_path(path: &str, key: &Value) -> String {
     }
 }
 
-fn collect_duplicate_node_ids(
+/// Контракт фрейма агента (`NodeDef.system_prompt_file`). Файл живёт вне YAML,
+/// поэтому без диска проверяется только семантика:
+/// - слот доставки без файла;
+/// - неизвестное значение слота (валидация через единый
+///   `agent_frame::FrameDelivery::parse`);
+/// - поле на ноде, чей рантайм фрейм не читает (не `llm_worker`);
+/// - нода внутри группы с ЯВНОЙ `fused_instruction`: склеенный вызов
+///   объединяется этапами с системными промптами агентов, per-node фрейм
+///   на таком этапе неприменим (авто-склейка без инструкции предупреждается
+///   в рантайме — `workflow_engine::build_fused_system_prompt`).
+fn collect_agent_frame_diagnostics(
     workflow: &WorkflowDef,
+    diagnostics: &mut Vec<GraphDiagnostic>,
+) {
+    let fused_group_ids: HashSet<&str> = workflow
+        .groups
+        .iter()
+        .filter(|g| {
+            g.fused_instruction
+                .as_deref()
+                .map_or(false, |s| !s.trim().is_empty())
+        })
+        .map(|g| g.id.as_str())
+        .collect();
+    for node in &workflow.nodes {
+        let has_file = node
+            .system_prompt_file
+            .as_deref()
+            .map_or(false, |s| !s.trim().is_empty());
+        let delivery_raw = node.system_prompt_delivery.as_deref();
+        let has_delivery = delivery_raw.map_or(false, |s| !s.trim().is_empty());
+        if !has_file && !has_delivery {
+            continue;
+        }
+        if has_delivery {
+            if let Err(e) = super::agent_frame::FrameDelivery::parse(delivery_raw) {
+                push_diagnostic(
+                    diagnostics,
+                    "SYSTEM_PROMPT_DELIVERY_UNKNOWN",
+                    &format!("nodes[id={}]", node.id),
+                    e,
+                );
+            }
+        }
+        if !has_file {
+            push_diagnostic(
+                diagnostics,
+                "SYSTEM_PROMPT_DELIVERY_WITHOUT_FILE",
+                &format!("nodes[id={}]", node.id),
+                "задан system_prompt_delivery без system_prompt_file — нода не получит фрейм"
+                    .to_string(),
+            );
+            continue;
+        }
+        if node.node_type != NodeType::LlmWorker {
+            push_diagnostic(
+                diagnostics,
+                "SYSTEM_PROMPT_FILE_UNSUPPORTED_NODE",
+                &format!("nodes[id={}]", node.id),
+                format!(
+                    "system_prompt_file поддерживается только нодами llm_worker (тип этой ноды: {:?})",
+                    node.node_type,
+                ),
+            );
+            continue;
+        }
+        if node
+            .group
+            .as_deref()
+            .map_or(false, |id| fused_group_ids.contains(id.trim()))
+        {
+            push_diagnostic(
+                diagnostics,
+                "SYSTEM_PROMPT_FILE_IN_GROUP",
+                &format!("nodes[id={}]", node.id),
+                "нода принадлежит группе с fused_instruction — склеенный вызов не читает фрейм ноды"
+                    .to_string(),
+            );
+        }
+    }
+}
+
+fn collect_duplicate_node_ids(    workflow: &WorkflowDef,
     diagnostics: &mut Vec<GraphDiagnostic>,
 ) {
     let mut counts = HashMap::new();

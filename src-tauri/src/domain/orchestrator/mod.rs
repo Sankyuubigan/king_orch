@@ -758,6 +758,7 @@ where
             &mut messages_store,
             &mut msg_counter,
             String::new(),
+            None,
             stream_meta.clone(),
             true,
             prompt_log.clone(),
@@ -887,6 +888,25 @@ pub(crate) fn spill_root_dir() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("spill"))
 }
 
+/// SSOT: значение `tool_choice` для wire-запроса LLM.
+///
+/// Инвариант формы (инцидент 20.10.2026): `tool_choice` осмыслен ТОЛЬКО при
+/// фактически приложенных wire-тулах (`tools[]`). Тулы на wire есть только у
+/// нативных агентов (coder/research) — им достаточно `"auto"` (жёсткое
+/// `"required"` баговано на Qwen3, #27767/#27217 — «падает/молчит»).
+/// Прочим (legacy/сигнальные агенты) тулы на wire не идут вовсе: раньше им
+/// отправлялся `"required"` — локальный движок поле молча игнорировал, а облако
+/// форвардит буквально и получает невалидный запрос (пустой стрим ×3 у
+/// validator). Значение «enforce» контролируется app-level GUARD'ом
+/// `retry_native_final_without_tools`, а не полем wire-запроса.
+pub(crate) fn resolve_enforce_tool_choice(has_native_tools: bool) -> Option<&'static str> {
+    if has_native_tools {
+        Some("auto")
+    } else {
+        None
+    }
+}
+
 pub(crate) fn run_agent_node<L, S, C>(
     log_cb: L,
     status_cb: S,
@@ -912,6 +932,10 @@ pub(crate) fn run_agent_node<L, S, C>(
     messages: &mut Vec<ChatMessage>,
     msg_counter: &mut u32,
     injected_reports: String,
+    // Фрейм ноды (NodeDef.system_prompt_file, шаг графа): доп. сообщение сразу
+    // после system-промпта агента, ПЕРЕД историей (см. workflow_engine::agent_frame).
+    // None — нода/вызов без фрейма; None не меняет существующее поведение.
+    agent_frame: Option<crate::domain::workflow_engine::agent_frame::AgentFrame>,
     stream_meta: Arc<Mutex<StreamMeta>>,
     allow_stream: bool,
     prompt_log: Option<std::path::PathBuf>,
@@ -1150,6 +1174,14 @@ where
         content: system_prompt.clone(),
         ..Default::default()
     }];
+
+    // Фрейм ноды: вставка НА ПОЗИЦИЮ 1, до всей истории (контракт позиции —
+    // см. workflow_engine::agent_frame). None → поведение идентично прошлому.
+    crate::domain::workflow_engine::agent_frame::apply_frame_to_llm_messages(
+        &mut llm_messages,
+        agent_frame.as_ref(),
+        |line| log_cb(line),
+    );
 
     // История для LLM — единое правило (llm_history): не-thought сообщения, только content.
     for msg in llm_history(messages) {
@@ -1535,16 +1567,9 @@ where
         // на локальном движке теперь принудительно без внешнего think (причина —
         // «думатель без ответа» на Ornith, 17.10.26). force_no_thinking и
         // has_agent_grammar объявлены вне цикла (см. выше по функции).
-        let enforce_tool_choice = if has_native_tools {
-            // Native (coder/research): "auto" — модель сама решает вызвать тул.
-            // "required" багован на Qwen3 (#27767/#27217, падает/молчит); принуждение
-            // реализовано app-level GUARD'ом в финальных путях (см. ниже).
-            Some("auto")
-        } else if has_tools_for_prompt {
-            Some("required")
-        } else {
-            None
-        };
+        // tool_choice — ТОЛЬКО из SSOT: следование wire-инварианту «нет тулов —
+        // нет tool_choice» (инцидент 20.10.2026, пустой стрим ×3 у validator).
+        let enforce_tool_choice = resolve_enforce_tool_choice(has_native_tools);
         let attempt_generate = |msgs: &[LlmMessage]| -> Result<GenerationResult, String> {
             // `agent.disable_reasoning` — явный выбор агента: у reasoning-моделей
             // размышление идёт ОТДЕЛЬНЫМ каналом, грамматика его не ограничивает,
@@ -1629,6 +1654,12 @@ where
                         }
                         if overflow_retries >= MAX_OVERFLOW_RETRIES {
                             log::error!("[{}] Сервер недоступен после попыток: {}", ctx_label, e);
+                            if crate::infra::is_cloud_empty_stream_error(&e) {
+                                return Err(format!(
+                                    "☁️ Повторы облачного запроса не помогли: {}. Скорее всего это сбой роутера/провайдера (квота или outage) — попробуйте позже или смените модель.",
+                                    first_line(&e)
+                                ));
+                            }
                             return Err(format!("Движок LLM потерял связь: {}", first_line(&e)));
                         }
                         overflow_retries += 1;
@@ -2575,6 +2606,18 @@ mod tests {
 
     fn parse_wf(yaml: &str) -> WorkflowDef {
         serde_yaml::from_str(yaml).expect("Не удалось распарсить тестовый workflow")
+    }
+
+    /// GP3 (инцидент 20.10.2026): tool_choice живёт только при wire-тулах.
+    /// Нативные агенты (tools[] приложены реально) → "auto";
+    /// legacy/сигнальные агенты (тулов на wire нет) → None. Раньше вторым
+    /// отправлялся "required" — локальный движок это молча игнорировал,
+    /// но облако форвардит буквально и получает невалидный запрос
+    /// (пустой стрим ×3 у validator).
+    #[test]
+    fn enforce_tool_choice_requires_wire_tools() {
+        assert_eq!(resolve_enforce_tool_choice(true), Some("auto"));
+        assert_eq!(resolve_enforce_tool_choice(false), None);
     }
 
     #[test]
