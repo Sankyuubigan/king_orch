@@ -85,20 +85,40 @@ function buildToolCatalog() {
       md += `- \`${m[1]}\` — ${m[2]}\n`;
     }
   }
-  md += "\n## Инструменты кодинга (Rust-ядро, infra/tools/ — SSOT)\n\n";
-  const toolsDir = path.join(SRC, "infra", "tools");
-  const toolFiles = ["fs.rs", "search.rs", "shell.rs", "lsp.rs"];
-  for (const f of toolFiles) {
-    const full = path.join(toolsDir, f);
+  md += "\n## Инструменты кодинга (SSOT-ядро ko-code-tools, my-tauri-plugins)\n\n";
+  // С 20.10.2026 реализации файловых/поисковых/shell-тулов перенесены в крейт
+  // `ko-code-tools` (repo my-tauri-plugins) — единственный источник правды
+  // (тот же код использует CLI agent-tools). Хост содержит только тонкие
+  // адаптеры (макрос `adapter_tool!`), их текст в его mod.rs не парсится.
+  // Само ядро описывает тула через `impl CodeTool for X { ... }` — парсим его.
+  const coreDir = "D:\\Projects\\my-tauri-plugins\\ko-code-tools\\src";
+  for (const f of ["fs.rs", "search.rs", "shell.rs"]) {
+    const full = path.join(coreDir, f);
     if (!fs.existsSync(full)) continue;
     const src = fs.readFileSync(full, "utf8");
+    const implRe = /impl\s+CodeTool\s+for\s+(\w+)\s*\{([\s\S]*?)\n\}/g;
+    let m;
+    while ((m = implRe.exec(src))) {
+      const body = m[2];
+      const name = (body.match(/fn\s+name\(&self\)\s*->\s*&\w*\s*\{\s*"([^"]+)"/) || [])[1];
+      const desc = (body.match(/fn\s+description\(&self\)\s*->\s*&\w*\s*\{\s*"([^"]*)"/) || [])[1];
+      if (!name || !desc) continue;
+      const readonly = /fn\s+is_readonly\(&self\)\s*->\s*bool\s*\{\s*true\s*\}/.test(body);
+      const flag = readonly ? "read-only" : "read+write";
+      md += `- \`${name}\` [${flag}] — ${desc}\n`;
+    }
+  }
+  md += "\n## LSP-инструменты (хост King Orch, infra/tools/lsp.rs)\n\n";
+  const lspSrc = path.join(SRC, "infra", "tools", "lsp.rs");
+  if (fs.existsSync(lspSrc)) {
+    const src = fs.readFileSync(lspSrc, "utf8");
     // Парсим блоки `impl Tool for X { ... }` целиком: имя, описание, read-only.
     const implRe = /impl\s+Tool\s+for\s+(\w+)\s*\{([\s\S]*?)\n\}/g;
     let m;
     while ((m = implRe.exec(src))) {
       const body = m[2];
-      const name = (body.match(/fn\s+name\(&self\)\s*->\s*&str\s*\{\s*"([^"]+)"/) || [])[1];
-      const desc = (body.match(/fn\s+description\(&self\)\s*->\s*&str\s*\{\s*"([^"]*)"/) || [])[1];
+      const name = (body.match(/fn\s+name\(&self\)\s*->\s*&\w*\s*\{\s*"([^"]+)"/) || [])[1];
+      const desc = (body.match(/fn\s+description\(&self\)\s*->\s*&\w*\s*\{\s*"([^"]*)"/) || [])[1];
       if (!name || !desc) continue;
       const readonly = /fn\s+is_readonly\(&self\)\s*->\s*bool\s*\{\s*true\s*\}/.test(body);
       const flag = readonly ? "read-only" : "read+write";
@@ -122,7 +142,7 @@ function buildToolCatalog() {
       name: "agent-tools",
       repo: "D:\\Projects\\my-tauri-plugins",
       relative: "bin\\agent-tools.exe",
-      purpose: "Карта репозитория под бюджет токенов (AST → граф → сжатый текст)",
+      purpose: "Карта репозитория под бюджет токенов (codemap: AST → граф → сжатый текст) и единое ядро кодо-тулов кода агента (code: read_file/grep/bash/...; CLI `code call` и MCP-режим — тот же код, что хостовые тула King Orch)",
     },
   ];
   for (const tool of EXTERNAL_TOOLS) {

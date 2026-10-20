@@ -8,6 +8,7 @@
 //! Фазовый фолбэк: если сервер не установлен (нет в `bins/`, нет в PATH) —
 //! честная ошибка «не установлен», а не молчание (правило 2.2).
 
+pub mod lint_gate;
 pub mod manager;
 
 use std::collections::VecDeque;

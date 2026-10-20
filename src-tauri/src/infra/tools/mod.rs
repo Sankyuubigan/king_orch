@@ -1,20 +1,30 @@
-//! 🧰 Инструменты кодинга и файлов (Rust-ядро, SSOT).
+//! 🧰 Инструменты кодинга и файлов (SSOT в крейте `ko-code-tools`).
 //!
-//! Единый источник правды: все тулы регистрируются здесь один раз (трейт [`Tool`]).
-//! Read-only / read+write наборы — это ФИЛЬТРЫ над единым реестром (по флагу
-//! `is_readonly`), а НЕ отдельные реализации. Дублирование кода исключено.
+//! Реализации ВСЕХ кодовых тулов (файлы/поиск/shell) живут в крейте
+//! `ko-code-tools` (репозиторий my-tauri-plugins) — тем же ядром пользуется
+//! CLI `agent-tools`. Хост держит только:
+//!  - публичные [`Tool`] / [`ToolError`] / [`ToolCtx`] (контракт King Orch);
+//!  - политику записи хоста (`PermissionApprover` / `WriteOutside` / `authorize_write`);
+//!  - [`CoreAuthorizer`] — мост хостовой политики к ядровому хуку `WriteAuthorizer`;
+//!  - тонкие адаптеры (макрос [`adapter_tool!`]): `Tool`-обёртки над `CodeTool` ядра.
+//! Перенос 1:1; паритет имён/описаний/схем проверен гейтом каталогов.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::Value;
 
 use crate::infra::permissions::PermissionApprover;
 
-pub mod fs;
 pub mod lsp;
 pub mod media;
-pub mod search;
-pub mod shell;
+
+/// Хелперы ядра: ними пользуются lsp.rs/media.rs через `super::` (имена прежние).
+pub use ko_code_tools::{is_within_root, resolve_path};
+
+/// Ошибка тула — единый тип с ядром (варианты и Display-тексты 1:1, конверсий нет).
+pub use ko_code_tools::ToolError;
+/// Трейт ядра нужен в scope: макрос вызывает его методы на конкретных типах.
+use ko_code_tools::CodeTool;
 
 /// Мета-имя в `agent.tools` — набор только для чтения (read-only).
 pub const TOOLSET_READ: &str = "code_read";
@@ -62,36 +72,7 @@ pub struct ToolCtx<'a> {
     pub image_artifacts: Option<&'a media::ImageArtifactRegistry>,
 }
 
-/// Ошибка тула. Все ветки завершаются честным сообщением (правило 2.2: тишина = ложь).
-#[derive(Debug)]
-pub enum ToolError {
-    /// Неверные/недостающие аргументы вызова.
-    Usage(String),
-    /// Файл/директория не найдены.
-    NotFound(String),
-    /// Запрещено (вне корня / отклонено пользователем / запрещённая операция).
-    Forbidden(String),
-    /// Ошибка ввода/вывода.
-    Io(String),
-    /// Превышен таймаут.
-    Timeout(String),
-}
-
-impl std::fmt::Display for ToolError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ToolError::Usage(m) => write!(f, "Неверные аргументы: {}", m),
-            ToolError::NotFound(m) => write!(f, "Не найдено: {}", m),
-            ToolError::Forbidden(m) => write!(f, "Запрещено: {}", m),
-            ToolError::Io(m) => write!(f, "Ошибка ввода/вывода: {}", m),
-            ToolError::Timeout(m) => write!(f, "Таймаут: {}", m),
-        }
-    }
-}
-
-impl std::error::Error for ToolError {}
-
-/// Контракт инструмента. Реализации — в `fs.rs`, `search.rs`, `shell.rs`.
+/// Контракт инструмента. Реализации: адаптеры ядра в этом модуле + lsp.rs/media.rs.
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
@@ -102,19 +83,130 @@ pub trait Tool: Send + Sync {
     fn execute(&self, args: &Value, ctx: &ToolCtx) -> Result<String, ToolError>;
 }
 
-/// SSOT-реестр: ВСЕ тулы кодинга. Единая точка, где живут реализации.
+/// Централизованная проверка права записи по абсолютному пути.
+///
+/// Внутри `ctx.write_root` — авто (логируется диспетчером); вне — поведение
+/// задаёт `ctx.write_outside`: `Deny` (жёсткий запрет, аналитический пайплайн)
+/// или `Prompt` (плашка юзеру, пайплайн-исполнитель).
+pub fn authorize_write(abs: &Path, ctx: &ToolCtx, tool: &str) -> Result<(), ToolError> {
+    if is_within_root(ctx.write_root, abs) {
+        return Ok(());
+    }
+    // Новый файл: сам путь может ещё не существовать — проверяем родителя.
+    if let Some(parent) = abs.parent() {
+        if is_within_root(ctx.write_root, parent) {
+            return Ok(());
+        }
+    }
+    match ctx.write_outside {
+        WriteOutside::Deny => Err(ToolError::Forbidden(format!(
+            "запись вне рабочей области '{}' запрещена политикой пайплайна (путь: {})",
+            ctx.write_root.display(),
+            abs.display()
+        ))),
+        WriteOutside::Prompt => {
+            ctx.approver
+                .check_write(abs, ctx.session_id, ctx.agent_id, tool)
+        }
+    }
+}
+
+/// Мост: хостовая политика записи → хук ядра `WriteAuthorizer`.
+/// `ToolError` хоста и ядра — один и тот же тип, конверсий не требуется.
+struct CoreAuthorizer<'a> {
+    ctx: &'a ToolCtx<'a>,
+}
+
+impl ko_code_tools::WriteAuthorizer for CoreAuthorizer<'_> {
+    fn authorize(&self, abs_path: &Path, tool: &str) -> Result<(), ToolError> {
+        authorize_write(abs_path, self.ctx, tool)
+    }
+}
+
+/// Тонкий адаптер: хостовый `Tool` поверх ядерного `CodeTool`.
+/// name/description/parameters/is_readonly берутся из ядра (паритет без дублей);
+/// execute поднимает ядерный ToolCtx с хостовой политикой записи через CoreAuthorizer.
+macro_rules! adapter_tool {
+    ($name:ident, $core_ty:path) => {
+        pub struct $name;
+
+        impl Tool for $name {
+            fn name(&self) -> &str {
+                $core_ty.name()
+            }
+            fn description(&self) -> &str {
+                $core_ty.description()
+            }
+            fn parameters(&self) -> Value {
+                $core_ty.parameters()
+            }
+            fn is_readonly(&self) -> bool {
+                $core_ty.is_readonly()
+            }
+            fn execute(&self, args: &Value, ctx: &ToolCtx) -> Result<String, ToolError> {
+                let ko_auth = CoreAuthorizer { ctx };
+                // Линт-гейт хоста: правка, ломающая код, откатывается.
+                //
+                // Гейт подключается ТОЛЬКО если сервер проверки установлен: без
+                // него проверять нечем, и «проверка не выполнена» — это не отказ
+                // правки, а отсутствие инструмента. Причина уходит в лог
+                // (правило 3.4: честно и без шума в ответе агенту).
+                //
+                // Гейт объявлен ДО выбора: его ссылка живёт дольше контекста,
+                // поэтому в ветке `if` он не создаётся.
+                let gate = crate::infra::lsp::lint_gate::LspLintGate {
+                    workspace_root: ctx.workspace_root,
+                    bins_dir: ctx.bins_dir,
+                };
+                let server_available =
+                    crate::infra::lsp::manager::is_lsp_server_available(ctx.bins_dir);
+                if !server_available {
+                    log::warn!(
+                        "lint-gate: сервер проверки ('{}') не установлен в '{}' — проверка правок отключена",
+                        crate::infra::lsp::LSP_SERVER_NAME,
+                        ctx.bins_dir.display()
+                    );
+                }
+                let ko_ctx = ko_code_tools::ToolCtx::new(ctx.workspace_root, &ko_auth);
+                // Гейт ленивый — сервер поднимается только если проверка
+                // реально понадобилась (то есть при записи в файл).
+                let ko_ctx = if server_available {
+                    ko_ctx.with_lint_gate(&gate)
+                } else {
+                    ko_ctx
+                };
+                $core_ty.execute(args, &ko_ctx)
+            }
+        }
+    };
+}
+
+// Файловые тулы (SSOT: ko-code-tools::fs).
+adapter_tool!(ReadFile, ko_code_tools::fs::ReadFile);
+adapter_tool!(ReadManyFiles, ko_code_tools::fs::ReadManyFiles);
+adapter_tool!(WriteFile, ko_code_tools::fs::WriteFile);
+adapter_tool!(EditFile, ko_code_tools::fs::EditFile);
+// Поисковые тулы (SSOT: ko-code-tools::search).
+adapter_tool!(Grep, ko_code_tools::search::Grep);
+adapter_tool!(Glob, ko_code_tools::search::Glob);
+adapter_tool!(ListDirectory, ko_code_tools::search::ListDirectory);
+// Shell-тулы (SSOT: ko-code-tools::shell).
+adapter_tool!(Bash, ko_code_tools::shell::Bash);
+adapter_tool!(RunTests, ko_code_tools::shell::RunTests);
+
+/// SSOT-реестр: ВСЕ тулы кодинга. Ядро (fs/search/shell) + LSP хоста.
 /// `code_read`/`code_write` — фильтры по `is_readonly()` над этим списком.
 pub fn all_tools() -> Vec<Box<dyn Tool>> {
     vec![
-        Box::new(fs::ReadFile),
-        Box::new(fs::ReadManyFiles),
-        Box::new(fs::WriteFile),
-        Box::new(fs::EditFile),
-        Box::new(search::Grep),
-        Box::new(search::Glob),
-        Box::new(search::ListDirectory),
-        Box::new(shell::Bash),
-        Box::new(shell::RunTests),
+        Box::new(ReadFile),
+        Box::new(ReadManyFiles),
+        Box::new(WriteFile),
+        Box::new(EditFile),
+        Box::new(Grep),
+        Box::new(Glob),
+        Box::new(ListDirectory),
+        Box::new(Bash),
+        Box::new(RunTests),
         Box::new(lsp::LspGetDefinition),
         Box::new(lsp::LspGetReferences),
         Box::new(lsp::LspGetDiagnostics),
@@ -170,86 +262,6 @@ pub fn is_code_tool_reference(name: &str) -> bool {
 /// мета-имёнем "tools" (в отличие от MCP-тулов с мета-именем сервера).
 pub fn is_tool_granted(all_tools: &[(String, String, Value)], tool_name: &str) -> bool {
     all_tools.iter().any(|(meta, name, _)| meta == "tools" && name == tool_name)
-}
-
-/// Разрешить путь (абсолютный или относительный корня) в абсолютный.
-pub fn resolve_path(root: &Path, path: &str) -> PathBuf {
-    let p = Path::new(path);
-    if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        root.join(p)
-    }
-}
-
-/// Проверка: путь находится ВНУТРИ корня (или равен ему). Для read-тулов.
-pub fn is_within_root(root: &Path, path: &Path) -> bool {
-    let root_abs = normalize_canonical(root);
-    let path_abs = normalize_canonical(path);
-    path_abs.starts_with(&root_abs)
-}
-
-/// Централизованная проверка права записи по абсолютному пути.
-///
-/// Внутри `ctx.write_root` — авто (логируется диспетчером); вне — поведение
-/// задаёт `ctx.write_outside`: `Deny` (жёсткий запрет, аналитический пайплайн)
-/// или `Prompt` (плашка юзеру, пайплайн-исполнитель).
-pub fn authorize_write(abs: &Path, ctx: &ToolCtx, tool: &str) -> Result<(), ToolError> {
-    if is_within_root(ctx.write_root, abs) {
-        return Ok(());
-    }
-    // Новый файл: сам путь может ещё не существовать — проверяем родителя.
-    if let Some(parent) = abs.parent() {
-        if is_within_root(ctx.write_root, parent) {
-            return Ok(());
-        }
-    }
-    match ctx.write_outside {
-        WriteOutside::Deny => Err(ToolError::Forbidden(format!(
-            "запись вне рабочей области '{}' запрещена политикой пайплайна (путь: {})",
-            ctx.write_root.display(),
-            abs.display()
-        ))),
-        WriteOutside::Prompt => {
-            ctx.approver
-                .check_write(abs, ctx.session_id, ctx.agent_id, tool)
-        }
-    }
-}
-
-/// canonicalize с очисткой Windows-префикса `\\?\` (иначе `starts_with` ломается).
-fn normalize_canonical(p: &Path) -> PathBuf {
-    let c = p.canonicalize().unwrap_or_else(|_| p.to_path_buf());
-    let s = c.to_string_lossy().to_string();
-    let s = s.strip_prefix(r"\\?\").unwrap_or(&s).to_string();
-    PathBuf::from(s)
-}
-
-/// Обрезать длинный текст до лимита с пометкой (для читаемых выводов тулов).
-pub fn truncate(text: &str, limit: usize) -> String {
-    if text.chars().count() <= limit {
-        text.to_string()
-    } else {
-        let head: String = text.chars().take(limit).collect();
-        format!("{}…\n[вывод обрезан до {} символов]", head, limit)
-    }
-}
-
-/// Взять первые `max_bytes` байт строки БЕЗ разрыва UTF-8 (граница по
-/// `char_indices`). Для безопасной обрезки URL/логов/артефактов.
-pub fn take_utf8_start(s: &str, max_bytes: usize) -> String {
-    if s.len() <= max_bytes {
-        return s.to_string();
-    }
-    let mut end = 0usize;
-    for (idx, _) in s.char_indices() {
-        if idx > max_bytes {
-            break;
-        }
-        end = idx;
-    }
-    // end — граница последнего символа, полностью помещающегося в лимит.
-    s[..end].to_string()
 }
 
 #[cfg(test)]
@@ -308,111 +320,59 @@ mod tests {
     }
 
     #[test]
-    fn resolve_path_handles_absolute_and_relative() {
-        let root = Path::new("C:/proj");
-        assert_eq!(resolve_path(root, "a/b.ts"), PathBuf::from("C:/proj/a/b.ts"));
-        assert_eq!(resolve_path(root, "D:/other/c.ts"), PathBuf::from("D:/other/c.ts"));
-    }
-
-    #[test]
-    fn truncate_marks_cut() {
-        let t = truncate("abcdef", 4);
-        assert!(t.contains("[вывод обрезан"));
-        assert_eq!(truncate("abc", 10), "abc");
-    }
-
-    #[test]
-    fn take_utf8_start_is_byte_budget_safe() {
-        // Кириллица 'ю' = 2 байта: срез по байтам без char-границы не паникует.
-        assert_eq!(take_utf8_start("ююю", 3), "ю"); // лимит 3 байта → 1 символ
-        assert_eq!(take_utf8_start("ююю", 4), "юю");
-        assert_eq!(take_utf8_start("ююю", 1), "");
-        assert_eq!(take_utf8_start("hello world", 99), "hello world");
-        assert_eq!(take_utf8_start("hello", 3), "hel");
-        assert_eq!(take_utf8_start("", 5), "");
-    }
-
-    #[test]
     fn unknown_tool_returns_usage_error() {
         let err = execute_tool("nope", &serde_json::json!({}), &ctx()).unwrap_err();
         assert!(matches!(err, ToolError::Usage(_)));
     }
 
-    // ── Capability-проверка диспетчера (defense-in-depth) ──
-    // Диспетчер собирает all_tools так же, как run_agent_node: agent_code_tool_schemas
-    // (мета-имя "tools") + MCP-тулы (мета-имя сервера) + builtin + todo.
+    // ── Гейт паритета адаптеров: адаптер — зеркало ядра (имя/описание/схема/флаг) ──
 
-    #[test]
-    fn grant_check_code_read_agent_cannot_call_mutators() {
-        // Имитация all_tools для code_read-агента: только read-only + явные.
-        let schemas = tool_schemas(false, &[]);
-        // Передаём как есть (диспетчер принимает готовый список).
-        let mut all_tools: Vec<(String, String, serde_json::Value)> = schemas.clone();
-        // Добавляем "чужой" MCP-тул с тем же именем, что код-мутатор — не должен
-        // дать доступ (мета-имя сервера, а не "tools").
-        all_tools.push(("fs_write".to_string(), "write_file".to_string(), serde_json::json!({})));
-
-        assert!(is_tool_granted(&all_tools, "read_file"), "read_file выдан code_read");
-        assert!(!is_tool_granted(&all_tools, "write_file"), "write_file НЕ выдан code_read (даже если MCP-тул с тем же именем)");
-        assert!(!is_tool_granted(&all_tools, "bash"), "bash НЕ выдан code_read");
-        assert!(!is_tool_granted(&all_tools, "edit_file"), "edit_file НЕ выдан code_read");
-        // LSP-тулы read-only — выдан.
-        assert!(is_tool_granted(&all_tools, "lsp_get_definition"));
+    /// Пары (хост-адаптер, ядерный CodeTool) — реестр один-в-один с ядерным.
+    fn adapter_core_pairs() -> Vec<(Box<dyn Tool>, Box<dyn ko_code_tools::CodeTool>)> {
+        vec![
+            (Box::new(ReadFile), Box::new(ko_code_tools::fs::ReadFile)),
+            (Box::new(ReadManyFiles), Box::new(ko_code_tools::fs::ReadManyFiles)),
+            (Box::new(WriteFile), Box::new(ko_code_tools::fs::WriteFile)),
+            (Box::new(EditFile), Box::new(ko_code_tools::fs::EditFile)),
+            (Box::new(Grep), Box::new(ko_code_tools::search::Grep)),
+            (Box::new(Glob), Box::new(ko_code_tools::search::Glob)),
+            (Box::new(ListDirectory), Box::new(ko_code_tools::search::ListDirectory)),
+            (Box::new(Bash), Box::new(ko_code_tools::shell::Bash)),
+            (Box::new(RunTests), Box::new(ko_code_tools::shell::RunTests)),
+        ]
     }
 
     #[test]
-    fn grant_check_code_write_agent_can_call_mutators() {
-        let all_tools = tool_schemas(true, &[]);
-        assert!(is_tool_granted(&all_tools, "read_file"));
-        assert!(is_tool_granted(&all_tools, "write_file"), "write_file выдан code_write");
-        assert!(is_tool_granted(&all_tools, "bash"), "bash выдан code_write");
-        assert!(is_tool_granted(&all_tools, "edit_file"));
+    fn adapters_mirror_core_contract() {
+        for (tool, core) in adapter_core_pairs() {
+            assert_eq!(tool.name(), core.name(), "имя адаптера != ядра: {}", tool.name());
+            assert_eq!(
+                tool.description(),
+                core.description(),
+                "описание адаптера != ядра: {}",
+                tool.name()
+            );
+            assert_eq!(
+                tool.parameters(),
+                core.parameters(),
+                "схема адаптера != ядра: {}",
+                tool.name()
+            );
+            assert_eq!(tool.is_readonly(), core.is_readonly(), "флаг readonly: {}", tool.name());
+        }
     }
 
     #[test]
-    fn grant_check_explicit_bash_grants_bash_not_write() {
-        let all_tools = tool_schemas(false, &["bash".to_string()]);
-        assert!(is_tool_granted(&all_tools, "bash"), "явный bash выдан");
-        assert!(!is_tool_granted(&all_tools, "write_file"), "write_file НЕ выдан при явном bash");
-    }
-
-    #[test]
-    fn grant_check_unknown_tool_never_granted() {
-        let all_tools = tool_schemas(true, &[]);
-        assert!(!is_tool_granted(&all_tools, "totally_unknown"));
-    }
-
-    #[test]
-    fn write_outside_parse_defaults_to_prompt() {
-        assert_eq!(WriteOutside::parse("deny"), WriteOutside::Deny);
-        assert_eq!(WriteOutside::parse("DENY"), WriteOutside::Deny);
-        assert_eq!(WriteOutside::parse("prompt"), WriteOutside::Prompt);
-        assert_eq!(WriteOutside::parse(""), WriteOutside::Prompt);
-    }
-
-    #[test]
-    fn authorize_write_deny_blocks_outside_write_root() {
-        let ctx = ToolCtx {
-            workspace_root: Path::new("C:/proj"),
-            write_root: Path::new("C:/proj/.agents_workspace"),
-            write_outside: WriteOutside::Deny,
-            ..ctx()
-        };
-        // внутри авто-зоны — разрешено
-        assert!(authorize_write(Path::new("C:/proj/.agents_workspace/task.md"), &ctx, "write_file").is_ok());
-        // вне авто-зоны — жёсткий запрет (без плашки)
-        let err = authorize_write(Path::new("C:/proj/src/main.rs"), &ctx, "write_file").unwrap_err();
-        assert!(matches!(err, ToolError::Forbidden(_)));
-    }
-
-    #[test]
-    fn authorize_write_prompt_allows_inside_write_root() {
-        let ctx = ToolCtx {
-            workspace_root: Path::new("C:/proj"),
-            write_root: Path::new("C:/proj"),
-            write_outside: WriteOutside::Prompt,
-            ..ctx()
-        };
-        assert!(authorize_write(Path::new("C:/proj/src/main.rs"), &ctx, "write_file").is_ok());
+    fn host_registry_matches_core_registry_order() {
+        // 9 кодовых тулов в реестре хоста — в том же порядке, что и в ядерном реестре.
+        let core_names: Vec<String> =
+            ko_code_tools::all_code_tools().iter().map(|t| t.name().to_string()).collect();
+        let host_names: Vec<String> =
+            all_tools().iter().map(|t| t.name().to_string()).collect();
+        assert_eq!(
+            &host_names[..core_names.len()],
+            &core_names[..],
+            "порядок кодовых тулов хоста обязан совпадать с ядерным"
+        );
     }
 }

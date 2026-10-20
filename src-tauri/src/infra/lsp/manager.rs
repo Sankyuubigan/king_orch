@@ -115,3 +115,23 @@ pub fn get_diagnostics(
         Ok(super::format_diagnostics(&result))
     })
 }
+
+/// Сырые элементы диагностики файла — для машинного сравнения «до/после».
+///
+/// Форматированный текст для этого не годится: линт-гейту нужно сравнивать
+/// проблемы попарно (строка + текст), а не разбирать строки обратно.
+pub fn diagnostic_items(
+    workspace_root: &Path,
+    bins_dir: &Path,
+    path: &Path,
+    log_cb: impl Fn(String) + Send + Sync + 'static,
+) -> Result<Vec<serde_json::Value>, String> {
+    with_client(workspace_root, bins_dir, log_cb, |client| {
+        let result = client.diagnostics(path)?;
+        Ok(result
+            .get("items")
+            .and_then(|items| items.as_array())
+            .cloned()
+            .unwrap_or_default())
+    })
+}

@@ -28,6 +28,15 @@ tools: ["code_read", "bash"]
     D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap search --path . someSymbol
     D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap callers --path . someSymbol
 
+РАЗВЕДКА ОДНОГО ФАЙЛА (когда файл уже известен):
+
+    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap skeleton --path . src/файл.rs
+    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap body --path . src/файл.rs someSymbol
+
+`skeleton` — импорты и сигнатуры файла с номерами строк, БЕЗ тел (дёшево, один
+файл, индекс не нужен). `body` — тело одного символа: от строки объявления до
+начала следующего объявления файла (граница названа в ответе).
+
 КОГДА ЗАДАЧА ПРИВЯЗАНА К КОНКРЕТНЫМ МОДУЛЯМ — добавь `--file`, по флагу на модуль.
 Так сфокусированный файл поднимается в самое начало карты вместо общего обзора:
 
@@ -41,6 +50,8 @@ tools: ["code_read", "bash"]
 | «кто вызывает X» | `codemap callers --path . X` |
 | «что за проект, какие в нём модули» | `codemap map --path . --tokens 2048` |
 | «покажи мне модуль X изнутри» | `codemap map ... --file <путь к X>` |
+| «что внутри этого файла, но без тел» | `codemap skeleton --path . <файл>` |
+| «покажи тело одного символа» | `codemap body --path . <файл> <символ>` |
 
 `codemap search` и `codemap callers` отвечают за один вызов на вопрос.
 Точечный вопрос про символ **НЕ решается** десятками `grep` и чтения файлов

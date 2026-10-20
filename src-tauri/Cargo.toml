@@ -1,6 +1,6 @@
 [package]
 name = "king_orch"
-version = "26.10.9"
+version = "26.10.8"
 description = "Local LLM Multi-Agent Studio"
 authors = ["You"]
 edition = "2021"
@@ -39,12 +39,13 @@ tauri-plugin-downloader = { path = "../../my-tauri-plugins/tauri-plugin-download
 tauri-plugin-image-engine = { path = "../../my-tauri-plugins/tauri-plugin-image-engine" }
 # Атомарные записи JSON (app_config.json, sessions/): tmp->rename + sidecar lock.
 ko-json-store = { path = "../../my-tauri-plugins/ko-json-store" }
+# Ядро кодо-тулов (SSOT, репозиторий my-tauri-plugins): чит/поиск/shell-тулы.
+# Регулярные функции переехали в ядро; host оставляет только политику записи.
+ko-code-tools = { path = "../../my-tauri-plugins/ko-code-tools" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["full"] }
 regex = "1.10"
-ignore = "0.4"
-globset = "0.4"
 lazy_static = "1.4"
 reqwest = { version = "0.12", features = ["json", "rustls-tls-native-roots", "stream", "blocking"], default-features = false }
 serde_yaml = "0.9"

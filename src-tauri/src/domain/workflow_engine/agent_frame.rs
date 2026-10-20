@@ -175,9 +175,20 @@ mod tests {
         }
     }
 
+    /// Каталог для фикстур — УНИКАЛЬНЫЙ на вызов.
+    ///
+    /// Раньше здесь был каталог, общий для всех тестов модуля, и каждый вызов
+    /// его удалял: при параллельном выполнении тесты затирали каталог друг
+    /// друга, и прогоны падали с «Отказано в доступе» / «файла нет» — то есть
+    /// гонка выглядела как дефект логики. Имя с наносекундной меткой делает
+    /// каталоги независимыми.
     fn temp_dir() -> std::path::PathBuf {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or_default();
         let dir = std::env::temp_dir().join(format!(
-            "agent_frame_tests_{}",
+            "agent_frame_tests_{}_{nanos}",
             std::process::id()
         ));
         let _ = fs::remove_dir_all(&dir);
