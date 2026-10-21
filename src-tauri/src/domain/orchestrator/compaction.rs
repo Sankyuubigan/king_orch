@@ -311,7 +311,16 @@ pub(crate) fn is_server_unavailable(err: &str) -> bool {
 /// Возвращать `true` надо только когда повтор имеет смысл (движок мог
 /// освободиться), поэтому «мёртвый сервер» сюда НЕ входит — он уже отдан
 /// `is_server_unavailable`.
+///
+/// Облачное «молчание больше порога тишины» ([cloud_timeout]) — ровно этот
+/// класс: шлюз мог ожить, повтор имеет смысл. А штатная отмена юзером
+/// ([cloud_cancelled]) — терминальное решение человека: ретрай ЗАПРЕЩЁН.
 pub(crate) fn is_stream_timeout(err: &str) -> bool {
+    // Отмена юзером — НЕ таймаут: повторять действует против воли человека,
+    // поэтому её отсекаем ПЕРВОЙ строкой.
+    if crate::infra::is_cloud_cancelled_error(err) {
+        return false;
+    }
     let e = err.to_lowercase();
     if is_server_unavailable(err) {
         return false;
@@ -321,6 +330,7 @@ pub(crate) fn is_stream_timeout(err: &str) -> bool {
         || e.contains("prompt eval не завершился")
         || e.contains("генерация остановилась: нет данных от движка")
         || e.contains("не ответил http-статусом")
+        || crate::infra::is_cloud_timeout_error(err)
 }
 
 #[cfg(test)]
@@ -544,5 +554,41 @@ mod tests {
         assert!(!is_stream_timeout(""));
         assert!(!is_stream_timeout("llama-server: HTTP 400 Bad Request"));
         assert!(!is_stream_timeout("Ошибка создания HTTP-клиента"));
+    }
+
+    /// G4 (21.10.2026): облачный «тайм-аут тишины» ([cloud_timeout]) —
+    /// повторяемый транспортный отказ: шлюз мог ожить → тайм-аут-класс.
+    /// Точный Display плагина (client_error.rs) вставлен машинообразно.
+    #[test]
+    fn test_cloud_timeout_is_stream_timeout_not_overflow() {
+        let cloud_timeout = "Облачный роутер не отдавал данных ≥600 c (фаза: body). \
+Живая очередь отвечает хоть байтами; полная тишина — это мёртвое соединение. \
+Повторите позже или смените модель [cloud_timeout]";
+        assert!(
+            is_stream_timeout(cloud_timeout),
+            "облачное молчание обязано распознаваться как тайм-аут"
+        );
+        assert!(
+            !is_context_overflow(cloud_timeout),
+            "облачное молчание НЕ переполнение контекста — усечение текста бессмысленно"
+        );
+        assert!(
+            !is_server_unavailable(cloud_timeout),
+            "облачное молчание НЕ «мёртвый сервер» — шлюз жив и сам решит, когда открыть ретрай"
+        );
+    }
+
+    /// G4: штатная отмена юзером ([cloud_cancelled]) — не тайм-аут:
+    /// ретрай после «Стоп» против воли человека запрещён.
+    #[test]
+    fn test_cloud_cancelled_is_not_stream_timeout() {
+        let cancelled =
+            "Прервано пользователем (облачный запрос отменён, фаза: body) [cloud_cancelled]";
+        assert!(
+            !is_stream_timeout(cancelled),
+            "отмена юзером не должна триггерить ретрай"
+        );
+        assert!(!is_context_overflow(cancelled));
+        assert!(!is_server_unavailable(cancelled));
     }
 }

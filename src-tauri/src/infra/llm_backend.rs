@@ -3,7 +3,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use tauri_plugin_cloud_routers::router::client::{self, ChatMessage, ChatRequest};
-use tauri_plugin_cloud_routers::router::client_error::{CloudStreamError, CLOUD_EMPTY_STREAM_MARKER};
+use tauri_plugin_cloud_routers::router::client_error::{
+    CloudStreamError, CLOUD_CANCELLED_MARKER, CLOUD_EMPTY_STREAM_MARKER, CLOUD_TIMEOUT_MARKER,
+};
 use tauri_plugin_llama_engine::engine::llm_types::GenerationResult;
 use tauri_plugin_llama_engine::engine::{
     ChatAttachment, GrammarSpec, LlmMessage, LlamaEngine, ModelParams, ToolCall, ToolDefinition,
@@ -23,6 +25,23 @@ pub struct CloudEndpoint {
 /// не должно (SSOT).
 pub fn is_cloud_empty_stream_error(err: &str) -> bool {
     err.contains(CLOUD_EMPTY_STREAM_MARKER)
+}
+
+/// Класс «облако молчало дольше порога тишины» ([cloud_timeout]): живая
+/// очередь провайдера под него не попадает — любой байт сбрасывает порог.
+/// Распознаётся оркестратором как повторяемый транспортный отказ (тихий
+/// ретрай допустим), но НЕ как «мёртвый сервер» (та била по бесполезным
+/// ретраям) и НЕ как переполнение контекста.
+pub fn is_cloud_timeout_error(err: &str) -> bool {
+    err.contains(CLOUD_TIMEOUT_MARKER)
+}
+
+/// Штатный исход «юзер нажал Стоп» ([cloud_cancelled]): НЕ ошибка
+/// провайдера и НЕ таймаут — ретраи запрещены, это терминальное решение
+/// пользователя. Display ошибки начинается с «Прервано пользователем» —
+/// детектор оркестратора (mod.rs) опирается на эту фразу.
+pub fn is_cloud_cancelled_error(err: &str) -> bool {
+    err.contains(CLOUD_CANCELLED_MARKER)
 }
 
 
@@ -91,6 +110,7 @@ impl CloudEngine {
         tool_choice: Option<&str>,
         tools: Option<Vec<ToolDefinition>>,
         attachments: Option<&[ChatAttachment]>,
+        cancel_flag: Option<Arc<AtomicBool>>,
         mut progress_cb: F,
         log_cb: L,
     ) -> Result<GenerationResult, String>
@@ -174,12 +194,13 @@ impl CloudEngine {
         };
         log_cb(format!("☁️ 9Router: один вызов модели «{}»", self.model));
         let stream_cb = self.stream_cb.clone();
+        let started = std::time::Instant::now();
         // Счётчик = «роутер вернул полезный ответ». Ok стрима и «пустой успех»
         // (HTTP 200 без данных — был подтверждён обмен) засчитываются; ошибке
         // HTTP, внутреннему error-кадру и мусорному стриму — нет. Для «пустого
         // успеха» правда в том, что квота МОГЛА быть списана — это оговорено
         // в warn-логе рядом со счётчиком.
-        let result = match client::chat_completion_stream_result(
+        let result = match client::chat_completion_stream_result_cancellable(
             &self.endpoint.base_url,
             self.endpoint.api_key.as_deref(),
             &request,
@@ -191,8 +212,15 @@ impl CloudEngine {
                     stream_cb(delta.reasoning);
                 }
             },
+            cancel_flag,
         ) {
-            Ok(result) => result,
+            Ok(result) => {
+                log_cb(format!(
+                    "☁️ 9Router: ответ целиком получен за {:.0} с",
+                    started.elapsed().as_secs_f32()
+                ));
+                result
+            }
             Err(CloudStreamError::EmptySuccess) => {
                 // Провайдер формально ответил 200, но контента не было (инцидент
                 // 18.10.2026: ×5 пустых 200 у validator). Структурно невозможный
@@ -210,6 +238,29 @@ impl CloudEngine {
                 return Err(CloudStreamError::EmptySuccess.to_string());
             }
             Err(error) => {
+                let elapsed = started.elapsed();
+                match &error {
+                    CloudStreamError::TimedOut { idle_secs, phase } => {
+                        log::warn!(
+                            "☁️ таймаут тишины: шлюз не откликался ≥{} с (фаза: {}), ожидание длилось {:.0} с",
+                            idle_secs,
+                            phase,
+                            elapsed.as_secs_f32()
+                        );
+                        log_cb(format!(
+                            "☁️ [cloud-timeout] Молчание больше порога тишины ({} с, фаза: {}). Ретрай — по решению оркестратора.",
+                            idle_secs, phase
+                        ));
+                    }
+                    CloudStreamError::Cancelled { phase } => {
+                        log::info!(
+                            "☁️ запрос прерван пользователем (фаза: {}), {:.0} с ожидания",
+                            phase,
+                            elapsed.as_secs_f32()
+                        );
+                    }
+                    _ => {}
+                }
                 log_cb(format!(
                     "☁️ [cloud-counter] Ответ от облака не получен — запрос НЕ засчитан: {}",
                     error
@@ -441,6 +492,7 @@ impl LlmEngine {
                     tool_choice,
                     tools,
                     None,
+                    Some(cancel_flag),
                     progress_cb,
                     log_cb,
                 )
@@ -501,6 +553,7 @@ impl LlmEngine {
                     tool_choice,
                     tools.map(|items| items.to_vec()),
                     attachments,
+                    Some(cancel_flag),
                     progress_cb,
                     log_cb,
                 )
@@ -552,6 +605,7 @@ impl LlmEngine {
                     _tool_choice,
                     tools,
                     Some(_attachments),
+                    Some(_cancel_flag),
                     _progress_cb,
                     _log_cb,
                 )
