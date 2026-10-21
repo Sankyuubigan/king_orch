@@ -129,20 +129,54 @@ fn mapping_path(path: &str, key: &Value) -> String {
     }
 }
 
-/// Контракт фрейма агента (`NodeDef.system_prompt_file`). Файл живёт вне YAML,
-/// поэтому без диска проверяется только семантика:
-/// - слот доставки без файла;
-/// - неизвестное значение слота (валидация через единый
+/// Контракт фрейма агента (`NodeDef.system_prompt_file` и графовый дефолт
+/// `config.default_system_prompt_*`). Файл живёт вне YAML, поэтому без диска
+/// проверяется только семантика:
+/// - дефолтная пара: слот без файла в `config` (location `config`);
+/// - неизвестное значение слота — на ноде и в `config` (валидация через единый
 ///   `agent_frame::FrameDelivery::parse`);
+/// - слот без файла на ноде — учитывая дефолт: если файл наследуется из
+///   `config`, merge по полю (`agent_frame::effective_frame`) легален;
 /// - поле на ноде, чей рантайм фрейм не читает (не `llm_worker`);
 /// - нода внутри группы с ЯВНОЙ `fused_instruction`: склеенный вызов
 ///   объединяется этапами с системными промптами агентов, per-node фрейм
 ///   на таком этапе неприменим (авто-склейка без инструкции предупреждается
-///   в рантайме — `workflow_engine::build_fused_system_prompt`).
+///   в рантайме — `workflow_engine::build_fused_system_prompt`, дефолтный
+///   фрейм там же гасится тем же предупреждением — без per-node диагностики).
 fn collect_agent_frame_diagnostics(
     workflow: &WorkflowDef,
     diagnostics: &mut Vec<GraphDiagnostic>,
 ) {
+    // --- Графовый дефолт (`config.default_system_prompt_*`): валидация пары ---
+    // Одна запись config — одна диагностика, Location `"config"`.
+    if let Some(config) = workflow.config.as_ref() {
+        let default_delivery_raw = config.default_system_prompt_delivery.as_deref();
+        let has_default_file = config
+            .default_system_prompt_file
+            .as_deref()
+            .map_or(false, |s| !s.trim().is_empty());
+        let has_default_delivery = default_delivery_raw.map_or(false, |s| !s.trim().is_empty());
+        if has_default_delivery {
+            if let Err(e) = super::agent_frame::FrameDelivery::parse(default_delivery_raw) {
+                push_diagnostic(
+                    diagnostics,
+                    "SYSTEM_PROMPT_DELIVERY_UNKNOWN",
+                    "config",
+                    e,
+                );
+            }
+            if !has_default_file {
+                push_diagnostic(
+                    diagnostics,
+                    "SYSTEM_PROMPT_DELIVERY_WITHOUT_FILE",
+                    "config",
+                    "задан config.default_system_prompt_delivery без default_system_prompt_file — дефолтный фрейм не применится"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
     let fused_group_ids: HashSet<&str> = workflow
         .groups
         .iter()
@@ -153,6 +187,15 @@ fn collect_agent_frame_diagnostics(
         })
         .map(|g| g.id.as_str())
         .collect();
+    let has_config_default_file = workflow
+        .config
+        .as_ref()
+        .map(|c| {
+            c.default_system_prompt_file
+                .as_deref()
+                .map_or(false, |s| !s.trim().is_empty())
+        })
+        .unwrap_or(false);
     for node in &workflow.nodes {
         let has_file = node
             .system_prompt_file
@@ -173,7 +216,9 @@ fn collect_agent_frame_diagnostics(
                 );
             }
         }
-        if !has_file {
+        // Слот без файла на ноде — проблема ТОЛЬКО если файл не наследуется
+        // из графового дефолта (merge по полю легален).
+        if !has_file && !has_config_default_file {
             push_diagnostic(
                 diagnostics,
                 "SYSTEM_PROMPT_DELIVERY_WITHOUT_FILE",
@@ -183,7 +228,7 @@ fn collect_agent_frame_diagnostics(
             );
             continue;
         }
-        if node.node_type != NodeType::LlmWorker {
+        if has_file && node.node_type != NodeType::LlmWorker {
             push_diagnostic(
                 diagnostics,
                 "SYSTEM_PROMPT_FILE_UNSUPPORTED_NODE",
@@ -195,10 +240,11 @@ fn collect_agent_frame_diagnostics(
             );
             continue;
         }
-        if node
-            .group
-            .as_deref()
-            .map_or(false, |id| fused_group_ids.contains(id.trim()))
+        if has_file
+            && node
+                .group
+                .as_deref()
+                .map_or(false, |id| fused_group_ids.contains(id.trim()))
         {
             push_diagnostic(
                 diagnostics,

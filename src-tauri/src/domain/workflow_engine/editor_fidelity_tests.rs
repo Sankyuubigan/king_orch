@@ -423,3 +423,111 @@ edges: []
         d.code == "SYSTEM_PROMPT_FILE_IN_GROUP" && d.location == "nodes[id=worker]"
     }));
 }
+
+// --- Графовый дефолт фрейма (`config.default_system_prompt_*`) ---
+
+#[test]
+fn accepts_agent_frame_from_graph_default() {
+    // Гейт G1 (tasks/21.10.26): ноды наследуют дефолт — диагностик быть не должно.
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: user_input
+config:
+  default_system_prompt_file: ../system_frame.md
+  default_system_prompt_delivery: user_prefix
+nodes:
+  - id: user_input
+    type: user_message
+  - id: worker
+    type: llm_worker
+    agent: test
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(!diagnostics
+        .iter()
+        .any(|d| d.code.starts_with("SYSTEM_PROMPT_")));
+}
+
+#[test]
+fn accepts_node_delivery_merging_with_default_file() {
+    // Merge по полю: нода меняет только слот, файл наследуется из дефолта —
+    // легальная комбинация, без диагностики DELIVERY_WITHOUT_FILE.
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: user_input
+config:
+  default_system_prompt_file: ../system_frame.md
+nodes:
+  - id: user_input
+    type: user_message
+  - id: worker
+    type: llm_worker
+    agent: test
+    system_prompt_delivery: system
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(!diagnostics
+        .iter()
+        .any(|d| d.code.starts_with("SYSTEM_PROMPT_")));
+}
+
+#[test]
+fn rejects_config_default_delivery_unknown() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: user_input
+config:
+  default_system_prompt_file: ../system_frame.md
+  default_system_prompt_delivery: в_воздухе
+nodes:
+  - id: user_input
+    type: user_message
+  - id: worker
+    type: llm_worker
+    agent: test
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics.iter().any(|d| {
+        d.code == "SYSTEM_PROMPT_DELIVERY_UNKNOWN"
+            && d.location == "config"
+            && d.message.contains("неизвестное значение")
+    }));
+}
+
+#[test]
+fn rejects_config_default_delivery_without_file() {
+    // Парная семантика дефолта: слот без файла в config — диагностика location config.
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: user_input
+config:
+  default_system_prompt_delivery: user_prefix
+nodes:
+  - id: user_input
+    type: user_message
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics.iter().any(|d| {
+        d.code == "SYSTEM_PROMPT_DELIVERY_WITHOUT_FILE" && d.location == "config"
+    }));
+}

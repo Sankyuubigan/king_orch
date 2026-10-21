@@ -437,10 +437,32 @@ where
             // Остальные (thought по умолчанию) стримят мысли в блок «Мысли агентов».
             let allow_stream = node.output_type.as_deref() == Some("message");
             let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config, Some(agent));
-            // Фрейм ноды (`NodeDef.system_prompt_file`): отчёт об ошибке чтения —
-            // честная ошибка ноды (fail-fast), а не молчаливое отсутствие рамки.
+            // Фрейм ноды (`NodeDef.system_prompt_file` или графовый дефолт
+            // `config.default_system_prompt_*`): отчёт об ошибке чтения — честная
+            // ошибка ноды (fail-fast), а не молчаливое отсутствие рамки.
             let workflow_dir = std::path::Path::new(&workflow.parent_dir);
-            let agent_frame = super::agent_frame::resolve_node_frame(node, Some(workflow_dir))?;
+            let agent_frame = super::agent_frame::resolve_node_frame(
+                node,
+                Some(workflow_dir),
+                workflow.config.as_ref(),
+            )?;
+            if agent_frame.is_some() {
+                // Событие резолва — в лог (источник виден в «Логах», §2.5).
+                // Файл приходит с ноды или унаследован от дефолта графа.
+                let source = if node
+                    .system_prompt_file
+                    .as_deref()
+                    .map_or(false, |s| !s.trim().is_empty())
+                {
+                    "нода"
+                } else {
+                    "дефолт графа"
+                };
+                (runner.log_cb)(format!(
+                    "[worker] фрейм '{}' — источник: {}",
+                    node.id, source
+                ));
+            }
             let mut pending_signal = None;
             let result = runner.call_agent(
                 agent,

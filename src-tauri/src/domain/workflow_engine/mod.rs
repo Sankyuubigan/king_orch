@@ -801,12 +801,13 @@ fn build_fused_system_prompt(
                     group.id, agent_id, node.id
                 ));
             }
-            // Авто-склейка без fused_instruction может включить ноду с фреймом:
+            // Авто-склейка без fused_instruction может включить ноду с фреймом
+            // (нодовым или унаследованным от `config.default_system_prompt_*`):
             // per-node фрейм на склеенном этапе неприменим — предупреждаем ГРОМКО.
-            if node
-                .system_prompt_file
-                .as_deref()
-                .map_or(false, |s| !s.trim().is_empty())
+            // Эффективная пара — единый merge `agent_frame::effective_frame`.
+            if agent_frame::effective_frame(node, workflow.config.as_ref())
+                .file
+                .is_some()
             {
                 log::warn!(
                     "[agent_frame] Фрейм ноды '{}' (группа '{}') не применится: \

@@ -143,6 +143,20 @@ pub struct WorkflowConfig {
     /// Дефолтный пресет параметров LLM для всех узлов workflow (имя из sampling_presets.json)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_llm_params: Option<String>,
+    /// SSOT-дефолт фрейма (доп. системного промпта) для ВСЕХ нод `llm_worker` графа:
+    /// путь к markdown-файлу относительно папки YAML-графа (как `config.facts_file`).
+    ///
+    /// Объявляется ОДИН раз на граф; нодовые поля `system_prompt_file` /
+    /// `system_prompt_delivery` переопределяют дефолт ПО ПОЛЮ
+    /// (`agent_frame::effective_frame`). Применяется только к `llm_worker`;
+    /// резолв — `agent_frame::resolve_node_frame`, отсутствующий/пустой файл —
+    /// та же ЯВНАЯ ошибка ноды, что и для нодового пути.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_system_prompt_file: Option<String>,
+    /// Слот доставки дефолтного фрейма: `system` | `user_prefix` (дефолт контракта
+    /// `system`). Валидация значения — `agent_frame::FrameDelivery::parse`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_system_prompt_delivery: Option<String>,
     /// Глобальный предохранитель от бесконечных циклов: макс. число выполненных узлов
     /// за один прогон workflow (default 200). При превышении — честная ошибка.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -782,6 +796,163 @@ edges: []
             .expect("нода worker");
         assert!(node.system_prompt_file.is_none());
         assert!(node.system_prompt_delivery.is_none());
+    }
+
+    #[test]
+    fn parses_config_default_frame() {
+        let wf = wf_from_yaml(
+            r#"
+name: test
+config:
+  default_system_prompt_file: ../system_frame.md
+  default_system_prompt_delivery: user_prefix
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+  - id: worker
+    type: llm_worker
+    agent: test
+edges: []
+"#,
+        );
+        let config = wf.config.as_ref().expect("config графа");
+        assert_eq!(
+            config.default_system_prompt_file.as_deref(),
+            Some("../system_frame.md")
+        );
+        assert_eq!(
+            config.default_system_prompt_delivery.as_deref(),
+            Some("user_prefix")
+        );
+    }
+
+    #[test]
+    fn config_default_frame_fields_absent_by_default() {
+        // Правило round-trip (Гейт G2, tasks/21.10.26): у графов без дефолта
+        // поля нет и в файл оно НЕ дописывается при пересохранении.
+        // Кейс 1: блока config вообще нет → config = None (валидное состояние).
+        let wf = wf_from_yaml(
+            r#"
+name: test
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+edges: []
+"#,
+        );
+        assert!(wf.config.is_none());
+        let serialized = serde_yaml::to_string(&wf).expect("сер");
+        assert!(
+            !serialized.contains("default_system_prompt"),
+            "None-конфиг не должен создавать дефолты в YAML: {}",
+            serialized
+        );
+
+        // Кейс 2: config есть (facts_file), но дефолтов нет — тоже не дописываются.
+        let wf2 = wf_from_yaml(
+            r#"
+name: test
+config:
+  facts_file: facts.yaml
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+edges: []
+"#,
+        );
+        let config2 = wf2.config.as_ref().expect("config графа");
+        assert!(config2.default_system_prompt_file.is_none());
+        assert!(config2.default_system_prompt_delivery.is_none());
+        let serialized = serde_yaml::to_string(&wf2).expect("сер");
+        assert!(
+            !serialized.contains("default_system_prompt"),
+            "None-дефолты не должны попадать в YAML: {}",
+            serialized
+        );
+    }
+
+    /// Гейт G3 (tasks/21.10.26): боевой граф психотерапевта после чистки
+    /// нодовых полей — фрейм объявлен один раз в `config`, а нодовые поля
+    /// `llm_worker`-нод удалены. Нодовые поля у llm_worker отсутствуют,
+    /// effective-пара собирается из дефолта (merge применяется движком
+    /// ТОЛЬКО к llm_worker — единственный боевой вызов резолва в ветке
+    /// `LlmWorker`, `nodes.rs`).
+    #[test]
+    fn production_graph_frame_resolved_from_config_default() {
+        let path = graph_path("agents/psychotherapist/transitions/main_conversation_flow.yaml");
+        let wf = parse_workflow_file(&path)
+            .unwrap_or_else(|e| panic!("Парсинг {:?} не удался: {}", path, e));
+
+        let config = wf.config.as_ref().expect("config боевого графа");
+        assert_eq!(
+            config.default_system_prompt_file.as_deref(),
+            Some("../system_frame.md")
+        );
+        assert_eq!(
+            config.default_system_prompt_delivery.as_deref(),
+            Some("user_prefix")
+        );
+
+        // llm_worker: нодовые поля удалены, фрейм наследуется из дефолта.
+        for node_id in [
+            "call_validator",
+            "call_collector",
+            "call_soma_translator",
+            "call_decomposer",
+            "call_grounder",
+            "call_pattern_finder",
+            "call_healer",
+            "call_shadow_worker",
+            "call_request_helper",
+            "call_synthesizer",
+        ] {
+            let node = wf
+                .nodes
+                .iter()
+                .find(|n| n.id == node_id)
+                .unwrap_or_else(|| panic!("нода {} не найдена", node_id));
+            assert_eq!(
+                node.node_type,
+                NodeType::LlmWorker,
+                "нода {} должна быть llm_worker",
+                node_id
+            );
+            assert!(
+                node.system_prompt_file.is_none()
+                    && node.system_prompt_delivery.is_none(),
+                "у ноды {} остались нодовые поля фрейма — SSOT нарушена",
+                node_id
+            );
+            let effective =
+                super::super::agent_frame::effective_frame(node, Some(config));
+            assert_eq!(
+                effective.file.as_deref(),
+                Some("../system_frame.md"),
+                "фрейм {} должен наследоваться из дефолта",
+                node_id
+            );
+            assert_eq!(
+                effective.delivery_raw.as_deref(),
+                Some("user_prefix"),
+                "слот {} должен наследоваться из дефолта",
+                node_id
+            );
+        }
+
+        // Факт-экстрактор — не llm_worker: дефолт к нему не применяется
+        // (контракт резолва — только в ветке LlmWorker).
+        let extractor = wf
+            .nodes
+            .iter()
+            .find(|n| n.id == "extract_facts")
+            .expect("нода extract_facts");
+        assert!(
+            extractor.node_type != NodeType::LlmWorker,
+            "extract_facts должен оставаться не-llm_worker"
+        );
     }
 
     #[test]

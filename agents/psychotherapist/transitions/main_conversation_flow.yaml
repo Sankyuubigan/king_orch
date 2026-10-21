@@ -3,6 +3,10 @@ name: Психотерапевт
 config:
   facts_file: facts.yaml
   default_llm_params: creative
+  # SSOT фрейма: объявлен ОДИН раз — все ноды llm_worker наследуют его
+  # без явного указания (agent_frame::resolve_node_frame, merge по полю).
+  default_system_prompt_file: ../system_frame.md
+  default_system_prompt_delivery: user_prefix
 
 entry: user_message
 
@@ -19,15 +23,15 @@ nodes:
 - id: user_message
   type: user_message
   ui_pos:
-    x: -2274
     y: 493
+    x: -2274
 
 - id: extract_facts
   type: llm_fact_extractor
   input: '{{ nodes.user_message.output.text }}'
   ui_pos:
-    y: 493
     x: -1990
+    y: 493
   llm_params: strict
 
 - id: check_has_problem
@@ -43,33 +47,27 @@ nodes:
 - id: call_collector
   type: llm_worker
   agent: data_collector
-  system_prompt_file: ../system_frame.md
-  system_prompt_delivery: user_prefix
   output_type: message
   inject_response:
   - validator
   - decomposer
   ui_pos:
-    x: 3183
     y: -347
+    x: 3183
 
 - id: call_soma_translator
   type: llm_worker
   agent: soma_translator
-  system_prompt_file: ../system_frame.md
-  system_prompt_delivery: user_prefix
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    x: -561
     y: 210
+    x: -561
   llm_params: strict
 
 - id: call_decomposer
   type: llm_worker
   group: group_1
   agent: decomposer
-  system_prompt_file: ../system_frame.md
-  system_prompt_delivery: user_prefix
   inject_response:
   - soma_translator
   ui_pos:
@@ -79,23 +77,19 @@ nodes:
 - id: call_validator
   type: llm_worker
   agent: validator
-  system_prompt_file: ../system_frame.md
-  system_prompt_delivery: user_prefix
   inject_response:
   - decomposer
   - shadow_worker
   - grounder
   - data_collector
   ui_pos:
-    y: 152
     x: 1345
+    y: 152
   llm_params: strict
 
 - id: call_grounder
   type: llm_worker
   agent: grounder
-  system_prompt_file: ../system_frame.md
-  system_prompt_delivery: user_prefix
   task: Проанализируй отчёты коллег и жалобу пользователя. Выдай несколько конкретных, приземлённых бытовых сценариев возможных МЕНТАЛЬНЫХ причин проблемы (6-й элемент невроза, а не соматика). Если данных не хватает — задай пользователю уточняющие вопросы.
   output_type: message
   inject_response:
@@ -123,22 +117,18 @@ nodes:
 - id: call_pattern_finder
   type: llm_worker
   agent: pattern_finder_by_elements
-  system_prompt_file: ../system_frame.md
-  system_prompt_delivery: user_prefix
   inject_response:
   - decomposer
   - shadow_worker
   - grounder
   - data_collector
   ui_pos:
-    y: 44
     x: 2834
+    y: 44
 
 - id: call_healer
   type: llm_worker
   agent: neuro_healer
-  system_prompt_file: ../system_frame.md
-  system_prompt_delivery: user_prefix
   task: |
     Из отчёта pattern_finder_by_elements возьми номер типа паттерна.
     Затем выполни ШАГ 2 — прочитай описание этого паттерна в базе знаний инструментом ReadSection.
@@ -152,14 +142,12 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 3202
     y: 26
+    x: 3202
 
 - id: call_shadow_worker
   type: llm_worker
   agent: shadow_worker
-  system_prompt_file: ../system_frame.md
-  system_prompt_delivery: user_prefix
   output_type: message
   inject_response:
   - validator
@@ -168,15 +156,15 @@ nodes:
   - grounder
   - soma_translator
   ui_pos:
-    y: -456
     x: 2259
+    y: -456
 
 - id: note_1782221436115
   type: note
   input: пересчитываем данные с учетом новых данных от юзера
   ui_pos:
-    x: -1215
     y: 255
+    x: -1215
 
 - id: note_1782220193985
   type: note
@@ -189,8 +177,8 @@ nodes:
   type: note
   input: вычисление типа
   ui_pos:
-    y: 41
     x: 2085
+    y: 41
 
 - id: check_critical_elements
   type: condition_router
@@ -207,8 +195,8 @@ nodes:
     equals: false
   logic: any
   ui_pos:
-    x: 1655
     y: 81
+    x: 1655
 
 - id: check_somatic
   type: condition_router
@@ -268,12 +256,10 @@ nodes:
 - id: call_request_helper
   type: llm_worker
   agent: request_helper
-  system_prompt_file: ../system_frame.md
-  system_prompt_delivery: user_prefix
   output_type: message
   ui_pos:
-    x: -808
     y: 864
+    x: -808
 
 - id: check_elements1
   type: condition_router
@@ -284,16 +270,14 @@ nodes:
     equals: true
   - field: validator_report.e2
     equals: true
-  - field: validator_report.e5
-    equals: true
   - field: validator_report.e6
     equals: true
   - field: validator_report.e7
     equals: true
   logic: all
   ui_pos:
-    x: 1967
     y: -283
+    x: 1967
 
 - id: check_elements2
   type: condition_router
@@ -313,8 +297,6 @@ nodes:
   type: llm_worker
   group: group_1
   agent: synthesizer
-  system_prompt_file: ../system_frame.md
-  system_prompt_delivery: user_prefix
   output_type: message
   inject_response:
   - decomposer
