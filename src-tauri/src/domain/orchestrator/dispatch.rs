@@ -10,6 +10,16 @@ use std::sync::Mutex;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Instant;
 
+/// Медиа-инструменты image-движка, исполняемые локальным диспетчером (без MCP).
+/// SSOT трёх ранее расходившихся условий: `upscale_image` в них упускался и
+/// проваливался в «Инструмент 'upscale_image' не найден» (см. tasks/21.10.26
+/// …md §1.1, лог 00:57). Набор обязан совпадать с тем, что исполняет
+/// `infra::execute_image_tool` (media.rs: "generate_image" | "edit_image" |
+/// "upscale_image").
+fn is_image_engine_tool(tool: &str) -> bool {
+    matches!(tool, "generate_image" | "edit_image" | "upscale_image")
+}
+
 /// Управляющий сигнал цикла `run_agent_node`: как продолжить после
 /// вызова `execute_tool_call` / `handle_subagent_call`.
 pub(crate) enum DispatchCtl {
@@ -287,9 +297,7 @@ where
         if !tool_found || !tool_succeeded {
             // Ресурсная ошибка image-движка (нет памяти) — не «плохие аргументы»:
             // повтор тем же способом бесполезен. Честный стоп сразу (§2.2, §1.7.1).
-            if super::vram::is_resource_error(&output)
-                && (tool_name == "generate_image" || tool_name == "edit_image")
-            {
+            if super::vram::is_resource_error(&output) && is_image_engine_tool(tool_name) {
                 self.tool_calls.push(ToolCallInfo {
                     tool_name: tool_name.to_string(),
                     arguments: args_str,
@@ -424,7 +432,7 @@ where
                     }
                 }
             }
-        } else if tool_name == "generate_image" || tool_name == "edit_image" {
+        } else if is_image_engine_tool(tool_name) {
             tool_found = true;
             let granted = self
                 .all_tools
@@ -652,7 +660,7 @@ where
             // как в legacy-пути (ретраи бесполезны, §2.2).
             if found
                 && super::vram::is_resource_error(&output)
-                && (call.name == "generate_image" || call.name == "edit_image")
+                && is_image_engine_tool(&call.name)
             {
                 self.tool_calls.push(ToolCallInfo {
                     tool_name: call.name.clone(),

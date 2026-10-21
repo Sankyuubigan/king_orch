@@ -568,8 +568,7 @@ pub fn get_prompt_preview(
                 let prompt = crate::domain::build_system_prompt(
                     agent, &history, has_tools, &tools, 2048, false, false, false, false,
                 );
-                let uses_image_selection =
-                    agent.tools.iter().any(|tool| tool == "edit_image");
+                let uses_image_selection = crate::domain::agent_consumes_image_catalog(agent);
                 (prompt, uses_image_selection)
             }
             None => {
@@ -581,7 +580,7 @@ pub fn get_prompt_preview(
                     node.agent.as_deref().and_then(|agent_id| {
                         agents.iter().find(|agent| agent.id == agent_id)
                     })
-                    .is_some_and(|agent| agent.tools.iter().any(|tool| tool == "edit_image"))
+                    .is_some_and(crate::domain::agent_consumes_image_catalog)
                 });
                 (prompt, uses_image_selection)
             }

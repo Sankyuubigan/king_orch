@@ -1,6 +1,18 @@
+use crate::domain::agent_manager::AgentProfile;
 use crate::infra::{ChatAttachment, ChatMessage};
 use sha2::{Digest, Sha256};
 use std::collections::HashSet;
+
+/// Агент потребляет каталог изображений (нужен список `hist_*` / `req_*` id
+/// вложений сессии). SSOT для ранее размножившегося условия, где у апскейлера
+/// каталог не появлялся вовсе (`tool == "edit_image"` ×6: orchestrator/mod.rs
+/// ×4, api/chat.rs ×2 — см. tasks/21.10.26 …md §1.1).
+pub fn agent_consumes_image_catalog(agent: &AgentProfile) -> bool {
+    agent
+        .tools
+        .iter()
+        .any(|tool| tool == "edit_image" || tool == "upscale_image")
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ImageLocator {
@@ -215,14 +227,30 @@ impl RequestMedia {
             if !seen.insert(source_id.clone()) {
                 continue;
             }
+            // Терпимый ресолв (image_ids): модель регулярно искажает id в
+            // свободном тексте (лог 21.10.2026 00:51–00:57 — три «Неизвестный
+            // source_image_id» подряд при верном контексте). Канонизация
+            // (скобки/кавычки/подчёркивания) + восстановление по ≤2 простым
+            // правкам. Неоднозначность и «далёкие» — честный отказ, не выбор.
+            let candidate_ids: Vec<&str> = self
+                .candidates
+                .iter()
+                .map(|candidate| candidate.id.as_str())
+                .collect();
+            let lookup = super::image_ids::lookup_id(source_id, &candidate_ids);
+            let matched_id = super::image_ids::finalize_lookup(
+                lookup,
+                source_id,
+                &self.valid_ids(),
+            )?;
             let candidate = self
                 .candidates
                 .iter()
-                .find(|candidate| candidate.id == *source_id)
+                .find(|candidate| candidate.id == matched_id)
                 .ok_or_else(|| {
                     format!(
-                        "Неизвестный source_image_id. Допустимые ID: {}",
-                        self.valid_ids()
+                        "Изображение '{}' исчезло из каталога между стадиями ресолва",
+                        matched_id
                     )
                 })?;
             resolved.push(self.resolve_candidate(candidate, messages)?);

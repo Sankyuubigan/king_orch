@@ -4,6 +4,7 @@ pub(crate) use dispatch::*;
 pub(crate) mod compaction;
 pub(crate) mod grammar;
 pub(crate) mod image_catalog;
+pub(crate) mod image_ids;
 pub(crate) mod invocation;
 pub(crate) mod prompt_log;
 pub(crate) mod result;
@@ -16,6 +17,7 @@ pub(crate) use compaction::*;
 pub(crate) use consts::*;
 pub(crate) use grammar::*;
 pub use image_catalog::RequestMedia;
+pub use image_catalog::agent_consumes_image_catalog;
 pub(crate) use invocation::*;
 pub(crate) use prompt_log::*;
 pub(crate) use result::*;
@@ -417,13 +419,13 @@ where
                         .iter()
                         .find(|agent| agent.id == agent_id)
                 })
-                .is_some_and(|agent| agent.tools.iter().any(|tool| tool == "edit_image"))
+                .is_some_and(agent_consumes_image_catalog)
         })
     } else {
         agents
             .iter()
             .find(|agent| agent.id == agent_id)
-            .is_some_and(|agent| agent.tools.iter().any(|tool| tool == "edit_image"))
+            .is_some_and(agent_consumes_image_catalog)
     };
     let image_catalog_text = if uses_image_selection {
         request_media.candidate_prompt()
@@ -1157,7 +1159,7 @@ where
         is_hybrid,
         is_cloud,
     );
-    if agent.tools.iter().any(|tool| tool == "edit_image") {
+    if agent_consumes_image_catalog(agent) {
         let image_candidates = request_media.candidate_prompt();
         if !image_candidates.is_empty() {
             system_prompt.push_str("\n\n");
@@ -1188,7 +1190,7 @@ where
         let actual_author = msg.author.as_deref().unwrap_or("user");
         let role;
         let mut content = prompt::sanitize_model_visible_text(&msg.content);
-        if agent.tools.iter().any(|tool| tool == "edit_image") {
+        if agent_consumes_image_catalog(agent) {
             content.push_str(&request_media.message_suffix(msg.id.as_deref()));
         }
 
