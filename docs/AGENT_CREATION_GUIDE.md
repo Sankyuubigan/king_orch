@@ -185,9 +185,9 @@ visible: false  # опционально: не предлагать агента
 
 ### Параметр `tools` (код-тулы из Rust-ядра `infra/tools/`)
 
-Код-инструменты живут в Rust-ядре (SSOT-реестр `src-tauri/src/infra/tools/`), а не в MCP-серверах. Укажи в `tools`:
+Код-инструменты: SSOT-реализация в крейте `ko-code-tools` (репозиторий `my-tauri-plugins`), реестр/адаптеры — `src-tauri/src/infra/tools/`. Не в MCP-серверах. Укажи в `tools`:
 
-- `code_read` — мета-набор **read-only** тулов: `read_file`, `read_many_files`, `grep`, `glob`, `list_directory`, `lsp_get_definition`, `lsp_get_references`, `lsp_get_diagnostics`. Выполняются автоматически, без плашки, по любым путям.
+- `code_read` — мета-набор **read-only** тулов: `read_file`, `read_many_files`, `grep`, `glob`, `list_directory`. Выполняются автоматически, без плашки, по любым путям.
 - `code_write` — полный набор (**чтение + запись**): всё из `code_read` плюс мутаторы `write_file`, `edit_file`, `bash`, `run_tests`. Запись **внутри корня проекта** — автоматически разрешена и логируется; запись **вне корня** — плашка в UI с выбором: «Запретить / Разрешить 1 раз / Разрешить в этом чате».
 - **Явные имена** — добавляются к базовому read-only набору (например `tools: ["bash"]` даёт read-only + `bash`, но НЕ `write_file`).
 

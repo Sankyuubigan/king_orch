@@ -728,7 +728,7 @@ mod tests {
         "agents/coder/transitions/analyst-team.yaml",
         "agents/coder/transitions/coding-team.yaml",
         "agents/research/transitions/search-specialist.yaml",
-        "agents/media/transitions/media-flow.yaml",
+        "agents/image-gen/transitions/image-gen-flow.yaml",
     ];
 
     #[test]
@@ -1208,7 +1208,7 @@ edges: []
     /// Проверяем по исходникам проекта — копий критериев в тесте не создаём.
     const DATA_FILES: &[&str] = &[
         "coder/transitions/facts.yaml",
-        "media/transitions/facts.yaml",
+        "image-gen/transitions/facts.yaml",
         "psychotherapist/transitions/facts.yaml",
         "research/transitions/facts.yaml",
         "psychotherapist/database/element_validation_rules.yaml",
@@ -1279,8 +1279,8 @@ edges: []
             [
                 "analyst-team",
                 "coding-team",
+                "image-gen-flow",
                 "main_conversation_flow",
-                "media-flow",
                 "search-specialist",
             ],
             "фильтр не должен терять или подменять реальные графы"

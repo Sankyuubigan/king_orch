@@ -92,28 +92,13 @@ function buildToolCatalog() {
   // адаптеры (макрос `adapter_tool!`), их текст в его mod.rs не парсится.
   // Само ядро описывает тула через `impl CodeTool for X { ... }` — парсим его.
   const coreDir = "D:\\Projects\\my-tauri-plugins\\ko-code-tools\\src";
-  for (const f of ["fs.rs", "search.rs", "shell.rs"]) {
+  // С 21.10.2026 fs.rs разбит на facade + fs/{read,write,edit,lint}.rs,
+  // search.rs держит grep, а glob/list_directory переехали в search/listing.rs.
+  for (const f of ["fs/fs_read.rs", "fs/fs_write.rs", "fs/fs_edit.rs", "search.rs", "search/listing.rs", "shell.rs"]) {
     const full = path.join(coreDir, f);
     if (!fs.existsSync(full)) continue;
     const src = fs.readFileSync(full, "utf8");
     const implRe = /impl\s+CodeTool\s+for\s+(\w+)\s*\{([\s\S]*?)\n\}/g;
-    let m;
-    while ((m = implRe.exec(src))) {
-      const body = m[2];
-      const name = (body.match(/fn\s+name\(&self\)\s*->\s*&\w*\s*\{\s*"([^"]+)"/) || [])[1];
-      const desc = (body.match(/fn\s+description\(&self\)\s*->\s*&\w*\s*\{\s*"([^"]*)"/) || [])[1];
-      if (!name || !desc) continue;
-      const readonly = /fn\s+is_readonly\(&self\)\s*->\s*bool\s*\{\s*true\s*\}/.test(body);
-      const flag = readonly ? "read-only" : "read+write";
-      md += `- \`${name}\` [${flag}] — ${desc}\n`;
-    }
-  }
-  md += "\n## LSP-инструменты (хост King Orch, infra/tools/lsp.rs)\n\n";
-  const lspSrc = path.join(SRC, "infra", "tools", "lsp.rs");
-  if (fs.existsSync(lspSrc)) {
-    const src = fs.readFileSync(lspSrc, "utf8");
-    // Парсим блоки `impl Tool for X { ... }` целиком: имя, описание, read-only.
-    const implRe = /impl\s+Tool\s+for\s+(\w+)\s*\{([\s\S]*?)\n\}/g;
     let m;
     while ((m = implRe.exec(src))) {
       const body = m[2];

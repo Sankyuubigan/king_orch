@@ -202,10 +202,9 @@ Module-scope helper'ы:
 | `session_manager.rs` | Чтение/запись JSON-файлов сессий (единый массив `messages[]`) |
 | `mcp_client.rs` | JSON-RPC клиент для MCP-серверов через stdin/stdout |
 | `downloader.rs` | Скачивание .gguf файлов с прогрессом |
-| `bin_downloader.rs` | Скачивание sidecar-бинарников (deno, yt-dlp, rust-analyzer) с распаковкой zip/gzip |
-| `tools/` | **Инструменты кодинга (Rust-ядро, SSOT)**. Трейт `Tool` + реестр `all_tools()`: `fs.rs` (read_file/read_many_files/write_file/edit_file), `search.rs` (grep/glob/list_directory), `shell.rs` (bash/run_tests), `lsp.rs` (lsp_get_definition/lsp_get_references/lsp_get_diagnostics). `code_read`/`code_write` — фильтры по `is_readonly()`, explicit-имена добавляются к базе. Вся реализация — в этом модуле, диспетчер только исполняет |
+| `bin_downloader.rs` | Скачивание sidecar-бинарников (deno, yt-dlp) с распаковкой zip |
+| `tools/` | **Инструменты кодинга.** Трейт `Tool` + реестр `all_tools()`: тонкие адаптеры (макрос `adapter_tool!`) над ядром `ko-code-tools` (SSOT-реализация в `my-tauri-plugins`; чтение/поиск/shell). `code_read`/`code_write` — фильтры по `is_readonly()`, explicit-имена добавляются к базе. Диспетчер только исполняет |
 | `permissions.rs` | Система разрешений: `PermissionApprover` (auto-allow в корне для мутаторов, read-only авто везде, session-grants, pending-запросы). Тул-события → плашка в UI |
-| `lsp/` | LSP-клиент (JSON-RPC 2.0 по stdio, Content-Length framing) + `manager.rs` (sidecar: ленивый старт rust-analyzer, кэш на workspace root) |
 
 ---
 
@@ -226,12 +225,11 @@ main.rs
         │    │    └→ runtime.rs          — MCP-загрузка + agent_code_tool_schemas
         │    ├→ parsers.rs
         │    └→ agent_manager.rs       — загрузка .md + YAML, load_entry_points()
-       └→ infra/ (дверь: infra/mod.rs)
-            ├→ tools/                   — код-тулы (SSOT): fs/search/shell/lsp
+        └→ infra/ (дверь: infra/mod.rs)
+            ├→ tools/                   — адаптеры код-тулов (SSOT: ko-code-tools)
             ├→ permissions.rs           — PermissionApprover, плашка
-            ├→ lsp/                     — LSP-клиент + sidecar-менеджер
             ├→ mcp_client.rs            — JSON-RPC клиент MCP
-            ├→ bin_downloader.rs        — sidecar-бинарники (deno, rust-analyzer)
+            ├→ bin_downloader.rs        — sidecar-бинарники (deno, yt-dlp)
             └→ ...
 
 Frontend:
@@ -313,8 +311,7 @@ dispatch.rs: is_code_tool_reference(tool)?
 ```
 
 - **Grant (что видит агент)** = `agent_code_tool_schemas(agent)` (runtime.rs): `code_read` → только readonly, `code_write` → всё, явные имена → добавляются к read-only базе. Этот же список попадает в `all_tools` → и в промпт, и в проверку `is_tool_granted`.
-- **LSP** (`infra/lsp/`): rust-analyzer как sidecar (JSON-RPC 2.0 по stdio), ленивый старт, один процесс на workspace root. Тулы `lsp_get_*` — read-only.
-- **Установка sidecar**: `bin_downloader.rs` (rust-analyzer приходит как `.gz` → flate2). Нет бинарника → честная ошибка «LSP-сервер не установлен», не тишина.
+- **Авто-откат правок (линт-гейт)** в хосте НЕ подключен: правка выполняется без автопроверки (ядро честно помечает); проверка синтаксиса — задача агента (CLI `code check` в agent-tools либо `code call run_tests cargo_check`).
 
 **Запрещённые импорты:**
 - ❌ `api/chat.rs → crate::infra::llm::ChatMessage` (кишки)

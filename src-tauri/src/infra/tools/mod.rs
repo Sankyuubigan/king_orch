@@ -15,10 +15,9 @@ use serde_json::Value;
 
 use crate::infra::permissions::PermissionApprover;
 
-pub mod lsp;
 pub mod media;
 
-/// Хелперы ядра: ними пользуются lsp.rs/media.rs через `super::` (имена прежние).
+/// Хелперы ядра: ними пользуется media.rs через `super::` (имена прежние).
 pub use ko_code_tools::{is_within_root, resolve_path};
 
 /// Ошибка тула — единый тип с ядром (варианты и Display-тексты 1:1, конверсий нет).
@@ -72,7 +71,7 @@ pub struct ToolCtx<'a> {
     pub image_artifacts: Option<&'a media::ImageArtifactRegistry>,
 }
 
-/// Контракт инструмента. Реализации: адаптеры ядра в этом модуле + lsp.rs/media.rs.
+/// Контракт инструмента. Реализации: адаптеры ядра в этом модуле + media.rs.
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
@@ -145,36 +144,12 @@ macro_rules! adapter_tool {
             }
             fn execute(&self, args: &Value, ctx: &ToolCtx) -> Result<String, ToolError> {
                 let ko_auth = CoreAuthorizer { ctx };
-                // Линт-гейт хоста: правка, ломающая код, откатывается.
-                //
-                // Гейт подключается ТОЛЬКО если сервер проверки установлен: без
-                // него проверять нечем, и «проверка не выполнена» — это не отказ
-                // правки, а отсутствие инструмента. Причина уходит в лог
-                // (правило 3.4: честно и без шума в ответе агенту).
-                //
-                // Гейт объявлен ДО выбора: его ссылка живёт дольше контекста,
-                // поэтому в ветке `if` он не создаётся.
-                let gate = crate::infra::lsp::lint_gate::LspLintGate {
-                    workspace_root: ctx.workspace_root,
-                    bins_dir: ctx.bins_dir,
-                };
-                let server_available =
-                    crate::infra::lsp::manager::is_lsp_server_available(ctx.bins_dir);
-                if !server_available {
-                    log::warn!(
-                        "lint-gate: сервер проверки ('{}') не установлен в '{}' — проверка правок отключена",
-                        crate::infra::lsp::LSP_SERVER_NAME,
-                        ctx.bins_dir.display()
-                    );
-                }
+                // Линт-гейт (авто-откат правок) хостом НЕ подключается: сервер
+                // проверки снят с вооружения 21.10.26, ядро честно помечает
+                // такие правки как «без автопроверки» (NoGate-путь в fs.rs).
+                // Проверка синтаксиса — задача агента: `code check` (CLI
+                // agent-tools) либо `code call run_tests cargo_check`.
                 let ko_ctx = ko_code_tools::ToolCtx::new(ctx.workspace_root, &ko_auth);
-                // Гейт ленивый — сервер поднимается только если проверка
-                // реально понадобилась (то есть при записи в файл).
-                let ko_ctx = if server_available {
-                    ko_ctx.with_lint_gate(&gate)
-                } else {
-                    ko_ctx
-                };
                 $core_ty.execute(args, &ko_ctx)
             }
         }
@@ -194,7 +169,7 @@ adapter_tool!(ListDirectory, ko_code_tools::search::ListDirectory);
 adapter_tool!(Bash, ko_code_tools::shell::Bash);
 adapter_tool!(RunTests, ko_code_tools::shell::RunTests);
 
-/// SSOT-реестр: ВСЕ тулы кодинга. Ядро (fs/search/shell) + LSP хоста.
+/// SSOT-реестр: ВСЕ тулы кодинга (полностью ядерные — fs/search/shell).
 /// `code_read`/`code_write` — фильтры по `is_readonly()` над этим списком.
 pub fn all_tools() -> Vec<Box<dyn Tool>> {
     vec![
@@ -207,9 +182,6 @@ pub fn all_tools() -> Vec<Box<dyn Tool>> {
         Box::new(ListDirectory),
         Box::new(Bash),
         Box::new(RunTests),
-        Box::new(lsp::LspGetDefinition),
-        Box::new(lsp::LspGetReferences),
-        Box::new(lsp::LspGetDiagnostics),
     ]
 }
 
@@ -293,11 +265,6 @@ mod tests {
         let read_only = all_tools().iter().filter(|t| t.is_readonly()).count();
         let read_schemas = tool_schemas(false, &[]);
         assert_eq!(read_schemas.len(), read_only, "code_read = все readonly-тулы");
-        // LSP-тулы — read-only (авто-доступ без плашки).
-        let names: Vec<String> = read_schemas.iter().map(|(_, n, _)| n.clone()).collect();
-        assert!(names.contains(&"lsp_get_definition".to_string()));
-        assert!(names.contains(&"lsp_get_references".to_string()));
-        assert!(names.contains(&"lsp_get_diagnostics".to_string()));
     }
 
     #[test]
