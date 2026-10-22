@@ -1615,15 +1615,16 @@ body.edge-reconnecting {
 
 /* ─── Адаптация под узкое окно ─── */
 /* На узкой ширине прячем второстепенные элементы управления чата,
-   чтобы кнопки Стоп/Отправить не обрезались и не накладывались. */
+   чтобы кнопки Стоп/Отправить не обрезались и не накладывались.
+   Селекторы по КЛАССУ: элементы строятся через buildChatPage без id,
+   id-селекторы (#token-counter и т.п.) никогда не совпадали. */
 @media (max-width: 760px) {
-  #token-counter,
-  #engine-badge { display: none; }
+  .token-counter,
+  .engine-badge { display: none; }
   .sidebar { width: 200px; padding: 10px; gap: 10px; }
 }
 
 @media (max-width: 560px) {
-  #btn-add-model { display: none; }
   .agent-select,
   .model-select { min-width: 80px; flex: 1; }
   .chat-input-area { gap: 8px; padding: 8px; }
@@ -2095,7 +2096,10 @@ body.edge-reconnecting {
 }
 
 .main-screen-logo {
-  width: min(520px, 78vw);
+  /* Динамический размер: крупнее на больших экранах, но ограничен ВЫСОТОЙ
+     окна (viewBox 840/260 ≈ 3.23:1; 128vh даёт высоту SVG ≤ ~40vh), иначе на
+     низких окнах логотип уезжает под поле ввода. */
+  width: clamp(360px, min(88vw, 128vh), 900px);
   height: auto;
   pointer-events: none;
   flex-shrink: 0;
@@ -2130,8 +2134,7 @@ body.edge-reconnecting {
 }
 .settings-nav-btn:hover { background: var(--session-hover); border-color: var(--primary); color: var(--primary); }
 
-/* кнопка «+ модель» в ряду ввода (открывает раздел «Настройки») */
-.btn-add-model { flex: 0 0 auto; margin-left: 2px; }
+/* кнопка «+ модель» в ряду ввода — удалена (user request 22.10.26) */
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Вкладка-веб-страница (iframe 9Router Web UI)

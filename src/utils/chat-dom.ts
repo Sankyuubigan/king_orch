@@ -151,12 +151,10 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
   const modelSelect = document.createElement("select");
   modelSelect.className = "model-select";
   modelSelect.title = "Выбор модели GGUF";
-  const btnAddModel = document.createElement("button");
-  btnAddModel.className = "btn-secondary btn-add-model";
-  btnAddModel.title = "Добавить новую модель (локально)";
-  btnAddModel.textContent = "+";
   const tokenCounter = py("div", "token-counter") as HTMLDivElement;
-  tokenCounter.textContent = "0 / 8192";
+  // Стартовый placeholder до config:loaded (лимит ещё не известен) — «0 / 8192»
+  // было ложью, если конфиг задаёт другой лимит или модель облачная.
+  tokenCounter.textContent = "— / …";
   tokenCounter.title = "Токены: Текущие / Лимит контекста";
   const engineBadge = py("div", "engine-badge engine-idle") as HTMLDivElement;
   engineBadge.textContent = "…";
@@ -182,7 +180,7 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
   strategyToggleText.textContent = "Схлопнуто ⚡";
   strategyToggleLabel.append(strategyToggle, strategyToggleTrack, strategyToggleText);
 
-  left.append(btnAttach, fileInput, btnSetWorkdir, currentWorkdir, agentSelect, btnAgentSettings, modelSelect, btnAddModel, strategyToggleLabel, tokenCounter, engineBadge, cloudCounter);
+  left.append(btnAttach, fileInput, btnSetWorkdir, currentWorkdir, agentSelect, btnAgentSettings, modelSelect, strategyToggleLabel, tokenCounter, engineBadge, cloudCounter);
 
   const right = py("div", "chat-input-controls-right");
   const btnStop = document.createElement("button");

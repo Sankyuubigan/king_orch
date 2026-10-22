@@ -606,8 +606,6 @@ export class TabController {
     // до восстановления вкладок (init() идёт ПОСЛЕ loadConfig).
     fillModelSelect(page.modelSelect);
     fillAgentSelect(page.agentSelect);
-    // Кнопка «+» (добавить модель) открывает Настройки.
-    page.pageRoot.querySelector?.(".btn-add-model")?.addEventListener("click", () => this.openSection("settings"));
     if (isMain) page.viewChat.classList.add("main-mode");
   }
 

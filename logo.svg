@@ -12,7 +12,7 @@
         font-size: 82px;
         letter-spacing: 2px;
         filter: drop-shadow(0 0 14px rgba(168, 85, 247, 0.28));
-        animation: textFloat 3.8s ease-in-out infinite alternate;
+        animation: textFloat 4.2s ease-in-out infinite alternate;
         transform-origin: 480px 145px;
       }
 
@@ -28,10 +28,12 @@
         animation: spinCounter 16s linear infinite;
       }
 
-      /* Плавное парение руки экзоскелета */
+      /* Плавная живая рука экзоскелета: качание на шарнире запястья
+         (чан: cx=118 cy=177). Вращение честное — предплечье качается вместе с
+         ладонью, как у настоящего сустава. */
       .hand-levitation {
-        transform-origin: 140px 180px;
-        animation: hoverHand 3.4s ease-in-out infinite alternate;
+        transform-origin: 118px 177px;
+        animation: hoverHand 4s ease-in-out infinite alternate;
       }
 
       /* Пульсация кибер-световода на руке */
@@ -50,13 +52,15 @@
       }
 
       @keyframes hoverHand {
-        0% { transform: translateY(0px) rotate(0deg); }
-        100% { transform: translateY(6px) rotate(-1.2deg); }
+        0%   { transform: translateY(0px) rotate(1.4deg); }
+        50%  { transform: translateY(5px) rotate(-0.6deg); }
+        100% { transform: translateY(9px) rotate(-2.2deg); }
       }
 
       @keyframes textFloat {
-        0% { transform: translateY(0px); }
-        100% { transform: translateY(-3px); }
+        0%   { transform: translateY(0px) rotate(0deg); }
+        50%  { transform: translateY(-5px) rotate(0.4deg); }
+        100% { transform: translateY(-9px) rotate(0.8deg); }
       }
 
       @keyframes conduitPulse {

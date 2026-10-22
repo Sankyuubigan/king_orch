@@ -9,7 +9,7 @@ import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
 import { renderMarkdown, stripStreamArtifacts, extractChannelThought, CLOUD_ROUTER_PREFIXES, isCloudModelPath, fillModelSelect, fillAgentSelect, getAgentDisplayName, getSelectedAgentName, isGraphAgent, hasFusableGroups } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
-import { trackError } from "../telemetry";
+import { trackError, trackEvent } from "../telemetry";
 
 let mermaidPromise: Promise<typeof import("mermaid")> | null = null;
 let mermaidInitialized = false;
@@ -244,6 +244,8 @@ export class ChatController {
   private modelAudioCapable: boolean = false;
   private countTimer: number | null = null;
   private lastPromptTokens: number = 0;
+  /// Какая ветка токен-счёта рисовалась последней (облако/локальная) — для аналитики смены режима.
+  private lastTokenModeCloud: boolean | null = null;
   private processingWatchdog: number | null = null;
   /// Кэш каталога моделей плагина (для tokenizer_id в счётчике токенов).
   private catalogCache: CatalogEntry[] | null = null;
@@ -471,21 +473,49 @@ export class ChatController {
     this.countTimer = window.setTimeout(() => this.updateTokenCounter(), 400);
   }
 
+  /**
+   * Единые состояния плашки токенов для ОБЕИХ веток (вторая итерация 22.10.26:
+   * tasks/22.10.26 Токены при облачных моделях.md). Раньше здесь был каскад
+   * несогласованных ранних return (глюк «то 0, то сворачивается»), затем —
+   * тотальное скрытие при облачной модели. Теперь контракт один — «сколько
+   * токенов съедает текущий промпт»:
+   *  1. нет модели/агента → «—» (облако) / «— / лимит» (локальная);
+   *  2. нечего считать (нет истории, ввода и вложений) → «~0» (облако) /
+   *     «0 / лимит» (локальная) — без invoke;
+   *  3. иначе → токены ПОЛНОГО промпта через get_prompt_preview (system-промпт
+   *     агента + ИСТОРИЯ + текущий ввод; при пустом message бэкенд не добавляет
+   *     user-сообщение — api/chat.rs) → TokenizerService.countTokens:
+   *     - облачная модель → «~N» (estimatePromptMemory и «/ лимит» неприменимы;
+   *       «~» = оценка чужим токенизатором, точный счёт отдаёт провайдер);
+   *     - локальная → прежний вид «N (~X МБ …)» + warning/danger 80%.
+   *  Видимостью плашки setIndicatorMode больше НЕ управляет: валидный контент
+   *  есть у обеих веток (css-скрытие на узких окнах остается).
+   */
   private async updateTokenCounter() {
-    if (store.isProcessing) return;
+    const counter = this.el.tokenCounter;
+    if (!counter || store.isProcessing) return;
     const modelPath = this.el.modelSelect?.value;
     const agentId = this.el.agentSelect?.value;
     const text = this.el.chatInput?.value || "";
     const contextSize = store.contextSize;
+    const isCloud = !!modelPath && isCloudModelPath(modelPath);
 
-    if (!text.trim()) {
-      if (this.el.tokenCounter) this.el.tokenCounter.innerText = `0 / ${contextSize}`;
+    if (!modelPath || !agentId) {
+      counter.innerText = isCloud ? "—" : `— / ${contextSize > 0 ? contextSize : "…"}`;
+      counter.title = "Выберите модель и агента, чтобы увидеть заполнение контекста";
       return;
     }
-    if (!modelPath || !agentId) return;
-    // Облачные комбо роутеров: локальный счётчик токенов/VRAM неприменим.
-    if (isCloudModelPath(modelPath)) {
-      if (this.el.tokenCounter) this.el.tokenCounter.innerText = "";
+    // Локальная ветка: лимит контекста приходит из конфига (contextSize).
+    if (!isCloud && contextSize <= 0) {
+      counter.innerText = "— / …";
+      counter.title = "Ожидание загрузки конфигурации (лимит контекста)";
+      return;
+    }
+    if (!text.trim() && !this.state.history.some(m => m.type === "message") && this.attachments.length === 0) {
+      counter.innerText = isCloud ? "~0" : `0 / ${contextSize}`;
+      counter.title = isCloud
+        ? "Токены промпта: истории и ввода пока нет — 0."
+        : "Токены: Текущие / Лимит контекста";
       return;
     }
 
@@ -516,31 +546,52 @@ export class ChatController {
         const tokens = await countTokens(promptText, tokenizerId);
         this.lastPromptTokens = tokens;
 
+        // Облачная ветка: VRAM-оценка (estimatePromptMemory) и «80% лимита»
+        // неприменимы — покажем только «~N». Prompt-сборщик на бэкенде от
+        // модели не зависит (api/chat.rs uses model_path no-op), текст тот же,
+        // что и у локальной ветки.
+        if (isCloud) {
+            counter.innerText = `~${tokens}`;
+            counter.title = "Предварительная оценка токенов: system-промпт + история + ввод (чужой токенизатор). Точный счёт возвращает провайдер после ответа.";
+            counter.classList.remove("warning", "danger");
+            this.notifyTokenMode(isCloud, tokens);
+            return;
+        }
+
         const vram = await estimatePromptMemory(modelPath, contextSize, kvQuantKeys, kvQuantValues, tokens, maxGen);
 
-        if (this.el.tokenCounter) {
-            const isGraph = isGraphAgent(this.el.agentSelect.value);
-            const graphHint = isGraph ? " Оценка по самому тяжёлому агенту графа." : "";
-            // Формат: (расчётная потребность + уже занятая VRAM) / точный объём VRAM в MiB.
-            const memStr = vram && vram.vram_used_mb > 0 && vram.vram_total_mb > 0
-                ? ` (~${Math.round(vram.need_mb + vram.vram_used_mb)} МБ / ${Math.round(vram.vram_total_mb)} МБ)`
-                : (isFinite(vram?.need_mb) && (vram?.need_mb ?? 0) > 0 ? ` (~${Math.round(vram.need_mb)} МБ)` : "");
-            this.el.tokenCounter.innerText = `${tokens}${memStr}`;
-            this.el.tokenCounter.classList.remove("warning", "danger");
-            if (tokens > contextSize) {
-                this.el.tokenCounter.classList.add("danger");
-                this.el.tokenCounter.title = "Внимание: Лимит превышен! При отправке старые сообщения будут удалены из контекста." + graphHint;
-            } else if (tokens > contextSize * 0.8) {
-                this.el.tokenCounter.classList.add("warning");
-                this.el.tokenCounter.title = "Контекст заполняется. Близко к лимиту." + graphHint;
-            } else {
-                this.el.tokenCounter.title = "Токены: текущие / Лимит контекста. Память: оценка (потребность + занято) / объём VRAM." + graphHint;
-            }
+        const isGraph = isGraphAgent(this.el.agentSelect.value);
+        const graphHint = isGraph ? " Оценка по самому тяжёлому агенту графа." : "";
+        // Формат: (расчётная потребность + уже занятая VRAM) / точный объём VRAM в MiB.
+        const memStr = vram && vram.vram_used_mb > 0 && vram.vram_total_mb > 0
+            ? ` (~${Math.round(vram.need_mb + vram.vram_used_mb)} МБ / ${Math.round(vram.vram_total_mb)} МБ)`
+            : (isFinite(vram?.need_mb) && (vram?.need_mb ?? 0) > 0 ? ` (~${Math.round(vram.need_mb)} МБ)` : "");
+        counter.innerText = `${tokens}${memStr}`;
+        counter.classList.remove("warning", "danger");
+        if (tokens > contextSize) {
+            counter.classList.add("danger");
+            counter.title = "Внимание: Лимит превышен! При отправке старые сообщения будут удалены из контекста." + graphHint;
+        } else if (tokens > contextSize * 0.8) {
+            counter.classList.add("warning");
+            counter.title = "Контекст заполняется. Близко к лимиту." + graphHint;
+        } else {
+            counter.title = "Токены: текущие / Лимит контекста. Память: оценка (потребность + занято) / объём VRAM." + graphHint;
         }
+        this.notifyTokenMode(isCloud, tokens);
     } catch (e) {
         console.error("Ошибка обновления счетчика токенов:", e);
         void trackError("chat.updateTokenCounter", e);
     }
+  }
+
+  /**
+   * Аналитика смены ветки токен-счёта (облако ↔ локальная). Событие шлём
+   * один раз при смене режима, не на каждый пересчёт (debounce-тип работы).
+   */
+  private notifyTokenMode(cloud: boolean, tokens: number) {
+    if (this.lastTokenModeCloud === cloud) return;
+    this.lastTokenModeCloud = cloud;
+    void trackEvent("token_mode", { cloud: cloud ? 1 : 0, tokens });
   }
 
   // ── Операции над сообщениями ──
@@ -907,7 +958,11 @@ export class ChatController {
   }
 
   /** Единая точка выбора индикатора под полем ввода.
-   *  cloud=true → облако: счётчик запросов вместо бейджа движка. */
+   *  cloud=true → облако: счётчик запросов вместо бейджа движка.
+   *  Плашку токенов этот метод больше НЕ прячет: облачная ветка
+   *  updateTokenCounter рисует свою оценку «~N», поэтому у плашки есть
+   *  валидный контент для обоих режимов (css-скрытие на узких окнах
+   *  в styles.css остаётся как было). */
   private setIndicatorMode(cloud: boolean) {
     if (this.el.engineBadge) {
       this.el.engineBadge.style.display = cloud ? "none" : "";
