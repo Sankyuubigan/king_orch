@@ -1434,8 +1434,9 @@ edges: []
 
     /// Настоящий граф обязан распознаваться как граф и грузиться.
     ///
-    /// На 17.10.26 в `agents/` живёт 5 графов; вариант психотерапевта из
-    /// `experiments/` удалён коммитом `83e37f9` вместе с нодой System-1.
+    /// На 22.10.26 в `agents/` живёт 6 графов (добавлен video-gen-flow —
+    /// генерация видео по описанию, агент video_maker). Вариант психотерапевта
+    /// из `experiments/` удалён коммитом `83e37f9` вместе с нодой System-1.
     #[test]
     fn real_graphs_are_still_discovered() {
         let agents_dir = workspace_root().join("agents");
@@ -1453,6 +1454,7 @@ edges: []
                 "image-gen-flow",
                 "main_conversation_flow",
                 "search-specialist",
+                "video-gen-flow",
             ],
             "фильтр не должен терять или подменять реальные графы"
         );

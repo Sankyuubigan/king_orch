@@ -258,6 +258,7 @@ async fn main() {
             api::file_utils::read_text_file,
             api::file_utils::get_attachment_metadata,
             api::file_utils::get_image_data_url,
+            api::file_utils::get_video_data_url,
             api::file_utils::save_image_from_path,
             api::file_utils::reveal_path,
             api::file_utils::save_image_file,

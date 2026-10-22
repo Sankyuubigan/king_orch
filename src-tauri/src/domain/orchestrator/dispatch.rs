@@ -505,12 +505,16 @@ where
                     (self.log_cb)("⏸ LLM-движок выгружен из VRAM на время генерации изображения (KV-кэш будет потерян)".to_string());
                     log::info!("⏸ LLM suspend перед '{}' (агент '{}')", tool_name, self.agent.id);
                 }
-                let image_result = crate::infra::execute_image_tool(
-                    tool_name,
-                    arguments,
-                    &code_ctx,
-                    &selected_attachments,
-                );
+                // media-тулы (image → video фолбэк): None = не media, дальше generic path.
+                // VRAM-suspend общий: spawn движка генерации выгружает chat-движок.
+                let image_result =
+                    crate::infra::execute_image_tool(
+                        tool_name,
+                        arguments,
+                        &code_ctx,
+                        &selected_attachments,
+                    )
+                    .or_else(|| crate::infra::execute_video_tool(tool_name, arguments, &code_ctx));
                 if was_suspended {
                     match self.engine.resume_after_external_compute() {
                         Ok(()) => {

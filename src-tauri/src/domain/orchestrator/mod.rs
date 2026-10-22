@@ -252,6 +252,7 @@ pub fn build_worst_agent_prompt(
             let mut tools = runtime::builtin_tools();
             tools.extend(runtime::agent_code_tool_schemas(agent));
             tools.extend(crate::infra::image_tool_schemas(&agent.tools));
+            tools.extend(crate::infra::video_tool_schemas(&agent.tools));
             let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
             let mut sp =
                 build_system_prompt(agent, history, has_tools, &tools, 2048, false, false, false, false);
@@ -393,6 +394,7 @@ where
                  let mut tools = runtime::builtin_tools();
                  tools.extend(runtime::agent_code_tool_schemas(agent));
                  tools.extend(crate::infra::image_tool_schemas(&agent.tools));
+                 tools.extend(crate::infra::video_tool_schemas(&agent.tools));
                  let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
                 (
                     build_system_prompt(
@@ -803,8 +805,16 @@ where
             &current_sub_calls,
             &image_artifacts,
         )?;
+        let videos_attached = crate::infra::attach_saved_videos_from_sub_calls(
+            &mut final_message,
+            &current_sub_calls,
+            &image_artifacts,
+        ).map_err(|e| log::error!("[VID-TOOL] Видео не приложены: {}", e)).unwrap_or(0);
         if attached > 0 {
             log_cb(format!("🖼 Прикреплено изображений к ответу: {}", attached));
+        }
+        if videos_attached > 0 {
+            log_cb(format!("🎬 Прикреплено видео к ответу: {}", videos_attached));
         }
         messages_store.push(final_message);
         // Сигнал агента — ПОСЛЕ его ответа (как в nodes.rs:517-528).
@@ -1061,6 +1071,7 @@ where
     // агента → схемы media-тулов (мета-имя "media"). Исполнение — через
     // tauri-plugin-image-engine, референсы — аттачменты текущего запроса.
     all_tools.extend(crate::infra::image_tool_schemas(&agent.tools));
+    all_tools.extend(crate::infra::video_tool_schemas(&agent.tools));
 
     let has_real_tools = !all_tools.is_empty() || !agent.tools.is_empty();
 

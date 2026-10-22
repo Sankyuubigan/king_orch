@@ -16,6 +16,7 @@ use serde_json::Value;
 use crate::infra::permissions::PermissionApprover;
 
 pub mod media;
+pub mod video;
 
 /// Хелперы ядра: ними пользуется media.rs через `super::` (имена прежние).
 pub use ko_code_tools::{is_within_root, resolve_path};

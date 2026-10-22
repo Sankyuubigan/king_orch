@@ -52,3 +52,6 @@ pub use tools::media::{
     attach_saved_images_from_sub_calls, execute_image_tool, image_tool_schemas,
     ImageArtifactRegistry,
 };
+pub use tools::video::{
+    attach_saved_videos_from_sub_calls, execute_video_tool, video_tool_schemas,
+};

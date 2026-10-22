@@ -1,0 +1,81 @@
+name: Видео по описанию
+description: Генерация короткого видео со звуком по текстовому описанию (MiniMax H3, черновик или финал).
+
+config:
+  facts_file: facts.yaml
+  default_llm_params: creative
+
+# Точка входа графа — текст, отправленный пользователем в чат.
+entry: user_message
+
+nodes:
+  # ── Источник данных: текст пользователя (без LLM) ──
+  - id: user_message
+    type: user_message
+    ui_pos:
+      x: -320
+      y: 40
+
+  # ── Классификация: просит ли пользователь видео с нуля ──
+  - id: extract_facts
+    type: llm_fact_extractor
+    input: "{{ nodes.user_message.output.text }}"
+    llm_params: strict
+    ui_pos:
+      x: -80
+      y: 40
+
+  - id: route
+    type: switch
+    input_object: "{{ nodes.extract_facts.output }}"
+    cases_priority:
+      - key: needs_video_generate
+        to: make_video
+    default: no_video_task
+    ui_pos:
+      x: 140
+      y: 40
+
+  # ── Ветка генерации (терминальная) ──
+  - id: make_video
+    type: llm_worker
+    agent: video_maker
+    task: |
+      Сгенерируй видео по описанию пользователя.
+
+      Описание задачи: {{ nodes.extract_facts.output.rewritten_query }}
+      Исходный текст пользователя: {{ nodes.user_message.output.text }}
+    output_type: message
+    ui_pos:
+      x: 360
+      y: 40
+
+  # ── Не видео-запрос: помощник (объясняет возможности, уточняет задачу) ──
+  - id: no_video_task
+    type: llm_worker
+    agent: video_helper
+    task: |
+      Классификатор НЕ распознал запрос на генерацию видео: пользователь либо
+      спрашивает о возможностях, либо просит что-то, что видео-модель не делает
+      (например, редактирование существующего ролика). Коротко объясни, что
+      команда умеет: создать короткий клип со звуком по описанию; уточни, что
+      именно снять, если пользователь описал задачу неточно. НЕ вызывай инструменты.
+
+      Сообщение пользователя: {{ nodes.user_message.output.text }}
+    output_type: message
+    ui_pos:
+      x: 360
+      y: 160
+
+edges:
+  - from: user_message
+    to: extract_facts
+
+  - from: extract_facts
+    to: route
+
+  - from: make_video
+    to: END
+
+  - from: no_video_task
+    to: END

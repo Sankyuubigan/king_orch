@@ -512,10 +512,21 @@ where
                 &current_sub_calls,
                 &runner.image_artifacts,
             )?;
+            let videos_attached = crate::infra::attach_saved_videos_from_sub_calls(
+                &mut msg,
+                &current_sub_calls,
+                &runner.image_artifacts,
+            ).map_err(|e| log::error!("[VID-TOOL] Видео не приложены (узел '{}'): {}", agent_id, e)).unwrap_or(0);
             if attached > 0 {
                 (runner.log_cb)(format!(
                     "🖼 Прикреплено изображений к ответу узла '{}': {}",
                     agent_id, attached
+                ));
+            }
+            if videos_attached > 0 {
+                (runner.log_cb)(format!(
+                    "🎬 Прикреплено видео к ответу узла '{}': {}",
+                    agent_id, videos_attached
                 ));
             }
             push_report(&mut context.messages, msg, agent.replace_report, Some(2));

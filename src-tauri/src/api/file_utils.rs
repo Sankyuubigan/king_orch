@@ -82,6 +82,34 @@ pub fn get_image_data_url(path: String) -> Result<String, String> {
     Ok(format!("data:{};base64,{}", mime_type, encoded))
 }
 
+/// Data-URL для видео из чата (клип сгенерирован локально, в `messages[]` он
+/// лежит только по file_path — webm десятки МБ, base64 туда нельзя).
+#[tauri::command]
+pub fn get_video_data_url(path: String) -> Result<String, String> {
+    let file_path = Path::new(&path);
+    let metadata = fs::metadata(file_path).map_err(|error| {
+        log::error!("Не удалось проверить видео {:?}: {}", path, error);
+        format!("Файл видео недоступен: {}", path)
+    })?;
+    if metadata.is_dir() {
+        return Err(format!("Путь является папкой, а не видео: {}", path));
+    }
+    let mime_type = mime_from_path(file_path);
+    if !mime_type.starts_with("video/") {
+        return Err(format!("Файл не является поддерживаемым видео: {}", path));
+    }
+    let bytes = fs::read(file_path).map_err(|error| {
+        log::error!("Не удалось прочитать видео {:?}: {}", path, error);
+        format!("Не удалось прочитать видео: {}", path)
+    })?;
+    if bytes.is_empty() {
+        return Err(format!("Файл видео пуст: {}", path));
+    }
+    use base64::Engine;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+    Ok(format!("data:{};base64,{}", mime_type, encoded))
+}
+
 #[tauri::command]
 pub fn save_image_from_path(source_path: String, destination_path: String) -> Result<(), String> {
     let source = Path::new(&source_path);
@@ -155,6 +183,10 @@ fn mime_from_path(path: &Path) -> String {
         "ogg" => "audio/ogg",
         "m4a" => "audio/mp4",
         "txt" => "text/plain",
+        "webm" => "video/webm",
+        "avi" => "video/x-msvideo",
+        "mp4" | "m4v" => "video/mp4",
+        "mkv" => "video/x-matroska",
         "md" => "text/markdown",
         "json" => "application/json",
         "pdf" => "application/pdf",

@@ -3,7 +3,8 @@ import type { Attachment } from "../types";
 export interface ImageAttachmentCallbacks {
   onPreview: (attachment: Attachment) => void;
   onSave: (attachment: Attachment) => void;
-  loadPreview?: (attachment: Attachment, image: HTMLImageElement) => void;
+  /** Ленивая загрузка: для изображения — get_image_data_url, для видео — get_video_data_url. */
+  loadPreview?: (attachment: Attachment, media: HTMLMediaElement) => void;
   onOpenPath?: (attachment: Attachment) => void;
 }
 

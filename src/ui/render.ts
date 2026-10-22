@@ -3,6 +3,7 @@ import { createMessageMenu } from "./message-menu";
 import type { MessageMenuCallbacks } from "./message-menu";
 import { createImageAttachmentElement } from "./image-attachment";
 import type { ImageAttachmentCallbacks } from "./image-attachment";
+import { createVideoAttachmentElement } from "./video-attachment";
 import type { Attachment } from "../types";
 
 
@@ -42,6 +43,8 @@ export function createMessageElement(
     for (const att of attachments) {
       if (att.mime_type?.startsWith("image/")) {
         attDiv.appendChild(createImageAttachmentElement(att, imageCallbacks));
+      } else if (att.mime_type?.startsWith("video/")) {
+        attDiv.appendChild(createVideoAttachmentElement(att, imageCallbacks));
       } else {
         const chip = document.createElement("button");
         chip.type = "button";
