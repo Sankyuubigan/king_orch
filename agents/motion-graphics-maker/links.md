@@ -1,0 +1,11 @@
+https://github.com/heygen-com/hyperframes
+https://github.com/remotion-dev/remotion
+https://gotburnout.io/en/news/github-repos-that-turn-opus-5-5-into-a-motion-design-studio-4073
+https://x.com/RoundtableSpace/status/2109958757891346459
+https://github.com/iart-ai/web-animation-skills
+https://github.com/dylantarre/animation-principles
+https://github.com/whaleyxbt/claude-motion
+https://github.com/delphi-ai/animate-skill
+https://github.com/cth9191/animate
+https://github.com/charlie947/motion-graphics-skills
+https://github.com/iart-ai/explainer-video-skills
