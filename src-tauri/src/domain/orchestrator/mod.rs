@@ -1512,10 +1512,20 @@ where
 
             if current_tokens + max_gen_tokens <= ideal_ctx as usize || ctx.llm_messages.len() <= 2
             {
-                log_cb(format!(
-                    "📊 Память: выделен KV-кэш на {} токенов (Промпт: {}, Резерв: {})",
-                    ideal_ctx, current_tokens, max_gen_tokens
-                ));
+                if engine.is_cloud() {
+                    // У облака нет KV-кэша и VRAM-резерва: печать «Резерв: N»
+                    // вводила в заблуждение при разборе облачных инцидентов
+                    // (24.10.2026). Бюджет — семантика локального движка.
+                    log_cb(
+                        "📊 Память (облако): KV-кэш не выделяется, генерация без лимита (бюджет на cloud-wire не передаётся)"
+                            .to_string(),
+                    );
+                } else {
+                    log_cb(format!(
+                        "📊 Память: выделен KV-кэш на {} токенов (Промпт: {}, Резерв: {})",
+                        ideal_ctx, current_tokens, max_gen_tokens
+                    ));
+                }
                 break;
             }
             if ctx.llm_messages.len() > 2 {
@@ -1566,12 +1576,20 @@ where
         }
 
         let gen_start = Instant::now();
+        // Для облака max_gen_tokens — локальный резерв, на wire не уходящий
+        // (инвариант llm_backend.rs): в логе он обязан выглядеть как «нет лимита»,
+        // иначе при разборе инцидентов читатель ищет несуществующий кап.
+        let max_gen_label = if engine.is_cloud() {
+            "∞ (облако, без лимита)".to_string()
+        } else {
+            max_gen_tokens.to_string()
+        };
         log_cb(format!(
             ">>> [{}] LLM вызов #{}, msgs={}, max_gen={}, глубина={}",
             agent.name,
             iter,
             ctx.llm_messages.len(),
-            max_gen_tokens,
+            max_gen_label,
             depth
         ));
         let ctx_label = format!("{}:{}#{}", mem_mode, agent.name, iter);

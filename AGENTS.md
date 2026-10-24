@@ -142,6 +142,9 @@
 > - Бинарь `llama-server.exe` **скачивается пользователем** из релизов `ggml-org/llama.cpp` (НЕ sidecar Tauri, НЕ бандлится). Не удаляй папку `<exe>/llamacpp` — это установленный пользователем движок.
 > - Сервер гарантированно убивается при выходе (`Drop` + Windows Job Object `KILL_ON_JOB_CLOSE` + `kill_active_engines` в `ExitRequested`).
 >
+> **Бюджет генерации — только для локального движка (инцидент 24.10.2026, pattern_finder):**
+> `max_gen_tokens` (резерв KV-кэша в VRAM, `app_config.json`) на cloud-wire **не передаётся** — в облачном запросе поле `max_tokens` отсутствует (`llm_backend.rs`, `CloudEngine::generate`). У облачных thinking-моделей `max_tokens` накрывает **мысли + ответ вместе** (gemini: OUT 2044 из бюджета 2048, видимых 217 символов, `finish_reason=length`), поэтому лимитить облако этим полем нельзя — мысли должны быть ничем не ограничены. Обрыв по `finish_reason=length` гейтится на границе `CloudEngine`: один ретрай (`CLOUD_LENGTH_RETRIES_MAX = 1`), затем `Err` — тихо обрезанный текст downstream не проходит. В логах для облачных вызовов `max_gen=∞ (облако, без лимита)` и KV-кэш не печатается.
+>
 > **Правило cwd (см. rules.md:53):** пути к движку вычисляй через `std::env::current_exe().parent()`, а НЕ через `app.path().executable_dir()`.
 >
 > ### 2. Расположение тестов

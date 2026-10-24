@@ -44,6 +44,12 @@ pub fn is_cloud_cancelled_error(err: &str) -> bool {
     err.contains(CLOUD_CANCELLED_MARKER)
 }
 
+/// Максимум повторов запроса при `finish_reason=length` от провайдера
+/// (инцидент 24.10.2026, pattern_finder: gemini отдала 217 видимых символов
+/// и обрезалась). Инвариант облачной границы: downstream получает либо
+/// полный ответ, либо Err — тихо обрезанного текста не существует.
+const CLOUD_LENGTH_RETRIES_MAX: u32 = 1;
+
 
 fn attachment_data_url(attachment: &ChatAttachment) -> Result<String, String> {
     if !attachment.data_base64.is_empty() {
@@ -105,7 +111,7 @@ impl CloudEngine {
     fn generate<F, L>(
         &self,
         messages: &[LlmMessage],
-        max_tokens: usize,
+        _max_tokens: usize,
         params: &ModelParams,
         tool_choice: Option<&str>,
         tools: Option<Vec<ToolDefinition>>,
@@ -186,7 +192,13 @@ impl CloudEngine {
         let request = ChatRequest {
             model: self.model.clone(),
             messages,
-            max_tokens: Some(max_tokens as u32),
+            // Инвариант wire-формы (инцидент 24.10.2026, pattern_finder): поле
+            // `max_tokens` на облачную границу не проходит. Бюджет генерации —
+            // концепт локального движка (резерв KV-кэша в VRAM); у облачных
+            // thinking-моделей max_tokens накрывает мысли + ответ вместе
+            // (gemini: OUT 2044 из бюджета 2048, видимыми — 217 символов,
+            // finish_reason=length), поэтому лимит не отправляется вовсе.
+            max_tokens: None,
             temperature: Some(params.temperature),
             tools,
             tool_choice: tool_choice.map(str::to_string),
@@ -194,99 +206,128 @@ impl CloudEngine {
         };
         log_cb(format!("☁️ 9Router: один вызов модели «{}»", self.model));
         let stream_cb = self.stream_cb.clone();
-        let started = std::time::Instant::now();
-        // Счётчик = «роутер вернул полезный ответ». Ok стрима и «пустой успех»
-        // (HTTP 200 без данных — был подтверждён обмен) засчитываются; ошибке
-        // HTTP, внутреннему error-кадру и мусорному стриму — нет. Для «пустого
-        // успеха» правда в том, что квота МОГЛА быть списана — это оговорено
-        // в warn-логе рядом со счётчиком.
-        let result = match client::chat_completion_stream_result_cancellable(
-            &self.endpoint.base_url,
-            self.endpoint.api_key.as_deref(),
-            &request,
-            |delta| {
-                if !delta.content.is_empty() {
-                    stream_cb(delta.content);
+        // Гейт обрыва по длине (инцидент 24.10.2026): провайдер может вернуть
+        // finish_reason=length (дефолтный кап/фильтр). Тихо отдавать обрезанный
+        // текст downstream нельзя — воркер уйдёт дальше с полуфабрикатом.
+        // Контракт границы: CLOUD_LENGTH_RETRIES_MAX + 1 попыток, затем Err.
+        let mut final_result = None;
+        for attempt in 0..=CLOUD_LENGTH_RETRIES_MAX {
+            let started = std::time::Instant::now();
+            // Счётчик = «роутер вернул полезный ответ». Ok стрима и «пустой успех»
+            // (HTTP 200 без данных — был подтверждён обмен) засчитываются; ошибке
+            // HTTP, внутреннему error-кадру и мусорному стриму — нет. Для «пустого
+            // успеха» правда в том, что квота МОГЛА быть списана — это оговорено
+            // в warn-логе рядом со счётчиком.
+            let attempt_result = match client::chat_completion_stream_result_cancellable(
+                &self.endpoint.base_url,
+                self.endpoint.api_key.as_deref(),
+                &request,
+                |delta| {
+                    if !delta.content.is_empty() {
+                        stream_cb(delta.content);
+                    }
+                    if !delta.reasoning.is_empty() {
+                        stream_cb(delta.reasoning);
+                    }
+                },
+                cancel_flag.clone(),
+            ) {
+                Ok(result) => {
+                    log_cb(format!(
+                        "☁️ 9Router: ответ целиком получен за {:.0} с",
+                        started.elapsed().as_secs_f32()
+                    ));
+                    result
                 }
-                if !delta.reasoning.is_empty() {
-                    stream_cb(delta.reasoning);
+                Err(CloudStreamError::EmptySuccess) => {
+                    // Провайдер формально ответил 200, но контента не было (инцидент
+                    // 18.10.2026: ×5 пустых 200 у validator). Структурно невозможный
+                    // раньше пустой Ok пофиксен на уровне плагина (client.rs
+                    // `classify_sse_result`) — сюда попадает классифицированный Err.
+                    let total = self.requests.fetch_add(1, Ordering::Relaxed) + 1;
+                    log_cb(format!(
+                        "☁️ [cloud-counter] Пустой успех (HTTP 200 без данных) — засчитано запросов к облаку: {}. Квота могла быть списана.",
+                        total
+                    ));
+                    log::warn!(
+                        "☁️ [cloud-counter] EmptySuccess — квота могла быть списана (маркер {})",
+                        CLOUD_EMPTY_STREAM_MARKER
+                    );
+                    return Err(CloudStreamError::EmptySuccess.to_string());
                 }
-            },
-            cancel_flag,
-        ) {
-            Ok(result) => {
-                log_cb(format!(
-                    "☁️ 9Router: ответ целиком получен за {:.0} с",
-                    started.elapsed().as_secs_f32()
-                ));
-                result
-            }
-            Err(CloudStreamError::EmptySuccess) => {
-                // Провайдер формально ответил 200, но контента не было (инцидент
-                // 18.10.2026: ×5 пустых 200 у validator). Структурно невозможный
-                // раньше пустой Ok пофиксен на уровне плагина (client.rs
-                // `classify_sse_result`) — сюда попадает классифицированный Err.
-                let total = self.requests.fetch_add(1, Ordering::Relaxed) + 1;
-                log_cb(format!(
-                    "☁️ [cloud-counter] Пустой успех (HTTP 200 без данных) — засчитано запросов к облаку: {}. Квота могла быть списана.",
-                    total
-                ));
+                Err(error) => {
+                    let elapsed = started.elapsed();
+                    match &error {
+                        CloudStreamError::TimedOut { idle_secs, phase } => {
+                            log::warn!(
+                                "☁️ таймаут тишины: шлюз не откликался ≥{} с (фаза: {}), ожидание длилось {:.0} с",
+                                idle_secs,
+                                phase,
+                                elapsed.as_secs_f32()
+                            );
+                            log_cb(format!(
+                                "☁️ [cloud-timeout] Молчание больше порога тишины ({} с, фаза: {}). Ретрай — по решению оркестратора.",
+                                idle_secs, phase
+                            ));
+                        }
+                        CloudStreamError::Cancelled { phase } => {
+                            log::info!(
+                                "☁️ запрос прерван пользователем (фаза: {}), {:.0} с ожидания",
+                                phase,
+                                elapsed.as_secs_f32()
+                            );
+                        }
+                        _ => {}
+                    }
+                    log_cb(format!(
+                        "☁️ [cloud-counter] Ответ от облака не получен — запрос НЕ засчитан: {}",
+                        error
+                    ));
+                    return Err(error.to_string());
+                }
+            };
+            let total = self.requests.fetch_add(1, Ordering::Relaxed) + 1;
+            // Телеметрия ПОСЛЕ разбора (логирование после трансформации):
+            // если провайдер отдал обрезанный/подозрительный ответ — причина станет
+            // видимой из last_logs.txt без дополнительных расследований.
+            log_cb(format!(
+                "☁️ stream: content={} симв, reasoning={} симв, tool_calls={}, finish_reason={}",
+                attempt_result.content.chars().count(),
+                attempt_result.reasoning.chars().count(),
+                attempt_result.tool_calls.len(),
+                if attempt_result.finish_reason.is_empty() {
+                    "< отсутствует >".to_string()
+                } else {
+                    attempt_result.finish_reason.clone()
+                }
+            ));
+            log_cb(format!(
+                "☁️ [cloud-counter] Засчитано запросов к облаку за этот чат: {}",
+                total
+            ));
+            if attempt_result.finish_reason == "length" {
+                if attempt < CLOUD_LENGTH_RETRIES_MAX {
+                    log_cb(format!(
+                        "☁️ [cloud-length-gate] ответ обрезан лимитом длины (попытка {}/{}), повторяю запрос",
+                        attempt + 1,
+                        CLOUD_LENGTH_RETRIES_MAX + 1
+                    ));
+                    continue;
+                }
                 log::warn!(
-                    "☁️ [cloud-counter] EmptySuccess — квота могла быть списана (маркер {})",
-                    CLOUD_EMPTY_STREAM_MARKER
+                    "☁️ [cloud-length-gate] провайдер {} раз(а) вернул finish_reason=length — отдаю ошибку вместо обрезанного текста",
+                    CLOUD_LENGTH_RETRIES_MAX + 1
                 );
-                return Err(CloudStreamError::EmptySuccess.to_string());
-            }
-            Err(error) => {
-                let elapsed = started.elapsed();
-                match &error {
-                    CloudStreamError::TimedOut { idle_secs, phase } => {
-                        log::warn!(
-                            "☁️ таймаут тишины: шлюз не откликался ≥{} с (фаза: {}), ожидание длилось {:.0} с",
-                            idle_secs,
-                            phase,
-                            elapsed.as_secs_f32()
-                        );
-                        log_cb(format!(
-                            "☁️ [cloud-timeout] Молчание больше порога тишины ({} с, фаза: {}). Ретрай — по решению оркестратора.",
-                            idle_secs, phase
-                        ));
-                    }
-                    CloudStreamError::Cancelled { phase } => {
-                        log::info!(
-                            "☁️ запрос прерван пользователем (фаза: {}), {:.0} с ожидания",
-                            phase,
-                            elapsed.as_secs_f32()
-                        );
-                    }
-                    _ => {}
-                }
-                log_cb(format!(
-                    "☁️ [cloud-counter] Ответ от облака не получен — запрос НЕ засчитан: {}",
-                    error
+                return Err(format!(
+                    "☁️ провайдер {} раз(а) обрезал ответ по лимиту длины (finish_reason=length) — полный ответ недоступен",
+                    CLOUD_LENGTH_RETRIES_MAX + 1
                 ));
-                return Err(error.to_string());
             }
-        };
-        let total = self.requests.fetch_add(1, Ordering::Relaxed) + 1;
-        // Телеметрия ПОСЛЕ разбора (логирование после трансформации):
-        // если провайдер отдал обрезанный/подозрительный ответ — причина станет
-        // видимой из last_logs.txt без дополнительных расследований.
-        log_cb(format!(
-            "☁️ stream: content={} симв, reasoning={} симв, tool_calls={}, finish_reason={}",
-            result.content.chars().count(),
-            result.reasoning.chars().count(),
-            result.tool_calls.len(),
-            if result.finish_reason.is_empty() {
-                "< отсутствует >".to_string()
-            } else {
-                result.finish_reason.clone()
-            }
-        ));
-        log_cb(format!(
-            "☁️ [cloud-counter] Засчитано запросов к облаку за этот чат: {}",
-            total
-        ));
+            final_result = Some(attempt_result);
+            break;
+        }
+        // Инвариант цикла: выход возможен только через Some+break или ранний Err.
+        let result = final_result.expect("цикл длины обязан вернуть результат или ошибку");
         progress_cb(1.0, "done");
         let tool_calls: Vec<ToolCall> = result
             .tool_calls
@@ -758,51 +799,40 @@ mod tests {
         std::thread::JoinHandle<()>,
         Arc<Mutex<String>>,
     ) {
-        use std::io::{Read, Write};
         let capture = Arc::new(Mutex::new(String::new()));
         let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
         let addr = listener.local_addr().expect("addr");
         let cap = capture.clone();
         let server = std::thread::spawn(move || {
             let (mut stream, _) = listener.accept().expect("accept");
-            let mut buf = Vec::new();
-            let mut chunk = [0u8; 4096];
-            let mut target: Option<usize> = None; // конец тела: header_end + content_len
-            loop {
-                let n = stream.read(&mut chunk).unwrap_or(0);
-                if n == 0 {
-                    break;
-                }
-                buf.extend_from_slice(&chunk[..n]);
-                if target.is_none() {
-                    if let Some(pos) = find_bytes(&buf, b"\r\n\r\n") {
-                        let head = String::from_utf8_lossy(&buf[..pos]);
-                        let len = head
-                            .lines()
-                            .find_map(|line| {
-                                let (k, v) = line.split_once(':')?;
-                                k.eq_ignore_ascii_case("content-length")
-                                    .then(|| v.trim().parse::<usize>().ok())?
-                            });
-                        target = len.map(|len| pos + 4 + len);
-                    }
-                }
-                if target.is_some_and(|t| buf.len() >= t) {
-                    break;
-                }
+            *cap.lock().expect("capture lock") = read_request_wire_body(&mut stream);
+            write_sse_response(&mut stream, body);
+        });
+        (addr, server, capture)
+    }
+
+    /// SSE-стенд на несколько ПОСЛЕДОВАТЕЛЬНЫХ соединений: каждое новое
+    /// соединение получает своё тело из списка по порядку; wire-тела всех
+    /// запросов запоминаются в порядке прихода (для гейта finish_reason=length).
+    fn serve_cloud_capture_seq(
+        bodies: &'static [&'static str],
+    ) -> (
+        std::net::SocketAddr,
+        std::thread::JoinHandle<()>,
+        Arc<Mutex<Vec<String>>>,
+    ) {
+        let capture: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("addr");
+        let cap = capture.clone();
+        let server = std::thread::spawn(move || {
+            for body in bodies {
+                let (mut stream, _) = listener.accept().expect("accept");
+                cap.lock()
+                    .expect("capture lock")
+                    .push(read_request_wire_body(&mut stream));
+                write_sse_response(&mut stream, body);
             }
-            let body_start = find_bytes(&buf, b"\r\n\r\n")
-                .map(|pos| pos + 4)
-                .unwrap_or(buf.len());
-            *cap.lock().expect("capture lock") =
-                String::from_utf8_lossy(&buf[body_start..]).to_string();
-            let response = format!(
-                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            let _ = stream.write_all(response.as_bytes());
-            let _ = stream.flush();
         });
         (addr, server, capture)
     }
@@ -812,6 +842,54 @@ mod tests {
             return None;
         }
         (0..=haystack.len() - needle.len()).find(|&i| &haystack[i..i + needle.len()] == needle)
+    }
+
+    /// Читает один HTTP-запрос из сокета и возвращает wire-тело (заголовки +
+    /// ровно Content-Length — соединение держится открытым в ожидании ответа).
+    fn read_request_wire_body(stream: &mut std::net::TcpStream) -> String {
+        use std::io::Read;
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 4096];
+        let mut target: Option<usize> = None; // конец тела: header_end + content_len
+        loop {
+            let n = stream.read(&mut chunk).unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
+            if target.is_none() {
+                if let Some(pos) = find_bytes(&buf, b"\r\n\r\n") {
+                    let head = String::from_utf8_lossy(&buf[..pos]);
+                    let len = head
+                        .lines()
+                        .find_map(|line| {
+                            let (k, v) = line.split_once(':')?;
+                            k.eq_ignore_ascii_case("content-length")
+                                .then(|| v.trim().parse::<usize>().ok())?
+                        });
+                    target = len.map(|len| pos + 4 + len);
+                }
+            }
+            if target.is_some_and(|t| buf.len() >= t) {
+                break;
+            }
+        }
+        let body_start = find_bytes(&buf, b"\r\n\r\n")
+            .map(|pos| pos + 4)
+            .unwrap_or(buf.len());
+        String::from_utf8_lossy(&buf[body_start..]).to_string()
+    }
+
+    /// Отвечает SSE-кадром 200 с переданным телом.
+    fn write_sse_response(stream: &mut std::net::TcpStream, body: &str) {
+        use std::io::Write;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(response.as_bytes());
+        let _ = stream.flush();
     }
 
     /// «Пустой успех» (HTTP 200 без данных — инцидент 18.10.2026) — обмен с
@@ -940,5 +1018,79 @@ mod tests {
 
         assert!(result.is_ok(), "ответ стенда должен приниматься: {result:?}");
         assert_eq!(counter.load(Ordering::Relaxed), 5, "засчитан ровно один новый запрос");
+    }
+
+    const SSE_STOP_FULL: &str = "data: {\"choices\":[{\"delta\":{\"content\":\"полный ответ\"},\"finish_reason\":\"stop\"}]}\n\n\
+                                 data: [DONE]\n\n";
+    const SSE_LENGTH_TRUNCATED: &str = "data: {\"choices\":[{\"delta\":{\"content\":\"нач\"},\"finish_reason\":\"length\"}]}\n\n\
+                                        data: [DONE]\n\n";
+
+    /// Wire-инвариант бюджета (инцидент 24.10.2026, pattern_finder: OUT 2044 из
+    /// бюджета 2048 — видимо 217 символов, мысли съели ответ): поле `max_tokens`
+    /// не имеет права появляться на cloud-wire ни в каком виде. Бюджет —
+    /// семантика VRAM локального движка, у провайдера лимит не запрашивается.
+    #[test]
+    fn cloud_request_carries_no_max_tokens() {
+        let (addr, server, capture) = serve_cloud_capture(SSE_STOP_FULL);
+        let engine = cloud_with_counter(&format!("http://{}", addr), Arc::new(AtomicU64::new(0)));
+        let result = run_cloud(&engine);
+        server.join().ok();
+
+        result.expect("ответ стенда обязан приниматься");
+
+        let wire = capture.lock().expect("capture lock").clone();
+        let value: serde_json::Value =
+            serde_json::from_str(&wire).expect("wire-тело обязано быть JSON");
+        assert!(
+            value.get("max_tokens").is_none(),
+            "бюджет генерации обязан отсутствовать на cloud-wire: {wire}"
+        );
+        assert!(value.get("messages").is_some(), "wire: {wire}");
+    }
+
+    /// Гейт длины: первый ответ finish_reason=length (обрыв), повтор уходит тем
+    /// же запросом и приносит stop → отдаётся полный текст. Оба запроса
+    /// засчитаны (оба списали квоту), на wire ровно два вызова.
+    #[test]
+    fn cloud_length_finish_is_retried_once_then_accepted() {
+        let (addr, server, capture) = serve_cloud_capture_seq(&[SSE_LENGTH_TRUNCATED, SSE_STOP_FULL]);
+        let counter = Arc::new(AtomicU64::new(0));
+        let engine = cloud_with_counter(&format!("http://{}", addr), counter.clone());
+        let result = run_cloud(&engine);
+        server.join().ok();
+
+        let result = result.expect("повтор после length обязан пройти");
+        assert_eq!(result.text, "полный ответ", "обрезанный кусок не склеивается");
+        assert_eq!(result.stop_reason, "stop");
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            2,
+            "засчитаны оба запроса — оба обменялись с провайдером"
+        );
+        assert_eq!(capture.lock().expect("capture lock").len(), 2, "на wire два запроса");
+    }
+
+    /// Гейт длины: оба ответа finish_reason=length → Err с диагностикой.
+    /// Тихий обрезанный текст downstream не проходит (инвариант границы),
+    /// ретрай ровно один — без зацикливания.
+    #[test]
+    fn cloud_length_twice_is_error_not_truncated_answer() {
+        let (addr, server, capture) = serve_cloud_capture_seq(&[SSE_LENGTH_TRUNCATED, SSE_LENGTH_TRUNCATED]);
+        let counter = Arc::new(AtomicU64::new(0));
+        let engine = cloud_with_counter(&format!("http://{}", addr), counter.clone());
+        let result = run_cloud(&engine);
+        server.join().ok();
+
+        let err = result.expect_err("дважды обрезанный ответ обязан быть ошибкой");
+        assert!(
+            err.contains("finish_reason=length"),
+            "диагностика обязана называть причину: {err}"
+        );
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            2,
+            "ретрай ровно один, дальше — ошибка"
+        );
+        assert_eq!(capture.lock().expect("capture lock").len(), 2);
     }
 }
