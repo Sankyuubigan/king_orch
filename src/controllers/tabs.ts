@@ -434,6 +434,12 @@ export class TabController {
     const existing = this.entries.find(t => t.type === "webview" && t.url === url);
     if (existing) {
       this.activate(existing.id);
+      // Повторный клик «Web UI» перезагружает iframe: плагин шлёт событие
+      // только после живой health-пробы, поэтому перезагрузка безопасна и
+      // заодно чинит вкладку, застрявшую на странице ошибки (инцидент
+      // 25.10.26 — iframe не мог оживить сам себя: JS на странице ошибки
+      // браузера не исполняется).
+      this.reloadWebviewEntry(existing);
       return this.tabToApp(existing);
     }
     const tab: AppTab = {
@@ -449,6 +455,35 @@ export class TabController {
     this.activate(tab.id);
     this.persistTabs();
     return tab;
+  }
+
+  /**
+   * Перезагрузить webview-вкладки дашборда роутера с адресом `base_url`.
+   *
+   * Вызывается по событию жизни от супервизора плагина (`running:true`):
+   * плагин шлёт его только при отвечающем порте, поэтому перезагрузка
+   * безопасна и оживляет вкладку, застрявшую на странице ошибки браузера.
+   */
+  reloadWebviewsByBaseUrl(baseUrl: string): void {
+    const base = baseUrl.replace(/\/+$/, "");
+    for (const entry of this.entries) {
+      if (entry.type !== "webview" || !entry.url) continue;
+      if (entry.url !== `${base}/dashboard`) continue;
+      this.reloadWebviewEntry(entry);
+    }
+  }
+
+  /** Перезагрузить iframe одной webview-вкладки (повторное присвоение src —
+   * всегда навигация, даже на тот же адрес). */
+  private reloadWebviewEntry(entry: TabEntry): void {
+    if (entry.type !== "webview" || !entry.url) return;
+    const iframe = entry.viewEl.querySelector<HTMLIFrameElement>("iframe.webview-frame");
+    if (!iframe) {
+      logFront(`[tabs] reloadWebviewEntry: в ${entry.id} нет iframe — пропущено`);
+      return;
+    }
+    iframe.src = entry.url;
+    logFront(`[tabs] reload webview ${entry.id} (${entry.url})`);
   }
 
   closeTab(id: string) {

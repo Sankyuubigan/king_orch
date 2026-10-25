@@ -16,7 +16,7 @@ import "@my-tauri-plugins/plugin-cloud-routers";
 import "@my-tauri-plugins/plugin-downloader";
 import { initUpdateWatcher as initLlamaUpdateWatcher } from "@my-tauri-plugins/plugin-llama-engine";
 import { initUpdateWatcher as initImageUpdateWatcher } from "@my-tauri-plugins/plugin-image-engine";
-import { initUpdateWatcher as initRoutersUpdateWatcher, onOpenDashboard } from "@my-tauri-plugins/plugin-cloud-routers";
+import { initUpdateWatcher as initRoutersUpdateWatcher, onOpenDashboard, onStatusChange } from "@my-tauri-plugins/plugin-cloud-routers";
 import {
   SessionController, SettingsController, AgentPickerController,
   UpdatePopupController, TabController, initChatEventRouter,
@@ -226,6 +226,20 @@ async function initApp() {
       void trackError("tabs.openWebview", e);
     }
   }).catch((e) => void trackError("tabs.openWebview-listen", e));
+
+  // События жизни шлюза от супервизора плагина: при `running:true` (порт уже
+  // проверен пробой) перезагружаем вкладки дашборда этого адреса — застрявшие
+  // на странице ошибки «отказано в подключении» оживают без ручного закрытия
+  // (инцидент 25.10.26). `running:false` таб не трогает: ошибка внутри iframe
+  // видна сама, плюс дашборд показывает свой офлайн-баннер.
+  void onStatusChange((p) => {
+    if (!p.running) return;
+    try {
+      tabCtrl.reloadWebviewsByBaseUrl(p.base_url);
+    } catch (e) {
+      void trackError("tabs.reloadWebviewsByBaseUrl", e);
+    }
+  }).catch((e) => void trackError("tabs.reloadWebviewsByBaseUrl-listen", e));
 }
 
 document.addEventListener("DOMContentLoaded", () => {
