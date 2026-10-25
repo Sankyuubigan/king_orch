@@ -780,12 +780,6 @@ edges:
   to: eval_quick2
 - from: eval_quick2
   to: check_eval_quick2
-- from: final_quick
-  to: END
-- from: final_quick_improved
-  to: END
-- from: honest_fail_quick
-  to: END
 
 - from: call_docs
   to: eval_docs
@@ -795,12 +789,6 @@ edges:
   to: eval_docs2
 - from: eval_docs2
   to: check_eval_docs2
-- from: final_docs
-  to: END
-- from: final_docs_improved
-  to: END
-- from: honest_fail_docs
-  to: END
 
 - from: call_github
   to: eval_github
@@ -810,12 +798,6 @@ edges:
   to: eval_github2
 - from: eval_github2
   to: check_eval_github2
-- from: final_github
-  to: END
-- from: final_github_improved
-  to: END
-- from: honest_fail_github
-  to: END
 
 - from: call_academic
   to: eval_academic
@@ -825,12 +807,6 @@ edges:
   to: eval_academic2
 - from: eval_academic2
   to: check_eval_academic2
-- from: final_academic
-  to: END
-- from: final_academic_improved
-  to: END
-- from: honest_fail_academic
-  to: END
 
 - from: call_video
   to: eval_video
@@ -840,12 +816,6 @@ edges:
   to: eval_video2
 - from: eval_video2
   to: check_eval_video2
-- from: final_video
-  to: END
-- from: final_video_improved
-  to: END
-- from: honest_fail_video
-  to: END
 
 - from: decompose_topic
   to: call_sub1
@@ -863,12 +833,6 @@ edges:
   to: eval_deep2
 - from: eval_deep2
   to: check_eval_deep2
-- from: final_deep
-  to: END
-- from: final_deep_improved
-  to: END
-- from: honest_fail_deep
-  to: END
 
 - from: call_web
   to: eval_answer
@@ -878,7 +842,3 @@ edges:
   to: eval_again
 - from: eval_again
   to: check_eval2
-- from: final_web
-  to: END
-- from: honest_fail
-  to: END

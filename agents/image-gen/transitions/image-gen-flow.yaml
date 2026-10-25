@@ -109,15 +109,3 @@ edges:
 
   - from: extract_facts
     to: route
-
-  - from: edit_image
-    to: END
-
-  - from: upscale_image
-    to: END
-
-  - from: generate_image
-    to: END
-
-  - from: no_image_task
-    to: END

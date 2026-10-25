@@ -589,11 +589,82 @@ fn into_workflow(source: serde_yaml::Value, path: &Path) -> Result<WorkflowDef, 
         .unwrap_or(Path::new("."))
         .to_string_lossy()
         .to_string();
+    // «Сломанный граф не должен выглядеть рабочим» (паттерн невалидного entry):
+    // остатки сентинела END делают отказ загрузки явным с точной локацией,
+    // а не тихой потерей ребра в визуальном редакторе.
+    reject_end_sentinel(&wf)?;
     // «Сломанный граф не должен выглядеть рабочим» (тот же стиль, что у
     // отсутствующего entry): мёртвый signal-контракт виден в логе при
     // загрузке, а не только после того, как Model 3 вернул пустой ответ.
     log_dead_signal_contracts(&wf);
     Ok(wf)
+}
+
+/// Строка-сентинел конца ветки (`nodes::END_SENTINEL`) и её легаси-форма.
+///
+/// Сентинел УДАЛЁН из формата файлов: конец ветки = отсутствие исходящих
+/// рёбер (нода-терминал). Единая точка распознавания остатков — гейт
+/// загрузчика и диагностика редактора не должны разойтись в строках.
+pub(crate) fn is_end_sentinel(value: &str) -> bool {
+    value == super::nodes::END_SENTINEL || value == "__END__"
+}
+
+/// Гейт формата: граф с сентинелом END не загружается движком.
+///
+/// Рёбра `to: END` и END в полях маршрутизации — легаси, который рантайм
+/// трактовал как «стоп» (семантически то же, что отсутствие исходящих рёбер),
+/// а визуальный редактор считал повреждением: рисовал «YAML повреждён» и
+/// тихо терял такие рёбра при сохранении. Теперь формат таких значений не
+/// содержит, и загрузчик отказывает с точной локацией и инструкцией.
+///
+/// Гейт живёт здесь, в загрузчике, а НЕ в `read_workflow_file`: редактор
+/// парсит файл своим путём (`serde_yaml::from_value` в `api/graph.rs`) и
+/// обязан открывать старый файл с диагностикой `END_SENTINEL_DEPRECATED`,
+/// иначе его нечем чинить. `find_next_node` и guard очереди в `mod.rs`
+/// остаются как defense-in-depth — мёртвый, но безвредный код.
+fn reject_end_sentinel(wf: &WorkflowDef) -> Result<(), String> {
+    const REASON: &str =
+        "сентинел END удалён из формата: конец ветки = отсутствие исходящих рёбер";
+    for (index, edge) in wf.edges.iter().enumerate() {
+        if is_end_sentinel(&edge.to) {
+            return Err(format!(
+                "В workflow '{}' ребро edges[{}] ('{}' → '{}') использует {}. \
+                 Удали это ребро — нода-источник станет терминальной",
+                wf.name, index, edge.from, edge.to, REASON
+            ));
+        }
+    }
+    for node in &wf.nodes {
+        let routes = [
+            ("default", node.default.as_deref()),
+            ("sequential_to", node.sequential_to.as_deref()),
+            ("true_to", node.true_to.as_deref()),
+            ("false_to", node.false_to.as_deref()),
+        ];
+        for (field, target) in routes {
+            if let Some(target) = target {
+                if is_end_sentinel(target) {
+                    return Err(format!(
+                        "В workflow '{}' поле nodes[id={}].{} = '{}' использует {}. \
+                         Удали это поле маршрута",
+                        wf.name, node.id, field, target, REASON
+                    ));
+                }
+            }
+        }
+        if let Some(cases) = &node.cases_priority {
+            for (index, case) in cases.iter().enumerate() {
+                if is_end_sentinel(&case.to) {
+                    return Err(format!(
+                        "В workflow '{}' поле nodes[id={}].cases_priority[{}].to = '{}' \
+                         использует {}. Удали это поле маршрута",
+                        wf.name, node.id, index, case.to, REASON
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Один агрегированный `log::error!` на граф: список мёртвых пар одной
@@ -1516,6 +1587,114 @@ edges: []
     fn non_mapping_root_is_not_a_graph() {
         let source: serde_yaml::Value = serde_yaml::from_str("- один\n- два\n").expect("YAML");
         assert!(!declares_graph(&source));
+    }
+
+    /// Сентинел END удалён из формата: граф с ребром `to: END` загрузчик
+    /// отказывается грузить с точной локацией и инструкцией (паттерн
+    /// невалидного `entry` — сломанный граф не должен выглядеть рабочим).
+    #[test]
+    fn end_sentinel_edge_is_rejected_by_loader() {
+        let yaml = r#"
+name: Legacy Graph
+nodes:
+  - id: start
+    type: llm_worker
+edges:
+  - from: start
+    to: END
+"#;
+        let source: serde_yaml::Value = serde_yaml::from_str(yaml).expect("валидный YAML");
+        let error =
+            into_workflow(source, Path::new("legacy.yaml")).expect_err("сентинел END запрещён");
+        assert!(
+            error.contains("Legacy Graph"),
+            "нет привязки к графу в ошибке: {}",
+            error
+        );
+        assert!(
+            error.contains("edges[0]"),
+            "нет точной локации ребра: {}",
+            error
+        );
+        assert!(error.contains("END"), "нет имени сентинела: {}", error);
+        assert!(
+            error.contains("отсутствие исходящих рёбер"),
+            "нет инструкции «конец ветки = отсутствие исходящих рёбер»: {}",
+            error
+        );
+    }
+
+    /// `__END__` — легаси-форма сентинела, гейт ловит и её.
+    #[test]
+    fn end_sentinel_legacy_form_is_rejected_too() {
+        let yaml = r#"
+name: Legacy Graph
+nodes:
+  - id: start
+    type: llm_worker
+edges:
+  - from: start
+    to: __END__
+"#;
+        let source: serde_yaml::Value = serde_yaml::from_str(yaml).expect("валидный YAML");
+        let error =
+            into_workflow(source, Path::new("legacy.yaml")).expect_err("сентинел END запрещён");
+        assert!(error.contains("edges[0]"), "нет локации ребра: {}", error);
+    }
+
+    /// END в полях маршрутизации ноды — тот же отказ с локацией поля.
+    #[test]
+    fn end_sentinel_in_routing_field_is_rejected() {
+        let yaml = r#"
+name: Legacy Graph
+nodes:
+  - id: start
+    type: llm_worker
+  - id: check
+    type: condition_check
+    input_object: "{{ nodes.start.output }}"
+    field: ready
+    true_to: END
+edges:
+  - from: start
+    to: check
+"#;
+        let source: serde_yaml::Value = serde_yaml::from_str(yaml).expect("валидный YAML");
+        let error =
+            into_workflow(source, Path::new("legacy.yaml")).expect_err("сентинел END запрещён");
+        assert!(
+            error.contains("nodes[id=check].true_to"),
+            "нет локации поля маршрутизации: {}",
+            error
+        );
+    }
+
+    /// cases_priority[].to: END — гейт проверяет и приоритетные маршруты.
+    #[test]
+    fn end_sentinel_in_cases_priority_is_rejected() {
+        let yaml = r#"
+name: Legacy Graph
+nodes:
+  - id: start
+    type: llm_worker
+  - id: route
+    type: switch
+    input_object: "{{ nodes.start.output }}"
+    cases_priority:
+      - key: ready
+        to: END
+edges:
+  - from: start
+    to: route
+"#;
+        let source: serde_yaml::Value = serde_yaml::from_str(yaml).expect("валидный YAML");
+        let error =
+            into_workflow(source, Path::new("legacy.yaml")).expect_err("сентинел END запрещён");
+        assert!(
+            error.contains("nodes[id=route].cases_priority[0].to"),
+            "нет локации cases_priority: {}",
+            error
+        );
     }
 
     #[test]

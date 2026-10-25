@@ -73,9 +73,3 @@ edges:
 
   - from: extract_facts
     to: route
-
-  - from: make_video
-    to: END
-
-  - from: no_video_task
-    to: END

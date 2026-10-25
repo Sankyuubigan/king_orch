@@ -1224,7 +1224,11 @@ where
     }
 }
 
-const END_SENTINEL: &str = "END";
+/// Единый источник строки сентинела конца ветки. Из формата файлов сентинел
+/// удалён (конец ветки = отсутствие исходящих рёбер); проверки остатков —
+/// `parser::reject_end_sentinel` и `parser::is_end_sentinel`. Проверка ниже и
+/// guard очереди в `mod.rs` остаются как defense-in-depth.
+pub(crate) const END_SENTINEL: &str = "END";
 
 /// Находит следующий узел по списку edges.
 /// Возвращает `None` когда нужно остановить workflow (дошли до END).

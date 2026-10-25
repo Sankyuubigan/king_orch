@@ -195,6 +195,7 @@ infra/    — Инфраструктура (LLM, сессии, MCP, конфиг
 - Экстрактор берёт текст из **`input` узла** (`{{ nodes.user_message.output.text }}`), а не из ambient-контекста — иначе нода входа была бы декоративной. `condition_check`同理: `input_object` обязателен, хардкод дефолта `{{ nodes.extract_facts.output }}` удалён.
 - Инвариант: `{{ user_message }}` ≡ `{{ nodes.<entry>.output.text }}` (обе — `sanitize_model_visible_text(context.user_message)`). Короткая форма — сокращение для обратной совместимости, а не второй источник правды.
 - Контракт проверяется тестами `production_graphs_*` в `workflow_engine/parser.rs` по реальным файлам из `agents/`.
+- **Конец ветки = отсутствие исходящих рёбер** (нода-терминал). Сентинел `END` удалён из формата: рёбра `to: END` и END в полях маршрутизации отклоняются загрузчиком (`parser::reject_end_sentinel`), редактор показывает `END_SENTINEL_DEPRECATED` и удаляет маршрут при сохранении. Тип `return` устарел — новые графы его не используют.
 
 ### Grammar Architecture (Method 3 — Hybrid GBNF)
 - Все агенты с JSON-выводом используют **hybrid GBNF** (Method 3 из `docs/gbnf.md`):

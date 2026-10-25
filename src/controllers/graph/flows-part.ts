@@ -5,7 +5,7 @@ import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError } from "../../telemetry";
 import { readWorkflowFile, saveWorkflow } from "../../services";
 import type { WorkflowGraphDef, GraphNodeDef, GraphEdgeDef } from "./types";
-import { isDynamicNode, OUTPUT_COUNT, ENTRY_NODE_TYPE, inputCount } from "./constants";
+import { isDynamicNode, OUTPUT_COUNT, ENTRY_NODE_TYPE, END_SENTINEL, inputCount } from "./constants";
 import type { GraphController } from "./graph-class";
 
 // ─── Системный диалог открытия ───
@@ -120,6 +120,10 @@ export async function handleOpen(this: GraphController): Promise<void> {
       }
 
       for (const { edge, index } of nonSwitchEdgeEntries) {
+        // Сентинел END удалён из формата: ребро не отображается и в сохранение
+        // не вернётся (редактор — штатный мигратор). Свой EDGE_ENDPOINT_MISSING
+        // не пушим: диагностику END_SENTINEL_DEPRECATED уже отдал read_workflow_file.
+        if (edge.to === END_SENTINEL) continue;
         if (!nodesData[edge.from] || !nodesData[edge.to]) {
           diagnostics.push({
             code: "EDGE_ENDPOINT_MISSING",

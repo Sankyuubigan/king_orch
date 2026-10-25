@@ -635,3 +635,99 @@ edges:
         .iter()
         .any(|d| d.code.starts_with("CUSTOM_TOOL")), "лишние диагностики: {:?}", diagnostics);
 }
+
+// --- Сентинел END удалён из формата (конец ветки = отсутствие исходящих рёбер) ---
+
+#[test]
+fn edge_to_end_sentinel_is_deprecated_not_missing() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+nodes:
+  - id: worker
+    type: llm_worker
+    agent: test
+edges:
+  - from: worker
+    to: END
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    let deprecated = diagnostics
+        .iter()
+        .find(|d| d.code == "END_SENTINEL_DEPRECATED")
+        .expect("нет END_SENTINEL_DEPRECATED");
+    assert_eq!(deprecated.location, "edges[0].to");
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|d| d.code == "EDGE_ENDPOINT_MISSING"),
+        "END-цель не должна выглядеть повреждением: {:?}",
+        diagnostics
+    );
+}
+
+#[test]
+fn cases_priority_to_end_sentinel_is_deprecated() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+nodes:
+  - id: facts
+    type: note
+  - id: router
+    type: switch
+    input_object: "{{ nodes.facts.output }}"
+    cases_priority:
+      - key: ready
+        to: END
+  - id: worker
+    type: llm_worker
+    agent: test
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics.iter().any(|d| {
+        d.code == "END_SENTINEL_DEPRECATED"
+            && d.location == "nodes[id=router].cases_priority[0]"
+    }));
+    assert!(
+        !diagnostics.iter().any(|d| d.code == "NODE_TARGET_MISSING"),
+        "END-цель не должна выглядеть отсутствующей: {:?}",
+        diagnostics
+    );
+}
+
+#[test]
+fn edge_from_end_sentinel_stays_missing_endpoint() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+nodes:
+  - id: worker
+    type: llm_worker
+    agent: test
+edges:
+  - from: END
+    to: worker
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics.iter().any(|d| {
+        d.code == "EDGE_ENDPOINT_MISSING" && d.location == "edges[0].from"
+    }));
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|d| d.code == "END_SENTINEL_DEPRECATED"),
+        "`from: END` — настоящее повреждение, а не легаси-цель: {:?}",
+        diagnostics
+    );
+}

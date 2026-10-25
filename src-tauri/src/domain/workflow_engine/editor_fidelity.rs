@@ -3,7 +3,7 @@ use std::collections::{HashMap, HashSet};
 use serde::Serialize;
 use serde_yaml::{Mapping, Value};
 
-use super::parser::{NodeDef, NodeType, WorkflowDef};
+use super::parser::{is_end_sentinel, NodeDef, NodeType, WorkflowDef};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -827,6 +827,17 @@ fn push_missing_target(
             location,
             "цель маршрута пустая и не будет отображена".to_string(),
         );
+    } else if is_end_sentinel(target) {
+        push_diagnostic(
+            diagnostics,
+            "END_SENTINEL_DEPRECATED",
+            location,
+            format!(
+                "цель '{}' — сентинел END: он удалён из формата (конец ветки = отсутствие \
+                 исходящих рёбер); маршрут будет удалён при Сохранить",
+                target
+            ),
+        );
     } else if !ids.contains(target) {
         push_diagnostic(
             diagnostics,
@@ -862,7 +873,20 @@ fn collect_edge_diagnostics(
             if !nodes.contains_key(edge.from.as_str()) {
                 push_missing_edge_endpoint(diagnostics, &location, "from", &edge.from);
             }
-            if !nodes.contains_key(edge.to.as_str()) {
+            if is_end_sentinel(&edge.to) {
+                // Сентинел END удалён из формата: это не повреждение, а легаси,
+                // которое Сохранение из редактора мигрирует (ребро дропается на
+                // импорте). `from: END` остаётся настоящим повреждением —
+                // EDGE_ENDPOINT_MISSING ниже его не минует.
+                push_diagnostic(
+                    diagnostics,
+                    "END_SENTINEL_DEPRECATED",
+                    &format!("{}.to", location),
+                    "сентинел END удалён из формата (конец ветки = отсутствие исходящих \
+                     рёбер); ребро будет удалено при Сохранить"
+                        .to_string(),
+                );
+            } else if !nodes.contains_key(edge.to.as_str()) {
                 push_missing_edge_endpoint(diagnostics, &location, "to", &edge.to);
             }
         }

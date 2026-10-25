@@ -119,9 +119,3 @@ edges:
 
   - from: lookup_cards
     to: interpret
-
-  - from: ask_helper
-    to: END
-
-  - from: interpret
-    to: END
