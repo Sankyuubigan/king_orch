@@ -6,6 +6,7 @@ export function buildNodeInnerHtml(this: GraphController, data: any, fallbackId:
   const typeLabel = NODE_LABELS[data.type] || data.type;
   const nodeId = data.id || fallbackId;
   const isEntry = this.currentEntryNodeId === nodeId;
+  const disabledBadge = data.disabled ? `<div class="gn-disabled-badge">⛔ DISABLED</div>` : "";
 
   // Нода-источник: показывает, что именно запускает граф. Текст подставляется
   // нодами через `{{ nodes.<id>.output.text }}`.
@@ -107,7 +108,6 @@ export function buildNodeInnerHtml(this: GraphController, data: any, fallbackId:
     `;
   }
 
-  const disabledBadge = data.disabled ? `<div class="gn-disabled-badge">⛔ DISABLED</div>` : "";
   return `
     <div class="gn-title">${this.esc(nodeId)}</div>
     ${isEntry ? `<div class="gn-entry-badge">🚪 ВХОД ГРАФА</div>` : ""}
