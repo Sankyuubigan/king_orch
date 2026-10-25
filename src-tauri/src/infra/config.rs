@@ -1,14 +1,21 @@
 //! Полный конфиг приложения (`app_config.json`) — хостовый `AppConfig`.
 //!
-//! ## Разделение с движковым плагином
+//! ## Разделение с движковым плагином (два файла, один SSOT на ключ)
 //! Плагин `tauri-plugin-llama-engine` владеет движковыми ключами (models,
 //! last_model, models_dir, model_params, mmproj_files, model_meta,
-//! llamacpp_dir, engine_variant, каталог). Хосты остаются с полным `AppConfig`
-//! (theme, context_size, allow_error_reports, translator_*, …). Оба пишут в
-//! ОДИН файл field-preserving merge, поэтому ключи друг друга не затираются
-//! (типы модели/параметров пере-экспортируются отсюда из плагина — единая
-//! сериализация). Всё движковое (каталог, mmproj-хелперы, сэмплинг-параметры)
-//! живёт в плагине и доступно хостом через фасад `crate::infra::*`.
+//! llamacpp_dir, engine_source, engine_variant) в СОБСТВЕННОМ общем файле
+//! `%APPDATA%/llama-engine/app_config.json` (SSOT для всех хостов плагина).
+//! Хост хранит только хостовые ключи (theme, context_size, tabs, …) в своём
+//! `%APPDATA%/com.kingorch.app/app_config.json`.
+//!
+//! Стык: [`load_config`] читает хостовый файл и накатывает движковые ключи
+//! из файла плагина (оверлей тем же лоадером, что читает панель моделей —
+//! чат и плашка видят один список), а [`save_config_file`] вырезает
+//! движковые ключи из хостового файла, чтобы вторая копия правды не могла
+//! возникнуть снова. Запись движковых ключей хостом — только через
+//! [`set_engine_last_model`] / [`set_engine_dirs`] (инцидент 25.10.26:
+//! добавленная в панели модель не появлялась в выпадашке чата, потому что
+//! хост читал устаревшую копию из своего файла).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -20,6 +27,24 @@ use tauri::{AppHandle, Manager};
 /// Единые движковые типы — из плагина (SSOT), чтоб хостовый `AppConfig`
 /// сериализовался в тот же JSON, что и `EngineConfig` плагина.
 pub use tauri_plugin_llama_engine::engine::config::{ModelMeta, ModelParams};
+
+use tauri_plugin_llama_engine::engine::config::{
+    self as engine_config, EngineConfig,
+};
+
+/// Движковые ключи `EngineConfig` плагина — имена полей в JSON. Владелец —
+/// общий файл плагина; в хостовом файле их быть не должно (strip на записи).
+pub const ENGINE_KEYS: &[&str] = &[
+    "models",
+    "last_model",
+    "models_dir",
+    "model_params",
+    "mmproj_files",
+    "model_meta",
+    "llamacpp_dir",
+    "engine_source",
+    "engine_variant",
+];
 
 /// Одна вкладка рабочей области (браузерный UI). Сериализуется в `app_config.json`
 /// как часть `AppConfig.tabs`. Типы: "main" (главная/новая вкладка), "chat"
@@ -209,8 +234,8 @@ pub fn get_config_path(_app: &AppHandle) -> PathBuf {
 
 /// Имя папки данных приложения. ДОЛЖНО совпадать с `identifier` из
 /// tauri.conf.json (используется только для чтения конфига ДО создания
-/// Tauri-приложения, когда AppHandle ещё недоступен). Плагин использует то же
-/// имя через `set_app_data_dir_name`.
+/// Tauri-приложения, когда AppHandle ещё недоступен). Движковые ключи сюда
+/// не входят — ими владеет плагин llama-engine в собственном каталоге.
 pub const APP_DATA_DIR_NAME: &str = "com.kingorch.app";
 
 /// Папка данных приложения без AppHandle (APPDATA/<APP_DATA_DIR_NAME>).
@@ -231,11 +256,30 @@ pub fn app_data_dir_early() -> PathBuf {
 /// оборвалась на середине, значение лежит в журнале, и прямой `fs` его не видит
 /// — пользователь получил бы настройки по умолчанию вместо своих.
 pub fn load_config_early() -> AppConfig {
-    parse_config(ko_json_store::read_text(&app_data_dir_early().join("app_config.json")))
+    let mut cfg = parse_config(ko_json_store::read_text(&app_data_dir_early().join("app_config.json")));
+    apply_engine_keys(&mut cfg, &engine_config::load_config_early());
+    cfg
 }
 
 pub fn load_config(app: &AppHandle) -> AppConfig {
-    parse_config(ko_json_store::read_text(&get_config_path(app)))
+    let mut cfg = parse_config(ko_json_store::read_text(&get_config_path(app)));
+    apply_engine_keys(&mut cfg, &engine_config::load_config(app));
+    cfg
+}
+
+/// Накатывает движковые ключи из конфига плагина поверх хостовых значений.
+/// Копии движковых ключей в хостовом файле — остатки старой схемы (до переезда
+/// плагина в собственный каталог) и выигрывать никогда не должны.
+fn apply_engine_keys(cfg: &mut AppConfig, eng: &EngineConfig) {
+    cfg.models = eng.models.clone();
+    cfg.last_model = eng.last_model.clone();
+    cfg.models_dir = eng.models_dir.clone();
+    cfg.model_params = eng.model_params.clone();
+    cfg.mmproj_files = eng.mmproj_files.clone();
+    cfg.model_meta = eng.model_meta.clone();
+    cfg.llamacpp_dir = eng.llamacpp_dir.clone();
+    cfg.engine_source = eng.engine_source.clone();
+    cfg.engine_variant = eng.engine_variant.clone();
 }
 
 /// Разбор прочитанного текста конфига. Разбор не удался — дефолт, но причина
@@ -288,8 +332,36 @@ pub fn save_config_file(path: &Path, config: &AppConfig) -> Result<(), String> {
             for (k, v) in host_map {
                 root_map.insert(k, v);
             }
+            // Движковые ключи владеются общим файлом плагина (см. модульный
+            // док): копия в хостовом файле — вторая правда, из-за которой
+            // чат и панель моделей расходились. Вырезаем даже если остались
+            // с прошлых версий.
+            for k in ENGINE_KEYS {
+                root_map.remove(*k);
+            }
         }
     })
+}
+
+/// Записывает `last_model` (выбор модели в выпадашке чата) в общий конфиг
+/// движка — единый источник правды, который читает и панель моделей.
+pub fn set_engine_last_model(app: &AppHandle, path: &str) -> Result<(), String> {
+    let mut eng = engine_config::load_config(app);
+    eng.last_model = Some(path.to_string());
+    engine_config::save_config(app, &eng)
+}
+
+/// Записывает движковые пути (`llamacpp_dir`, `models_dir`) в общий конфиг
+/// движка (смена хранилища `KingOrchData` пересчитывает производные папки).
+pub fn set_engine_dirs(
+    app: &AppHandle,
+    llamacpp_dir: Option<String>,
+    models_dir: Option<String>,
+) -> Result<(), String> {
+    let mut eng = engine_config::load_config(app);
+    eng.llamacpp_dir = llamacpp_dir;
+    eng.models_dir = models_dir;
+    engine_config::save_config(app, &eng)
 }
 
 pub fn find_agents_dir(app: &AppHandle) -> PathBuf {
@@ -457,5 +529,82 @@ mod tests {
                 .and_then(|d| d.as_str()),
             Some("D:\\custom\\9router")
         );
+    }
+
+    /// Движковые ключи владеются общим файлом плагина: сохранение хостового
+    /// конфига обязано вырезать их (в том числе остатки старой схемы, уже
+    /// лежащие в файле), иначе в хостовом файле снова появится вторая копия
+    /// правды, расходящаяся с панелью моделей (инцидент 25.10.26).
+    #[test]
+    fn test_save_config_file_strips_engine_keys() {
+        let tmp = std::env::temp_dir().join(format!("king_orch_cfg_strip_{}.json", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        // Остатки старой схемы: движковые ключи в хостовом файле.
+        let initial_json = r#"{"models":["D:\\old\\stale.gguf"],"last_model":"D:\\old\\stale.gguf","theme":"dark"}"#;
+        fs::write(&tmp, initial_json).unwrap();
+
+        let mut cfg = AppConfig::default();
+        cfg.theme = "light".to_string();
+        cfg.models = vec!["D:\\new\\model.gguf".to_string()];
+        save_config_file(&tmp, &cfg).unwrap();
+
+        let saved = fs::read_to_string(&tmp).unwrap();
+        let val: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        let _ = fs::remove_file(&tmp);
+
+        for key in ENGINE_KEYS {
+            assert!(
+                val.get(*key).is_none(),
+                "движковый ключ «{key}» не должен попадать в хостовый файл, а он есть: {}",
+                val.get(*key).unwrap()
+            );
+        }
+        assert_eq!(val.get("theme").and_then(|t| t.as_str()), Some("light"));
+    }
+
+    /// Оверлей движковых ключей: файл плагина — SSOT, хостовые (устаревшие)
+    /// значения проигрывают по всем девяти ключам.
+    #[test]
+    fn test_apply_engine_keys_overrides_host_values() {
+        let mut cfg = AppConfig::default();
+        cfg.models = vec!["D:\\host\\stale.gguf".to_string()];
+        cfg.last_model = Some("D:\\host\\stale.gguf".to_string());
+        cfg.engine_variant = Some("cpu".to_string());
+
+        let params = ModelParams::default();
+        let mut eng = EngineConfig::default();
+        eng.models = vec!["D:\\plugin\\fresh.gguf".to_string()];
+        eng.last_model = Some("D:\\plugin\\fresh.gguf".to_string());
+        eng.models_dir = Some("D:\\KingOrchData\\models".to_string());
+        eng.model_params.insert("D:\\plugin\\fresh.gguf".to_string(), params);
+        eng.mmproj_files.insert(
+            "D:\\plugin\\fresh.gguf".to_string(),
+            "D:\\plugin\\fresh.mmproj.gguf".to_string(),
+        );
+        eng.model_meta.insert(
+            "D:\\plugin\\fresh.gguf".to_string(),
+            ModelMeta { uncen: true, vision: true, audio: false },
+        );
+        eng.llamacpp_dir = Some("D:\\KingOrchData\\llamacpp".to_string());
+        eng.engine_source = Some("ggml-org".to_string());
+        eng.engine_variant = Some("cuda-13.3".to_string());
+
+        apply_engine_keys(&mut cfg, &eng);
+
+        assert_eq!(cfg.models, eng.models);
+        assert_eq!(cfg.last_model, eng.last_model);
+        assert_eq!(cfg.models_dir, eng.models_dir);
+        assert_eq!(cfg.model_params.len(), 1);
+        assert!(cfg.model_params.contains_key("D:\\plugin\\fresh.gguf"));
+        assert_eq!(
+            cfg.mmproj_files.get("D:\\plugin\\fresh.gguf").map(String::as_str),
+            Some("D:\\plugin\\fresh.mmproj.gguf")
+        );
+        assert_eq!(
+            serde_json::to_value(cfg.model_meta.get("D:\\plugin\\fresh.gguf")).unwrap(),
+            serde_json::to_value(ModelMeta { uncen: true, vision: true, audio: false }).unwrap()
+        );
+        assert_eq!(cfg.llamacpp_dir, eng.llamacpp_dir);
+        assert_eq!(cfg.engine_source, eng.engine_source);
+        assert_eq!(cfg.engine_variant.as_deref(), Some("cuda-13.3"));
     }
 }

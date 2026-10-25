@@ -43,6 +43,7 @@ pub use mcp_client::{McpClient, McpPool, SharedMcpClient};
 // ─── Публичные функции ───
 pub use config::{
     load_config, load_config_early, save_config, load_sampling_presets,
+    set_engine_last_model, set_engine_dirs,
     find_agents_dir, find_mcp_servers_dir, find_coding_tests_dir,
 };
 pub use session_manager::{get_session, get_sessions, save_session, delete_session, rename_session, open_session_folder, reveal_path};

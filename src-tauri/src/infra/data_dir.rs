@@ -112,8 +112,13 @@ pub fn apply(app: &AppHandle, raw_path: &str) -> Result<PathBuf, String> {
 
     let mut cfg = infra::load_config(app);
     cfg.data_dir = Some(dir.to_string_lossy().to_string());
-    cfg.llamacpp_dir = Some(dir.join("llamacpp").to_string_lossy().to_string());
-    cfg.models_dir = Some(dir.join("models").to_string_lossy().to_string());
+    // llamacpp_dir и models_dir — движковые ключи: пишутся в общий конфиг
+    // плагина (SSOT), из хостового файла они вырезаются при сохранении.
+    infra::set_engine_dirs(
+        app,
+        Some(dir.join("llamacpp").to_string_lossy().to_string()),
+        Some(dir.join("models").to_string_lossy().to_string()),
+    )?;
     cfg.sdcpp_dir = Some(dir.join("sdcpp").to_string_lossy().to_string());
     let bundle_name = infra::default_bundle_entry()
         .map(|e| e.name)

@@ -20,10 +20,12 @@ async fn main() {
     // Ранний pre-Tauri период пишется через early_* (краш-лог живёт сразу).
     tauri_plugin_logs::early_init("king_orch.log");
 
-    // Движковый плагин читает тот же app_config.json (APPDATA/<name>).
-    tauri_plugin_llama_engine::engine::config::set_app_data_dir_name("com.kingorch.app");
-    // Шлюз облачных роутеров делит тот же app_config.json (секция cloud_routers).
-    tauri_plugin_cloud_routers::set_app_data_dir_name("com.kingorch.app");
+    // Плагины llama-engine и cloud-routers владеют своими конфигами в
+    // собственных каталогах (%APPDATA%/llama-engine, %APPDATA%/cloud-routers),
+    // общих для всех хостов. Прежние вызовы set_app_data_dir_name("com.kingorch.app")
+    // удалены: они давно no-op, а их комментарий («читает тот же app_config.json»)
+    // описывал схему до переезда плагинов и маскировал рассинхрон списков моделей
+    // (инцидент 25.10.26 — стык см. в доке infra::config).
 
     tauri_plugin_logs::early_log(
         "INFO",

@@ -137,16 +137,16 @@ pub fn reset_max_gen_tokens(app: AppHandle) -> u32 {
 
 #[tauri::command]
 pub fn set_last_model(app: AppHandle, path: String) {
-    let mut cfg = infra::load_config(&app);
     // 🛡 Проектор mmproj нельзя выбирать активной моделью (см. is_mmproj_file).
     // Пропускаем игнор в лог, конфиг не трогаем.
     if infra::is_mmproj_file(&path) {
         log::warn!("set_last_model: отклонён выбор mmproj «{}»", path);
         return;
     }
-    cfg.last_model = Some(path);
-    if let Err(e) = infra::save_config(&app, &cfg) {
-        log::error!("set_last_model: ошибка сохранения конфига: {}", e);
+    // last_model — движковый ключ: владелец — общий конфиг плагина
+    // llama-engine (его же читает панель моделей), не хостовый файл.
+    if let Err(e) = infra::set_engine_last_model(&app, &path) {
+        log::error!("set_last_model: ошибка сохранения конфига движка: {}", e);
     }
 }
 
