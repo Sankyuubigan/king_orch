@@ -531,3 +531,107 @@ edges: []
         d.code == "SYSTEM_PROMPT_DELIVERY_WITHOUT_FILE" && d.location == "config"
     }));
 }
+
+#[test]
+fn custom_tool_without_file_is_diagnosed() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+nodes:
+  - id: tool
+    type: custom_tool_call
+  - id: target
+    type: note
+edges:
+  - from: tool
+    to: target
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.code == "CUSTOM_TOOL_FILE_MISSING" && d.location == "nodes[id=tool]"));
+}
+
+#[test]
+fn custom_tool_output_message_requires_attachments_dir() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+nodes:
+  - id: tool
+    type: custom_tool_call
+    tool_file: ../tools/x.ts
+    output_message: true
+  - id: target
+    type: note
+edges:
+  - from: tool
+    to: target
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.code == "CUSTOM_TOOL_ATTACHMENTS_DIR_MISSING" && d.location == "nodes[id=tool]"));
+}
+
+#[test]
+fn custom_tool_in_group_is_diagnosed() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+nodes:
+  - id: tool
+    type: custom_tool_call
+    tool_file: ../tools/x.ts
+    group: g
+  - id: target
+    type: note
+edges:
+  - from: tool
+    to: target
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics
+        .iter()
+        .any(|d| d.code == "CUSTOM_TOOL_IN_GROUP" && d.location == "nodes[id=tool]"));
+}
+
+#[test]
+fn valid_custom_tool_node_has_no_custom_diagnostics() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: user_input
+nodes:
+  - id: user_input
+    type: user_message
+  - id: tool
+    type: custom_tool_call
+    tool_file: ../tools/x.ts
+    attachments_dir: ../database/cards
+    output_message: true
+  - id: target
+    type: note
+edges:
+  - from: user_input
+    to: tool
+  - from: tool
+    to: target
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(!diagnostics
+        .iter()
+        .any(|d| d.code.starts_with("CUSTOM_TOOL")), "лишние диагностики: {:?}", diagnostics);
+}

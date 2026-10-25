@@ -92,6 +92,21 @@ export function buildNodeInnerHtml(this: GraphController, data: any, fallbackId:
     return `<div class="gn-note-content">${this.esc(data.input || "")}</div>${sysBadge}`;
   }
 
+  if (data.type === "custom_tool_call") {
+    const argsCount = data.args ? Object.keys(data.args).length : 0;
+    const parts: string[] = [];
+    if (data.tool_file) parts.push(`⚙ ${this.esc(data.tool_file)}`);
+    if (argsCount > 0) parts.push(`args: ${argsCount}`);
+    if (data.output_message) parts.push("→ чат");
+    return `
+      <div class="gn-title">${this.esc(nodeId)}</div>
+      ${isEntry ? `<div class="gn-entry-badge">🚪 ВХОД ГРАФА</div>` : ""}
+      <div class="gn-type">${typeLabel}</div>
+      ${disabledBadge}
+      ${parts.length > 0 ? `<div class="gn-agent">${parts.join(" | ")}</div>` : ""}
+    `;
+  }
+
   const disabledBadge = data.disabled ? `<div class="gn-disabled-badge">⛔ DISABLED</div>` : "";
   return `
     <div class="gn-title">${this.esc(nodeId)}</div>

@@ -5,6 +5,9 @@
 
 pub mod agent_frame;
 pub mod context;
+/// One-shot кастомные тулы команд (`custom_tool_call`): бизнес-код команды
+/// живёт в её папке, движок — generic исполнитель (см. custom_tool.rs).
+pub mod custom_tool;
 pub mod editor_fidelity;
 pub mod fact_extractor;
 pub mod groups;

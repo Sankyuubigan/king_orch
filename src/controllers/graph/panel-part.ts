@@ -214,6 +214,33 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
     </div>`;
   }
 
+  if (data.type === "custom_tool_call") {
+    const argsJson = data.args ? JSON.stringify(data.args, null, 2) : "";
+    html += `<div class="graph-detail-section">
+      <div class="detail-label">Скрипт тула (tool_file)</div>
+      <input type="text" id="ge-tool-file" class="ge-input" placeholder="../tools/draw_card_numbers.ts" value="${this.esc(data.tool_file || "")}" />
+      <div class="detail-hint">Путь относительно папки YAML-графа. Скрипт живёт в папке команды; исполнение — one-shot Deno, stdout обязан быть JSON-объектом.</div>
+    </div>
+    <div class="graph-detail-section">
+      <div class="detail-label">Аргументы (args, JSON)</div>
+      <textarea id="ge-tool-args" class="ge-textarea" rows="4" placeholder='{"count": "{{ nodes.extract_facts.output.card_count }}"}'>${this.esc(argsJson)}</textarea>
+      <div class="detail-hint">Плоский JSON-объект; значения — строки (шаблоны вида {{ nodes.X.output.Y }} резолвит движок).</div>
+    </div>
+    <div class="graph-detail-section">
+      <div class="detail-label">Папка вложений (attachments_dir)</div>
+      <input type="text" id="ge-tool-attachments-dir" class="ge-input" placeholder="../database/cards" value="${this.esc(data.attachments_dir || "")}" />
+    </div>
+    <div class="graph-detail-section">
+      <div class="detail-label">Сообщение в чат (output_message)</div>
+      <label class="ge-toggle">
+        <input type="checkbox" id="ge-tool-output-message" ${data.output_message ? "checked" : ""} />
+        <span class="ge-toggle-slider"></span>
+        <span class="ge-toggle-label">${data.output_message ? "💬 Писать в чат" : "Только output для шаблонов"}</span>
+      </label>
+      <div class="detail-hint">true — создать сообщение (system_message, иначе авто-текст по output.cards) с вложениями карт из attachments_dir.</div>
+    </div>`;
+  }
+
   this.el.graphDetailContent.innerHTML = html;
 
   // Экземпляр студии может быть не один (вкладок студии несколько), поэтому поиск полей
@@ -393,6 +420,63 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
     noteSysMsg.addEventListener("change", () => {
       this.saveCheckpoint();
       this.editor!.drawflow.drawflow.Home.data[nodeId].data.system_message = noteSysMsg.value || undefined;
+      this.updateNodeHtml(nodeId);
+    });
+  }
+
+  const toolFileInput = getField<HTMLInputElement>("ge-tool-file");
+  if (toolFileInput) {
+    toolFileInput.addEventListener("change", () => {
+      this.saveCheckpoint();
+      this.editor!.drawflow.drawflow.Home.data[nodeId].data.tool_file = toolFileInput.value.trim() || undefined;
+      this.updateNodeHtml(nodeId);
+    });
+  }
+
+  const toolArgsInput = getField<HTMLTextAreaElement>("ge-tool-args");
+  if (toolArgsInput) {
+    toolArgsInput.addEventListener("change", () => {
+      this.saveCheckpoint();
+      const raw = toolArgsInput.value.trim();
+      if (!raw) {
+        this.editor!.drawflow.drawflow.Home.data[nodeId].data.args = undefined;
+      } else {
+        try {
+          const parsed = JSON.parse(raw);
+          if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+            showToast("args обязан быть JSON-объектом");
+            return;
+          }
+          this.editor!.drawflow.drawflow.Home.data[nodeId].data.args = parsed;
+        } catch {
+          showToast("args — невалидный JSON");
+          return;
+        }
+      }
+      this.updateNodeHtml(nodeId);
+    });
+  }
+
+  const toolAttachmentsDirInput = getField<HTMLInputElement>("ge-tool-attachments-dir");
+  if (toolAttachmentsDirInput) {
+    toolAttachmentsDirInput.addEventListener("change", () => {
+      this.saveCheckpoint();
+      this.editor!.drawflow.drawflow.Home.data[nodeId].data.attachments_dir =
+        toolAttachmentsDirInput.value.trim() || undefined;
+      this.updateNodeHtml(nodeId);
+    });
+  }
+
+  const toolOutputMessageInput = getField<HTMLInputElement>("ge-tool-output-message");
+  if (toolOutputMessageInput) {
+    toolOutputMessageInput.addEventListener("change", () => {
+      this.saveCheckpoint();
+      this.editor!.drawflow.drawflow.Home.data[nodeId].data.output_message =
+        toolOutputMessageInput.checked || undefined;
+      const label = toolOutputMessageInput.parentElement?.querySelector(".ge-toggle-label");
+      if (label) {
+        label.textContent = toolOutputMessageInput.checked ? "💬 Писать в чат" : "Только output для шаблонов";
+      }
       this.updateNodeHtml(nodeId);
     });
   }

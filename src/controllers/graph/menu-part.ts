@@ -54,6 +54,7 @@ export function setupContextMenu(this: GraphController): void {
             <div class="ctx-item" data-type="llm_fact_extractor">📋 Extractor</div>
             <div class="ctx-item" data-type="llm_freeform">💬 Freeform</div>
             <div class="ctx-item" data-type="note">📝 Note</div>
+            <div class="ctx-item" data-type="custom_tool_call">🔧 Custom Tool</div>
           </div>
         </div>
       `;

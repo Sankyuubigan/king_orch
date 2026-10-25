@@ -13,6 +13,7 @@ export const NODE_COLORS: Record<string, string> = {
   condition_router: "#5c6bc0",
   return: "#78909c",
   note: "#e53935",
+  custom_tool_call: "#8d6e63",
 };
 
 export const NODE_LABELS: Record<string, string> = {
@@ -30,6 +31,7 @@ export const NODE_LABELS: Record<string, string> = {
   condition_router: "🔀 Condition Router",
   return: "🏁 Return",
   note: "📝 Note",
+  custom_tool_call: "🔧 Custom Tool",
 };
 
 /**
@@ -72,6 +74,7 @@ export const OUTPUT_COUNT: Record<string, number> = {
   condition_router: 0,
   return: 0,
   note: 1,
+  custom_tool_call: 1,
 };
 
 export const CONDITION_CHECK_CASES = [

@@ -1,0 +1,127 @@
+name: Таролог
+description: Расклад карт Таро с картинками в чате и интерпретацией; неготовые вопросы — хелпер учит формулировать их правильно.
+
+config:
+  facts_file: facts.yaml
+  default_llm_params: creative
+
+# Точка входа графа — текст, отправленный пользователем в чат.
+entry: user_message
+
+nodes:
+  # ── Источник данных: текст пользователя (без LLM) ──
+  - id: user_message
+    type: user_message
+    ui_pos:
+      x: -320
+      y: 40
+
+  # ── Классификация вопроса: greeting / качество / количество карт ──
+  - id: extract_facts
+    type: llm_fact_extractor
+    input: "{{ nodes.user_message.output.text }}"
+    llm_params: strict
+    ui_pos:
+      x: -80
+      y: 40
+
+  # ── Маршрутизация по качеству вопроса (enum-факт, строгое совпадение) ──
+  # Недоставка факта → default: хелпер объясняет правила (не тишина).
+  - id: route
+    type: switch
+    input_object: "{{ nodes.extract_facts.output }}"
+    switch_field: question_quality
+    cases_priority:
+      - key: proper
+        to: draw_card_numbers
+      - key: reformulatable
+        to: draw_card_numbers
+      - key: unsuitable
+        to: ask_helper
+    default: ask_helper
+    ui_pos:
+      x: 140
+      y: 40
+
+  # ── Ветка хелпера (терминальная): учит формулировать вопросы ──
+  - id: ask_helper
+    type: llm_worker
+    agent: tarot_helper
+    task: |
+      Запрос пользователя не готов к раскладу: либо это приветствие или вопрос
+      о возможностях, либо формулировка вне языка колоды. Встреть кверента:
+      объясни, какие вопросы колода принимает, почему этот пока не возьмут,
+      и предложи переформулировку. НЕ вызывай инструменты — у тебя их нет.
+
+      Сообщение пользователя: {{ nodes.user_message.output.text }}
+    output_type: message
+    ui_pos:
+      x: 360
+      y: 280
+
+  # ── RNG-тул: уникальные номера карт 0..77 + ориентации (без LLM) ──
+  - id: draw_card_numbers
+    type: custom_tool_call
+    tool_file: ../tools/draw_card_numbers.ts
+    args:
+      count: "{{ nodes.extract_facts.output.card_count }}"
+    ui_pos:
+      x: 360
+      y: -80
+
+  # ── Лукап-тул: данные карт из SSOT + сообщение в чат с картинками ──
+  - id: lookup_cards
+    type: custom_tool_call
+    tool_file: ../tools/lookup_tarot_cards.ts
+    args:
+      numbers: "{{ nodes.draw_card_numbers.output.numbers }}"
+      orientations: "{{ nodes.draw_card_numbers.output.orientations }}"
+    attachments_dir: ../database/cards
+    output_message: true
+    system_message: |
+      Карты легли на сукно. Остановись и посмотри: судьба уже выбрала их для твоего вопроса.
+    ui_pos:
+      x: 580
+      y: -80
+
+  # ── Интерпретатор (терминальный): читает расклад и отвечает кверенту ──
+  - id: interpret
+    type: llm_worker
+    agent: tarot_reader
+    task: |
+      Прочитай расклад и ответь кверенту.
+
+      Вопрос кверента: {{ nodes.user_message.output.text }}
+      Вердикт анализатора (question_quality): {{ nodes.extract_facts.output.question_quality }}
+      Позиции карт: {{ nodes.lookup_cards.output.positions }}
+      Карты (JSON, у каждой есть orientation — прямое или перевёрнутое положение):
+      {{ nodes.lookup_cards.output.cards }}
+
+      Если question_quality равен "reformulatable" — сначала выпиши правильную
+      формулировку вопроса и объясни, почему карты отвечают только на правильные
+      вопросы. Затем интерпретируй каждую карту по её позиции с учётом
+      orientation (перевёрнутость проговаривай словами), сделай синтез расклада
+      и дай ответ на вопрос кверента с практическим итогом.
+    output_type: message
+    ui_pos:
+      x: 800
+      y: -80
+
+edges:
+  - from: user_message
+    to: extract_facts
+
+  - from: extract_facts
+    to: route
+
+  - from: draw_card_numbers
+    to: lookup_cards
+
+  - from: lookup_cards
+    to: interpret
+
+  - from: ask_helper
+    to: END
+
+  - from: interpret
+    to: END

@@ -54,6 +54,21 @@ export interface GraphNodeDef {
   system_prompt_file?: string;
   /** Слот доставки фрейма: `system` | `user_prefix` (дефолт `system`). */
   system_prompt_delivery?: string;
+  /**
+   * Кастомный тул ноды `custom_tool_call`: путь к скрипту относительно папки
+   * YAML-графа (прецедент `config.facts_file`). Зеркало `NodeDef.tool_file`;
+   * исполнение — `custom_tool.rs` (one-shot Deno, stdout = JSON-объект).
+   */
+  tool_file?: string;
+  /** Аргументы кастомного тула: плоский объект, значения — строки-шаблоны. */
+  args?: Record<string, string>;
+  /**
+   * Папка с картинками вложений (`output_message`) относительно папки графа.
+   * Зеркало `NodeDef.attachments_dir`.
+   */
+  attachments_dir?: string;
+  /** Создать сообщение в чат с вложениями карт. Зеркало `NodeDef.output_message`. */
+  output_message?: boolean;
 }
 
 export type ConditionNode =

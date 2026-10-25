@@ -28,6 +28,7 @@ pub fn analyze_workflow_fidelity(
     collect_node_target_diagnostics(workflow, &mut diagnostics);
     collect_edge_diagnostics(workflow, &mut diagnostics);
     collect_agent_frame_diagnostics(workflow, &mut diagnostics);
+    collect_custom_tool_diagnostics(workflow, &mut diagnostics);
     // «Мёртвый signal-контракт»: агент вызывает контракта, ключ никто
     // не читает — Method 3 отправит ответ в сигнал, а чат останется пустым.
     diagnostics.extend(super::signal_consumer_check::collect_dead_signal_diagnostics(
@@ -251,6 +252,68 @@ fn collect_agent_frame_diagnostics(
                 "SYSTEM_PROMPT_FILE_IN_GROUP",
                 &format!("nodes[id={}]", node.id),
                 "нода принадлежит группе с fused_instruction — склеенный вызов не читает фрейм ноды"
+                    .to_string(),
+            );
+        }
+    }
+}
+
+/// Контракт ноды `custom_tool_call`: обязательные поля и несовместимости.
+///
+/// Все проверки — ДО запуска: тул без `tool_file` или внутри FUSED-группы
+/// иначе «тихо не выполнился бы», а это выглядело бы как поломка графа.
+fn collect_custom_tool_diagnostics(
+    workflow: &WorkflowDef,
+    diagnostics: &mut Vec<GraphDiagnostic>,
+) {
+    for node in &workflow.nodes {
+        if node.node_type != NodeType::CustomToolCall {
+            continue;
+        }
+        let location = format!("nodes[id={}]", node.id);
+        let has_tool_file = node
+            .tool_file
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_some();
+        if !has_tool_file {
+            push_diagnostic(
+                diagnostics,
+                "CUSTOM_TOOL_FILE_MISSING",
+                &location,
+                "нода custom_tool_call без tool_file: нечего исполнять. Укажи путь к скрипту \
+                 относительно папки YAML-графа (прецедент config.facts_file)"
+                    .to_string(),
+            );
+        }
+        if node.output_message {
+            let has_dir = node
+                .attachments_dir
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .is_some();
+            if !has_dir {
+                push_diagnostic(
+                    diagnostics,
+                    "CUSTOM_TOOL_ATTACHMENTS_DIR_MISSING",
+                    &location,
+                    "output_message=true без attachments_dir: если output.cards содержит \
+                     image_file, вложения не собрать. Укажи папку с картинками относительно \
+                     папки графа либо убери output_message"
+                        .to_string(),
+                );
+            }
+        }
+        if node.group.as_deref().map(str::trim).filter(|g| !g.is_empty()).is_some() {
+            push_diagnostic(
+                diagnostics,
+                "CUSTOM_TOOL_IN_GROUP",
+                &location,
+                "custom_tool_call внутри группы: в FUSED-режиме внутренние ноды группы не \
+                 выполняются, тул был бы пропущен. Вынеси тул из группы (он сам по себе \
+                 макро-барьер — исполняется детерминированным движком, без LLM)"
                     .to_string(),
             );
         }

@@ -442,6 +442,22 @@ pub struct NodeDef {
     /// узел перевыполняется до лимита, выход из цикла — через switch/condition_check.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_visits: Option<u32>,
+    /// Путь к скрипту кастомного тула (`custom_tool_call`) относительно папки
+    /// YAML-графа (прецедент `config.facts_file`). Исполняется one-shot Deno.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tool_file: Option<String>,
+    /// Аргументы кастомного тула: плоский JSON-объект; строковые значения проходят
+    /// `context.resolve_template` (шаблоны вида `{{ nodes.X.output.Y }}`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub args: Option<HashMap<String, serde_yaml::Value>>,
+    /// Папка с файлами вложений (`custom_tool_call` + `output_message`) относительно
+    /// папки YAML-графа: из `output.cards[].image_file` собираются ChatAttachment.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub attachments_dir: Option<String>,
+    /// Создать сообщение в чат с содержимым output и вложениями карт
+    /// (`custom_tool_call`). Дефолт false — output доступен только шаблонам.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub output_message: bool,
 }
 
 fn is_false(b: &bool) -> bool {
@@ -474,6 +490,11 @@ pub enum NodeType {
     /// Точка входа графа — текст, который пользователь отправил в чат.
     /// Источник данных: 0 входов, 1 выход, LLM не вызывается.
     UserMessage,
+    /// One-shot кастомный тул: детерминированный бизнес-код команды агента,
+    /// живущий в её папке (`tool_file` относительно папки графа). Исполняется
+    /// Deno-процессом, stdout обязан быть JSON-объектом → `NodeResult.output`.
+    /// LLM не вызывается, сеть не разрешена — только чтение своих папок.
+    CustomToolCall,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -743,6 +764,7 @@ mod tests {
         "agents/coder/transitions/coding-team.yaml",
         "agents/research/transitions/search-specialist.yaml",
         "agents/image-gen/transitions/image-gen-flow.yaml",
+        "agents/tarot-master/transitions/tarot_master.yaml",
     ];
 
     #[test]
@@ -1434,9 +1456,10 @@ edges: []
 
     /// Настоящий граф обязан распознаваться как граф и грузиться.
     ///
-    /// На 22.10.26 в `agents/` живёт 6 графов (добавлен video-gen-flow —
-    /// генерация видео по описанию, агент video_maker). Вариант психотерапевта
-    /// из `experiments/` удалён коммитом `83e37f9` вместе с нодой System-1.
+    /// На 25.10.26 в `agents/` живёт 7 графов (добавлен tarot_master — расклад
+    /// карт команды «Таролог», агент tarot_reader/tarot_helper). Вариант
+    /// психотерапевта из `experiments/` удалён коммитом `83e37f9` вместе с нодой
+    /// System-1.
     #[test]
     fn real_graphs_are_still_discovered() {
         let agents_dir = workspace_root().join("agents");
@@ -1454,6 +1477,7 @@ edges: []
                 "image-gen-flow",
                 "main_conversation_flow",
                 "search-specialist",
+                "tarot_master",
                 "video-gen-flow",
             ],
             "фильтр не должен терять или подменять реальные графы"

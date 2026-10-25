@@ -1219,6 +1219,8 @@ where
                 next_nodes: vec![],
             })
         }
+
+        NodeType::CustomToolCall => super::custom_tool::execute_node(node, workflow, context, runner),
     }
 }
 
