@@ -10,14 +10,16 @@ use std::sync::Mutex;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Instant;
 
-/// Медиа-инструменты image-движка, исполняемые локальным диспетчером (без MCP).
-/// SSOT трёх ранее расходившихся условий: `upscale_image` в них упускался и
-/// проваливался в «Инструмент 'upscale_image' не найден» (см. tasks/21.10.26
-/// …md §1.1, лог 00:57). Набор обязан совпадать с тем, что исполняет
-/// `infra::execute_image_tool` (media.rs: "generate_image" | "edit_image" |
-/// "upscale_image").
-fn is_image_engine_tool(tool: &str) -> bool {
-    matches!(tool, "generate_image" | "edit_image" | "upscale_image")
+/// Медиа-инструменты движка изображений/видео, исполняемые локальным
+/// диспетчером (без MCP). SSOT трёх ранее расходившихся условий: `upscale_image`
+/// в них упускался и проваливался в «Инструмент 'upscale_image' не найден»
+/// (см. tasks/21.10.26 …md §1.1, лог 00:57). Набор обязан совпадать с тем, что
+/// исполняет пара `infra::execute_image_tool` / `infra::execute_video_tool`
+/// (media.rs: "generate_image" | "edit_image" | "upscale_image";
+/// video.rs: "generate_video"). Без "generate_video" здесь тул падал в
+/// MCP-поиск (сервера «media» не существует) и отвечал «Инструмент не найден».
+fn is_media_tool(tool: &str) -> bool {
+    matches!(tool, "generate_image" | "edit_image" | "upscale_image" | "generate_video")
 }
 
 /// Управляющий сигнал цикла `run_agent_node`: как продолжить после
@@ -297,7 +299,7 @@ where
         if !tool_found || !tool_succeeded {
             // Ресурсная ошибка image-движка (нет памяти) — не «плохие аргументы»:
             // повтор тем же способом бесполезен. Честный стоп сразу (§2.2, §1.7.1).
-            if super::vram::is_resource_error(&output) && is_image_engine_tool(tool_name) {
+            if super::vram::is_resource_error(&output) && is_media_tool(tool_name) {
                 self.tool_calls.push(ToolCallInfo {
                     tool_name: tool_name.to_string(),
                     arguments: args_str,
@@ -305,6 +307,20 @@ where
                 });
                 log::error!("Ресурсная ошибка image-тула '{}' (агент '{}'): {}", tool_name, self.agent.id, output);
                 self.final_response = super::vram::resource_error_fatal(&self.agent.id, tool_name, &output);
+                return Ok(DispatchCtl::Break);
+            }
+            // Детерминированная сетап-ошибка media-тула (бандл не скачан /
+            // движок не установлен / бандла нет в каталоге): ни один ретрай не
+            // меняет состояние диска, приказ «вызови СНОВА» порождал три
+            // бессмысленных прогона и ложный финал про «лимит». Честный стоп сразу.
+            if super::vram::is_setup_error(&output) && is_media_tool(tool_name) {
+                self.tool_calls.push(ToolCallInfo {
+                    tool_name: tool_name.to_string(),
+                    arguments: args_str,
+                    result: output.clone(),
+                });
+                log::error!("Сетап-ошибка media-тула '{}' (агент '{}'): {}", tool_name, self.agent.id, output);
+                self.final_response = super::vram::setup_error_fatal(&output);
                 return Ok(DispatchCtl::Break);
             }
             self.consecutive_failed_tools += 1;
@@ -432,7 +448,7 @@ where
                     }
                 }
             }
-        } else if is_image_engine_tool(tool_name) {
+        } else if is_media_tool(tool_name) {
             tool_found = true;
             let granted = self
                 .all_tools
@@ -546,7 +562,15 @@ where
                             self.agent.id,
                             raw_error
                         );
-                        if super::vram::is_resource_error(&raw_error) {
+                        // Честный текст (core §2.2): у NotFound/Usage/Forbidden есть
+                        // конкретная причина в Display («Не найдено: Активный бандл …
+                        // скачан не полностью … Скачайте его в Настройки …») — маскировать
+                        // её «внутренней ошибкой» = ложь, из-за которой агент гонял
+                        // ретраи детерминированного отказа. Обезличенный текст остаётся
+                        // только для Io/Timeout (их причина всегда в логе).
+                        if super::vram::is_resource_error(&raw_error)
+                            || super::vram::is_honest_tool_error(&error)
+                        {
                             tool_output =
                                 Some(super::vram::tool_error_to_output(tool_name, error));
                         } else {
@@ -664,7 +688,7 @@ where
             // как в legacy-пути (ретраи бесполезны, §2.2).
             if found
                 && super::vram::is_resource_error(&output)
-                && is_image_engine_tool(&call.name)
+                && is_media_tool(&call.name)
             {
                 self.tool_calls.push(ToolCallInfo {
                     tool_name: call.name.clone(),
@@ -674,6 +698,21 @@ where
                 log::error!("Ресурсная ошибка image-тула '{}' (агент '{}'): {}", call.name, self.agent.id, output);
                 self.final_response =
                     super::vram::resource_error_fatal(&self.agent.id, &call.name, &output);
+                return Ok(DispatchCtl::Break);
+            }
+            // Детерминированная сетап-ошибка (бандл не скачан / движка нет) —
+            // тот же немедленный стоп, что и в legacy-пути.
+            if found
+                && super::vram::is_setup_error(&output)
+                && is_media_tool(&call.name)
+            {
+                self.tool_calls.push(ToolCallInfo {
+                    tool_name: call.name.clone(),
+                    arguments: args_str.clone(),
+                    result: output.clone(),
+                });
+                log::error!("Сетап-ошибка media-тула '{}' (агент '{}'): {}", call.name, self.agent.id, output);
+                self.final_response = super::vram::setup_error_fatal(&output);
                 return Ok(DispatchCtl::Break);
             }
             self.tool_calls.push(ToolCallInfo {

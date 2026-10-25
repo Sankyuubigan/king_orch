@@ -21,6 +21,32 @@ pub fn is_resource_error(output: &str) -> bool {
         || output.contains("не стал готов за 300 сек")
 }
 
+/// Детерминированная сетап-ошибка media-тула: бандл не скачан/недокачан,
+/// движок не установлен, бандла нет в каталоге. Media-тулы выдают её как
+/// `ToolError::NotFound`, чей Display начинается с «Не найдено: » —
+/// повтор «вызови СНОВА» не может изменить состояние диска, ретрай запрещён.
+pub fn is_setup_error(output: &str) -> bool {
+    output.contains("Не найдено: ")
+}
+
+/// Честный финал при сетап-ошибке: текст уже содержит причину и инструкцию
+/// («Активный бандл … скачан не полностью: нет файлов … Скачайте его в
+/// Настройки → …»), добавляем только маркер агентской ошибки.
+pub fn setup_error_fatal(output: &str) -> String {
+    format!("{} {}", AGENT_ERROR_PREFIX, output)
+}
+
+/// Ошибка с конкретной причиной в Display (детерминированный отказ или
+/// неверные аргументы): агенту отдаём честный текст, маскировать = ложь
+/// (core §2.2). Обезличенный текст остаётся только для Io/Timeout —
+/// их причины и так пишет лог.
+pub fn is_honest_tool_error(e: &ToolError) -> bool {
+    matches!(
+        e,
+        ToolError::NotFound(_) | ToolError::Usage(_) | ToolError::Forbidden(_)
+    )
+}
+
 /// Честный финал при ресурсной ошибке: без ретраев, с цифрами из preflight.
 pub fn resource_error_fatal(agent_id: &str, tool_name: &str, output: &str) -> String {
     format!(
@@ -60,5 +86,39 @@ mod tests {
         assert!(msg.contains(AGENT_ERROR_PREFIX));
         assert!(msg.contains("8.6"));
         assert!(!msg.contains("попробуй снова"));
+    }
+
+    #[test]
+    fn detects_setup_errors() {
+        // Точный текст media.rs resolve_bundle_for_tools (ToolError::NotFound → Display).
+        let bundle = "Ошибка 'generate_image': Не найдено: Активный бандл «qwen-image-2.1-turbo-viggle-q4km» скачан не полностью: нет файлов Qwen-Image-2.1-viggle-turbo-v0.3-6step-Q4_K_M.gguf. Скачайте его в Настройки → «Наборы моделей» (движок изображений).";
+        assert!(is_setup_error(bundle));
+        assert!(is_setup_error("Не найдено: Движок изображений не установлен. Откройте Настройки → «Движок изображений»."));
+        // Ресурсные/аргументные/системные тексты — НЕ сетап-ошибки.
+        assert!(!is_setup_error("Ошибка 'generate_image': Неверные аргументы: prompt_en пуст"));
+        assert!(!is_setup_error("Ошибка ввода/вывода: Недостаточно памяти"));
+        // «не найден» (тул не найден) ≠ «Не найдено: » (NotFound-причина).
+        assert!(!is_setup_error("Ошибка: Инструмент 'generate_image' не найден."));
+    }
+
+    #[test]
+    fn setup_fatal_keeps_honest_text() {
+        let honest = "Ошибка 'generate_image': Не найдено: Активный бандл «x» скачан не полностью: нет файлов a.gguf. Скачайте его в Настройки → «Наборы моделей».";
+        let msg = setup_error_fatal(honest);
+        assert!(msg.starts_with(AGENT_ERROR_PREFIX));
+        assert!(msg.contains("скачан не полностью"));
+        assert!(msg.contains("Скачайте его"));
+        // Финал — не ретрай-приказ: модель не должна получить «вызови СНОВА».
+        assert!(!msg.contains("СНОВА"));
+    }
+
+    #[test]
+    fn honest_tool_error_classes() {
+        use crate::infra::tools::ToolError;
+        assert!(is_honest_tool_error(&ToolError::NotFound("скачан не полностью".to_string())));
+        assert!(is_honest_tool_error(&ToolError::Usage("prompt_en пуст".to_string())));
+        assert!(is_honest_tool_error(&ToolError::Forbidden("запрещено".to_string())));
+        assert!(!is_honest_tool_error(&ToolError::Io("spawn упал".to_string())));
+        assert!(!is_honest_tool_error(&ToolError::Timeout("таймаут".to_string())));
     }
 }
