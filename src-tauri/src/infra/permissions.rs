@@ -62,7 +62,8 @@ struct Inner {
     test_auto_deny: bool,
 }
 
-/// Единый глобальный approver. Один на приложение (чат один за раз).
+/// Единый глобальный approver. Ходы нескольких чатов параллельны;
+/// session-гранты и pending-запросы per-session/per-request_id.
 pub struct PermissionApprover {
     inner: Inner,
 }
@@ -114,6 +115,7 @@ impl PermissionApprover {
             agent: agent_id.to_string(),
             tool: tool.to_string(),
             path: path.display().to_string(),
+            session_id: session_id.to_string(),
         });
 
         // Блокируем агентский цикл до ответа пользователя (или таймаута).

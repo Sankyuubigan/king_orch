@@ -32,11 +32,14 @@ pub enum AgentEvent {
     },
     /// Запрос разрешения на запись вне корня проекта (плашка с 3 кнопками).
     /// Фронтенд показывает диалог и вызывает `respond_permission`.
+    /// `session_id` — чат, из которого пришёл запрос: плашки нескольких
+    /// параллельных чатов фронт различает по нему (очередь плашек).
     PermissionRequest {
         request_id: String,
         agent: String,
         tool: String,
         path: String,
+        session_id: String,
     },
 }
 

@@ -40,10 +40,12 @@
 ## 🧱 ЯДРО (Frontend Core)
 
 ### Store (`src/store.ts`)
-Общеприкладной стейт: вкладки (`tabs`/`activeTabId`), глобальный флаг `isProcessing`
-и каталоги (модели, агенты, комбо 9Router). **Чат-стейт (история/сессия/стриминг) НЕ
-хранится здесь** — он живёт в `ChatTabState` каждой чат-вкладки (вкладок может быть
-несколько). Store остаётся единым источником для всего, что не привязано к вкладке.
+Общеприкладной стейт: вкладки (`tabs`/`activeTabId`) и каталоги (модели, агенты,
+комбо 9Router). **Чат-стейт (история/сессия/стриминг/обработка) НЕ хранится здесь** —
+он живёт в `ChatTabState` каждой чат-вкладки (вкладок может быть несколько, и
+обработка в них параллельна). Глобального флага «идёт обработка» нет: единственный
+флаг — per-tab `ChatTabState.isProcessing`. Store остаётся единым источником для
+всего, что не привязано к вкладке.
 
 ### EventBus (`src/events.ts`)
 Шина событий. Контроллеры НЕ импортируют друг друга — общение через `bus.emit()` / `bus.on()`.
@@ -71,33 +73,43 @@ settings/engines — дубли делят один живой DOM-узел (к�
 `createStudioTab` у `TabController`). Вкладка владеет своим DOM, своим графом, своим
 открытым файлом и своим undo; `activate()` поднимает её суб-вкладку, `closeTab`/`resetEntries`
 зовут `dispose()`. В полосе такие вкладки различаются номером («Студия агентов 2»).
+Закрытие вкладки с идущей генерацией — только по подтверждению
+(`confirmDialog`): ход продолжается на бэкенде и сохранится в сессию.
 Раздел «Движки» (`#view-engines`) — плашки llama/image-engine из настроек. Восстановленные
 сессии загружаются лениво при активации вкладки, а тяжёлые web components материализуются
 при открытии раздела. webview-вкладка — iframe 9Router.
 Module-scope helper'ы:
 `getActiveChatController()` (активная чат-вкладка для других контроллеров) и
-`getChatControllerForSession(sessionId)` (для копирования живой истории).
+`getChatControllerForSession(sessionId)` (роутер событий и копирование живой истории).
 
 ### ChatController (`src/controllers/chat.ts`)
 Управление ОДНОЙ чат-вкладкой: отправка LLM, рендеринг, автосохранение, стриминг.
-Содержит `ChatTabState` (пер-tab стейт) и публичные методы-роутеры событий движка
-(`onProgress`/`onStatus`/`onStreamChunk`/`onAgentThought`/...), каждый с guard
-`isProcessingActive(this)`. Хук `hooks.onBecameChat(sessionId)` — вкладка main стала chat.
-**Последовательная обработка:** module-scope `activeProcessingChat` — только один
-контроллер обрабатывает запрос; освобождение — через `releaseGlobalProcessing()`.
+Содержит `ChatTabState` (пер-tab стейт с флагом `isProcessing`) и публичные методы-
+роутеры событий движка (`onProgress`/`onStatus`/`onStreamChunk`/`onAgentThought`/...).
+Хук `hooks.onBecameChat(sessionId)` — вкладка main стала chat.
+**Параллельная обработка:** глобального синглтона «активной обработки» больше нет.
+Вкладки отправляют независимо; бэкенд параллелит облачные ходы и ставит локальные
+в очередь (гейт движка), события приходят с `sessionId`. Guard'ы в методах-роутерах
+не нужны — доставку по сессии делает `getChatControllerForSession` в chat-router.
 **Индикатор обработки** (`ui/processing-indicator.ts`): вместо горизонтального
 прогрессбара — строка «SVG-спиннер + статус + маячок + таймер» в потоке сообщений
-(`chat-history`, визуально последняя через CSS `order`). `onProgress` — только
+(`chat-history`, визуально последняя через CSS `order`), per-tab. `onProgress` — только
 heartbeat сторожа (проценты больше не отображаются: полосы были фейковыми);
 `onStatus` обновляет текст и пульсует; видимый стрим-чанк гасит строку, новый
 статус возвращает. Жизненный цикл — строго в `setProcessingState` (единственная
-точка освобождения для успеха/отказа/стопа/сторожа).
+точка освобождения для успеха/отказа/стопа/сторожа). «Стоп» шлёт
+`stop_processing { sessionId }` — отменяет ход только своей сессии.
 
 ### ChatRouter (`src/controllers/chat-router.ts`)
 Регистрирует глобальные Tauri-события (`listen(...)`) ОДИН раз: `progress`, `status`,
-`stream_chunk`, `subcall_done`, `agent_thought`, `agent_tool_call`, `engine_mode`,
-`tool_permission_request`, `vram_notice`, `download_progress` (логируется глобально),
-`cloud-routers-chunk`. Передаёт в активную обрабатывающую вкладку.
+`stream_chunk`, `stream_reset`, `subcall_done`, `agent_thought`, `agent_tool_call`,
+`engine_mode`, `tool_permission_request`, `vram_notice`, `downloader:progress`.
+Каждое событие чата несёт `sessionId` в payload — роутер доставляет его через
+`getChatControllerForSession(sessionId)` в контроллер ЭТОЙ вкладки (чужая/закрытая
+сессия игнорируется). `tool_permission_request` и `vram_notice` — глобальные модалы
+мимо чат-контроллера (плашки разрешений — FIFO-очередь в `ui/permission.ts`).
+Подписка на `cloud-routers-chunk` удалена: команда `chat_completion` плагина хостом
+не вызывается, облачный стрим чата идёт через бэкенд (`stream_chunk` с sessionId).
 
 ### SettingsController (`src/controllers/settings.ts`)
 Конфигурация, параметры моделей, скачивание. Читает активную вкладку через

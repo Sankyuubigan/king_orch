@@ -31,6 +31,7 @@ pub fn init_permission_forwarding(app: &AppHandle) {
             agent,
             tool,
             path,
+            session_id,
         } = event
         {
             let _ = app.emit(
@@ -40,6 +41,7 @@ pub fn init_permission_forwarding(app: &AppHandle) {
                     "agent": agent,
                     "tool": tool,
                     "path": path,
+                    "sessionId": session_id,
                 }),
             );
         }

@@ -90,12 +90,21 @@ pub async fn run_iterative_test(
     let subcall_cb = |_subcall: &SubCall| { /* Test runner does not handle subcalls directly */ };
     let stream_cb = |_chunk: String| { /* Test runner does not handle streaming directly */ };
 
+    // ── Гейт локального движка ──
+    // Бенч не может делить VRAM с ходом чата: ждём слот (FIFO вместе с чатами).
+    let _engine_permit = state
+        .local_engine_gate
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| format!("Гейт локального движка: {}", e))?;
+
     let model_params = config
         .model_params
         .get(&model_path)
         .cloned()
         .unwrap_or_default();
-    
+
     // Инициализация движка LLM (папка движка llama.cpp — рядом с exe)
     let engine_dir = crate::infra::get_engine_dir(&app);
     let engine = infra::LlmEngine::local(infra::llm::LlamaEngine::new(
@@ -110,7 +119,9 @@ pub async fn run_iterative_test(
     )?);
 
     let format_type = config.prompt_format.clone();
-    let cancel_flag = state.cancel_flag.clone();
+    // Свой флаг отмены: глобального флага больше нет (ходы чатов отменяются
+    // по session_id), жизнь бенча от чатов независима.
+    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let max_gen_tokens = config.max_gen_tokens as usize;
 
     // Сохраняем длину до вызова into_iter(), чтобы не потерять владение вектором
@@ -250,7 +261,7 @@ pub fn get_pipeline_test_list(app: AppHandle) -> Result<Vec<domain::pipeline_tes
 #[tauri::command]
 pub async fn run_pipeline_test_cmd(
     app: AppHandle,
-    _state: State<'_, AppState>,
+    state: State<'_, AppState>,
     test_id: String,
     model_path: String,
 ) -> Result<domain::pipeline_test::PipelineTestResult, String> {
@@ -259,6 +270,14 @@ pub async fn run_pipeline_test_cmd(
         "--- Запуск pipeline test '{}' с моделью '{}' ---",
         test_id, model_path
     ));
+
+    // Гейт локального движка: pipeline-тест тоже потребитель VRAM.
+    let _engine_permit = state
+        .local_engine_gate
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| format!("Гейт локального движка: {}", e))?;
 
     let agents_dir = infra::find_agents_dir(&app);
     let project_root = agents_dir.parent().unwrap_or(&agents_dir).to_path_buf();

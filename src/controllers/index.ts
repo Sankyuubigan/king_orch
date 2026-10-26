@@ -1,10 +1,5 @@
 // 🚪 ПУБЛИЧНЫЙ КОНТРАКТ контроллеров
-export {
-  ChatController,
-  ChatTabState,
-  getActiveProcessingChat,
-  releaseGlobalProcessing,
-} from './chat'
+export { ChatController, ChatTabState } from './chat'
 export type { ChatElements, ChatHooks } from './chat'
 export { initChatEventRouter } from './chat-router'
 export { TabController, getTabNavigationMenu } from './tabs'

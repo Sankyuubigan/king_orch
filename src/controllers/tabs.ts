@@ -486,13 +486,23 @@ export class TabController {
     logFront(`[tabs] reload webview ${entry.id} (${entry.url})`);
   }
 
-  closeTab(id: string) {
+  async closeTab(id: string) {
     const idx = this.entries.findIndex(t => t.id === id);
     if (idx === -1) {
       logFront(`[tabs] closeTab: нет вкладки ${id}`);
       return;
     }
     const entry = this.entries[idx];
+    // Вкладка с идущей генерацией закрывается только по подтверждению: invoke-
+    // промис контроллера при этом жив, ход доедет на бэкенде и сохранится в
+    // сессию; события закрытой сессии просто не найдут контроллер.
+    if (entry.ctrl?.state.isProcessing) {
+      const yes = await confirmDialog(
+        "Идёт генерация",
+        "В этом чате идёт генерация. Закрыть вкладку? Генерация продолжится в фоне и сохранится в сессию.",
+      );
+      if (!yes) return;
+    }
     if (entry.ctrl) TAB_REGISTRY.delete(entry.ctrl.state.sessionId ?? "");
     if (entry.studio) {
       // Экземпляр студии принадлежит только этой вкладке: узел удаляем, ресурсы

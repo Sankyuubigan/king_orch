@@ -36,7 +36,17 @@ pub async fn run_coding_bench(
     let bins_dir =
         crate::infra::bin_downloader::get_bins_dir(&crate::infra::storage::app_data_root());
 
-    let cancel_flag = state.cancel_flag.clone();
+    // ── Гейт локального движка ──
+    // Бенч не может делить VRAM с ходом чата: ждём слот (FIFO вместе с чатами).
+    let _engine_permit = state
+        .local_engine_gate
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| format!("Гейт локального движка: {}", e))?;
+    // Свой флаг отмены: глобального флага больше нет (ходы чатов отменяются
+    // по session_id), жизнь бенча от чатов независима.
+    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let status_app = app.clone();
     let status_cb = move |msg: String, progress: u8| {
         let _ = status_app.emit("coding_status", msg);

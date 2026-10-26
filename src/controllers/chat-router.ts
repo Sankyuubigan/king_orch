@@ -1,49 +1,52 @@
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { onChunk as onCloudRouterChunk } from "@my-tauri-plugins/plugin-cloud-routers";
 import { formatSpeed } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import type { DragDropPayload } from "../types";
-import { getActiveProcessingChat } from "./chat";
-import { getActiveChatController } from "./tabs";
+import { showPermissionRequest, showVramRequest } from "../ui";
+import { getChatControllerForSession, getActiveChatController } from "./tabs";
 
 /**
  * Роутер глобальных Tauri-событий движка и агентов.
  *
- * Регистрируется ОДИН раз (main.ts, initChatEventRouter). Все события
- * перенаправляются в контроллер вкладки, обрабатывающей текущий запрос
- * (обработка строго последовательная). Per-tab `listen(...)` не используется,
+ * Регистрируется ОДИН раз (main.ts, initChatEventRouter). Бэкенд кладёт
+ * `sessionId` в payload каждого события — роутер доставляет его в контроллер
+ * вкладки ЭТОЙ сессии. Обработка параллельна (облачные ходы) и по очереди
+ * (локальные, гейт в бэкенде): вкладки не мешают друг другу, событие чужой
+ * сессии в эту вкладку не попадает. Per-tab `listen(...)` не используется,
  * чтобы не плодить дублирующиеся обработчики на каждую чат-вкладку.
  */
 export function initChatEventRouter(): void {
-  const active = () => getActiveProcessingChat();
+  // Контроллер сессии из payload события (пустой/чужой sessionId → null,
+  // событие игнорируется — например, для закрытой вкладки).
+  const by = (e: any) => getChatControllerForSession(e?.payload?.sessionId ?? "");
 
-  listen("progress", (e) => active()?.onProgress(e.payload as number));
-  listen("status", (e) => active()?.onStatus(e.payload as string));
+  listen("progress", (e) => by(e)?.onProgress(e.payload.progress));
+  // payload теперь объект { sessionId, text } (был голой строкой).
+  listen("status", (e) => by(e)?.onStatus(e.payload.text));
+  listen("stream_chunk", (e) => by(e)?.onStreamChunk(e.payload));
+  // payload { sessionId } — содержимое роутеру не важно.
+  listen("stream_reset", (e) => by(e)?.onStreamReset());
+  // Вложенный объект разворачивается: { sessionId, subcall } → subcall.
+  listen("subcall_done", (e) => by(e)?.onSubcallDone(e.payload.subcall));
+  listen("agent_thought", (e) => by(e)?.onAgentThought(e.payload));
+  listen("agent_tool_call", (e) => by(e)?.onAgentToolCall(e.payload));
+  listen("engine_mode", (e) => by(e)?.onEngineMode(e.payload));
 
-  listen("stream_chunk", (e) => active()?.onStreamChunk(e.payload as any));
-
-  // Повтор запроса бэкендом после транспортного сбоя: стрим-буферы вкладки
-  // сбрасываются, чтобы дельты новой попытки не приклеились к недописанному
-  // тексту оборванной (статус при этом показывает юзеру, что идёт повтор).
-  listen("stream_reset", () => active()?.onStreamReset());
-
-  // Стриминг облачных комбо: плагин шлёт { router, text, author, kind } —
-  // приводим к формату stream_chunk и переиспользуем общий рендер.
-  void onCloudRouterChunk((c) => active()?.onStreamChunk({ kind: c.kind, author: c.author, text: c.text }));
+  // Стриминг облачных комбо (`cloud-routers-chunk` от плагина) в чат НЕ
+  // маршрутизируется: команда `chat_completion` плагина хостом не вызывается —
+  // облачный стрим чата идёт серверным путём CloudEngine::generate →
+  // stream_chunk с sessionId (проверено grep'ом по src/, 26.10.2026).
 
   void getCurrentWebview().onDragDropEvent((event) => {
     getActiveChatController()?.onFileDragEvent(event.payload as DragDropPayload);
   });
 
-  listen("subcall_done", (e) => active()?.onSubcallDone(e.payload as any));
-  listen("agent_thought", (e) => active()?.onAgentThought(e.payload as any));
-  listen("agent_tool_call", (e) => active()?.onAgentToolCall(e.payload as any));
-  listen("engine_mode", (e) => active()?.onEngineMode(e.payload as any));
-
-  // Модальные диалоги разрешений — показываем при активной обработке.
-  listen("tool_permission_request", (e) => active()?.onToolPermission(e.payload as any));
-  listen("vram_notice", (e) => active()?.onVramNotice(e.payload as any));
+  // Плашки разрешений и VRAM — глобальные модалы, к контроллеру чата не
+  // привязаны: очередь плашек разрешений живёт в ui/permission.ts (FIFO по
+  // request_id), VRAM-предупреждение машинно-уровневое (локальный движок один).
+  listen("tool_permission_request", (e) => showPermissionRequest(e.payload));
+  listen("vram_notice", (e) => showVramRequest(e.payload));
 
   // Скачивание модели/движка — единый движок downloader (прогресс speed/ETA).
   listen("downloader:progress", (e) => {

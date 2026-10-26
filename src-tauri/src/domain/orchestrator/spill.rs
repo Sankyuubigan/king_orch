@@ -22,7 +22,24 @@ pub(crate) fn spill_if_large(
     }
     let root = spill_root_dir();
     let _ = std::fs::create_dir_all(&root);
-    let fname = format!("spill_{}_{}.txt", sanitize_name(agent_id), idx);
+    // Имя уникально на КАЖДЫЙ вызов (наносекунды + счётчик процесса): путь spill
+    // зашивается в текст ПЕРСИСТЯЩИХСЯ сообщений (read_spill читает по пути), и
+    // перезапись файла новым прогоном подсунула бы старому сообщению чужой
+    // контент. Старые файлы не трогаем — на них ссылаются старые сообщения;
+    // файлы копятся, это цена честности ссылок.
+    static SPILL_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = SPILL_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let fname = format!(
+        "spill_{}_{}_{:x}{}.txt",
+        sanitize_name(agent_id),
+        idx,
+        nanos,
+        seq
+    );
     let fpath = root.join(&fname);
     if std::fs::write(&fpath, output).is_err() {
         return (output.to_string(), None);
@@ -88,4 +105,26 @@ pub(crate) fn read_spill_file(path: &str, offset: usize, limit: usize) -> Result
         ));
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn spill_paths_are_unique_for_same_agent_and_idx() {
+        // Два прогона одного агента (параллельные чаты) не должны перезаписывать
+        // файлы друг друга: путь зашит в персистящее сообщение старого прогона.
+        let big = "A".repeat(SPILL_THRESHOLD + 1);
+        let (_, first) = spill_if_large(&big, "dup_agent", 3);
+        let (_, second) = spill_if_large(&big, "dup_agent", 3);
+        let pa = first.expect("первый spill");
+        let pb = second.expect("второй spill");
+        assert_ne!(
+            pa, pb,
+            "пути двух spill-вызовов с одинаковыми agent/idx совпали — перезапись"
+        );
+        let _ = fs::remove_file(&pa);
+        let _ = fs::remove_file(&pb);
+    }
 }

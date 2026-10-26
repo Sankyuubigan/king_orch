@@ -1,5 +1,4 @@
 use serde::Serialize;
-use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter, Manager, State};
 
@@ -214,27 +213,31 @@ pub async fn chat_request(
     //
     // `None` = «не переопределять»: решение остаётся за полем `strategy:` в файле
     // графа (дефолт — Detailed). Переопределение нужно, чтобы попробовать Fused на
-    // одном разговоре, не правя YAML, и чтобы UI мог показывать, что режим
+    // одном разговоре, не правя YAML, и чтобы UI мог показать, что режим
     // изменён относительно файла.
     execution_strategy: Option<String>,
 ) -> Result<ChatResponse, String> {
-    let mut cfg = infra::load_config(&app);
-    cfg.context_size = context_size;
-    cfg.max_gen_tokens = max_gen_tokens;
-    if let Some(rb) = reasoning_budget {
-        cfg.reasoning_budget = rb;
-    }
+    // ── Регистрация хода: один активный ход на сессию ──
+    // Повторный запрос той же сессии отвергается честной ошибкой (его итог всё
+    // равно перезаписал бы историю первого хода). Гард снимает ход с реестра
+    // на любом выходе из команды. Ходы разных сессий идут параллельно.
+    let registration = state.register_turn(&session_id)?;
+    let cancel_flag = registration.handle.cancel.clone();
+    let mut stop_rx = registration.stop_rx;
+    let _turn_guard = crate::api::TurnGuard::new(&state, registration.key.clone());
+    let session_key = registration.key;
+
+    // Конфиг здесь ТОЛЬКО читается: путь запроса не пишет глобальный файл
+    // (параллельные ходы двух вкладок не должны соревноваться за app_config.json).
+    // Значения слайдеров (context_size/max_gen/reasoning_budget) персистятся
+    // в момент изменения в UI (set_config_value), а не на каждом запросе.
+    let cfg = infra::load_config(&app);
+    let _ = reasoning_budget; // берётся из конфига ниже (поле UI не передаёт)
+    let reasoning_budget = cfg.reasoning_budget;
     // Variant A: KV-квант всегда выключен (ответственность с юзера снята).
     // BeeLlama получает KVarN через source.runtime в engine_sources.json.
     // Входящие kv_quant_* из API игнорируются — молча force false.
     let _ = (kv_quant_keys, kv_quant_values);
-    cfg.kv_quant_keys = false;
-    cfg.kv_quant_values = false;
-    // Формат промпта всегда Auto (UI-селект убран).
-    cfg.prompt_format = "Auto".to_string();
-    infra::save_config(&app, &cfg)
-        .map_err(|e| format!("Ошибка сохранения конфига: {}", e))?;
-    let reasoning_budget = cfg.reasoning_budget;
     let kv_quant_keys = false;
     let kv_quant_values = false;
 
@@ -242,6 +245,46 @@ pub async fn chat_request(
         || model_path.starts_with("extremerouter:")
         || model_path.starts_with("omniroute:");
     let engine_dir = infra::get_engine_dir(&app);
+
+    // ── Гейт локального движка: один llama-server в VRAM за раз ──
+    // Облачные ходы идут мимо гейта (VRAM не трогают) и выполняются параллельно
+    // с чем угодно. Локальный ход берёт слот ДО spawn'а движка; «Стоп» пока ход
+    // в очереди мгновенно выводит его (select на канал отмены), не грузя модель.
+    let engine_permit = if is_cloud {
+        None
+    } else {
+        let gate = state.local_engine_gate.clone();
+        // Owned-пермит ('static): он переезжает в spawn_blocking и живёт
+        // ровно до конца run_chat.
+        match gate.clone().try_acquire_owned() {
+            Ok(permit) => Some(permit),
+            Err(_) => {
+                let _ = app.emit(
+                    "status",
+                    serde_json::json!({
+                        "sessionId": session_id,
+                        "text": "⏳ Локальный движок занят другим чатом — ход в очереди…",
+                    }),
+                );
+                log::info!("[queue] ход {}: ждёт освобождения локального движка", session_key);
+                let mut acquire = gate.acquire_owned();
+                tokio::pin!(acquire);
+                loop {
+                    tokio::select! {
+                        permit = &mut acquire => {
+                            log::info!("[queue] ход {}: слот движка получен", session_key);
+                            break Some(permit.expect("гейт движка не закрывается"));
+                        }
+                        _ = &mut stop_rx => {
+                            log::info!("[queue] ход {}: отменён пользователем из очереди", session_key);
+                            return Err("Отменено пользователем (ход убран из очереди на движок)".to_string());
+                        }
+                    }
+                }
+            }
+        }
+    };
+
     let cloud_endpoint = if is_cloud {
         let router_id = if model_path.starts_with("9router:") {
             tauri_plugin_cloud_routers::RouterId::NineRouter
@@ -270,8 +313,6 @@ pub async fn chat_request(
     };
 
     let format_type = cfg.prompt_format.clone();
-    state.cancel_flag.store(false, Ordering::SeqCst);
-    let cancel_flag = state.cancel_flag.clone();
 
     // ── Автодокачка mmproj ──
     // Если фронтенд не успел докачать проектор (модель добавлена вручную), а в
@@ -299,41 +340,69 @@ pub async fn chat_request(
     let agents_dir = infra::find_agents_dir(&app);
     let mcp_servers_dir = infra::find_mcp_servers_dir(&app);
 
+    // ── sessionId в каждом payload ──
+    // События ходов разных чатов летят одним broadcast-каналом: единственный
+    // способ фронту развести их по вкладкам — sessionId в payload каждого.
     let app_log = app.clone();
+    let log_session = session_id.clone();
     let log_cb = move |msg: String| {
         log::info!("[LLM] {}", msg);
         // Повтор генерации после сбоя (orchestrator/mod.rs): фронт обязан
         // сбросить стрим-буферы — дельты новой попытки не должны приклеиться
-        // к недописанному тексту оборванной. Статус объясняет юзеру паузу.
+        // к недописанному тексту оборванной (статус при этом показывает юзеру, что идёт повтор).
         if msg.starts_with("🔄 Движок LLM ответил не с первого раза")
             || msg.starts_with("⏳ Движок не отдал результат вовремя")
         {
-            let _ = app_log.emit("stream_reset", serde_json::json!({}));
-            let _ = app_log.emit("status", "Сбой ответа — повторяю запрос…");
+            let _ = app_log.emit("stream_reset", serde_json::json!({ "sessionId": log_session }));
+            let _ = app_log.emit(
+                "status",
+                serde_json::json!({ "sessionId": log_session, "text": "Сбой ответа — повторяю запрос…" }),
+            );
         }
         if let Some((agent_name, thought, time_sec)) = parse_thought_from_log(&msg) {
             let _ = app_log.emit(
                 "agent_thought",
-                serde_json::json!({ "author": agent_name, "thought": thought, "time_sec": time_sec }),
+                serde_json::json!({ "sessionId": log_session, "author": agent_name, "thought": thought, "time_sec": time_sec }),
             );
         }
         if let Some(evt) = parse_tool_from_log(&msg) {
-            let _ = app_log.emit("agent_tool_call", evt);
+            let _ = app_log.emit(
+                "agent_tool_call",
+                serde_json::json!({
+                    "sessionId": log_session,
+                    "author": evt.author,
+                    "tool": evt.tool,
+                    "args": evt.args,
+                    "result": evt.result,
+                }),
+            );
         }
     };
 
     let app_status = app.clone();
+    let status_session = session_id.clone();
     let status_cb = move |msg: String, progress: u8| {
-        let _ = app_status.emit("status", &msg);
-        let _ = app_status.emit("progress", progress);
+        let _ = app_status.emit(
+            "status",
+            serde_json::json!({ "sessionId": status_session, "text": msg }),
+        );
+        let _ = app_status.emit(
+            "progress",
+            serde_json::json!({ "sessionId": status_session, "progress": progress }),
+        );
     };
 
     let app_subcall = app.clone();
+    let subcall_session = session_id.clone();
     let subcall_cb = move |subcall: &SubCall| {
-        let _ = app_subcall.emit("subcall_done", subcall.clone());
+        let _ = app_subcall.emit(
+            "subcall_done",
+            serde_json::json!({ "sessionId": subcall_session, "subcall": subcall }),
+        );
     };
 
     let app_stream = app.clone();
+    let stream_session = session_id.clone();
     let stream_meta = Arc::new(Mutex::new(domain::StreamMeta::default()));
     let meta_for_cb = stream_meta.clone();
     let stream_cb = move |chunk: String| {
@@ -352,7 +421,7 @@ pub async fn chat_request(
                     // Всё ещё внутри think блока — стримим как thought
                     let _ = app_stream.emit(
                         "stream_chunk",
-                        serde_json::json!({ "kind": "thought", "author": m.author, "text": chunk }),
+                        serde_json::json!({ "sessionId": stream_session, "kind": "thought", "author": m.author, "text": chunk }),
                     );
                     return;
                 } else if !m.buffer.is_empty() {
@@ -368,7 +437,7 @@ pub async fn chat_request(
         }
         let _ = app_stream.emit(
             "stream_chunk",
-            serde_json::json!({ "kind": kind, "author": author, "text": chunk }),
+            serde_json::json!({ "sessionId": stream_session, "kind": kind, "author": author, "text": chunk }),
         );
     };
 
@@ -379,6 +448,7 @@ pub async fn chat_request(
     // payload. Без этого юзер на reasoning-моделях смотрит в пустой экран,
     // пока движок думает (инцидент 24.09.2026: 1493 токена мыслей за 20 минут).
     let app_reason = app.clone();
+    let reason_session = session_id.clone();
     let reason_meta = stream_meta.clone();
     let reasoning_cb = move |chunk: String| {
         let author = {
@@ -387,7 +457,7 @@ pub async fn chat_request(
         };
         let _ = app_reason.emit(
             "stream_chunk",
-            serde_json::json!({ "kind": "thought", "author": author, "text": chunk }),
+            serde_json::json!({ "sessionId": reason_session, "kind": "thought", "author": author, "text": chunk }),
         );
     };
 
@@ -396,13 +466,16 @@ pub async fn chat_request(
     let log_cb_for_result = log_cb.clone();
     // Prompt-log: снимок точного входа модели (правило «модель видит только записанное»).
     // Путь best-effort по timestamp; если директория недоступна — лог просто не пишется.
+    // session_id в имени — параллельные ходы разных чатов не затирают логи друг друга.
     let prompt_log_ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let prompt_log = Some(crate::infra::storage::app_data_root().join("prompt_logs").join(format!(
-        "{}_{}.prompt_log.jsonl",
-        agent_id, prompt_log_ts
+        "{}_{}_{}.prompt_log.jsonl",
+        sanitize_filename_token(&agent_id),
+        sanitize_filename_token(&session_id),
+        prompt_log_ts
     )));
 
     if is_cloud {
@@ -438,6 +511,9 @@ pub async fn chat_request(
     let cloud_requests = state.cloud_counter(&session_id);
     let session_id_for_block = session_id.clone();
     let run_result = tokio::task::spawn_blocking(move || {
+        // Слот гейта живёт ровно до конца хода: VRAM занята, пока идёт
+        // run_chat, и освобождается только с его завершением (Drop пермита).
+        let _engine_permit = engine_permit;
         // ── Контроль утечек: RSS приложения до и после запроса ──
         // Рост между последовательными запросами = утечка в приложении.
         let app_rss_before = crate::infra::current_process_rss();
@@ -524,6 +600,7 @@ pub async fn chat_request(
     let _ = app.emit(
         "engine_mode",
         serde_json::json!({
+            "sessionId": session_id,
             "mode": result.engine_mode,
             "tok_per_sec": result.engine_tok_per_sec,
             "detail": result.engine_mode_detail,
@@ -544,10 +621,54 @@ pub async fn chat_request(
     })
 }
 
+/// Остановить обработку в КОНКРЕТНОМ чате (`session_id`): поднимает флаг
+/// отмены хода (его опрашивает цикл агента) и стреляет мгновенным каналом
+/// (выводит ход из очереди на локальный движок). Ходы ДРУГИХ чатов не
+/// затрагиваются — параллельные сессии независимы.
 #[tauri::command]
-pub async fn stop_processing(state: State<'_, AppState>) -> Result<(), String> {
-    state.cancel_flag.store(true, Ordering::SeqCst);
+pub fn stop_processing(state: State<'_, AppState>, session_id: String) -> Result<(), String> {
+    if state.cancel_turn(&session_id) {
+        log::info!("[stop] ход сессии {} отменён пользователем", session_id);
+    } else {
+        log::warn!(
+            "[stop] активного хода сессии {} нет — отменять нечего",
+            session_id
+        );
+    }
     Ok(())
+}
+
+/// Токен для имени файла (prompt_log): только файлобезопасные символы,
+/// ограничение длины по границам символов (не байт).
+fn sanitize_filename_token(s: &str) -> String {
+    let cleaned: String = s
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .take(40)
+        .collect();
+    cleaned
+}
+
+#[cfg(test)]
+mod sanitize_tests {
+    use super::sanitize_filename_token;
+
+    #[test]
+    fn sanitizes_unsafe_chars_and_keeps_short_ascii() {
+        assert_eq!(sanitize_filename_token("basic"), "basic");
+        assert_eq!(sanitize_filename_token("9router:gemini"), "9router_gemini");
+        assert_eq!(
+            sanitize_filename_token("a/b\\c*d?e"),
+            "a_b_c_d_e",
+            "опасные для путей символы заменяются"
+        );
+    }
+
+    #[test]
+    fn truncates_by_chars_not_bytes() {
+        let long = "д".repeat(80); // кириллица: 2 байта на символ
+        assert_eq!(sanitize_filename_token(&long).chars().count(), 40);
+    }
 }
 
 /// Режим графа: системный промпт самого «тяжёлого» агента графа — см.

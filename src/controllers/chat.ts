@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { store } from "../store";
 import { bus } from "../events";
-import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, openImageViewer, showToast, showPermissionRequest, showVramRequest, createProcessingIndicator } from "../ui";
+import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, openImageViewer, showToast, createProcessingIndicator } from "../ui";
 import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks, ProcessingIndicator } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
@@ -71,37 +71,11 @@ async function renderMermaid() {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Маршрутизация событий движка: глобальные Tauri-listen регистрируются ОДИН
-// раз (initChatEventRouter, см. src/controllers/chat-router.ts), а все события
-// (прогресс, статус, стриминг, мысли, режим движка) перенаправляются в
-// КОНТРОЛЛЕР вкладки, которая в данный момент обрабатывает запрос.
-// Обработка СТРОГО последовательная (одна генерация за раз).
-// ─────────────────────────────────────────────────────────────────────────────
-
-let activeProcessingChat: ChatController | null = null;
-
-function isProcessingActive(controller: ChatController): boolean {
-  return activeProcessingChat !== null && activeProcessingChat === controller;
-}
-
-/** Снятие статуса «активная обработка» — только сам владелец может освободить слот. */
-export function releaseGlobalProcessing(controller: ChatController) {
-  if (activeProcessingChat === controller) {
-    activeProcessingChat = null;
-    store.isProcessing = false;
-  }
-}
-
-/** Контроллер вкладки, обрабатывающей текущий запрос (для роутера и настроек). */
-export function getActiveProcessingChat(): ChatController | null {
-  return activeProcessingChat;
-}
-
-/** Захват слота активной обработки (строго один контроллер за раз). */
-export function setActiveProcessingChat(controller: ChatController) {
-  activeProcessingChat = controller;
-  store.isProcessing = true;
-}
-
+// раз (initChatEventRouter, см. src/controllers/chat-router.ts), и каждое
+// событие несёт sessionId в payload — роутер доставляет его в контроллер
+// вкладки ЭТОЙ сессии. Обработка параллельна: облачные ходы вкладок идут
+// одновременно, локальные встают в очередь на стороне бэкенда (гейт движка),
+// поэтому синглтон «активной обработки» здесь больше не нужен.
 // ─────────────────────────────────────────────────────────────────────────────
 
 export interface ChatElements {
@@ -149,8 +123,8 @@ export interface ChatHooks {
 
 /**
  * Состояние ОДНОЙ чат-вкладки. Каждая вкладка имеет собственную сессию,
- * историю, черновик и стриминг. Глобальный флаг `store.isProcessing` остаётся
- * верным и единым для приложения (обработка идёт где-то).
+ * историю, черновик и стриминг. Флаг `isProcessing` — per-tab: обработка
+ * разных вкладок параллельна (очередь локального движка — в бэкенде).
  */
 export class ChatTabState {
   sessionId: string | null = null;
@@ -311,12 +285,10 @@ export class ChatController {
     // между событиями замирали, выглядя как зависание (особенно в очереди
     // облачного провайдера). Событие остаётся heartbeat'ом сторожа —
     // status и progress всегда приходят парой (api/chat.rs, status_cb).
-    if (!isProcessingActive(this)) return;
     this.state.lastActivityAt = Date.now();
   }
 
   onStatus(text: string) {
-    if (!isProcessingActive(this)) return;
     this.state.lastActivityAt = Date.now();
     const ind = this.state.processingIndicator;
     if (ind) {
@@ -328,7 +300,6 @@ export class ChatController {
   }
 
   onStreamChunk(rawPayload: any) {
-    if (!isProcessingActive(this)) return;
     // Бэкенд шлёт объект { kind, author, text }; для обратной совместимости
     // (старые вызовы) payload может прийти строкой — считаем его message.
     const payload = rawPayload;
@@ -431,7 +402,6 @@ export class ChatController {
    * оборванной. Частичный пузырь убирается из UI — полный ответ придёт заново.
    */
   onStreamReset() {
-    if (!isProcessingActive(this)) return;
     if (this.state.rtStreamUid) {
       this.el.chatHistory
         .querySelector(`[data-msg-uid="${this.state.rtStreamUid}"]`)
@@ -447,7 +417,6 @@ export class ChatController {
   }
 
   onSubcallDone(call: any) {
-    if (!isProcessingActive(this)) return;
     this.state.realtimeSubcallKeys.add(`${call.agent_name}:${call.time_sec.toFixed(2)}`);
     const item = createSubcallElement(call, (c) => this.showSubchat(c));
     if (this.state.activeThoughtsBlock) { addToThoughtsBlock(this.state.activeThoughtsBlock, item); }
@@ -456,7 +425,6 @@ export class ChatController {
   }
 
   onAgentThought(payload: { author: string, thought: string, time_sec: number }) {
-    if (!isProcessingActive(this)) return;
     const dedupKey = `${payload.author}:${payload.thought.substring(0, 200)}`;
     if (this.thoughtDedupSet.has(dedupKey)) return;
     this.thoughtDedupSet.add(dedupKey);
@@ -467,7 +435,6 @@ export class ChatController {
   }
 
   onAgentToolCall(p: { author: string, tool: string, args?: string, result?: string }) {
-    if (!isProcessingActive(this)) return;
     const key = `${p.author}:${p.tool}`;
     if (p.result !== undefined) {
       const item = this.state.activeThoughtsBlock?.querySelector(`[data-tool-key="${key}"]`);
@@ -488,18 +455,7 @@ export class ChatController {
   }
 
   onEngineMode(p: { mode?: string, tok_per_sec?: number, detail?: string }) {
-    if (!isProcessingActive(this)) return;
     this.updateEngineBadge(p.mode || "cpu", p.tok_per_sec || 0, p.detail || "");
-  }
-
-  onToolPermission(payload: any) {
-    if (!isProcessingActive(this)) return;
-    showPermissionRequest(payload);
-  }
-
-  onVramNotice(payload: any) {
-    if (!isProcessingActive(this)) return;
-    showVramRequest(payload);
   }
 
   // ── Вспомогательные ──
@@ -537,7 +493,7 @@ export class ChatController {
    */
   private async updateTokenCounter() {
     const counter = this.el.tokenCounter;
-    if (!counter || store.isProcessing) return;
+    if (!counter || this.state.isProcessing) return;
     const modelPath = this.el.modelSelect?.value;
     const agentId = this.el.agentSelect?.value;
     const text = this.el.chatInput?.value || "";
@@ -837,7 +793,7 @@ export class ChatController {
   }
 
   private async onRunFromMessage(uid: string) {
-    if (store.isProcessing || this.state.isProcessing) return;
+    if (this.state.isProcessing) return;
     const readiness = this.sendReadiness();
     if (!readiness.ready) {
       showToast(readiness.reason || "Дождитесь готовности интерфейса", "error");
@@ -1232,8 +1188,6 @@ export class ChatController {
         this.state.rtThoughtUid = null;
         this.state.rtThoughtBuffer = "";
         this.state.rtThoughtAuthor = "";
-        setActiveProcessingChat(this);
-        store.isProcessing = true;
         this.armProcessingWatchdog();
         // Индикатор обработки — в поток сообщений: после сообщения юзера,
         // визуально всегда последний (CSS order). Живёт до конца обработки.
@@ -1251,7 +1205,6 @@ export class ChatController {
         // точка освобождения: finally отправки, run-from-message, стоп и
         // сторож сходятся сюда, поэтому «залипшая» строка структурно невозможна.
         this.disarmProcessingWatchdog();
-        releaseGlobalProcessing(this);
         this.state.processingIndicator?.destroy();
         this.state.processingIndicator = null;
     }
@@ -1448,7 +1401,9 @@ export class ChatController {
 
   async handleSend() {
     const text = this.el.chatInput.value.trim();     if (!text && this.attachments.length === 0) return;
-    if (store.isProcessing || this.state.isProcessing || this.state.isRestoringSession) return;
+    // Per-tab guard: вкладка B шлёт свободно, пока вкладка A обрабатывает —
+    // параллельность решает бэкенд (облако сразу, локал — в очередь).
+    if (this.state.isProcessing || this.state.isRestoringSession) return;
     const readiness = this.sendReadiness();
     if (!readiness.ready) {
       showToast(readiness.reason || "Дождитесь готовности интерфейса", "error");
@@ -1628,7 +1583,7 @@ export class ChatController {
   }
 
   private async handleFileSelect(files: FileList | null) {
-    if (!files || store.isProcessing) return;
+    if (!files || this.state.isProcessing) return;
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
       if (file.size > 20 * 1024 * 1024) { showToast(`Файл ${file.name} слишком большой (>20MB)`, "error"); continue; }
@@ -1647,7 +1602,7 @@ export class ChatController {
   }
 
   private async handlePaths(paths: string[]) {
-    if (paths.length === 0 || store.isProcessing || this.state.isProcessing) return;
+    if (paths.length === 0 || this.state.isProcessing) return;
     try {
       const metadata = await invoke<AttachmentMetadata[]>("get_attachment_metadata", { paths });
       for (const item of metadata) {
@@ -1669,7 +1624,7 @@ export class ChatController {
   }
 
   onFileDragEvent(payload: DragDropPayload) {
-    if (store.isProcessing || this.state.isProcessing) return;
+    if (this.state.isProcessing) return;
     const isDragging = payload.type === "enter" || payload.type === "over";
     this.el.viewChat.classList.toggle("drag-over", isDragging);
     if (payload.type === "drop") {
@@ -1731,7 +1686,8 @@ export class ChatController {
   private bindDomEvents() {
     this.el.btnSend?.addEventListener("click", () => this.handleSend());
     this.el.chatInput?.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); this.handleSend(); } });
-    this.el.btnStop?.addEventListener("click", async () => { if (this.el.btnStop.disabled) return; this.el.btnStop.disabled = true; this.el.btnStop.innerText = "Стоп..."; this.appendMessage('system', 'Остановка...'); await invoke("stop_processing"); this.el.btnStop.innerText = "⏹ Стоп"; });
+    this.el.btnStop?.addEventListener("click", async () => { if (this.el.btnStop.disabled) return; this.el.btnStop.disabled = true; this.el.btnStop.innerText = "Стоп..."; this.appendMessage('system', 'Остановка...'); // Стоп только своего хода: бэкенд отменяет ход ЭТОЙ сессии (в т.ч. выводит из очереди движка мгновенно), соседние вкладки не трогает.
+      await invoke("stop_processing", { sessionId: this.state.sessionId ?? "" }); this.el.btnStop.innerText = "⏹ Стоп"; });
     this.el.btnBackChat?.addEventListener("click", () => { this.el.viewSubchat.classList.remove('active'); this.el.viewChat.classList.add('active'); });
     this.el.chatInput.addEventListener("input", () => {
         this.el.chatInput.style.height = "auto";
