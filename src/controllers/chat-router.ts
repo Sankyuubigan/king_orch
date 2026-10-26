@@ -23,6 +23,11 @@ export function initChatEventRouter(): void {
 
   listen("stream_chunk", (e) => active()?.onStreamChunk(e.payload as any));
 
+  // Повтор запроса бэкендом после транспортного сбоя: стрим-буферы вкладки
+  // сбрасываются, чтобы дельты новой попытки не приклеились к недописанному
+  // тексту оборванной (статус при этом показывает юзеру, что идёт повтор).
+  listen("stream_reset", () => active()?.onStreamReset());
+
   // Стриминг облачных комбо: плагин шлёт { router, text, author, kind } —
   // приводим к формату stream_chunk и переиспользуем общий рендер.
   void onCloudRouterChunk((c) => active()?.onStreamChunk({ kind: c.kind, author: c.author, text: c.text }));

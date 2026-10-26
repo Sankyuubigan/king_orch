@@ -34,7 +34,7 @@ pub use tauri_plugin_llama_engine::get_engine_dir;
 pub use config::{AppConfig, SamplingPresets, TabState};
 pub use llm_backend::{
     CloudEndpoint, LlmEngine, is_cloud_cancelled_error, is_cloud_empty_stream_error,
-    is_cloud_timeout_error,
+    is_cloud_retryable_transport_error, is_cloud_timeout_error, is_cloud_truncated_error,
 };
 pub use messages::{llm_history, message_phase, push_report, ChatMessage, SubCall, ToolCallInfo};
 pub use session_manager::{ChatSession, SessionMeta};

@@ -299,6 +299,12 @@ pub(crate) fn is_server_unavailable(err: &str) -> bool {
         // внятную ошибку с маркером плагина. Маркер импортируется через
         // инфраструктурную дверь (SSOT плагина), литерала здесь нет.
         || crate::infra::is_cloud_empty_stream_error(err)
+        // Обрыв ответа на середине (terminated-стримы роутера, инцидент
+        // 25.10.2026) и повторяемые транспортные сбои (HTTP 5xx / «стрим не
+        // дочитан») — «Google рвётся, это норма»: ретрай по решению владельца.
+        // 4xx остаётся вне класса — это дефект запроса/конфигурации.
+        || crate::infra::is_cloud_truncated_error(err)
+        || crate::infra::is_cloud_retryable_transport_error(err)
 }
 
 /// Детект таймаута обмена с движком — НЕ переполнение контекста.
@@ -586,9 +592,43 @@ mod tests {
             "Прервано пользователем (облачный запрос отменён, фаза: body) [cloud_cancelled]";
         assert!(
             !is_stream_timeout(cancelled),
-            "отмена юзером не должна триггерить ретрай"
+            "отмена юзера не должна триггерить ретрай"
         );
         assert!(!is_context_overflow(cancelled));
         assert!(!is_server_unavailable(cancelled));
+    }
+
+    /// Обрыв ответа на середине (инцидент 25.10.2026, terminated-стримы) —
+    /// повторяемый транспортный отказ: ретраится как «сервер недоступен»,
+    /// не режет текст и не молчит.
+    #[test]
+    fn test_cloud_truncated_is_server_unavailable() {
+        let truncated = "Провайдер оборвал ответ на середине: успело прийти 872 симв., \
+но признак конца стрима ([DONE]/finish_reason) не пришёл. Причину обрыва провайдер \
+не передал — это транспортный сбой, повтор запроса, как правило, помогает [cloud_truncated]";
+        assert!(
+            is_server_unavailable(truncated),
+            "обрыв стрима — повторяемый транспортный отказ (ретрай)"
+        );
+        assert!(!is_stream_timeout(truncated));
+        assert!(!is_context_overflow(truncated));
+    }
+
+    /// HTTP 5xx и обрыв тела — ретраятся; 4xx — дефект конфигурации, нет.
+    /// «Google рвётся — это норма» (решение владельца 26.10.2026).
+    #[test]
+    fn test_http_5xx_and_body_break_are_retryable_but_not_4xx() {
+        assert!(is_server_unavailable(
+            "/v1/chat/completions: HTTP 502 fetch failed (ECONNRESET)"
+        ));
+        assert!(is_server_unavailable(
+            "9router /v1/chat/completions (стрим не дочитан): connection reset"
+        ));
+        assert!(!is_server_unavailable(
+            "/v1/chat/completions: HTTP 401 Unauthorized {\"error\":{\"message\":\"Missing API key\"}}"
+        ));
+        assert!(!is_server_unavailable(
+            "/v1/chat/completions: HTTP 400 Bad Request"
+        ));
     }
 }

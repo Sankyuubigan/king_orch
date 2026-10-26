@@ -180,6 +180,9 @@ export class ChatTabState {
   rtStreamUid: string | null = null;
   rtStreamBuffer: string = "";
   rtIsJson: boolean = false;
+  /// Автор стримящегося сообщения (для честной пометки при обрыве: частичный
+  /// текст сохраняется в историю от имени того, кто его писал).
+  rtStreamAuthor: string = "";
 
   // Стриминг мыслей
   rtThoughtUid: string | null = null;
@@ -222,6 +225,7 @@ export class ChatTabState {
     this.rtStreamUid = null;
     this.rtStreamBuffer = "";
     this.rtIsJson = false;
+    this.rtStreamAuthor = "";
     this.rtThoughtUid = null;
     this.rtThoughtBuffer = "";
     this.rtThoughtAuthor = "";
@@ -366,6 +370,7 @@ export class ChatController {
       const displayName = (author && author.trim())
         ? author
         : getSelectedAgentName(this.el.agentSelect);
+      this.state.rtStreamAuthor = displayName;
       this.appendMessage('agent', '', displayName, undefined, undefined, false, this.state.rtStreamUid);
     }
 
@@ -400,6 +405,27 @@ export class ChatController {
         }
       }
     }
+  }
+
+  /**
+   * Сброс стрим-буферов при повторе запроса бэкендом (событие stream_reset):
+   * дельты новой попытки не должны приклеиваться к недописанному тексту
+   * оборванной. Частичный пузырь убирается из UI — полный ответ придёт заново.
+   */
+  onStreamReset() {
+    if (!isProcessingActive(this)) return;
+    if (this.state.rtStreamUid) {
+      this.el.chatHistory
+        .querySelector(`[data-msg-uid="${this.state.rtStreamUid}"]`)
+        ?.remove();
+    }
+    this.state.rtStreamUid = null;
+    this.state.rtStreamBuffer = "";
+    this.state.rtIsJson = false;
+    this.state.rtStreamAuthor = "";
+    this.state.rtThoughtUid = null;
+    this.state.rtThoughtBuffer = "";
+    this.state.rtThoughtAuthor = "";
   }
 
   onSubcallDone(call: any) {
@@ -1180,6 +1206,7 @@ export class ChatController {
         this.state.rtStreamUid = null;
         this.state.rtStreamBuffer = "";
         this.state.rtIsJson = false;
+        this.state.rtStreamAuthor = "";
         this.state.rtThoughtUid = null;
         this.state.rtThoughtBuffer = "";
         this.state.rtThoughtAuthor = "";
@@ -1350,9 +1377,29 @@ export class ChatController {
    * Единая обработка отказа отправки (общая для handleSend и onRunFromMessage):
    * видимая запись в чат + перерисовка + попытка сохранить её. Отказ самой
    * персистентности обязан быть залогирован, а не проглочен (core rules §2.2).
+   *
+   * Частичный текст оборванного стрима НЕ проглатывается (инцидент 25.10.2026):
+   * юзер видел, как ответ писался в чат, — при ошибке он обязан остаться в
+   * истории с честной пометкой обрыва, а не молча исчезнуть при перерисовке.
+   * Служебные JSON-конверты (сигналы/вызовы тулов) не сохраняются: юзер их
+   * не видел.
    */
   private async handleSendFailure(error: unknown, scope: string) {
-    const wasCancelled = String(error).includes("Отменено") || String(error).includes("Прервано");
+    const errText = String(error);
+    const wasCancelled = errText.includes("Отменено") || errText.includes("Прервано");
+    const partial = stripStreamArtifacts(this.state.rtStreamBuffer ?? "").trim();
+    if (partial && !this.state.rtIsJson) {
+      const reason = wasCancelled
+        ? "прервано пользователем"
+        : errText.split("\n")[0].trim() || "причина неизвестна";
+      const author = this.state.rtStreamAuthor || getSelectedAgentName(this.el.agentSelect);
+      this.state.history.push({
+        type: "message",
+        author,
+        content: `${partial}\n\n---\n⚠️ **Ответ оборван:** ${reason}`,
+      });
+      this.state.uidList.push(this.state.nextUid());
+    }
     if (wasCancelled) {
       this.state.history.push({ type: "message", author: "system", content: "⚠️ Прервано." });
       this.state.uidList.push(this.state.nextUid());

@@ -302,6 +302,15 @@ pub async fn chat_request(
     let app_log = app.clone();
     let log_cb = move |msg: String| {
         log::info!("[LLM] {}", msg);
+        // Повтор генерации после сбоя (orchestrator/mod.rs): фронт обязан
+        // сбросить стрим-буферы — дельты новой попытки не должны приклеиться
+        // к недописанному тексту оборванной. Статус объясняет юзеру паузу.
+        if msg.starts_with("🔄 Движок LLM ответил не с первого раза")
+            || msg.starts_with("⏳ Движок не отдал результат вовремя")
+        {
+            let _ = app_log.emit("stream_reset", serde_json::json!({}));
+            let _ = app_log.emit("status", "Сбой ответа — повторяю запрос…");
+        }
         if let Some((agent_name, thought, time_sec)) = parse_thought_from_log(&msg) {
             let _ = app_log.emit(
                 "agent_thought",

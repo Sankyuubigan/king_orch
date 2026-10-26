@@ -4,7 +4,8 @@ use std::sync::{Arc, Mutex};
 
 use tauri_plugin_cloud_routers::router::client::{self, ChatMessage, ChatRequest};
 use tauri_plugin_cloud_routers::router::client_error::{
-    CloudStreamError, CLOUD_CANCELLED_MARKER, CLOUD_EMPTY_STREAM_MARKER, CLOUD_TIMEOUT_MARKER,
+    is_retryable_transport_error, CloudStreamError, CLOUD_CANCELLED_MARKER,
+    CLOUD_EMPTY_STREAM_MARKER, CLOUD_TIMEOUT_MARKER, CLOUD_TRUNCATED_MARKER,
 };
 use tauri_plugin_llama_engine::engine::llm_types::GenerationResult;
 use tauri_plugin_llama_engine::engine::{
@@ -25,6 +26,21 @@ pub struct CloudEndpoint {
 /// не должно (SSOT).
 pub fn is_cloud_empty_stream_error(err: &str) -> bool {
     err.contains(CLOUD_EMPTY_STREAM_MARKER)
+}
+
+/// Класс «провайдер оборвал ответ на середине» ([cloud_truncated]): контент
+/// пришёл частично, но признак конца стрима ([DONE]/finish_reason) — нет.
+/// Тихо обрезанный текст как полный ответ запрещён; оркестратор трактует
+/// как повторяемый транспортный отказ (инцидент 25.10.2026, terminated-стримы).
+pub fn is_cloud_truncated_error(err: &str) -> bool {
+    err.contains(CLOUD_TRUNCATED_MARKER)
+}
+
+/// Повторяемый транспортный сбой облака (HTTP 5xx / обрыв тела ответа):
+/// именно эти классы ретраятся («Google рвётся — это норма»); 4xx — дефект
+/// конфигурации, ретрай бессмыслен. Детектор — SSOT плагина.
+pub fn is_cloud_retryable_transport_error(err: &str) -> bool {
+    is_retryable_transport_error(err)
 }
 
 /// Класс «облако молчало дольше порога тишины» ([cloud_timeout]): живая
@@ -239,21 +255,37 @@ impl CloudEngine {
                     ));
                     result
                 }
-                Err(CloudStreamError::EmptySuccess) => {
+                Err(CloudStreamError::EmptySuccess { frames }) => {
                     // Провайдер формально ответил 200, но контента не было (инцидент
                     // 18.10.2026: ×5 пустых 200 у validator). Структурно невозможный
                     // раньше пустой Ok пофиксен на уровне плагина (client.rs
                     // `classify_sse_result`) — сюда попадает классифицированный Err.
                     let total = self.requests.fetch_add(1, Ordering::Relaxed) + 1;
                     log_cb(format!(
-                        "☁️ [cloud-counter] Пустой успех (HTTP 200 без данных) — засчитано запросов к облаку: {}. Квота могла быть списана.",
+                        "☁️ [cloud-counter] Пустой успех (HTTP 200 без данных, кадров {frames}) — засчитано запросов к облаку: {}. Квота могла быть списана.",
                         total
                     ));
                     log::warn!(
-                        "☁️ [cloud-counter] EmptySuccess — квота могла быть списана (маркер {})",
+                        "☁️ [cloud-counter] EmptySuccess (кадров {frames}) — квота могла быть списана (маркер {})",
                         CLOUD_EMPTY_STREAM_MARKER
                     );
-                    return Err(CloudStreamError::EmptySuccess.to_string());
+                    return Err(CloudStreamError::EmptySuccess { frames }.to_string());
+                }
+                Err(CloudStreamError::Truncated { partial_chars }) => {
+                    // Обмен состоялся и часть ответа реально пришла (инцидент
+                    // 25.10.2026: terminated-стримы роутера) — квота списана
+                    // почти наверняка, счётчик обязан это отражать. Тихо
+                    // обрезанный текст downstream не проходит.
+                    let total = self.requests.fetch_add(1, Ordering::Relaxed) + 1;
+                    log_cb(format!(
+                        "☁️ [cloud-counter] Ответ оборван провайдером на середине ({partial_chars} симв.) — засчитано запросов к облаку: {}. Квота могла быть списана.",
+                        total
+                    ));
+                    log::warn!(
+                        "☁️ [cloud-counter] Truncated ({partial_chars} симв.) — квота могла быть списана (маркер {})",
+                        CLOUD_TRUNCATED_MARKER
+                    );
+                    return Err(CloudStreamError::Truncated { partial_chars }.to_string());
                 }
                 Err(error) => {
                     let elapsed = started.elapsed();
@@ -911,6 +943,35 @@ mod tests {
                 );
             }
             Ok(_) => panic!("пустой успех обязан быть ошибкой (инвариант G5)"),
+        }
+        assert_eq!(
+            counter.load(Ordering::Relaxed),
+            3,
+            "обмен состоялся — засчитан ровно один запрос"
+        );
+    }
+
+    /// «Обрыв на середине» (инцидент 25.10.2026): дельты пришли, но стрим
+    /// закрылся без [DONE]/finish_reason — Err с машиночитаемым маркером,
+    /// счётчик растёт (обмен и часть ответа были — квота почти наверняка списана).
+    #[test]
+    fn cloud_truncated_stream_counted_once_and_surfaces_marker() {
+        let (addr, server) = serve_cloud_body(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"полвина отве\"}}]}\n\n",
+        );
+        let counter = Arc::new(AtomicU64::new(2));
+        let engine = cloud_with_counter(&format!("http://{}", addr), counter.clone());
+        let result = run_cloud(&engine);
+        server.join().ok();
+
+        match result {
+            Err(err) => {
+                assert!(
+                    err.contains(CLOUD_TRUNCATED_MARKER),
+                    "в ошибке обязан быть маркер класса: {err}"
+                );
+            }
+            Ok(_) => panic!("обрыв без признака конца обязан быть ошибкой"),
         }
         assert_eq!(
             counter.load(Ordering::Relaxed),
