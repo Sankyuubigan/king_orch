@@ -29,9 +29,6 @@ export interface ChatPageElements extends SharedChatControls {
   chatInput: HTMLTextAreaElement;
   btnSend: HTMLButtonElement;
   btnStop: HTMLButtonElement;
-  chatFeedback: HTMLDivElement;
-  progressBar: HTMLDivElement;
-  statusLabel: HTMLDivElement;
   agentSelect: HTMLSelectElement;
   btnAgentSettings: HTMLButtonElement;
   modelSelect: HTMLSelectElement;
@@ -97,19 +94,9 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
   const chatHistory = py("div", "chat-history") as HTMLDivElement;
   viewChat.appendChild(chatHistory);
 
-  // ── Панель прогресса обработки ──
-  const feedback = py("div", "feedback") as HTMLDivElement;
-  feedback.style.display = "none";
-  const resultToolbar = py("div", "result-toolbar");
-  const statusLabel = py("div", "status-label") as HTMLDivElement;
-  statusLabel.textContent = "Обработка...";
-  resultToolbar.appendChild(statusLabel);
-  const progressWrap = py("div", "progress-bar-container");
-  const progressBar = py("div", "progress-bar") as HTMLDivElement;
-  progressWrap.appendChild(progressBar);
-  feedback.appendChild(resultToolbar);
-  feedback.appendChild(progressWrap);
-  viewChat.appendChild(feedback);
+  // Индикатор обработки (спиннер + статус + таймер) живёт В ПОТОКЕ сообщений:
+  // контроллер вставляет его в chatHistory на время обработки. Отдельной
+  // панели прогресса между чатом и полем ввода больше нет.
 
   const inputArea = py("div", "chat-input-area group-box");
   const chatInput = document.createElement("textarea");
@@ -227,9 +214,6 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
     chatInput,
     btnSend,
     btnStop,
-    chatFeedback: feedback,
-    progressBar,
-    statusLabel,
     agentSelect,
     btnAgentSettings,
     modelSelect,

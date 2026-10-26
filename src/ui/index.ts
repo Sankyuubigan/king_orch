@@ -6,6 +6,9 @@ export type { Role } from './render'
 
 export { createThoughtsBlock, addToThoughtsBlock } from './thoughts-block'
 
+export { createProcessingIndicator } from './processing-indicator'
+export type { ProcessingIndicator } from './processing-indicator'
+
 export { showToast } from './toast'
 
 export { confirmDialog, initConfirmDialog } from './confirm'

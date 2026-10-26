@@ -85,6 +85,13 @@ Module-scope helper'ы:
 `isProcessingActive(this)`. Хук `hooks.onBecameChat(sessionId)` — вкладка main стала chat.
 **Последовательная обработка:** module-scope `activeProcessingChat` — только один
 контроллер обрабатывает запрос; освобождение — через `releaseGlobalProcessing()`.
+**Индикатор обработки** (`ui/processing-indicator.ts`): вместо горизонтального
+прогрессбара — строка «SVG-спиннер + статус + маячок + таймер» в потоке сообщений
+(`chat-history`, визуально последняя через CSS `order`). `onProgress` — только
+heartbeat сторожа (проценты больше не отображаются: полосы были фейковыми);
+`onStatus` обновляет текст и пульсует; видимый стрим-чанк гасит строку, новый
+статус возвращает. Жизненный цикл — строго в `setProcessingState` (единственная
+точка освобождения для успеха/отказа/стопа/сторожа).
 
 ### ChatRouter (`src/controllers/chat-router.ts`)
 Регистрирует глобальные Tauri-события (`listen(...)`) ОДИН раз: `progress`, `status`,

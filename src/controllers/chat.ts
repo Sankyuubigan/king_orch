@@ -2,8 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { store } from "../store";
 import { bus } from "../events";
-import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, openImageViewer, showToast, showPermissionRequest, showVramRequest } from "../ui";
-import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks } from "../ui";
+import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, openImageViewer, showToast, showPermissionRequest, showVramRequest, createProcessingIndicator } from "../ui";
+import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks, ProcessingIndicator } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
@@ -109,9 +109,6 @@ export interface ChatElements {
   chatInput: HTMLTextAreaElement;
   btnSend: HTMLButtonElement;
   btnStop: HTMLButtonElement;
-  chatFeedback: HTMLDivElement;
-  progressBar: HTMLDivElement;
-  statusLabel: HTMLDivElement;
   agentSelect: HTMLSelectElement;
   /** Тумблер режима исполнения графа (`Fused` = checked); заблокирован без групп. */
   strategyToggle: HTMLInputElement;
@@ -164,6 +161,10 @@ export class ChatTabState {
   /** Раскрывающийся блок «Мысли агентов» текущей вкладки. */
   activeThoughtsBlock: HTMLDivElement | null = null;
   realtimeSubcallKeys = new Set<string>();
+
+  /** Индикатор обработки в потоке чата (спиннер + статус + таймер).
+   *  Живёт только пока идёт обработка этой вкладки. */
+  processingIndicator: ProcessingIndicator | null = null;
 
   /// Для watchdog зависшей обработки.
   processingStartedAt = 0;
@@ -231,6 +232,10 @@ export class ChatTabState {
     this.rtThoughtAuthor = "";
     this.isRestoringSession = false;
     this.isProcessing = false;
+    // Сброс состояния в обход setProcessingState — индикатор обязан уйти
+    // вместе с обработкой, иначе строка останется в чате навсегда.
+    this.processingIndicator?.destroy();
+    this.processingIndicator = null;
     this.cloudRequests = 0;
     this.processingStartedAt = 0;
     this.lastActivityAt = 0;
@@ -301,16 +306,25 @@ export class ChatController {
 
   // ── Публичный API для роутера событий (src/controllers/chat-router.ts) ──
 
-  onProgress(pct: number) {
+  onProgress(_pct: number) {
+    // Проценты больше не отображаются: полосы 10/20/60/80 были фейковыми и
+    // между событиями замирали, выглядя как зависание (особенно в очереди
+    // облачного провайдера). Событие остаётся heartbeat'ом сторожа —
+    // status и progress всегда приходят парой (api/chat.rs, status_cb).
     if (!isProcessingActive(this)) return;
     this.state.lastActivityAt = Date.now();
-    this.el.progressBar.style.width = `${pct}%`;
   }
 
   onStatus(text: string) {
     if (!isProcessingActive(this)) return;
     this.state.lastActivityAt = Date.now();
-    this.el.statusLabel.innerText = text;
+    const ind = this.state.processingIndicator;
+    if (ind) {
+      ind.setStatus(text);
+      // Строка могла быть скрыта стримом прошлого агента — новый статус
+      // означает новый шаг/агента графа, показываем снова.
+      ind.show(true);
+    }
   }
 
   onStreamChunk(rawPayload: any) {
@@ -363,6 +377,10 @@ export class ChatController {
       this.state.rtIsJson = true;
       return;
     }
+
+    // Видимый текст ответа пошёл — растущий текст сам индикатор жизни,
+    // строку «спиннер + статус» гасим (вернётся со следующим статусом).
+    this.state.processingIndicator?.show(false);
 
     // Если это начало ответа, создаем пустое сообщение в UI
     if (!this.state.rtStreamUid) {
@@ -1123,6 +1141,10 @@ export class ChatController {
       this.el.chatHistory.appendChild(createMessageElement(role, cleanContent, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, msg.attachments, this.translatorMenuLabel(), msg.model, this.imageCallbacks));
     }
     if (thoughtsItems.length > 0) this.el.chatHistory.appendChild(createThoughtsBlock(thoughtsItems, lastAssistantUid, this.thoughtMenuCallbacks, thoughtsUids));
+    // Полная перерисовка стирает chatHistory — если обработка ещё идёт,
+    // возвращаем строку-индикатор в DOM (инвариант: она живёт в чате,
+    // пока isProcessing; убрать её может только setProcessingState(false)).
+    if (this.state.processingIndicator) this.el.chatHistory.appendChild(this.state.processingIndicator.el);
     this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
   }
 
@@ -1212,20 +1234,26 @@ export class ChatController {
         this.state.rtThoughtAuthor = "";
         setActiveProcessingChat(this);
         store.isProcessing = true;
-        this.armProcessingWatchdog();;
-        this.el.chatFeedback.style.display = "block";
-        this.el.progressBar.style.width = "0%";
-        this.el.statusLabel.innerText = "Подготовка...";
+        this.armProcessingWatchdog();
+        // Индикатор обработки — в поток сообщений: после сообщения юзера,
+        // визуально всегда последний (CSS order). Живёт до конца обработки.
+        if (!this.state.processingIndicator) this.state.processingIndicator = createProcessingIndicator();
+        const indicator = this.state.processingIndicator;
+        this.el.chatHistory.appendChild(indicator.el);
+        indicator.show(true);
+        indicator.setStatus("Подготовка...");
+        indicator.startTimer(this.state.processingStartedAt);
+        this.scrollToBottomIfNearEnd(this.el.chatHistory);
     }
     else {
         // Полный сброс «рабочего» состояния: чат больше не в процессе обработки —
-        // скрываем панель прогресса и возвращаем статус/прогресс к дефолту, чтобы
-        // UI не оставался в застывшем виде («Загрузка модели...», прогресс 10%).
+        // строка-индикатор уходит из чата, таймер гаснет. Это единственная
+        // точка освобождения: finally отправки, run-from-message, стоп и
+        // сторож сходятся сюда, поэтому «залипшая» строка структурно невозможна.
         this.disarmProcessingWatchdog();
         releaseGlobalProcessing(this);
-        this.el.chatFeedback.style.display = "none";
-        this.el.progressBar.style.width = "0%";
-        this.el.statusLabel.innerText = "Обработка...";
+        this.state.processingIndicator?.destroy();
+        this.state.processingIndicator = null;
     }
     this.refreshSendAvailability();
     bus.emit("processing:changed", state);

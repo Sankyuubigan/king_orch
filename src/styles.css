@@ -594,13 +594,34 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .markdown-body p { margin-bottom: 10px; margin-top: 0; }
 .markdown-body { font-family: inherit; }
 
-.feedback { padding: 5px 0; }
-.progress-bar-container { width: 100%; height: 6px; background-color: var(--border); border-radius: 3px; overflow: hidden; margin-top: 5px; }
-.progress-bar { height: 100%; width: 0%; background-color: var(--primary); transition: width 0.25s ease; }
-.download-stalled .progress-bar { animation: progress-pulse 1.5s ease-in-out infinite; }
-@keyframes progress-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-.result-toolbar { display: flex; justify-content: space-between; align-items: center; }
-.status-label { color: #888; font-size: 12px; }
+/* ─── Индикатор обработки в потоке чата (замена горизонтального прогрессбара) ─── */
+/* Строка всегда визуально последняя в flex-колонке .chat-history, DOM-позиция не важна. */
+.processing-row { order: 9999; display: flex; align-items: center; gap: 10px; padding: 4px 2px; min-height: 26px; }
+.processing-row.pi-hidden { display: none; }
+.pi-spin-wrap { position: relative; width: 22px; height: 22px; flex: 0 0 22px; display: grid; place-items: center; }
+.pi-spinner { display: block; }
+.pi-track { fill: none; stroke: var(--border); stroke-width: 3; }
+.pi-arc { fill: none; stroke-width: 3; stroke-linecap: round; stroke-dasharray: 76 101; transform-box: view-box; transform-origin: center; animation: pi-spin 900ms linear infinite; }
+@keyframes pi-spin { to { transform: rotate(360deg); } }
+/* Волна-пульс: расходящееся кольцо на каждый новый статус. */
+.pi-wave { position: absolute; inset: -4px; border-radius: 50%; border: 2px solid var(--primary); opacity: 0; pointer-events: none; }
+.pi-wave.pi-ping { animation: pi-ping 600ms ease-out; }
+@keyframes pi-ping { 0% { transform: scale(0.6); opacity: 0.7; } 100% { transform: scale(1.7); opacity: 0; } }
+/* Маячок: между событиями дышит, на смену статуса вспыхивает. */
+.pi-dot { width: 7px; height: 7px; border-radius: 50%; background-color: var(--primary); margin-left: auto; animation: pi-dot-breathe 2s ease-in-out infinite; }
+.pi-dot.pi-flash { animation: pi-dot-flash 500ms ease-out; }
+@keyframes pi-dot-breathe { 0%, 100% { opacity: 0.35; } 50% { opacity: 0.85; } }
+@keyframes pi-dot-flash { 0% { transform: scale(1); opacity: 1; box-shadow: 0 0 0 4px color-mix(in srgb, var(--primary) 35%, transparent); } 100% { transform: scale(1.5); opacity: 0.5; box-shadow: 0 0 0 0 transparent; } }
+/* Статус: текст справа от крутилки, смена — с заездом снизу. */
+.pi-status { font-size: 12.5px; color: var(--text); opacity: 0.85; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pi-status.pi-status-in { animation: pi-status-in 240ms ease-out; }
+@keyframes pi-status-in { 0% { transform: translateY(4px); opacity: 0; } 100% { transform: translateY(0); opacity: 0.85; } }
+.pi-timer { font-size: 11.5px; color: #888; font-variant-numeric: tabular-nums; flex: 0 0 auto; padding-left: 2px; }
+@media (prefers-reduced-motion: reduce) {
+  .pi-arc { animation-duration: 1800ms; }
+  .pi-wave.pi-ping, .pi-status.pi-status-in { animation-duration: 1ms; }
+  .pi-dot { animation: none; opacity: 0.6; }
+}
 textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(--border); border-radius: 6px; font-family: 'Consolas', monospace; font-size: 12px; resize: none; box-sizing: border-box; background: #1e1e1e; color: #d4d4d4; }
 
 .image-viewer-overlay { position: fixed; inset: 0; z-index: 1000000; background: rgba(0,0,0,0.94); display: flex; align-items: center; justify-content: center; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 0.18s ease, visibility 0.18s ease; }
