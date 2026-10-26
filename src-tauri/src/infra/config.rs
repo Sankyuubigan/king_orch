@@ -75,7 +75,9 @@ pub struct AppConfig {
     /// выбирает первую из списка).
     #[serde(default)]
     pub active_tab: Option<String>,
+    #[serde(default)]
     pub models: Vec<String>,
+    #[serde(default)]
     pub last_model: Option<String>,
     #[serde(default)]
     pub last_agent: Option<String>,
@@ -606,5 +608,39 @@ mod tests {
         assert_eq!(cfg.llamacpp_dir, eng.llamacpp_dir);
         assert_eq!(cfg.engine_source, eng.engine_source);
         assert_eq!(cfg.engine_variant.as_deref(), Some("cuda-13.3"));
+    }
+
+    /// Регрессия конфиг-ресета (26.10.26): `save_config_file` вырезает engine-ключи
+    /// (`models`, `last_model`, …) из хостового файла — это задумано (они живут в
+    /// SSOT-файле плагина). Десериализатор `AppConfig` обязан пережить их отсутствие:
+    /// иначе `serde_json::from_str` падает с `missing field models`, `parse_config`
+    /// возвращает `AppConfig::default()` и теряются вкладки + `agent_visibility`.
+    /// См. tasks/config-reset-after-engine-keys-strip.md.
+    #[test]
+    fn test_save_config_file_output_reparses_without_engine_keys() {
+        let tmp = std::env::temp_dir().join(format!(
+            "king_orch_rt_reparse_{}.json",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let cfg: AppConfig = serde_json::from_str(
+            r#"{"tabs":[{"id":"keep_main","type":"main","title":"Главная"}],
+                "agent_visibility":["basic","soma_translator"]}"#,
+        )
+        .unwrap();
+        save_config_file(&tmp, &cfg).unwrap();
+
+        let saved = fs::read_to_string(&tmp).unwrap();
+        let reloaded: AppConfig = serde_json::from_str(&saved)
+            .expect("host-файл без engine-ключей должен парситься в AppConfig");
+        let _ = fs::remove_file(&tmp);
+
+        assert_eq!(reloaded.tabs.len(), 1, "табка должна выжить save→read round-trip");
+        assert_eq!(reloaded.tabs[0].id.as_str(), "keep_main");
+        assert_eq!(reloaded.agent_visibility.len(), 2);
+        assert_eq!(reloaded.agent_visibility[0].as_str(), "basic");
+        assert_eq!(reloaded.agent_visibility[1].as_str(), "soma_translator");
     }
 }
