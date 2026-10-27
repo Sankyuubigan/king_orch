@@ -14,6 +14,7 @@ export const CLOUD_ROUTER_PREFIXES: Record<string, string> = {
   "9router": "9router:",
   "extremerouter": "extremerouter:",
   "omniroute": "omniroute:",
+  "gateway": "gateway:",
 };
 
 export function isCloudModelPath(path?: string | null): boolean {

@@ -243,7 +243,8 @@ pub async fn chat_request(
 
     let is_cloud = model_path.starts_with("9router:")
         || model_path.starts_with("extremerouter:")
-        || model_path.starts_with("omniroute:");
+        || model_path.starts_with("omniroute:")
+        || model_path.starts_with("gateway:");
     let engine_dir = infra::get_engine_dir(&app);
 
     // ── Гейт локального движка: один llama-server в VRAM за раз ──
@@ -290,6 +291,8 @@ pub async fn chat_request(
             tauri_plugin_cloud_routers::RouterId::NineRouter
         } else if model_path.starts_with("extremerouter:") {
             tauri_plugin_cloud_routers::RouterId::ExtremeRouter
+        } else if model_path.starts_with("gateway:") {
+            tauri_plugin_cloud_routers::RouterId::Gateway
         } else {
             tauri_plugin_cloud_routers::RouterId::OmniRoute
         };

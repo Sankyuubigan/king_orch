@@ -503,6 +503,8 @@ where
             model_path.strip_prefix("extremerouter:").unwrap()
         } else if model_path.starts_with("omniroute:") {
             model_path.strip_prefix("omniroute:").unwrap()
+        } else if model_path.starts_with("gateway:") {
+            model_path.strip_prefix("gateway:").unwrap()
         } else {
             return Err("Некорректный идентификатор модели облачного роутера".to_string());
         }.to_string();
