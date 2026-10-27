@@ -40,7 +40,8 @@ use crate::domain::parsers::{
 };
 use crate::domain::signals::{
     build_signal_envelope_grammar_with_think_budget, build_signal_envelope_json_only_grammar,
-    extract_signal_value_from_text, load_signal_contract, SignalContract,
+    draft_count_for_contract, extract_signal_value_from_text, load_signal_contract,
+    SignalContract,
 };
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, NodeType, WorkflowContext, WorkflowDef, WorkflowRunner,
@@ -1375,7 +1376,7 @@ where
             json_schema: None,
         }));
         if engine.supports_grammar() {
-            log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены), граница размышления: {:?} симв.", agent.id, agent.think_budget_chars));
+            log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены), граница размышления: {:?} симв. слотов отчёта: {}", agent.id, agent.think_budget_chars, draft_count_for_contract(&contract.value_schema)));
         } else {
             // set_grammar для такого движка — no-op (см. LlmEngine::supports_grammar).
             // Контракт сигнала держится на системном промпте + native tools, и все
@@ -2487,6 +2488,7 @@ where
                             &phase2_response,
                             &phase2_response,
                             &phase2_response,
+                            true,
                         );
                     }
                 }

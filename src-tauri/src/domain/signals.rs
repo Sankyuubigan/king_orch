@@ -155,8 +155,12 @@ pub fn build_signal_envelope_grammar_with_think_budget(
     // Генерируем value-грамматику в зависимости от типа контракта
     let value_grammar = build_value_grammar(schema);
 
-    // Свой черновик на каждый обязательный элемент контракта.
-    let drafts = required_field_count(schema);
+    // Свой черновик на каждый обязательный элемент контракта; минимум ОДИН —
+    // слот отчёта обязан существовать у любого контракта (инвариант
+    // draft_count_for_contract): enum/строковые/pattern-схемы не имеют
+    // `required`, и draft{0} структурно убивал отчёт агента — модель шла сразу
+    // в конверт (кейс soma_translator, tasks/27.10.26 draft0).
+    let drafts = draft_count_for_contract(schema);
     let draft_rule = match think_budget_chars {
         None => "draft ::= \"<think>\" [^<]* \"</think>\"".to_string(),
         Some(budget) => format!("draft ::= \"<think>\" [^\\n<]{{0,{budget}}} \"</think>\""),
@@ -188,15 +192,28 @@ pub fn build_signal_envelope_grammar_with_think_budget(
     )
 }
 
-/// Сколько черновиков требует контракт: столько же, сколько у него
-/// обязательных полей. Ноль полов у контракта означал бы, что модель не может
-/// перейти к конверту вовсе, поэтому такое значение — ошибка контракта.
+/// Сколько обязательных полей у схемы контракта (длина массива `required`).
+/// Число черновиков для грамматики считает `draft_count_for_contract` —
+/// оно не может быть нулевым независимо от формы контракта.
 pub fn required_field_count(schema: &serde_json::Value) -> usize {
     schema
         .get("required")
         .and_then(serde_json::Value::as_array)
         .map(|items| items.len())
         .unwrap_or(0)
+}
+
+/// Число черновиков (слотов отчёта) для контракта.
+///
+/// Инвариант ≥ 1: слот отчёта обязан существовать у ЛЮБОГО контракта.
+/// Enum/строковые/pattern-схемы (`soma_translator`, `focus_keeper`,
+/// `destructor_detector`) не имеют массива `required` — раньше это давало
+/// `draft{0}`: грамматика не оставляла выхода для анализа, модель шла сразу
+/// в конверт, отчёт агента был пуст (регрессия 93e30c7, 13.10.26).
+/// Object-контракты с N обязательными полями сохраняют N черновиков —
+/// это существующее поведение валидатора и его слоёв.
+pub fn draft_count_for_contract(schema: &serde_json::Value) -> usize {
+    required_field_count(schema).max(1)
 }
 
 /// Токены, оставаемые конверту `emit_signal`.
@@ -590,6 +607,107 @@ mod tests {
             bounded.lines().count(),
             unbounded.lines().count(),
             "структура грамматики разъехалась"
+        );
+    }
+
+    /// Извлечь число черновиков из строки `drafts-block ::= draft{N}`.
+    fn drafts_count_of(grammar: &str) -> usize {
+        grammar
+            .lines()
+            .find(|line| line.starts_with("drafts-block ::= draft{"))
+            .and_then(|line| {
+                let start = "drafts-block ::= draft{".len();
+                let end = line.len().saturating_sub(1);
+                line.get(start..end).and_then(|n| n.parse::<usize>().ok())
+            })
+            .unwrap_or(0)
+    }
+
+    /// Слот отчёта обязан существовать у ЛЮБОГО контракта (инвариант ≥ 1).
+    /// Enum-схемы (soma_translator, focus_keeper) не имеют `required` — прежнее
+    /// `draft{0}` убивало отчёт: грамматика не оставляла выхода для анализа,
+    /// модель шла сразу в конверт (регрессия 93e30c7; tasks/27.10.26 draft0.md).
+    #[test]
+    fn enum_contract_gets_one_draft_slot() {
+        let contract = SignalContract {
+            key: "soma_translator".to_string(),
+            value_schema: serde_json::json!({
+                "type": "string",
+                "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"]
+            }),
+        };
+        let grammar = build_signal_envelope_grammar(&contract);
+        assert_eq!(
+            drafts_count_of(&grammar),
+            1,
+            "у enum-контракта обязан быть ровно один слот отчёта, grammar:\n{}",
+            grammar
+        );
+    }
+
+    /// Object-контракты сохраняют прежнее поведение: один черновик на каждое
+    /// обязательное поле (валидатор и его слои).
+    #[test]
+    fn object_contract_keeps_draft_per_required_field() {
+        let contract = SignalContract {
+            key: "validator_surface".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "additionalProperties": false,
+                "properties": { "e1": { "type": "boolean" }, "e2": { "type": "boolean" } },
+                "required": ["e1", "e2"]
+            }),
+        };
+        let grammar = build_signal_envelope_grammar(&contract);
+        assert_eq!(
+            drafts_count_of(&grammar),
+            2,
+            "object-контракт: черновик на каждое required-поле"
+        );
+    }
+
+    /// Ни один production-контракт не может остаться без слота отчёта.
+    #[test]
+    fn all_production_contracts_have_at_least_one_draft() {
+        let path = schema_path();
+        let dir = path.parent().expect("папка signals");
+        let map = load_all_signal_contracts(dir);
+        assert!(map.len() > 1, "контракты не прочитаны");
+        for (id, contract) in &map {
+            let grammar = build_signal_envelope_grammar(contract);
+            assert!(
+                drafts_count_of(&grammar) >= 1,
+                "контракт '{}' остался без слота отчёта (draft{{0}})",
+                id
+            );
+        }
+        for id in ["soma_translator", "focus_keeper"] {
+            let contract = map.get(id).unwrap_or_else(|| panic!("контракт {} не найден", id));
+            assert_eq!(
+                drafts_count_of(&build_signal_envelope_grammar(contract)),
+                1,
+                "контракт {}: enum-схема обязана давать ровно один слот отчёта",
+                id
+            );
+        }
+    }
+
+    /// Phase-2 JSON-only rescue-билдер остаётся без слота отчёта: там отчёт не
+    /// нужен (размышления Phase 1 уже сохранены thought-сообщением).
+    #[test]
+    fn json_only_grammar_has_no_drafts_block() {
+        let contract = SignalContract {
+            key: "soma_translator".to_string(),
+            value_schema: serde_json::json!({
+                "type": "string",
+                "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"]
+            }),
+        };
+        let grammar = build_signal_envelope_json_only_grammar(&contract);
+        assert!(
+            !grammar.contains("drafts-block"),
+            "Phase-2 билдер не должен нести слот отчёта: {}",
+            grammar
         );
     }
 

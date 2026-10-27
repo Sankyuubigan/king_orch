@@ -242,6 +242,7 @@ where
                 combined,
                 parse_target,
                 response,
+                false,
             );
         }
 
@@ -1037,6 +1038,7 @@ where
         combined: &str,
         parse_target: &str,
         _response: &str,
+        json_only_rescue: bool,
     ) -> Result<DispatchCtl, String> {
         let mut key_val = arguments.get("key");
         let mut val_val = arguments.get("value");
@@ -1100,6 +1102,20 @@ where
                 analysis
             };
 
+            // Слот отчёта обязан существовать (draft_count_for_contract ≥ 1),
+            // поэтому пустой анализ при валидном сигнале в ОСНОВНОМ вызове —
+            // аномалия: модель выдала пустой черновик либо путь извлечения сломан.
+            // Phase-2 JSON-only rescue исключён: там отчёт не нужен (мысли
+            // Phase 1 уже сохранены отдельным thought-сообщением). Диагностика,
+            // не маскировка: сигнал сохраняется как обычно.
+            if analysis.trim().is_empty() && !json_only_rescue {
+                log::warn!(
+                    "emit_signal: пустой отчёт при валидном сигнале '{}' (агент '{}', depth={})",
+                    key,
+                    self.agent.id,
+                    self.depth
+                );
+            }
             (self.log_cb)(format!(
                 "💭 Мысль {} [d={}] (сигнал + анализ) [⏱{:.1}с]: {}",
                 self.agent.name,
