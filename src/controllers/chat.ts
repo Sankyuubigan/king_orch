@@ -1781,7 +1781,7 @@ export class ChatController {
   private bindStrategyToggle() {
     this.el.strategyToggle?.addEventListener("change", () => {
       this.state.executionStrategy = this.el.strategyToggle?.checked ? "fused" : "detailed";
-      logFront(`[chat] режим исполнения: ${this.state.executionStrategy === "fused" ? "схлопнуто (Fused)" : "подробно (Detailed)"}`);
+      logFront(`[chat] режим исполнения: ${this.state.executionStrategy === "fused" ? "Fused Mode" : "подробно (Detailed)"}`);
     });
     this.applyStrategyToggleState();
   }

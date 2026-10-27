@@ -164,7 +164,7 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
   strategyToggleLabel.title = "Режим исполнения графа: подробно по нодам или группами одним вызовом";
   const strategyToggleTrack = py("span", "strategy-switch-track");
   const strategyToggleText = py("span", "strategy-switch-text");
-  strategyToggleText.textContent = "Схлопнуто ⚡";
+  strategyToggleText.textContent = "Fused Mode";
   strategyToggleLabel.append(strategyToggle, strategyToggleTrack, strategyToggleText);
 
   left.append(btnAttach, fileInput, btnSetWorkdir, currentWorkdir, agentSelect, btnAgentSettings, modelSelect, strategyToggleLabel, tokenCounter, engineBadge, cloudCounter);
