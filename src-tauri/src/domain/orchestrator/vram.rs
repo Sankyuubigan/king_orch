@@ -13,11 +13,17 @@
 use super::consts::AGENT_ERROR_PREFIX;
 use crate::infra::tools::ToolError;
 
-/// Маркер ресурсной ошибки image-preflight (SSOT порогов — плагин,
-/// здесь только детект текста для маршрутизации ретраев).
+/// Маркеры ресурсной ошибки image/video-preflight (SSOT формулировок — плагин,
+/// `tauri-plugin-image-engine/src/engine/preflight.rs::resource_markers`;
+/// здесь только детект текста для маршрутизации ретраев). Каноны video-preflight
+/// («Недостаточно VRAM/места на диске», 27.10.26) живут в этом списке наравне
+/// с image-канонами: маркер, которого нет в списке, снова маскируется в
+/// «внутренняя ошибка media-движка» и порождает слепые ретраи модели.
 pub fn is_resource_error(output: &str) -> bool {
     output.contains("Недостаточно памяти")
         || output.contains("Недостаточно RAM")
+        || output.contains("Недостаточно VRAM")
+        || output.contains("Недостаточно места на диске")
         || output.contains("не стал готов за 300 сек")
 }
 
@@ -78,6 +84,31 @@ mod tests {
         assert!(is_resource_error("Недостаточно RAM: нужно ~13 ГБ"));
         assert!(!is_resource_error("Ошибка 'generate_image': Неверные аргументы: prompt_en пуст"));
         assert!(!is_resource_error("Готово за 12.3 сек"));
+    }
+
+    /// Боевой текст из лога 27.10.26 (video-preflight q4km, 29.5 ГБ свободно):
+    /// раньше формула «Не хватает RAM» не матчилась → маскировка в
+    /// «внутренняя ошибка media-движка» → 3 слепых ретрая модели. Канон
+    /// «Недостаточно RAM» обязан распознаваться через полный путь ошибок
+    /// (ToolError::Io → Display «Ошибка ввода/вывода: …»).
+    #[test]
+    fn detects_video_preflight_ram_from_real_log() {
+        let output = "Ошибка 'generate_video': Ошибка ввода/вывода: Недостаточно RAM: \
+             нужно ≥ 30.0 ГБ свободной, фактически 29.5 ГБ. Закройте другие приложения \
+             или возьмите бандл легче.";
+        assert!(is_resource_error(output), "видео-RAM-канон обязан матчиться: {}", output);
+    }
+
+    /// Каноны video-preflight 27.10.26 (SSOT — preflight.rs::resource_markers
+    /// плагина): VRAM и диск тоже маршрутятся честно, без маскировки.
+    #[test]
+    fn detects_video_preflight_vram_and_disk() {
+        assert!(is_resource_error(
+            "Ошибка 'generate_video': Ошибка ввода/вывода: Недостаточно VRAM: нужно ≥ 12.0 ГБ на карте, фактически 8.0 ГБ."
+        ));
+        assert!(is_resource_error(
+            "Ошибка 'generate_video': Ошибка ввода/вывода: Недостаточно места на диске: для докачки нужно ≥ 31.7 ГБ на томе D:\\, свободно 10.0 ГБ."
+        ));
     }
 
     #[test]

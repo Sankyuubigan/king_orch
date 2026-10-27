@@ -506,6 +506,41 @@ where
                     }
                 }
             }
+            // generate_video: source_image_ids ОПЦИОНАЛЕН (t2va — видео с нуля),
+            // поэтому общий resolve_arguments (там ключ обязателен) не подходит.
+            // Но если картинки к запросу прикреплены, а модель их не запросила —
+            // молча терять данные юзера запрещено: честный отказ с инструкцией,
+            // а не тихий t2va (tasks-план 27.10.26, «Гейты отказа»).
+            if tool_output.is_none() && tool_name == "generate_video" {
+                if arguments.get("source_image_ids").is_some() {
+                    match self
+                        .request_media
+                        .resolve_arguments(arguments, &*self.messages)
+                    {
+                        Ok(attachments) => {
+                            log::info!(
+                                "[media] Resolved source_image_ids for video agent '{}': resolved={}",
+                                self.agent.id,
+                                attachments.len()
+                            );
+                            selected_attachments = attachments;
+                        }
+                        Err(error) => {
+                            tool_output = Some(super::vram::tool_error_to_output(
+                                tool_name,
+                                crate::infra::ToolError::Usage(error),
+                            ));
+                        }
+                    }
+                } else if !self.request_media.current_attachments().is_empty() {
+                    tool_output = Some(super::vram::tool_error_to_output(
+                        tool_name,
+                        crate::infra::ToolError::Usage(
+                            "К текущему запросу прикреплены изображения. Чтобы сделать видео ПО КАРТИНКЕ, передай 'source_image_ids' с её ID (она станет первым кадром). Видео с нуля по тексту — только когда картинок в запросе нет.".to_string(),
+                        ),
+                    ));
+                }
+            }
             if tool_output.is_none() {
                 let code_ctx = crate::infra::ToolCtx {
                     workspace_root: &self.workspace_root,
@@ -531,7 +566,14 @@ where
                         &code_ctx,
                         &selected_attachments,
                     )
-                    .or_else(|| crate::infra::execute_video_tool(tool_name, arguments, &code_ctx));
+                    .or_else(|| {
+                        crate::infra::execute_video_tool(
+                            tool_name,
+                            arguments,
+                            &code_ctx,
+                            &selected_attachments,
+                        )
+                    });
                 if was_suspended {
                     match self.engine.resume_after_external_compute() {
                         Ok(()) => {

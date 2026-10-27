@@ -72,11 +72,105 @@ fn video_result_uses_opaque_artifact_id() {
 #[test]
 fn unknown_tool_returns_none_and_empty_prompt_is_usage() {
     let ctx = test_ctx(None);
-    assert!(execute_video_tool("nope", &serde_json::json!({}), &ctx).is_none());
-    let err = execute_video_tool("generate_video", &serde_json::json!({"prompt_en": "   "}), &ctx)
-        .expect("generate_video обрабатывается")
-        .unwrap_err();
+    assert!(execute_video_tool("nope", &serde_json::json!({}), &ctx, &[]).is_none());
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"prompt_en": "   "}),
+        &ctx,
+        &[],
+    )
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
     assert!(matches!(err, ToolError::Usage(_)));
+}
+
+/// Схема тула объявляет i2va-вход: source_image_ids (ровно один ID) — опционален,
+/// t2va остаётся путём по умолчанию (образец media_tests.rs).
+#[test]
+fn video_schema_declares_source_image_ids() {
+    let tool = GenerateVideo;
+    let params = tool.parameters();
+    let ids = params
+        .pointer("/properties/source_image_ids")
+        .expect("source_image_ids объявлен в схеме");
+    assert_eq!(ids.get("type").and_then(|v| v.as_str()), Some("array"));
+    assert_eq!(ids.get("minItems").and_then(|v| v.as_i64()), Some(1));
+    assert_eq!(ids.get("maxItems").and_then(|v| v.as_i64()), Some(1));
+    // Не в required: видео с нуля по тексту — легальный вызов без картинок.
+    let required = params
+        .pointer("/required")
+        .and_then(|v| v.as_array())
+        .unwrap();
+    assert!(!required.iter().any(|v| v == "source_image_ids"));
+    assert!(tool.description().contains("source_image_ids"));
+}
+
+/// Две и больше картинок — честный Usage-отказ ДО всякого обращения к бандлу
+/// (fl2va/ref2va в туле не открыты; молча взять первую — потеря данных юзера).
+#[test]
+fn video_refuses_multiple_attachments_honestly() {
+    let ctx = test_ctx(None);
+    let attachments = vec![
+        crate::infra::ChatAttachment {
+            file_name: "a.png".to_string(),
+            mime_type: "image/png".to_string(),
+            data_base64: String::new(),
+            file_path: Some("D:\\no\\a.png".to_string()),
+            is_dir: Some(false),
+        },
+        crate::infra::ChatAttachment {
+            file_name: "b.png".to_string(),
+            mime_type: "image/png".to_string(),
+            data_base64: String::new(),
+            file_path: Some("D:\\no\\b.png".to_string()),
+            is_dir: Some(false),
+        },
+    ];
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"prompt_en": "тест"}),
+        &ctx,
+        &attachments,
+    )
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
+    match err {
+        ToolError::Usage(msg) => {
+            assert!(msg.contains("РОВНО одну"), "отказ называет лимит: {}", msg);
+        }
+        other => panic!("ожидался Usage, получен: {:?}", other),
+    }
+}
+
+/// Гейт режима бандла (Шаг 4): i2va-запрос на бандле без «i2va» в modes —
+/// честный Usage-отказ с инструкцией, а НЕ тихий t2va. Синтетический entry
+/// из встроенного каталога (герметично, без реального конфига машины).
+#[test]
+fn video_refuses_i2va_on_bundle_without_mode() {
+    let mut ref2va = tauri_plugin_image_engine::engine::video_bundle_by_name(
+        "minimax_h3_ref2va_pruned-q3k",
+    )
+    .expect("ref2va-бандл в каталоге");
+    assert!(!ref2va.modes.iter().any(|m| m == "i2va"));
+    let err = ensure_bundle_supports_i2va(&ref2va).unwrap_err();
+    match err {
+        ToolError::Usage(msg) => {
+            assert!(msg.contains("не поддерживает генерацию по картинке"), "{}", msg);
+            assert!(msg.contains("modes"), "отказ перечисляет modes: {}", msg);
+            assert!(msg.contains("Настройки"), "отказ даёт инструкцию: {}", msg);
+        }
+        other => panic!("ожидался Usage, получен: {:?}", other),
+    }
+    // fl2va-бандл с i2va — гейт пропускает.
+    let mut fl2va = tauri_plugin_image_engine::engine::video_bundle_by_name(
+        "minimax_h3_fl2va_pruned-q4km",
+    )
+    .expect("fl2va-бандл в каталоге");
+    assert!(fl2va.modes.iter().any(|m| m == "i2va"));
+    assert!(ensure_bundle_supports_i2va(&fl2va).is_ok());
+    // Бандл вообще без modes (добавленный кодом) — гейт отказывает.
+    ref2va.modes.clear();
+    assert!(ensure_bundle_supports_i2va(&ref2va).is_err());
 }
 
 #[test]

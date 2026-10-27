@@ -90,13 +90,36 @@ fn resolve_video_bundle_for_tools() -> Result<
     Ok(entry)
 }
 
+/// Гейт режима бандла (декларативный, SSOT каталога): i2va-запрос на бандле
+/// без i2va — честный отказ с инструкцией, а НЕ тихий t2va (молчаливое
+/// отклонение картинки юзера = ложь). Выделен в чистую функцию для герметичного
+/// теста на синтетическом entry (без реального конфига машины).
+fn ensure_bundle_supports_i2va(
+    entry: &tauri_plugin_image_engine::engine::VideoBundleEntry,
+) -> Result<(), ToolError> {
+    if entry.modes.iter().any(|m| m == "i2va") {
+        return Ok(());
+    }
+    Err(ToolError::Usage(format!(
+        "Активный видео-бандл «{}» не поддерживает генерацию по картинке (modes: {}). \
+         Активируйте fl2va-набор в Настройки → «Модели ImageGEN» (вкладка «Видео») \
+         и повторите.",
+        entry.name,
+        entry.modes.join(", ")
+    )))
+}
+
 fn run_generate_video(
     prompt_en: &str,
     seconds: u32,
     final_quality: bool,
+    init_path: Option<&str>,
     ctx: &ToolCtx,
 ) -> Result<VideoRunOutput, ToolError> {
     let entry = resolve_video_bundle_for_tools()?;
+    if init_path.is_some() {
+        ensure_bundle_supports_i2va(&entry)?;
+    }
     let engine_dir = tauri_plugin_image_engine::engine::engine_dir_early();
     let bundle_dir = tauri_plugin_image_engine::engine::video_bundle_dir_early();
 
@@ -108,10 +131,11 @@ fn run_generate_video(
 
     // Честный прогон: движок spawn'ится на прогон и его же Drop убивает.
     log::info!(
-        "[VID-TOOL] generate_video start: bundle={}, seconds={}, quality={}",
+        "[VID-TOOL] generate_video start: bundle={}, seconds={}, quality={}, mode={}",
         entry.name,
         seconds,
-        if final_quality { "final" } else { "draft" }
+        if final_quality { "final" } else { "draft" },
+        if init_path.is_some() { "i2va" } else { "t2va" }
     );
     let out_dir = video_session_outputs_dir(ctx.session_id);
     let ts = std::time::SystemTime::now()
@@ -129,6 +153,7 @@ fn run_generate_video(
         prompt_en,
         seconds,
         final_quality,
+        init_path,
         &out_path,
         None,
         log_cb,
@@ -237,15 +262,16 @@ impl Tool for GenerateVideo {
         "generate_video"
     }
     fn description(&self) -> &str {
-        "Сгенерировать короткое видео (+аудио) с нуля по английскому промпту. Клип будет приложен к ответу как файл."
+        "Сгенерировать короткое видео (+аудио) по английскому промпту: либо с нуля по тексту, либо ПО ПРИКРЕПЛЁННОЙ КАРТИНКЕ (она станет первым кадром — передай её ID в source_image_ids). Клип будет приложен к ответу как файл."
     }
     fn parameters(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "prompt_en": {"type": "string", "description": "Развёрнутый английский промпт: объект, действие/движение, окружение, свет, стиль. Описывай ДВИЖЕНИЕ сцены и камеры, а не статичную картинку."},
+                "prompt_en": {"type": "string", "description": "Развёрнутый английский промпт: объект, действие/движение, окружение, свет, стиль. Описывай ДВИЖЕНИЕ сцены и камеры, а не статичную картинку. При i2va описывай, КАК сцена на картинке оживает и движется."},
+                "source_image_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 1, "description": "РОВНО ОДИН ID картинки из блока доступных изображений — она станет первым кадром видео (image-to-video). Опционально: без него видео генерируется с нуля по тексту. Файловые пути запрещены."},
                 "seconds": {"type": "integer", "minimum": 1, "maximum": 15, "description": "Длительность клипа в секундах (по умолчанию 5). Лимит зависит от выбранного набора моделей: больше — только если пользователь прямо попросил."},
-                "final_quality": {"type": "boolean", "description": "false (по умолчанию) = черновик (быстро, минуты). true = финальное качество (медленно: 10+ минут на 5 секунд на 8 ГБ VRAM — предупреждай пользователя о времени)."}
+                "final_quality": {"type": "boolean", "description": "false (по умолчанию) = черновик (быстро, минуты). true = финальное качество (медленно: 10+ минут на 5 секунд — предупреждай пользователя о времени)."}
             },
             "required": ["prompt_en"]
         })
@@ -274,10 +300,14 @@ pub fn video_tool_schemas(agent_tools: &[String]) -> Vec<(String, String, Value)
 }
 
 /// Исполнить video-тул по имени (диспетчер; VRAM-suspend делает вызывающий).
+/// `attachments` — ресолвнутые по source_image_ids картинки текущего запроса:
+/// ровно одна → i2va (первый кадр), ни одной → t2va, две и больше — честный
+/// отказ (fl2va/ref2va в туле не открыты — см. tasks-план 27.10.26 §5).
 pub fn execute_video_tool(
     name: &str,
     args: &Value,
     ctx: &ToolCtx,
+    attachments: &[crate::infra::ChatAttachment],
 ) -> Option<Result<String, ToolError>> {
     match name {
         "generate_video" => {
@@ -289,6 +319,22 @@ pub fn execute_video_tool(
             if prompt.is_empty() {
                 return Some(Err(ToolError::Usage("prompt_en пуст".to_string())));
             }
+            if attachments.len() > 1 {
+                return Some(Err(ToolError::Usage(format!(
+                    "generate_video принимает РОВНО одну картинку (первый кадр), передано {}. \
+                     Режим «первый + последний кадр» в этой задаче не открыт.",
+                    attachments.len()
+                ))));
+            }
+            let init_path: Option<String> = if attachments.is_empty() {
+                None
+            } else {
+                match crate::infra::tools::media::resolve_ref_paths(attachments, ctx.session_id) {
+                    Ok(paths) if !paths.is_empty() => Some(paths[0].clone()),
+                    Ok(_) => None,
+                    Err(error) => return Some(Err(ToolError::Usage(error))),
+                }
+            };
             let seconds = args
                 .get("seconds")
                 .and_then(|value| value.as_u64())
@@ -299,7 +345,7 @@ pub fn execute_video_tool(
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false);
             Some(
-                run_generate_video(prompt, seconds, final_quality, ctx)
+                run_generate_video(prompt, seconds, final_quality, init_path.as_deref(), ctx)
                     .and_then(|output| format_video_result(output, ctx)),
             )
         }
