@@ -129,8 +129,8 @@ pub struct AppConfig {
     pub model_meta: HashMap<String, ModelMeta>,
     #[serde(default)]
     pub llamacpp_dir: Option<String>,
-    /// Источник бинарей движка: "ggml-org" (дефолт) / "beellama" (KVarN).
-    /// None = дефолт (ggml-org). См. engine_sources.json плагина.
+    /// Источник бинарей движка: "ggml-org" (дефолт) / "beellama" (KVarN) /
+    /// "prismml" (модели Bonsai). None = дефолт (ggml-org). См. engine_sources.json плагина.
     #[serde(default)]
     pub engine_source: Option<String>,
     /// Предпочтение юзера: какой бекенд движка использовать ("auto" / "cpu" /

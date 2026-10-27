@@ -163,19 +163,32 @@ export class SettingsController {
     bus.emit("model-catalog-changed");
   }
 
-  /// Заполняет выпадающий список модели-переводчика списком установленных моделей.
-  updateTranslatorModelSelect(config: any) {
+  /// Заполняет выпадающий список модели-переводчика из store.models (тот же
+  /// каталог, что у основного селекта). Вызов обязателен при загрузке конфига
+  /// и при каждом изменении каталога — иначе список остаётся пустым навсегда.
+  /// Только локальные модели: translate_message строит локальный LlamaEngine
+  /// по пути файла, облачный путь вида "9router:…" он не примет.
+  updateTranslatorModelSelect() {
     const sel = this.el.translatorModelSelect;
     if (!sel) return;
-    sel.innerHTML = '<option value="">— не выбрано —</option>';
-    for (const m of config.models || []) {
+    sel.innerHTML = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.text = "— не выбрано —";
+    sel.appendChild(placeholder);
+    for (const m of store.models) {
       const o = document.createElement("option");
       o.value = m;
       o.text = m.split(/[/\\]/).pop() || m;
       sel.appendChild(o);
     }
-    if (config.translator_model && config.models && config.models.includes(config.translator_model)) {
-      sel.value = config.translator_model;
+    if (store.translatorModel && store.models.includes(store.translatorModel)) {
+      sel.value = store.translatorModel;
+    } else {
+      sel.value = "";
+      // Модель переводчика исчезла из каталога — сбрасываем store, чтобы
+      // UI и состояние не разъехались (иначе перевод уйдёт в мёртвый путь).
+      store.translatorModel = null;
     }
   }
 
@@ -201,16 +214,12 @@ export class SettingsController {
       const config: any = await invoke("get_config");
       store.models = Array.isArray(config.models) ? config.models : store.models;
       store.lastModel = config.last_model ?? null;
-      if (config.translator_model) {
-        this.el.translatorModelSelect.value = config.translator_model;
-        store.translatorModel = config.translator_model;
-      } else {
-        store.translatorModel = null;
-      }
+      store.translatorModel = config.translator_model || null;
       if (config.translator_lang) {
         this.el.translatorLangSelect.value = config.translator_lang;
         store.translatorLang = config.translator_lang;
       }
+      this.updateTranslatorModelSelect();
       if (config.context_size) store.contextSize = config.context_size;
       if (config.workdir) store.workdir = config.workdir;
       if (config.max_gen_tokens) { this.el.maxGenSlider.value = config.max_gen_tokens.toString(); this.el.maxGenValue.innerText = config.max_gen_tokens.toString(); }
@@ -399,5 +408,8 @@ export class SettingsController {
     bus.on("model:changed", (modelPath: string) => {
       if (getActiveChatController()?.modelSelectValue === modelPath) this.loadModelParams();
     });
+    // Каталог моделей изменился (добавили/удалили модель) — перерисовываем и
+    // селект переводчика, как это делают чат-вкладки.
+    bus.on("model-catalog-changed", () => this.updateTranslatorModelSelect());
   }
 }
