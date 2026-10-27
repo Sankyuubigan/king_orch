@@ -120,15 +120,10 @@ pub fn apply(app: &AppHandle, raw_path: &str) -> Result<PathBuf, String> {
         Some(dir.join("models").to_string_lossy().to_string()),
     )?;
     cfg.sdcpp_dir = Some(dir.join("sdcpp").to_string_lossy().to_string());
-    let bundle_name = infra::default_bundle_entry()
-        .map(|e| e.name)
-        .unwrap_or_else(|| "qwen-image-2.1".to_string());
-    cfg.image_bundle_dir = Some(
-        dir.join("image_models")
-            .join(&bundle_name)
-            .to_string_lossy()
-            .to_string(),
-    );
+    // Папки бандлов image-engine — КОРНИ пулов (25.10.2026: per-bundle
+    // подпапки порождали перекачку общих файлов, плагин держит один пул).
+    cfg.image_bundle_dir = Some(dir.join("image_models").to_string_lossy().to_string());
+    cfg.video_bundle_dir = Some(dir.join("video_models").to_string_lossy().to_string());
     // `cloud_routers_dir` здесь больше не пишется: папку роутеров задаёт сам
     // плагин (`APPDATA/cloud-routers/<id>`), общий для всех проектов. Хост,
     // назначавший путь, разводил бы папку шлюза по приложениям — процесс-то

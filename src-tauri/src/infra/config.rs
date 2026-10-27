@@ -162,6 +162,9 @@ pub struct AppConfig {
     /// Папка бандла весов ImageGEN (ключ плагина image-engine).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_bundle_dir: Option<String>,
+    /// Папка видео-бандлов ImageGEN (ключ плагина image-engine; MiniMax H3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_bundle_dir: Option<String>,
 }
 
 fn default_translator_lang() -> String {
@@ -216,6 +219,7 @@ impl Default for AppConfig {
             data_dir: None,
             sdcpp_dir: None,
             image_bundle_dir: None,
+            video_bundle_dir: None,
         }
     }
 }
