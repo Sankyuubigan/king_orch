@@ -24,9 +24,21 @@ const AS2R = DEG_TO_RAD / 3600.0;
 const D2PI = 2.0 * Math.PI;
 const EPS0 = 84381.406 * AS2R;
 
-/** Эпоха айанамши (JD UT) и начальное значение (0 по определению режима). */
-const AYA_T0_UT = 1903396.8128654;
-const AYA_T0_VALUE = 0.0;
+/** Эпоха айанамши Surya Siddhanta (JD UT) и начальное значение
+ *  (0 по определению режима). */
+const AYA_T0_SS_UT = 1903396.8128654;
+const AYA_T0_SS_VALUE = 0.0;
+
+/**
+ * Эпоха и начальное значение Lahiri (Chitrapaksha) — режим SE_SIDM_LAHIRI
+ * (Swiss Ephemeris, sweph.h: строка «1: Lahiri»):
+ *   {2435553.5, 23.250182778 - 0.004658035, FALSE, SEMOD_PREC_IAU_1976}
+ * Эпоха — Calendar Reform Committee 1956 (равноденствие 1956, JD 2435553.5),
+ * t0 задан в TT/ET (t0_is_UT = FALSE → ΔT НЕ прибавляется), значение 23°15'
+ * минус нутация (Wahr 1980).
+ */
+const AYA_T0_LAHIRI_ET = 2435553.5;
+const AYA_T0_LAHIRI_VALUE = 23.250182778 - 0.004658035;
 
 // ── Vondrák 2011: прецессия эклиптики (p, q) ────────────────────────────────
 // Полиномы (асек), степени t^0..t^3, t = века от J2000.
@@ -173,15 +185,18 @@ function equatorialToEcliptic(vec: number[], eps: number): number[] {
 }
 
 /**
- * Айанамша Surya Siddhanta в градусах на момент jdUt (юлианский день UT).
- * Точка весеннего равноденствия даты прецессируется к эпохе t0 (в TT),
- * её эклиптическая долгота t0 с обратным знаком + ayan_t0.
+ * Айанамша по эпохальным константам — семантика swi_get_ayanamsa_ex
+ * (Swiss Ephemeris, метод по умолчанию, без SE_SIDBIT_ECL_DATE):
+ * точка весеннего равноденствия даты прецессируется к эпохе t0,
+ * её эклиптическая долгота на эпохе t0 (средняя наклонность) с обратным
+ * знаком + начальное значение айанамши.
+ *
+ * t0IsUt: если true, эпоха t0 задана в UT и переводится в TT через ΔT;
+ * если false — t0 уже в TT/ET и прибавлять ΔT нельзя.
  */
-export function ayanamsaSuryaSiddhanta(jdUt: number): number {
+function ayanamsaFromEpoch(jdUt: number, t0Jd: number, t0IsUt: boolean, ayanT0: number): number {
     const jdEt = jdUt + deltaT(jdUt) / 86400.0;
-    // Эпоха t0 задана в UT → переводим в TT (в 499 г. DeltaT ~ 5700 c;
-    // пренебрежение сдвинуло бы результат на ~0.03", берём явно).
-    const t0Et = AYA_T0_UT + deltaT(AYA_T0_UT) / 86400.0;
+    const t0Et = t0IsUt ? t0Jd + deltaT(t0Jd) / 86400.0 : t0Jd;
 
     let x = [1, 0, 0];
     if (jdEt !== J2000) x = precess(x, jdEt, +1);
@@ -190,5 +205,21 @@ export function ayanamsaSuryaSiddhanta(jdUt: number): number {
     const eps = meanObliquity(t0Et);
     const ecl = equatorialToEcliptic(x, eps);
     const lon = Math.atan2(ecl[1], ecl[0]) * RAD_TO_DEG;
-    return degnorm(-lon + AYA_T0_VALUE);
+    return degnorm(-lon + ayanT0);
+}
+
+/**
+ * Айанамша Sri Surya Siddhanta (SE_SIDM_SURYASIDDHANTA): t0 в UT.
+ * Внутренняя проверка замыкания: ayanamsa(t0) === 0 по построению.
+ */
+export function ayanamsaSuryaSiddhanta(jdUt: number): number {
+    return ayanamsaFromEpoch(jdUt, AYA_T0_SS_UT, true, AYA_T0_SS_VALUE);
+}
+
+/**
+ * Айанамша Lahiri (Chitrapaksha) — SE_SIDM_LAHIRI: эпоха CRC 1956 задана
+ * в TT, начальное значение 23°15' минус нутация (Wahr 1980).
+ */
+export function ayanamsaLahiri(jdUt: number): number {
+    return ayanamsaFromEpoch(jdUt, AYA_T0_LAHIRI_ET, false, AYA_T0_LAHIRI_VALUE);
 }

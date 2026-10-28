@@ -30,13 +30,11 @@ export const DASHA_LORDS: string[] = [
 export const DASHA_YEARS: number[] = [7.0, 20.0, 6.0, 10.0, 7.0, 18.0, 16.0, 19.0, 17.0];
 
 /**
- * Длина года даши: «Year with 360 tithis» (1 титхи = 0.9843529667 сут) —
- * настройка эталона/JHora. Сверять с настройками JHora при валидации гейта!
- * Альтернативы из настроек JHora (сохранил из драфта; если в JHora выбрана
- * другая строка — подменить константу и пересчитать фикстуры):
- *   365.242190 — Mean tropical solar year
- *   365.256364 — Mean sidereal solar year
- *   360.000000 — Savana year (360 days)
+ * Длина года даши Sri Surya Siddhanta: «Year with 360 tithis»
+ * (1 титхи = 0.9843529667 сут). Значение по умолчанию для
+ * calculateVimshottari (обратная совместимость с эталоном/фикстурами);
+ * боевой тул передаёт год из пресета системы (vedic_system.ts):
+ * drik → 365.2425, sss → это значение.
  */
 export const DASHA_YEAR_DAYS = 354.3670680;
 
@@ -183,6 +181,8 @@ export function calculateVimshottari(
     moonLon: number,
     birthUtcMs: number,
     maxLevel: number,
+    /** Длина года даши в сутках; по умолчанию — год SSS «360 tithis». */
+    yearDays: number = DASHA_YEAR_DAYS,
 ): DashaPeriod[] {
     const normMoon = ((moonLon % 360.0) + 360.0) % 360.0;
     const nakSpan = 360.0 / 27.0;
@@ -192,14 +192,14 @@ export function calculateVimshottari(
     const degInNak = normMoon % nakSpan;
     const fractionPassed = degInNak / nakSpan;
 
-    const firstMdFullDays = DASHA_YEARS[firstLordIdx] * DASHA_YEAR_DAYS;
+    const firstMdFullDays = DASHA_YEARS[firstLordIdx] * yearDays;
     const elapsedMs = Math.round(firstMdFullDays * fractionPassed * 86_400_000.0);
     let cursorMs = birthUtcMs - elapsedMs;
 
     const mahadashas: DashaPeriod[] = [];
     for (let i = 0; i < 9; i++) {
         const lordIdx = (firstLordIdx + i) % 9;
-        const mdDays = DASHA_YEARS[lordIdx] * DASHA_YEAR_DAYS;
+        const mdDays = DASHA_YEARS[lordIdx] * yearDays;
         const mdMs = Math.round(mdDays * 86_400_000.0);
         const endMs = cursorMs + mdMs;
         mahadashas.push({

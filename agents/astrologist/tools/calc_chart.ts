@@ -5,15 +5,16 @@
  * строк `{"jhd_path": "..."}`; на stdout — ТОЛЬКО JSON-объект; любая ошибка —
  * сообщение в stderr + exit 1 (честный отказ, workflow останавливается).
  *
- * Астрономия: astronomy-engine (вендор в ./vendor, VSOP87) + айанамса
- * Surya Siddhanta (ayanamsa.ts, эквивалент SE_SIDM_SURYASIDDHANTA).
+ * Астрономия: astronomy-engine (вендор в ./vendor, VSOP87). Система расчёта
+ * (планетная модель, айанамша, год даши) выбирается ОДНОЙ строкой в
+ * vedic_system.ts (VEDIC_SYSTEM; дефолт "drik": Drik + Lahiri + 365.2425).
  * Эталон алгоритмов и констант — исходный драфт parse_and_calc.rs
  * (git-история: коммит 0434d65).
  */
 
 import { AstroTime, e_tilt, SiderealTime, GeoVector, Ecliptic, Body } from "./vendor/astronomy.js";
 import { J2000, DEG_TO_RAD, degnorm, jdUtToJdEt } from "./ephemeris_time.ts";
-import { ayanamsaSuryaSiddhanta } from "./ayanamsa.ts";
+import { VEDIC_SYSTEM_CONFIG } from "./vedic_system.ts";
 import { parseJhd, JhdInput } from "./jhd_parser.ts";
 import {
     SIGNS,
@@ -127,10 +128,15 @@ async function main() {
         fail(`файл ${jhdPath} не разобран: ${e instanceof Error ? e.message : String(e)}`);
     }
 
-    // ── 2. Время и айанамша ──
+    // ── 2. Система, время и айанамша ──
+    // Честный отказ вместо тихо неверных чисел: SSS-планетная модель
+    // (эпициклы Сурья-сиддханты) ещё не реализована — см. vedic_system.ts.
+    if (VEDIC_SYSTEM_CONFIG.planetaryModel === "sss") {
+        fail("планетная модель Sri Surya Siddhanta ещё не реализована (см. vedic_system.ts); переключите VEDIC_SYSTEM на \"drik\"");
+    }
     const jdUt = input.julianDayUt;
     const jdEt = jdUtToJdEt(jdUt);
-    const ayanamsa = ayanamsaSuryaSiddhanta(jdUt);
+    const ayanamsa = VEDIC_SYSTEM_CONFIG.ayanamsa(jdUt);
 
     // ── 3. Лагна: RAMC (видимое звёздное время + долгота) и истинная наклонность ──
     const gastHours = SiderealTime(mkTime(jdUt, jdEt));
@@ -179,7 +185,7 @@ async function main() {
 
     // ── 6. Вимшоттари: 9 махадаш + активная цепочка до прана-даши ──
     const nowMs = Date.now();
-    const dashaTree = calculateVimshottari(moonLon, input.birthUtcMs, 3);
+    const dashaTree = calculateVimshottari(moonLon, input.birthUtcMs, 3, VEDIC_SYSTEM_CONFIG.dashaYearDays);
     let activeChain = findActiveDashaChain(dashaTree, nowMs);
     // Достраиваем SD и PAD только вдоль активной ветки (всё дерево 5 уровней — 53к узлов).
     if (activeChain.length === 3) {
@@ -200,7 +206,7 @@ async function main() {
     // ── 7. Транзиты: положения грах на текущий момент ──
     const jdUtNow = Date.now() / 1000.0 / 86400.0 + 2440587.5;
     const jdEtNow = jdUtToJdEt(jdUtNow);
-    const ayanamsaNow = ayanamsaSuryaSiddhanta(jdUtNow);
+    const ayanamsaNow = VEDIC_SYSTEM_CONFIG.ayanamsa(jdUtNow);
     const transits = BODIES.map((bodyDef) => {
         let sidLon: number;
         let retro: boolean;
@@ -264,8 +270,13 @@ async function main() {
             utc_iso: input.birthUtcIso,
             jd_ut: r4(jdUt),
         },
+        system: {
+            key: VEDIC_SYSTEM_CONFIG.system,
+            name: VEDIC_SYSTEM_CONFIG.name,
+            planetary_model: VEDIC_SYSTEM_CONFIG.planetaryModel,
+        },
         ayanamsha: {
-            name: "Sri Surya Siddhanta",
+            name: VEDIC_SYSTEM_CONFIG.ayanamshaName,
             value: r4(ayanamsa),
         },
         lagna: roundPoint(lagna),
@@ -273,7 +284,7 @@ async function main() {
         houses_d1: housesD1,
         houses_d9: housesD9,
         dasha: {
-            year_days_setting: "360 tithis",
+            year_days_setting: VEDIC_SYSTEM_CONFIG.dashaYearName,
             maha_dashas: dashaTree.map((md) => ({
                 lord: md.lordName,
                 start: new Date(md.startMs).toISOString(),
