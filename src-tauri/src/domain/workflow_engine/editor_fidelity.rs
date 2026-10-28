@@ -27,6 +27,7 @@ pub fn analyze_workflow_fidelity(
     collect_template_reference_diagnostics(workflow, &mut diagnostics);
     collect_node_target_diagnostics(workflow, &mut diagnostics);
     collect_edge_diagnostics(workflow, &mut diagnostics);
+    collect_unreachable_node_diagnostics(workflow, &mut diagnostics);
     collect_agent_frame_diagnostics(workflow, &mut diagnostics);
     collect_custom_tool_diagnostics(workflow, &mut diagnostics);
     // «Мёртвый signal-контракт»: агент вызывает контракта, ключ никто
@@ -930,6 +931,127 @@ fn push_missing_edge_endpoint(
         &format!("{}.{}", location, field),
         format!("{}='{}' не существует среди nodes[].id", field, value),
     );
+}
+
+/// Все ноды, достижимые из `entry`, — BFS по КАЖДОМУ объявленному маршруту:
+/// рёбра (`edges[].from → .to`), `true_to`/`false_to`, `default`, `sequential_to`
+/// и `cases_priority[].to`. Ровно те источники маршрутов, по которым рантайм
+/// выбирает следующую ноду, поэтому расхождений с исполнением нет.
+///
+/// Группа исполняется как единое целое (в FUSED внутренние ноды не диспетчатся
+/// по отдельности), поэтому достигнув одного члена группы, считаем достижимыми
+/// всех — иначе слипнутые группы давали бы ложные срабатывания.
+///
+/// `entry` не объявлен или пуст → пустое множество: это отдельная диагностика
+/// `ENTRY_MISSING`, дублировать её здесь не нужно.
+pub(crate) fn reachable_node_ids(workflow: &WorkflowDef) -> HashSet<String> {
+    let Some(entry) = workflow
+        .entry
+        .as_deref()
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+    else {
+        return HashSet::new();
+    };
+
+    let mut routes: HashMap<&str, Vec<&str>> = HashMap::new();
+    for edge in &workflow.edges {
+        if is_end_sentinel(&edge.to) || edge.to.trim().is_empty() {
+            continue;
+        }
+        routes
+            .entry(edge.from.as_str())
+            .or_default()
+            .push(edge.to.as_str());
+    }
+    for node in &workflow.nodes {
+        let bucket = routes.entry(node.id.as_str()).or_default();
+        for target in [
+            node.true_to.as_deref(),
+            node.false_to.as_deref(),
+            node.default.as_deref(),
+            node.sequential_to.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if !is_end_sentinel(target) && !target.trim().is_empty() {
+                bucket.push(target);
+            }
+        }
+        for case in node.cases_priority.iter().flatten() {
+            if !is_end_sentinel(&case.to) && !case.to.trim().is_empty() {
+                bucket.push(case.to.as_str());
+            }
+        }
+    }
+
+    let mut group_members: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut node_group: HashMap<&str, &str> = HashMap::new();
+    for node in &workflow.nodes {
+        if let Some(group) = node.group.as_deref().map(str::trim).filter(|g| !g.is_empty()) {
+            group_members.entry(group).or_default().push(node.id.as_str());
+            node_group.insert(node.id.as_str(), group);
+        }
+    }
+
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut queue = vec![entry.to_string()];
+    while let Some(id) = queue.pop() {
+        if !visited.insert(id.clone()) {
+            continue;
+        }
+        if let Some(nexts) = routes.get(id.as_str()) {
+            for next in nexts {
+                queue.push((*next).to_string());
+            }
+        }
+        // Достигнув одного члена группы, движок исполняет всю группу:
+        // расширяем очередь остальными членами её группы.
+        if let Some(group) = node_group.get(id.as_str()) {
+            if let Some(members) = group_members.get(*group) {
+                for member in members {
+                    queue.push((*member).to_string());
+                }
+            }
+        }
+    }
+    visited
+}
+
+/// Нода, недостижимая из entry, — потерянная ветка: маршрут в неё никто не
+/// прокладывал, и прогон молча оборвётся на предыдущей ноде (реальный кейс:
+/// граф астролога без ребра `find_jhd → check_jhd` «успешно завершался» после
+/// тула, не выдав пользователю ничего). Проверка делает такой граф видимым
+/// ДО запуска — тем же способом, что и `ENTRY_MISSING`.
+fn collect_unreachable_node_diagnostics(
+    workflow: &WorkflowDef,
+    diagnostics: &mut Vec<GraphDiagnostic>,
+) {
+    let reached = reachable_node_ids(workflow);
+    if reached.is_empty() {
+        return;
+    }
+    let mut unreachable: Vec<&str> = workflow
+        .nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .filter(|id| !reached.contains(*id))
+        .collect();
+    unreachable.sort_unstable();
+    for id in unreachable {
+        push_diagnostic(
+            diagnostics,
+            "NODE_UNREACHABLE_FROM_ENTRY",
+            &format!("nodes[id={}]", id),
+            format!(
+                "нода недостижима из entry '{}': ни ребро, ни поле маршрута (true_to/false_to/\
+                 default/cases_priority) в неё не ведут — ветка с этой нодой никогда не выполнится. \
+                 Добавь ребро или маршрут от предыдущей ноды ветки",
+                workflow.entry.as_deref().unwrap_or(""),
+            ),
+        );
+    }
 }
 
 fn is_dynamic_node(node: &NodeDef) -> bool {

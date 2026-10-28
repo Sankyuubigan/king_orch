@@ -14,7 +14,7 @@
 
 import { AstroTime, e_tilt, SiderealTime, GeoVector, Ecliptic, Body } from "./vendor/astronomy.js";
 import { J2000, DEG_TO_RAD, degnorm, jdUtToJdEt } from "./ephemeris_time.ts";
-import { VEDIC_SYSTEM_CONFIG } from "./vedic_system.ts";
+import { VEDIC_SYSTEM_CONFIG, CHARA_KARAKA_SCHEME } from "./vedic_system.ts";
 import { parseJhd, JhdInput } from "./jhd_parser.ts";
 import {
     SIGNS,
@@ -26,6 +26,7 @@ import {
     PointInfo,
 } from "./vedic_math.ts";
 import { tropicalAscendant } from "./houses.ts";
+import { buildChartAnalysis } from "./chart_analysis.ts";
 
 /**
  * AstroTime из (jdUt, jdEt): astronomy-engine принимает UT в J2000-днях,
@@ -183,6 +184,23 @@ async function main() {
     const housesD1 = houseList(lagnaD1Sign, "houseD1").map((h) => ({ ...h, sign_name: SIGNS[h.sign_idx] }));
     const housesD9 = houseList(lagnaD9Sign, "houseD9").map((h) => ({ ...h, sign_name: SIGNS[h.sign_idx] }));
 
+    // ── 5.1 Аналитический слой: управители домов, дришти, достоинства, караки ──
+    // Предрасчёт до LLM: модель не считает владения и аспекты «в уме».
+    const analysis = buildChartAnalysis(
+        planets.map((p, i) => ({
+            key: BODIES[i].key,
+            name: p.name,
+            lon: p.longitude,
+            isRetro: p.isRetrograde,
+            signD1Idx: p.signD1Idx,
+            signD9Idx: p.signD9Idx,
+            houseD1: p.houseD1,
+            degreeInSign: p.degreeInSign,
+        })),
+        lagnaD1Sign,
+        CHARA_KARAKA_SCHEME,
+    );
+
     // ── 6. Вимшоттари: 9 махадаш + активная цепочка до прана-даши ──
     const nowMs = Date.now();
     const dashaTree = calculateVimshottari(moonLon, input.birthUtcMs, 3, VEDIC_SYSTEM_CONFIG.dashaYearDays);
@@ -257,6 +275,12 @@ async function main() {
         house_d9: p.houseD9,
     });
 
+    /** Граха + предрасчитанные аналитические поля (см. chart_analysis.ts). */
+    const roundPlanet = (p: PointInfo, i: number) => ({
+        ...roundPoint(p),
+        ...analysis.planets[BODIES[i].key],
+    });
+
     const output = {
         tool: "calc_chart",
         birth: {
@@ -280,7 +304,11 @@ async function main() {
             value: r4(ayanamsa),
         },
         lagna: roundPoint(lagna),
-        planets: planets.map(roundPoint),
+        chara_karakas: {
+            scheme: analysis.chara_karakas.scheme,
+            ...analysis.chara_karakas.karakas,
+        },
+        planets: planets.map(roundPlanet),
         houses_d1: housesD1,
         houses_d9: housesD9,
         dasha: {

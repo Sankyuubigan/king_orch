@@ -29,6 +29,16 @@ export type VedicSystem = "drik" | "sss";
 /** ← ЕДИНСТВЕННАЯ СТРОКА ПЕРЕКЛЮЧЕНИЯ СИСТЕМЫ. */
 export const VEDIC_SYSTEM: VedicSystem = "drik";
 
+export type CharaKarakaScheme = "seven" | "eight";
+
+/**
+ * ← СХЕМА ЧАРАКАРАК (Джаймини). Дефолт "eight": 8 карак, Раху участвует с
+ * перевёрнутым градусом (30° − положение в знаке) — совпадает с дефолтом
+ * Jagannatha Hora. "seven": 7 карак без Раху (школа К.Н. Рао). Кету не
+ * участвует ни в одной схеме. Реализация — chart_analysis.charaKarakas.
+ */
+export const CHARA_KARAKA_SCHEME: CharaKarakaScheme = "eight";
+
 export interface VedicSystemConfig {
     system: VedicSystem;
     /** Человекочитаемое имя системы (идёт в вывод тула). */

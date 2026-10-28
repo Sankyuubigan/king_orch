@@ -10,14 +10,15 @@ extractor_prompt: |
   {{ user_message }}
 
   Ответь ТОЛЬКО JSON без пояснений и без markdown-фенсов, ВСЕМИ ключами:
-  {"is_greeting": true/false, "question_quality": "proper"/"reformulatable"/"unsuitable", "chart_needed": "yes"/"no"}
+  {"is_greeting": true/false, "question_quality": "proper"/"reformulatable"/"unsuitable", "chart_needed": "yes"/"no", "question_topic": "career_finance"/"relationships"/"health"/"spirituality"/"general"}
 
   ПРИОРИТЕТ (взаимоисключающие правила, брать высший по списку):
-  1. Если is_greeting = TRUE — question_quality = "unsuitable", chart_needed = "no"
+  1. Если is_greeting = TRUE — question_quality = "unsuitable", chart_needed = "no",
+     question_topic = "general"
      (хелпер объяснит возможности и правила работы с картой).
   2. Иначе question_quality и chart_needed определяются по критериям фактов.
   3. Если непонятно, к какой категории отнести вопрос, — "reformulatable"
-     (хелпер поможет переформулировать).
+     (хелпер поможет переформулировать), а тема вопроса — "general".
 
 facts:
   - id: is_greeting
@@ -79,3 +80,34 @@ facts:
 
       При сомнении — "yes" (карта даст более глубокий ответ).
       Если is_greeting = TRUE — всегда "no".
+
+  - id: question_topic
+    values:
+      - career_finance
+      - relationships
+      - health
+      - spirituality
+      - general
+    criteria: |
+      Тема вопроса — определяет, какой блок специализированных правил Джйотиш
+      подключить к разбору. Одно значение, ближайшее к главному запросу.
+
+      **career_finance:** работа, призвание и карьера, бизнес, деньги и доходы,
+      финансы, недвижимость и крупные покупки, долги, инвестиции, профессиональная
+      реализация, признание и статус.
+
+      **relationships:** любовь и романтика, брак и партнёрство (личное и деловое),
+      совместимость, семья и дети, друзья и окружение, конфликты и примирения.
+
+      **health:** самочувствие, энергия и выносливость, сон, образ жизни,
+      восстановление, режим и привычки тела (не диагноз и не замена врача —
+      только образ жизни и общие указания карты).
+
+      **spirituality:** предназначение и кармические задачи, духовный рост,
+      практики, смыслы, внутреннее состояние и ментальные паттерны, упайи
+      (гармонизация), благотворительность.
+
+      **general:** всё остальное — методологические вопросы о том, как читать
+      карту, общие периоды жизни без конкретной сферы, смешанный запрос без
+      доминирующей темы. При сомнении между темами — "general".
+      Если is_greeting = TRUE — всегда "general".

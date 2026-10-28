@@ -597,6 +597,9 @@ fn into_workflow(source: serde_yaml::Value, path: &Path) -> Result<WorkflowDef, 
     // отсутствующего entry): мёртвый signal-контракт виден в логе при
     // загрузке, а не только после того, как Model 3 вернул пустой ответ.
     log_dead_signal_contracts(&wf);
+    // Тот же стиль: недостижимые из entry ноды — потерянная ветка, прогон
+    // молча оборвётся на предыдущей ноде без единого сообщения пользователю.
+    log_unreachable_nodes(&wf);
     Ok(wf)
 }
 
@@ -682,6 +685,34 @@ fn log_dead_signal_contracts(wf: &WorkflowDef) {
         "[workflow_engine] график '{}' содержит мёртвые signal-контракты: {}",
         wf.name,
         summary.join(" | ")
+    );
+}
+
+/// Ноды, недостижимые из entry, видны в логе при загрузке движком —
+/// так же, как мёртвые signal-контракты. Граф остаётся загружаемым
+/// (работающая часть графа лучше неработающей вовсе), но сломанным он
+/// выглядеть не имеет права. Расчёт достижимостия — единственная точка
+/// правды в `editor_fidelity::reachable_node_ids` (та же функция питает
+/// диагностику редактора `NODE_UNREACHABLE_FROM_ENTRY`).
+fn log_unreachable_nodes(wf: &WorkflowDef) {
+    let reached = super::editor_fidelity::reachable_node_ids(wf);
+    if reached.is_empty() {
+        return;
+    }
+    let lost: Vec<&str> = wf
+        .nodes
+        .iter()
+        .map(|node| node.id.as_str())
+        .filter(|id| !reached.contains(*id))
+        .collect();
+    if lost.is_empty() {
+        return;
+    }
+    log::error!(
+        "[workflow_engine] график '{}' содержит ноды, недостижимые из entry ({}): \
+         маршрут в них потерян — ветка оборвётся молча, пользователь не получит ответ",
+        wf.name,
+        lost.join(", ")
     );
 }
 
@@ -1071,6 +1102,42 @@ edges: []
                 wf.edges.iter().any(|e| e.from == entry.id),
                 "Вход {:?} отключён: нет ни одного ребра из него",
                 path
+            );
+        }
+    }
+
+    /// Гейт достижимости: в КАЖДОМ боевом графе все ноды должны быть
+    /// достижимы из entry. Регрессия «потерянное ребро к тулу» (astrologist:
+    /// find_jhd без ребра к check_jhd) оборвала бы ветку молча — пользователь
+    /// не получил бы ответ, а граф выглядел бы рабочим.
+    #[test]
+    fn production_graphs_have_no_unreachable_nodes() {
+        use crate::domain::workflow_engine::editor_fidelity::analyze_workflow_fidelity;
+        for rel in PRODUCTION_GRAPHS {
+            let path = graph_path(rel);
+            assert!(path.exists(), "Файл графа не найден: {:?}", path);
+            let source: serde_yaml::Value = serde_yaml::from_str(
+                &std::fs::read_to_string(&path)
+                    .unwrap_or_else(|e| panic!("Чтение {:?} не удалось: {}", path, e)),
+            )
+            .unwrap_or_else(|e| panic!("YAML {:?} не парсится: {}", path, e));
+            let wf: WorkflowDef = serde_yaml::from_value(source.clone())
+                .unwrap_or_else(|e| panic!("Парсинг {:?} не удался: {}", path, e));
+            let diagnostics = analyze_workflow_fidelity(&source, &wf).expect("анализ");
+            let unreachable: Vec<&crate::domain::workflow_engine::editor_fidelity::GraphDiagnostic> =
+                diagnostics
+                    .iter()
+                    .filter(|d| d.code == "NODE_UNREACHABLE_FROM_ENTRY")
+                    .collect();
+            assert!(
+                unreachable.is_empty(),
+                "{:?}: недостижимые из entry ноды (маршрут потерян): {}",
+                path,
+                unreachable
+                    .iter()
+                    .map(|d| format!("{} ({})", d.location, d.message))
+                    .collect::<Vec<_>>()
+                    .join("; ")
             );
         }
     }

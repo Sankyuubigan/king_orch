@@ -731,3 +731,98 @@ edges:
         diagnostics
     );
 }
+
+#[test]
+fn detects_unreachable_node_from_entry() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: start
+nodes:
+  - id: start
+    type: user_message
+  - id: orphan
+    type: note
+edges: []
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(diagnostics.iter().any(|d| {
+        d.code == "NODE_UNREACHABLE_FROM_ENTRY" && d.location == "nodes[id=orphan]"
+    }));
+}
+
+#[test]
+fn node_reachable_through_routing_fields_is_not_flagged() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: start
+nodes:
+  - id: start
+    type: user_message
+  - id: gate
+    type: condition_check
+    field: ok
+    true_to: via_true
+    false_to: via_cases
+  - id: via_true
+    type: note
+  - id: via_cases
+    type: note
+  - id: orphan
+    type: note
+edges:
+  - from: start
+    to: gate
+"#,
+    );
+
+    // via_true/via_cases достижимы ТОЛЬКО через поля маршрутизации
+    // condition_check — достижимостия обязана их видеть; orphan не достижим никем.
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+    let unreachable: Vec<&str> = diagnostics
+        .iter()
+        .filter(|d| d.code == "NODE_UNREACHABLE_FROM_ENTRY")
+        .filter_map(|d| d.location.strip_prefix("nodes[id=").and_then(|s| s.strip_suffix("]")))
+        .collect();
+    assert_eq!(unreachable, vec!["orphan"]);
+}
+
+#[test]
+fn group_members_are_reachable_together() {
+    let (source, workflow) = parse(
+        r#"
+name: test
+entry: start
+nodes:
+  - id: start
+    type: user_message
+  - id: member_a
+    type: llm_worker
+    agent: test
+    group: fused_block
+  - id: member_b
+    type: llm_worker
+    agent: test
+    group: fused_block
+groups:
+  - id: fused_block
+edges:
+  - from: start
+    to: member_a
+"#,
+    );
+
+    let diagnostics = analyze_workflow_fidelity(&source, &workflow).expect("analysis");
+
+    assert!(
+        !diagnostics
+            .iter()
+            .any(|d| d.code == "NODE_UNREACHABLE_FROM_ENTRY"),
+        "достигнув одного члена группы, движок исполняет всю группу: {:?}",
+        diagnostics
+    );
+}

@@ -11,8 +11,8 @@ nodes:
 - id: user_message
   type: user_message
   ui_pos:
-    x: -376
     y: 37
+    x: -376
 
 - id: extract_facts
   type: llm_fact_extractor
@@ -29,8 +29,8 @@ nodes:
   true_to: ask_helper
   false_to: route
   ui_pos:
-    x: 30
-    y: 36
+    x: 190
+    y: 31
 
 - id: route
   type: switch
@@ -45,22 +45,22 @@ nodes:
     to: ask_helper
   default: ask_helper
   ui_pos:
-    x: 169
-    y: 44
+    y: 309
+    x: 505
 
 - id: check_chart
   type: switch
   input_object: '{{ nodes.extract_facts.output }}'
   switch_field: chart_needed
   cases_priority:
-  - key: "yes"
+  - key: yes
     to: find_jhd
-  - key: "no"
+  - key: no
     to: interpret
   default: find_jhd
   ui_pos:
-    x: 334
-    y: 44
+    x: 851
+    y: 219
 
 - id: ask_helper
   type: llm_worker
@@ -75,14 +75,14 @@ nodes:
     Сообщение пользователя: {{ nodes.user_message.output.text }}
   output_type: message
   ui_pos:
-    x: 554
-    y: 262
+    y: 506
+    x: 1142
 
 - id: find_jhd
   type: custom_tool_call
   ui_pos:
-    x: 517
-    y: -79
+    y: 54
+    x: 1161
   tool_file: ../tools/find_jhd_attachment.ts
   args:
     attachments: '{{ nodes.user_message.output.attachments }}'
@@ -94,17 +94,28 @@ nodes:
   true_to: calc_chart
   false_to: ask_attach
   ui_pos:
-    x: 689
-    y: -74
+    y: -58
+    x: 1437
 
 - id: calc_chart
   type: custom_tool_call
   ui_pos:
-    x: 853
-    y: -121
+    x: 1703
+    y: -70
   tool_file: ../tools/calc_chart.ts
   args:
     jhd_path: '{{ nodes.find_jhd.output.path }}'
+
+- id: build_knowledge
+  type: custom_tool_call
+  ui_pos:
+    x: 1975
+    y: -95
+  tool_file: ../tools/build_knowledge.ts
+  args:
+    lagna: '{{ nodes.calc_chart.output.lagna }}'
+    topic: '{{ nodes.extract_facts.output.question_topic }}'
+    planets: '{{ nodes.calc_chart.output.planets }}'
 
 - id: ask_attach
   type: llm_worker
@@ -121,8 +132,8 @@ nodes:
     Сообщение пользователя: {{ nodes.user_message.output.text }}
   output_type: message
   ui_pos:
-    x: 853
-    y: 90
+    y: 77
+    x: 1705
 
 - id: interpret
   type: llm_worker
@@ -132,10 +143,13 @@ nodes:
 
     Вопрос пользователя: {{ nodes.user_message.output.text }}
     Вердикт анализатора (question_quality): {{ nodes.extract_facts.output.question_quality }}
-    Данные рождения и натальная карта (JSON: лагна, 9 грах с знаками/градусами/накшатрами/падами/домами D1 и навамшей D9, дома, махадаши, активная цепочка даш на сейчас):
+    Тема вопроса (question_topic): {{ nodes.extract_facts.output.question_topic }}
+    Данные рождения и натальная карта (JSON: лагна, 9 грах с знаками/градусами/накшатрами/падами/домами D1 и навамшей D9, предрасчёт: управители домов, аспекты-дришти, достоинства, сожжение, варготтама, чаракараки; дома, махадаши, активная цепочка даш на сейчас):
     {{ nodes.calc_chart.output }}
     Транзиты на момент запроса (положения грах и дома натальной карты, которые они проходят):
     {{ nodes.calc_chart.output.transits }}
+    База знаний под эту карту и вопрос (функциональная природа грах для лагны, все связки «управитель дома в доме» этой карты, правила темы вопроса):
+    {{ nodes.build_knowledge.output.text }}
 
     Правила разбора:
     1. Если question_quality равен "reformulatable" — сначала выпиши правильную
@@ -144,16 +158,20 @@ nodes:
     2. Читай карту по структурам: лагна и её управитель, положение грах в
        знаках и домах (D1), их накшатры, силы и слабости, навамша (D9) как
        тонкий слой.
-    3. Вопросы «когда?» — через активную цепочку даш (MD → AD → PD) и
+    3. Предрасчёт в JSON (управители домов, аспекты, достоинства, чаракараки)
+       авторитетен: НЕ пересчитывай его сам и не противоречь ему. Функциональную
+       роль планеты и смысл связок «управитель дома в доме» бери из базы знаний,
+       стиль изложения — свой, живой и человечный.
+    4. Вопросы «когда?» — через активную цепочку даш (MD → AD → PD) и
        транзиты: называй периоды и даты из JSON, не выдумывай сроки.
-    4. Все утверждения опирай только на данные из JSON — не придумывай
-       положения планет и периоды, которых там нет.
-    5. Дай ответ на вопрос пользователя с практическим итогом и, где уместно,
+    5. Все утверждения опирай только на данные из JSON и базы знаний — не
+       придумывай положения планет, периоды и связки, которых там нет.
+    6. Дай ответ на вопрос пользователя с практическим итогом и, где уместно,
        с упайями (привычки, образ жизни, работа с мышлением).
   output_type: message
   ui_pos:
-    x: 1096
-    y: -121
+    y: 158
+    x: 2349
 
 edges:
 
@@ -163,5 +181,11 @@ edges:
 - from: extract_facts
   to: check_greeting
 
+- from: find_jhd
+  to: check_jhd
+
 - from: calc_chart
+  to: build_knowledge
+
+- from: build_knowledge
   to: interpret
