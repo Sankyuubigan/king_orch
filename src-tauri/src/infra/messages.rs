@@ -13,7 +13,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use tauri_plugin_llama_engine::engine::{ChatAttachment, LlmMessage};
+use tauri_plugin_llama_engine::engine::LlmMessage;
+// Ре-экспорт: путь вложения — публичные данные графа и тулов (см. attachment_line).
+pub use tauri_plugin_llama_engine::engine::ChatAttachment;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallInfo {
@@ -51,8 +53,10 @@ pub struct ChatMessage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub time_sec: Option<f64>,
     /// Вложения пользовательского сообщения (картинки/файлы). Хранятся в JSON
-    /// сессии для отображения в чате; в промпт модели НЕ попадают (llm_history
-    /// берёт только content). Текущий ход передаёт их отдельным аргументом.
+    /// сессии для отображения в чате. Политика видимости (28.10.2026): путь
+    /// вложения — открытые данные для модели, поэтому во всех местах сборки
+    /// промпта контент дополняется строками `[Вложение: имя → путь]`
+    /// (`content_with_attachments`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub attachments: Option<Vec<ChatAttachment>>,
     /// Фаза двухфазного вызова агента: `1` — свободные размышления (think),
@@ -77,6 +81,38 @@ pub struct ChatMessage {
 pub fn message_phase(msg: &ChatMessage) -> Option<u8> {
     msg.phase
         .or_else(|| if msg.msg_type == "signal" { Some(2) } else { None })
+}
+
+/// Строка видимости одного вложения. Путь прикреплённого файла — открытые
+/// данные для модели (решение 28.10.2026: все LLM и агенты всегда видят пути
+/// вложений и пути, написанные юзером в чате вручную). Вложения без пути
+/// (legacy `<input type=file>`, base64-only) видны только именем — пути у них
+/// физически нет.
+pub fn attachment_line(attachment: &ChatAttachment) -> String {
+    match attachment.file_path.as_deref() {
+        Some(path) => format!("\n[Вложение: {} → {}]", attachment.file_name, path),
+        None => format!("\n[Вложение: {}]", attachment.file_name),
+    }
+}
+
+/// Блок строк вложений одним куском ("" если вложений нет).
+pub fn attachment_lines(attachments: &[ChatAttachment]) -> String {
+    let mut out = String::new();
+    for attachment in attachments {
+        out.push_str(&attachment_line(attachment));
+    }
+    out
+}
+
+/// Content сообщения + строки вложений. Единая точка видимости вложений в
+/// промпте: применяется во всех местах сборки llm_messages (legacy-история,
+/// `{{ messages }}`, freeform/direct).
+pub fn content_with_attachments(msg: &ChatMessage) -> String {
+    let mut content = msg.content.clone();
+    if let Some(attachments) = &msg.attachments {
+        content.push_str(&attachment_lines(attachments));
+    }
+    content
 }
 
 /// Добавляет отчёт агента в массив сообщений сессии.

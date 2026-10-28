@@ -1,0 +1,167 @@
+name: Астролог
+
+config:
+  facts_file: facts.yaml
+  default_llm_params: creative
+
+entry: user_message
+
+nodes:
+
+- id: user_message
+  type: user_message
+  ui_pos:
+    x: -376
+    y: 37
+
+- id: extract_facts
+  type: llm_fact_extractor
+  input: '{{ nodes.user_message.output.text }}'
+  ui_pos:
+    x: -119
+    y: 30
+  llm_params: strict
+
+- id: check_greeting
+  type: condition_check
+  input_object: '{{ nodes.extract_facts.output }}'
+  field: is_greeting
+  true_to: ask_helper
+  false_to: route
+  ui_pos:
+    x: 30
+    y: 36
+
+- id: route
+  type: switch
+  input_object: '{{ nodes.extract_facts.output }}'
+  switch_field: question_quality
+  cases_priority:
+  - key: proper
+    to: check_chart
+  - key: reformulatable
+    to: check_chart
+  - key: unsuitable
+    to: ask_helper
+  default: ask_helper
+  ui_pos:
+    x: 169
+    y: 44
+
+- id: check_chart
+  type: switch
+  input_object: '{{ nodes.extract_facts.output }}'
+  switch_field: chart_needed
+  cases_priority:
+  - key: "yes"
+    to: find_jhd
+  - key: "no"
+    to: interpret
+  default: find_jhd
+  ui_pos:
+    x: 334
+    y: 44
+
+- id: ask_helper
+  type: llm_worker
+  agent: astrologist_helper
+  task: |
+    Запрос пользователя не готов к астрологическому разбору: либо это
+    приветствие или вопрос о возможностях, либо формулировка вне языка
+    Джйотиш. Встреть человека: объясни, на какие вопросы ведическая
+    астрология отвечает глубоко, почему этот пока не возьмут, и предложи
+    переформулировку. НЕ вызывай инструменты — у тебя их нет.
+
+    Сообщение пользователя: {{ nodes.user_message.output.text }}
+  output_type: message
+  ui_pos:
+    x: 554
+    y: 262
+
+- id: find_jhd
+  type: custom_tool_call
+  ui_pos:
+    x: 517
+    y: -79
+  tool_file: ../tools/find_jhd_attachment.ts
+  args:
+    attachments: '{{ nodes.user_message.output.attachments }}'
+
+- id: check_jhd
+  type: condition_check
+  input_object: '{{ nodes.find_jhd.output }}'
+  field: found
+  true_to: calc_chart
+  false_to: ask_attach
+  ui_pos:
+    x: 689
+    y: -74
+
+- id: calc_chart
+  type: custom_tool_call
+  ui_pos:
+    x: 853
+    y: -121
+  tool_file: ../tools/calc_chart.ts
+  args:
+    jhd_path: '{{ nodes.find_jhd.output.path }}'
+
+- id: ask_attach
+  type: llm_worker
+  agent: astrologist_helper
+  task: |
+    Пользователь задал вопрос, для которого нужна его натальная карта, но
+    файла данных рождения (.jhd) среди вложений нет. Вежливо объясни, что
+    для глубокого ответа нужна карта: попроси выгрузить файл .jhd из
+    программы Jagannatha Hora (в ней: File → Save birth data, формат JHD)
+    или из любой программы, поддерживающей этот формат, и прикрепить его
+    к сообщению. Коротко скажи, что сможет разобрать по карте. НЕ вызывай
+    инструменты — у тебя их нет.
+
+    Сообщение пользователя: {{ nodes.user_message.output.text }}
+  output_type: message
+  ui_pos:
+    x: 853
+    y: 90
+
+- id: interpret
+  type: llm_worker
+  agent: astrologist_reader
+  task: |
+    Дай астрологический разбор и ответь пользователю.
+
+    Вопрос пользователя: {{ nodes.user_message.output.text }}
+    Вердикт анализатора (question_quality): {{ nodes.extract_facts.output.question_quality }}
+    Данные рождения и натальная карта (JSON: лагна, 9 грах с знаками/градусами/накшатрами/падами/домами D1 и навамшей D9, дома, махадаши, активная цепочка даш на сейчас):
+    {{ nodes.calc_chart.output }}
+    Транзиты на момент запроса (положения грах и дома натальной карты, которые они проходят):
+    {{ nodes.calc_chart.output.transits }}
+
+    Правила разбора:
+    1. Если question_quality равен "reformulatable" — сначала выпиши правильную
+       формулировку вопроса и объясни, почему Джйотиш глубоко отвечает только
+       на такие вопросы.
+    2. Читай карту по структурам: лагна и её управитель, положение грах в
+       знаках и домах (D1), их накшатры, силы и слабости, навамша (D9) как
+       тонкий слой.
+    3. Вопросы «когда?» — через активную цепочку даш (MD → AD → PD) и
+       транзиты: называй периоды и даты из JSON, не выдумывай сроки.
+    4. Все утверждения опирай только на данные из JSON — не придумывай
+       положения планет и периоды, которых там нет.
+    5. Дай ответ на вопрос пользователя с практическим итогом и, где уместно,
+       с упайями (привычки, образ жизни, работа с мышлением).
+  output_type: message
+  ui_pos:
+    x: 1096
+    y: -121
+
+edges:
+
+- from: user_message
+  to: extract_facts
+
+- from: extract_facts
+  to: check_greeting
+
+- from: calc_chart
+  to: interpret

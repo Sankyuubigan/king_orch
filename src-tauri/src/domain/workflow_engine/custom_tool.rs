@@ -70,8 +70,17 @@ where
 
     let deno_path = resolve_deno(runner.bins_dir, &runner.log_cb)?;
     let started = Instant::now();
-    let (stdout, stderr, exit_code) =
-        run_deno(&deno_path, &script_dir, workflow_dir, &script_path, &args_json)?;
+    // Юзер явно отдал эти файлы в чат — тулы графа могут их читать (та же
+    // доверенность, что у Rust-медиа-тулов, читающих attachment.file_path).
+    let attachment_paths = runner.request_media.current_attachment_paths();
+    let (stdout, stderr, exit_code) = run_deno(
+        &deno_path,
+        &script_dir,
+        workflow_dir,
+        &script_path,
+        &args_json,
+        &attachment_paths,
+    )?;
 
     for line in String::from_utf8_lossy(&stderr).lines() {
         if !line.trim().is_empty() {
@@ -224,13 +233,14 @@ where
 /// stdout/stderr читаются фоновыми потоками (зависший тул с переполненным
 /// пайпом не должен упереться в deadlock), главный поток ждёт завершения
 /// до дедлайна и убивает процесс при таймауте.
-fn run_deno(
-    deno_path: &Path,
+/// Список allow-read: папки тула/графа/команды + файлы, прикреплённые юзером
+/// к текущему запросу (политика видимости 28.10.2026: вложение — открытые
+/// данные; читать можно ТОЛЬКО явно прикреплённые файлы, не произвольные пути).
+fn build_allow_read_paths(
     script_dir: &Path,
     workflow_dir: &Path,
-    script_path: &Path,
-    args_json: &str,
-) -> Result<(Vec<u8>, Vec<u8>, std::process::ExitStatus), String> {
+    attachment_paths: &[String],
+) -> Vec<String> {
     let mut allow_read: Vec<String> = Vec::new();
     for dir in [script_dir, workflow_dir, workflow_dir.parent().unwrap_or(workflow_dir)] {
         let s = dir.to_string_lossy().to_string();
@@ -238,6 +248,23 @@ fn run_deno(
             allow_read.push(s);
         }
     }
+    for path in attachment_paths {
+        if !path.trim().is_empty() && !allow_read.contains(path) {
+            allow_read.push(path.clone());
+        }
+    }
+    allow_read
+}
+
+fn run_deno(
+    deno_path: &Path,
+    script_dir: &Path,
+    workflow_dir: &Path,
+    script_path: &Path,
+    args_json: &str,
+    attachment_paths: &[String],
+) -> Result<(Vec<u8>, Vec<u8>, std::process::ExitStatus), String> {
+    let allow_read = build_allow_read_paths(script_dir, workflow_dir, attachment_paths);
 
     let mut cmd = Command::new(deno_path);
     cmd.arg("run")
@@ -599,7 +626,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         .expect("скрипт записан");
 
         let (stdout, stderr, status) =
-            run_deno(&deno, &root, &root, &root.join("fixture_tool.ts"), r#"{"n":"2"}"#)
+            run_deno(&deno, &root, &root, &root.join("fixture_tool.ts"), r#"{"n":"2"}"#, &[])
                 .expect("тул выполнен");
         assert!(stderr.is_empty(), "stderr: {}", String::from_utf8_lossy(&stderr));
         assert!(status.success(), "exit: {}", status);
@@ -629,7 +656,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         .expect("скрипт записан");
 
         let (stdout, stderr, status) =
-            run_deno(&deno, &root, &root, &root.join("failing_tool.ts"), "{}")
+            run_deno(&deno, &root, &root, &root.join("failing_tool.ts"), "{}", &[])
                 .expect("процесс запущен");
         assert!(!status.success());
         assert!(stdout.is_empty());
@@ -752,6 +779,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             &transitions,
             &tools.join("draw_card_numbers.ts"),
             r#"{"count":"3"}"#,
+            &[],
         )
         .expect("тул выполнен");
         assert!(status.success(), "exit: {}, stderr: {}", status, String::from_utf8_lossy(&stderr));
@@ -795,6 +823,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             &transitions,
             &tools.join("lookup_tarot_cards.ts"),
             r#"{"numbers":"[3,21,57]","orientations":"[\"upright\",\"reversed\",\"upright\"]"}"#,
+            &[],
         )
         .expect("тул выполнен");
         assert!(status.success(), "exit: {}, stderr: {}", status, String::from_utf8_lossy(&stderr));
@@ -837,6 +866,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             &transitions,
             &tools.join("lookup_tarot_cards.ts"),
             r#"{"numbers":"[999]","orientations":"[\"upright\"]"}"#,
+            &[],
         )
         .expect("процесс запущен");
         assert!(!status.success(), "несуществующий номер обязан дать exit≠0");
@@ -902,6 +932,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             &transitions,
             &tools.join("read_md_section.ts"),
             r###"{"file":"psychotherapist/database/inner_contour_9_patterns.md","heading":"## 2"}"###,
+            &[],
         )
         .expect("тул выполнен");
         assert!(status.success(), "exit: {}, stderr: {}", status, String::from_utf8_lossy(&stderr));
@@ -934,6 +965,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             &transitions,
             &tools.join("read_md_section.ts"),
             r###"{"file":"psychotherapist/database/inner_contour_9_patterns.md","heading":"## 99"}"###,
+            &[],
         )
         .expect("процесс запущен");
         assert!(!status.success(), "несуществующая секция обязана дать exit≠0");
@@ -962,6 +994,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             &transitions,
             &tools.join("read_md_section.ts"),
             r###"{"file":"../outside/db.md","heading":"## 1"}"###,
+            &[],
         )
         .expect("процесс запущен");
         assert!(!status.success(), "путь вне agents/ обязан дать exit≠0");
@@ -972,5 +1005,84 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             "stderr объясняет отказ: {}",
             stderr_text
         );
+    }
+
+    /// allow-read: папки тула/графа/команды + прикреплённые файлы юзера
+    /// (без дублей и пустышек). Политика видимости 28.10.2026.
+    #[test]
+    fn allow_read_paths_include_attachments() {
+        let script_dir = Path::new("D:\\proj\\agents\\astrologist\\tools");
+        let workflow_dir = Path::new("D:\\proj\\agents\\astrologist\\transitions");
+        let paths = build_allow_read_paths(
+            script_dir,
+            workflow_dir,
+            &[
+                "C:\\Users\\user\\Desktop\\карта.jhd".to_string(),
+                "C:\\Users\\user\\Desktop\\карта.jhd".to_string(), // дубль
+                "   ".to_string(), // пустышка
+            ],
+        );
+        assert_eq!(
+            paths,
+            vec![
+                "D:\\proj\\agents\\astrologist\\tools".to_string(),
+                "D:\\proj\\agents\\astrologist\\transitions".to_string(),
+                "D:\\proj\\agents\\astrologist".to_string(),
+                "C:\\Users\\user\\Desktop\\карта.jhd".to_string(),
+            ],
+            "папки команды + файл вложения, без дублей: {:?}",
+            paths
+        );
+    }
+
+    /// gate_tool_contract (реальный Deno): тул МОЖЕТ прочитать файл, явно
+    /// прикреплённый юзером, даже если тот лежит вне папки агентов.
+    #[test]
+    #[ignore]
+    fn real_deno_tool_reads_user_attachment() {
+        let log = |msg: String| println!("[log] {}", msg);
+        let bins_dir = std::env::temp_dir().join("king_orch_bins");
+        std::fs::create_dir_all(&bins_dir).expect("создано");
+        let deno = resolve_deno(&bins_dir, &log).expect("deno доступен");
+        let (tools, transitions, _) = tarot_team_dirs();
+
+        // Временный файл-вложение ВНЕ agents/.
+        let outside = std::env::temp_dir().join("king_orch_attachment_probe.txt");
+        std::fs::write(&outside, "jhd-probe-ok").expect("вложение записано");
+
+        let tool = tools.join("attachment_read_probe.ts");
+        std::fs::write(
+            &tool,
+            "const args = JSON.parse(Deno.args[0]);\n\
+             const text = await Deno.readTextFile(args.path);\n\
+             console.log(JSON.stringify({ read: text }));\n",
+        )
+        .expect("тул-проба записан");
+
+        let result = run_deno(
+            &deno,
+            &tools,
+            &transitions,
+            &tool,
+            &format!(r#"{{"path":"{}"}}"#, outside.display()),
+            &[outside.to_string_lossy().to_string()],
+        )
+        .expect("тул выполнен");
+        assert!(result.2.success(), "exit: {}, stderr: {}", result.2, String::from_utf8_lossy(&result.1));
+        let output: serde_json::Value =
+            serde_json::from_str(String::from_utf8_lossy(&result.0).trim()).expect("stdout — JSON");
+        assert_eq!(output["read"], "jhd-probe-ok");
+
+        // Контроль честности: БЕЗ allow-read на вложение тот же тул обязан упасть.
+        let denied = run_deno(
+            &deno,
+            &tools,
+            &transitions,
+            &tool,
+            &format!(r#"{{"path":"{}"}}"#, outside.display()),
+            &[],
+        )
+        .expect("процесс запущен");
+        assert!(!denied.2.success(), "без allow-read чтение вложения обязано упасть");
     }
 }

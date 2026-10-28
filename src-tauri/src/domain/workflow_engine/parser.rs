@@ -836,6 +836,7 @@ mod tests {
         "agents/research/transitions/search-specialist.yaml",
         "agents/image-gen/transitions/image-gen-flow.yaml",
         "agents/tarot-master/transitions/tarot_master.yaml",
+        "agents/astrologist/transitions/astrologist.yaml",
     ];
 
     #[test]
@@ -1544,6 +1545,7 @@ edges: []
             stems,
             [
                 "analyst-team",
+                "astrologist",
                 "coding-team",
                 "image-gen-flow",
                 "main_conversation_flow",

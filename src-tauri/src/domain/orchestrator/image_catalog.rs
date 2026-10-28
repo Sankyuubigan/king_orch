@@ -46,6 +46,12 @@ struct ImageCandidate {
 pub struct RequestMedia {
     request_attachments: Vec<ChatAttachment>,
     candidates: Vec<ImageCandidate>,
+    /// Все вложения (любого формата) текущего запроса + истории — структурные
+    /// ссылки `{file_name, mime_type, file_path, is_dir, origin}` для графа
+    /// (`user_message.output.attachments`) и allow-read тулов. Политика
+    /// видимости 28.10.2026: не-image вложения — не «мусор», а полноправные
+    /// данные с путями.
+    attachment_refs: Vec<serde_json::Value>,
 }
 
 impl RequestMedia {
@@ -70,8 +76,16 @@ impl RequestMedia {
             .any(|attachment| attachment.mime_type.starts_with("image/"));
         let mut candidates = Vec::new();
         let mut stored_request_attachments = Vec::new();
+        let mut attachment_refs = Vec::new();
 
         for (index, attachment) in request_attachments.iter().enumerate() {
+            attachment_refs.push(serde_json::json!({
+                "file_name": attachment.file_name,
+                "mime_type": attachment.mime_type,
+                "file_path": attachment.file_path,
+                "is_dir": attachment.is_dir.unwrap_or(false),
+                "origin": "current",
+            }));
             if !attachment.mime_type.starts_with("image/") {
                 continue;
             }
@@ -93,7 +107,9 @@ impl RequestMedia {
             if message.msg_type == "thought" || message.msg_type == "signal" {
                 continue;
             }
-            if has_current_images && message.id.as_deref() == Some(current_user_id.as_str()) {
+            let is_current_user_message =
+                message.id.as_deref() == Some(current_user_id.as_str());
+            if has_current_images && is_current_user_message {
                 continue;
             }
             let Some(attachments) = message.attachments.as_ref() else {
@@ -104,6 +120,17 @@ impl RequestMedia {
                 .clone()
                 .unwrap_or_else(|| format!("message_{message_index}"));
             for (attachment_index, attachment) in attachments.iter().enumerate() {
+                // Ссылки на вложения истории — любого формата (текущий ход уже
+                // учтён в request_attachments с origin "current").
+                if !is_current_user_message {
+                    attachment_refs.push(serde_json::json!({
+                        "file_name": attachment.file_name,
+                        "mime_type": attachment.mime_type,
+                        "file_path": attachment.file_path,
+                        "is_dir": attachment.is_dir.unwrap_or(false),
+                        "origin": "history",
+                    }));
+                }
                 if !attachment.mime_type.starts_with("image/") {
                     continue;
                 }
@@ -127,11 +154,50 @@ impl RequestMedia {
         Self {
             request_attachments: stored_request_attachments,
             candidates,
+            attachment_refs,
         }
     }
 
     pub fn current_attachments(&self) -> &[ChatAttachment] {
         &self.request_attachments
+    }
+
+    /// Все вложения (любого формата) текущего запроса и истории — структурные
+    /// ссылки для графа и allow-read тулов.
+    pub fn attachment_refs(&self) -> &[serde_json::Value] {
+        &self.attachment_refs
+    }
+
+    /// Пути прикреплённых файлов (текущий запрос + история сессии) — список
+    /// allow-read для Deno-тулов графа: юзер явно отдал эти файлы в чат
+    /// (повторный вопрос без повторного прикрепления берёт .jhd из истории —
+    /// он должен так же читаться тулом).
+    pub fn current_attachment_paths(&self) -> Vec<String> {
+        self.attachment_refs
+            .iter()
+            .filter_map(|r| {
+                r.get("file_path")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .collect()
+    }
+
+    /// Строки `[Вложение: имя → путь]` текущего запроса — добавляются к тексту
+    /// текущего хода ({{ user_message }} и user_message.output.text).
+    pub fn current_attachment_lines(&self) -> String {
+        let mut out = String::new();
+        for r in &self.attachment_refs {
+            if r.get("origin").and_then(|v| v.as_str()) != Some("current") {
+                continue;
+            }
+            let name = r.get("file_name").and_then(|v| v.as_str()).unwrap_or("");
+            match r.get("file_path").and_then(|v| v.as_str()) {
+                Some(path) => out.push_str(&format!("\n[Вложение: {} → {}]", name, path)),
+                None => out.push_str(&format!("\n[Вложение: {}]", name)),
+            }
+        }
+        out
     }
 
     pub fn candidate_ids(&self) -> Vec<&str> {
@@ -163,10 +229,10 @@ impl RequestMedia {
             ));
         }
         out.push_str(
-            "Выбирай только существующие id. Файловые пути не используй.\n\
-             Порядок source_image_ids = роли картинок: первый id — холст (<image1>, \
-             его композиция/поза/фон сохраняются), дальше — источники материала \
-             (<image2>, ...). В промпте адресуй картинки тегами <image1>, <image2>.",
+            "Выбирай только существующие id. Порядок source_image_ids = роли картинок: \
+             первый id — холст (<image1>, его композиция/поза/фон сохраняются), дальше — \
+             источники материала (<image2>, ...). В промпте адресуй картинки тегами \
+             <image1>, <image2>.",
         );
         out
     }
@@ -340,10 +406,8 @@ fn history_image_id(
 }
 
 fn compact_context(content: &str) -> String {
-    super::prompt::sanitize_model_visible_text(content)
-        .chars()
-        .take(240)
-        .collect()
+    // Пути в контексте видимы (политика 28.10.2026) — только усечение длины.
+    content.chars().take(240).collect()
 }
 
 #[cfg(test)]
@@ -421,8 +485,9 @@ mod tests {
         assert!(media.current_attachments().is_empty());
     }
 
+    /// Политика видимости (28.10.2026): пути в контексте каталога ВИДНЫ.
     #[test]
-    fn candidate_prompt_hides_filesystem_paths() {
+    fn candidate_prompt_shows_filesystem_paths() {
         let messages = vec![message(
             "msg_1",
             "image_generator",
@@ -430,11 +495,65 @@ mod tests {
             vec![attachment("image.png", "data")],
         )];
         let prompt = RequestMedia::build(&[], &messages).candidate_prompt();
-        assert!(!prompt.contains("D:\\private"));
-        assert!(!prompt.contains("/home/user"));
-        assert!(!prompt.contains("output/image.png"));
-        assert!(!prompt.contains("\\\\server\\share"));
-        assert_eq!(prompt.matches("[filesystem path omitted]").count(), 4);
+        assert!(prompt.contains("D:\\private\\output\\image.png"), "{}", prompt);
+        assert!(prompt.contains("/home/user/image.png"), "{}", prompt);
+        assert!(
+            !prompt.contains("Файловые пути не используй"),
+            "запрет путей удалён из каталога"
+        );
+    }
+
+    /// Не-image вложения попадают в attachment_refs (баг «видны только картинки»).
+    #[test]
+    fn attachment_refs_include_non_images_and_history() {
+        let jhd = ChatAttachment {
+            file_name: "карта.jhd".to_string(),
+            mime_type: "application/octet-stream".to_string(),
+            data_base64: String::new(),
+            file_path: Some("C:\\Users\\user\\Desktop\\карта.jhd".to_string()),
+            is_dir: Some(false),
+        };
+        let current = message("msg_1", "user", "текущий ход", vec![jhd.clone()]);
+        let old_jhd = ChatAttachment {
+            file_name: "старая.jhd".to_string(),
+            mime_type: "application/octet-stream".to_string(),
+            data_base64: String::new(),
+            file_path: Some("C:\\Downloads\\старая.jhd".to_string()),
+            is_dir: Some(false),
+        };
+        let old = message("msg_0", "user", "прошлый ход", vec![old_jhd.clone()]);
+
+        let media = RequestMedia::build(std::slice::from_ref(&jhd), &[old, current]);
+
+        let refs = media.attachment_refs().to_vec();
+        assert_eq!(refs.len(), 2, "current + history: {:?}", refs);
+        assert_eq!(refs[0].get("origin").and_then(|v| v.as_str()), Some("current"));
+        assert_eq!(
+            refs[0].get("file_path").and_then(|v| v.as_str()),
+            Some("C:\\Users\\user\\Desktop\\карта.jhd")
+        );
+        assert_eq!(refs[1].get("origin").and_then(|v| v.as_str()), Some("history"));
+
+        // allow-read: пути ОБЕИХ вложений (текущее + история) — юзер явно отдал
+        // оба файла в чат; повторный вопрос без прикрепления берёт из истории.
+        let paths = media.current_attachment_paths();
+        assert_eq!(
+            paths,
+            vec![
+                "C:\\Users\\user\\Desktop\\карта.jhd".to_string(),
+                "C:\\Downloads\\старая.jhd".to_string(),
+            ]
+        );
+
+        // Строки видимости — только текущего запроса (история уже видна
+        // в `{{ messages }}` через content_with_attachments).
+        let lines = media.current_attachment_lines();
+        assert!(
+            lines.contains("[Вложение: карта.jhd → C:\\Users\\user\\Desktop\\карта.jhd]"),
+            "{}",
+            lines
+        );
+        assert!(!lines.contains("старая.jhd"), "строки видимости — только current");
     }
 
     #[test]

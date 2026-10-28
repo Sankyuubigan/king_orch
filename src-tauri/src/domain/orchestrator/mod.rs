@@ -1203,7 +1203,9 @@ where
     for msg in llm_history(messages) {
         let actual_author = msg.author.as_deref().unwrap_or("user");
         let role;
-        let mut content = prompt::sanitize_model_visible_text(&msg.content);
+        // Пути вложений видимы (политика 28.10.2026): content дополняется
+        // строками `[Вложение: имя → путь]`.
+        let mut content = crate::infra::messages::content_with_attachments(msg);
         if agent_consumes_image_catalog(agent) {
             content.push_str(&request_media.message_suffix(msg.id.as_deref()));
         }
@@ -1232,10 +1234,16 @@ where
         });
     }
 
-    let model_user_text = prompt::sanitize_model_visible_text(&user_text);
+    // Текущий ход: строки вложений уже видны модели через историю (текущее
+    // сообщение юзера лежит в messages и проходит цикл выше с
+    // content_with_attachments), поэтому task/raw-текст дублировать не должен.
+    // Дедуп: если последний user-message истории УЖЕ содержит этот текст
+    // (текущий ход юзера + строки вложений), второй раз не пушим. Префиксное
+    // сравнение — потому что content истории дополнен строками вложений.
+    let model_user_text = user_text.clone();
     let user_text_dup = llm_messages
         .last()
-        .map(|m| m.role == "user" && m.content == model_user_text)
+        .map(|m| m.role == "user" && m.content.starts_with(model_user_text.as_str()))
         .unwrap_or(false);
     if !user_text_dup && !model_user_text.is_empty() {
         llm_messages.push(LlmMessage {

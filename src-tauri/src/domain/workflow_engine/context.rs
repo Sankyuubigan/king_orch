@@ -1,4 +1,3 @@
-use crate::domain::orchestrator::prompt::sanitize_model_visible_text;
 use crate::domain::orchestrator::RequestMedia;
 use crate::infra::{llm_history, ChatMessage};
 use std::collections::HashMap;
@@ -88,7 +87,7 @@ impl WorkflowContext {
         // {{ user_message }}
         result = result.replace(
             "{{ user_message }}",
-            &sanitize_model_visible_text(&self.user_message),
+            &super::nodes::user_message_text(self),
         );
         result = result.replace("{{ image_candidates }}", &self.image_candidates);
 
@@ -122,7 +121,7 @@ impl WorkflowContext {
                     serde_json::json!({
                         "type": m.msg_type,
                         "author": m.author,
-                        "content": sanitize_model_visible_text(&m.content)
+                        "content": crate::infra::messages::content_with_attachments(m)
                     })
                 })
                 .collect();
@@ -171,17 +170,19 @@ mod tests {
         }
     }
 
+    /// Политика видимости (28.10.2026): пути в тексте ВИДНЫ модели — и в
+    /// `{{ user_message }}`, и в `{{ messages }}`. Проверяет обратное старой
+    /// санитизации поведение: ничего не вырезается.
     #[test]
-    fn templates_hide_filesystem_paths() {
+    fn templates_show_filesystem_paths() {
         let context = WorkflowContext::new(
             "open D:\\private\\image.png".to_string(),
             vec![message("saved /home/user/image.png")],
             Vec::new(),
         );
         let resolved = context.resolve_template("{{ user_message }} {{ messages }}");
-        assert!(!resolved.contains("D:\\private"));
-        assert!(!resolved.contains("/home/user"));
-        assert_eq!(resolved.matches("[filesystem path omitted]").count(), 2);
+        assert!(resolved.contains("D:\\private\\image.png"), "{}", resolved);
+        assert!(resolved.contains("/home/user/image.png"), "{}", resolved);
     }
 
     /// `{{ signals.<key> }}` — значение одного сигнала: строка как есть,

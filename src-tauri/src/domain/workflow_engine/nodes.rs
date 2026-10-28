@@ -1,4 +1,3 @@
-use crate::domain::orchestrator::prompt::sanitize_model_visible_text;
 use crate::domain::workflow_engine::context::WorkflowContext;
 use crate::domain::workflow_engine::parser::{
     ConditionNode, EdgeDef, NodeDef, NodeType, WorkflowConfig, WorkflowDef,
@@ -201,14 +200,23 @@ pub fn resolve_signal_route(
     (matched, target)
 }
 
-/// Выход узла `user_message` — текст текущего хода пользователя.
-///
-/// Единственное место, где этот текст материализуется как данные графа.
-/// Санитизация происходит здесь и больше нигде: шаблон
-/// `{{ nodes.X.output.text }}` подставляет готовую строку (см.
-/// `WorkflowContext::resolve_template`).
+/// Текст текущего хода пользователя: сырой текст + строки вложений текущего
+/// запроса. Пути видимы модели (политика 28.10.2026) — санитизации нет.
+/// Инвариант: `{{ user_message }}` (context.rs) ≡ `{{ nodes.<entry>.output.text }}`
+/// — обе точки идут через эту функцию.
+pub fn user_message_text(context: &WorkflowContext) -> String {
+    let mut text = context.user_message.clone();
+    text.push_str(&context.request_media.current_attachment_lines());
+    text
+}
+
+/// Выход узла `user_message`: текст текущего хода + структурные ссылки на
+/// вложения текущего запроса и истории (для аргументов тулов графа).
 pub fn user_message_output(context: &WorkflowContext) -> serde_json::Value {
-    serde_json::json!({ "text": sanitize_model_visible_text(&context.user_message) })
+    serde_json::json!({
+        "text": user_message_text(context),
+        "attachments": context.request_media.attachment_refs(),
+    })
 }
 
 /// Текст текущего хода для LLM-узла: берётся из `input` узла, то есть ИЗ ГРАФА.
@@ -1528,15 +1536,70 @@ mod tests {
         let out = user_message_output(&ctx);
 
         assert_eq!(out.get("text").and_then(|v| v.as_str()), Some("болит спина"));
+        assert!(
+            out.get("attachments").and_then(|v| v.as_array()).unwrap().is_empty(),
+            "без request_media поле attachments — пустой массив, а не null"
+        );
     }
 
+    /// Политика видимости (28.10.2026): пути ВИДНЫ в тексте ноды входа.
     #[test]
-    fn user_message_node_sanitizes_paths() {
+    fn user_message_node_shows_paths() {
         let ctx = ctx_with_user_message("файл тут: C:\\Users\\user\\secret.txt");
         let out = user_message_output(&ctx);
         let text = out.get("text").and_then(|v| v.as_str()).unwrap_or_default();
 
-        assert!(!text.contains("secret.txt"), "путь не должен утекать в граф: {}", text);
+        assert!(text.contains("C:\\Users\\user\\secret.txt"), "путь виден модели: {}", text);
+    }
+
+    /// Вложения текущего запроса: строки в тексте + структурные ссылки.
+    #[test]
+    fn user_message_node_exposes_attachments() {
+        let mut ctx = ctx_with_user_message("расчитай карту по файлу");
+        let attachments = vec![crate::infra::ChatAttachment {
+            file_name: "карта.jhd".to_string(),
+            mime_type: "application/octet-stream".to_string(),
+            data_base64: String::new(),
+            file_path: Some("C:\\Users\\user\\Desktop\\карта.jhd".to_string()),
+            is_dir: Some(false),
+        }];
+        let msg = crate::infra::ChatMessage {
+            id: Some("msg_9".to_string()),
+            msg_type: "message".to_string(),
+            content: "расчитай карту по файлу".to_string(),
+            sub_calls: None,
+            author: Some("user".to_string()),
+            model: None,
+            time_sec: None,
+            attachments: Some(attachments.clone()),
+            phase: None,
+            author_name: None,
+        };
+        ctx.request_media = std::sync::Arc::new(crate::domain::orchestrator::RequestMedia::build(
+            &attachments,
+            &[msg],
+        ));
+
+        let out = user_message_output(&ctx);
+        let text = out.get("text").and_then(|v| v.as_str()).unwrap_or_default();
+        assert!(
+            text.contains("[Вложение: карта.jhd → C:\\Users\\user\\Desktop\\карта.jhd]"),
+            "строка вложения в тексте: {}",
+            text
+        );
+
+        let refs = out
+            .get("attachments")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+        assert_eq!(refs.len(), 1, "одно вложение текущего запроса: {:?}", refs);
+        let first = refs.first().cloned().unwrap_or_default();
+        assert_eq!(
+            first.get("file_path").and_then(|v| v.as_str()),
+            Some("C:\\Users\\user\\Desktop\\карта.jhd")
+        );
+        assert_eq!(first.get("origin").and_then(|v| v.as_str()), Some("current"));
     }
 
     #[test]

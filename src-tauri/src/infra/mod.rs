@@ -36,7 +36,10 @@ pub use llm_backend::{
     CloudEndpoint, LlmEngine, is_cloud_cancelled_error, is_cloud_empty_stream_error,
     is_cloud_retryable_transport_error, is_cloud_timeout_error, is_cloud_truncated_error,
 };
-pub use messages::{llm_history, message_phase, push_report, ChatMessage, SubCall, ToolCallInfo};
+pub use messages::{
+    attachment_line, attachment_lines, content_with_attachments, llm_history, message_phase,
+    push_report, ChatAttachment, ChatMessage, SubCall, ToolCallInfo,
+};
 pub use session_manager::{ChatSession, SessionMeta};
 pub use mcp_client::{McpClient, McpPool, SharedMcpClient};
 

@@ -129,7 +129,9 @@ pub struct WorkflowRunner<'a, L, S, C> {
 
 fn sanitized_llm_message(message: &ChatMessage) -> LlmMessage {
     let mut llm_message = message.to_llm_message();
-    llm_message.content = orchestrator::prompt::sanitize_model_visible_text(&message.content);
+    // Пути вложений видимы (политика 28.10.2026): контент дополняется
+    // строками `[Вложение: имя → путь]`.
+    llm_message.content = crate::infra::messages::content_with_attachments(message);
     llm_message
 }
 
@@ -294,7 +296,7 @@ where
         msgs.extend(history.iter().map(sanitized_llm_message));
         msgs.push(LlmMessage {
             role: "user".to_string(),
-            content: orchestrator::prompt::sanitize_model_visible_text(user_text),
+            content: user_text.to_string(),
             ..Default::default()
         });
         let gen = self
@@ -344,7 +346,7 @@ where
             },
             LlmMessage {
                 role: "user".to_string(),
-                content: orchestrator::prompt::sanitize_model_visible_text(user_text),
+                content: user_text.to_string(),
                 ..Default::default()
             },
         ];
@@ -1068,8 +1070,17 @@ mod tests {
         }
     }
 
+    /// Политика видимости (28.10.2026): пути ВИДНЫ; вложения сообщения
+    /// дополняют контент строками `[Вложение: имя → путь]`.
     #[test]
-    fn freeform_history_message_hides_filesystem_paths() {
+    fn freeform_history_message_shows_filesystem_paths_and_attachments() {
+        let with_path = crate::infra::ChatAttachment {
+            file_name: "карта.jhd".to_string(),
+            mime_type: "application/octet-stream".to_string(),
+            data_base64: String::new(),
+            file_path: Some("C:\\Users\\user\\Desktop\\карта.jhd".to_string()),
+            is_dir: Some(false),
+        };
         let message = ChatMessage {
             id: Some("msg_1".to_string()),
             msg_type: "message".to_string(),
@@ -1078,16 +1089,20 @@ mod tests {
             author: Some("user".to_string()),
             model: None,
             time_sec: None,
-            attachments: None,
+            attachments: Some(vec![with_path]),
             phase: None,
             author_name: None,
         };
-        let sanitized = sanitized_llm_message(&message);
-        assert!(!sanitized.content.contains("D:\\private"));
-        assert!(!sanitized.content.contains("/home/user"));
-        assert!(!sanitized.content.contains("output/image.png"));
-        assert!(!sanitized.content.contains("\\\\server\\share"));
-        assert_eq!(sanitized.content.matches("[filesystem path omitted]").count(), 4);
+        let visible = sanitized_llm_message(&message);
+        assert!(visible.content.contains("D:\\private\\image.png"), "{}", visible.content);
+        assert!(visible.content.contains("/home/user/image.png"), "{}", visible.content);
+        assert!(
+            visible
+                .content
+                .contains("[Вложение: карта.jhd → C:\\Users\\user\\Desktop\\карта.jhd]"),
+            "{}",
+            visible.content
+        );
     }
 
     // ─── SMOKE: авто-склейка системного промпта макро-ноды ────────────────
