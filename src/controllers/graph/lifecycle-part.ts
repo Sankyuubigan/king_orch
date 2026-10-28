@@ -92,6 +92,7 @@ export function ensureEditor(this: GraphController): void {
   }, true);
 
   this.setupCanvasInteraction();
+  this.setupCanvasZoom();
   this.setupContextMenu();
   this.setupEdgeDrag();
 }

@@ -17,6 +17,7 @@ export interface GraphApi {
   findNodeEl(nodeId: string): HTMLElement | null;
 
   setupCanvasInteraction(): void;
+  setupCanvasZoom(): void;
   selectNode(id: string): void;
   deselectAllNodes(): void;
   startBoxSelection(e: MouseEvent): void;

@@ -3,8 +3,6 @@ name: Психотерапевт
 config:
   facts_file: facts.yaml
   default_llm_params: creative
-  # SSOT фрейма: объявлен ОДИН раз — все ноды llm_worker наследуют его
-  # без явного указания (agent_frame::resolve_node_frame, merge по полю).
   default_system_prompt_file: ../system_frame.md
   default_system_prompt_delivery: user_prefix
 
@@ -15,23 +13,23 @@ groups:
 - id: group_1
   title: Новая группа
   ui_pos:
-    y: 719
     x: -105
+    y: 719
 
 nodes:
 
 - id: user_message
   type: user_message
   ui_pos:
-    y: 493
     x: -2274
+    y: 493
 
 - id: extract_facts
   type: llm_fact_extractor
   input: '{{ nodes.user_message.output.text }}'
   ui_pos:
-    x: -1990
     y: 493
+    x: -1990
   llm_params: strict
 
 - id: check_has_problem
@@ -60,8 +58,8 @@ nodes:
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    y: 210
     x: -561
+    y: 210
   llm_params: strict
 
 - id: call_decomposer
@@ -71,8 +69,8 @@ nodes:
   inject_response:
   - soma_translator
   ui_pos:
-    x: 240
     y: 486
+    x: 240
 
 - id: call_validator
   type: llm_worker
@@ -98,8 +96,8 @@ nodes:
   - data_collector
   - soma_translator
   ui_pos:
-    x: 2841
     y: -451
+    x: 2841
 
 - id: check_triage_complexity
   type: condition_router
@@ -123,18 +121,18 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 2834
     y: 44
+    x: 2834
 
 - id: read_pattern_section
   type: custom_tool_call
+  ui_pos:
+    x: 3145
+    y: 38
   tool_file: ../../_shared/tools/read_md_section.ts
   args:
     file: psychotherapist/database/inner_contour_9_patterns.md
     heading: '## {{ signals.pattern_type }}'
-  ui_pos:
-    x: 3018
-    y: 44
 
 - id: call_healer
   type: llm_worker
@@ -158,8 +156,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    y: 26
-    x: 3202
+    x: 3429
+    y: 38
 
 - id: call_shadow_worker
   type: llm_worker
@@ -186,8 +184,8 @@ nodes:
   type: note
   input: проверка данных. развилка на доработку данных или отправку на лечение
   ui_pos:
-    x: 916
     y: 492
+    x: 916
 
 - id: note_1784427848563
   type: note
@@ -239,16 +237,16 @@ nodes:
   - key: НУЖНА РУКОСТЬ
     to: note_1785123862689
   ui_pos:
-    x: -332
     y: 117
+    x: -332
 
 - id: note_1785123862689
   type: note
   input: уточнение рукости у юзера
   system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
   ui_pos:
-    y: 10
     x: -57
+    y: 10
 
 - id: note_1785141025138
   type: note
@@ -274,8 +272,8 @@ nodes:
   agent: request_helper
   output_type: message
   ui_pos:
-    y: 864
     x: -808
+    y: 864
 
 - id: check_elements1
   type: condition_router
@@ -306,8 +304,8 @@ nodes:
     equals: false
   logic: all
   ui_pos:
-    x: 2517
     y: -302
+    x: 2517
 
 - id: call_synthesizer
   type: llm_worker

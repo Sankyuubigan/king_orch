@@ -59,6 +59,11 @@ declare module "drawflow" {
       };
     };
     start(): void;
+    /** Публичные поля инстанса drawflow 0.0.60 (см. конструктор в min.js). */
+    zoom_max: number;
+    zoom_min: number;
+    zoom_value: number;
+    zoom_last_value: number;
     addNode(name: string, inputs: number, outputs: number, posX: number, posY: number, id?: string, data?: any, className?: string): string;
     addNodeImport(data: DrawflowNode, precanvas: HTMLElement): void;
     addNodeOutput(nodeId: string): void;
