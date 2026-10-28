@@ -848,4 +848,129 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             stderr_text
         );
     }
+
+    // ── Гейты команды «Психотерапевт» и общего тула read_md_section ──
+
+    /// Боевые папки психотерапевта + общий каталог тулов `agents/_shared/tools`.
+    fn psycho_dirs() -> (PathBuf, PathBuf, PathBuf) {
+        let root = project_root();
+        (
+            root.join("agents/_shared/tools"),
+            root.join("agents/psychotherapist/transitions"),
+            root.join("agents/psychotherapist"),
+        )
+    }
+
+    /// gate_inner_contour_headings: лечебная база обязана иметь РОВНО
+    /// заголовки `## 1`..`## 9` без постфиксов. Регрессия `## 2*`: regex
+    /// заголовка требует после номера пробел/конец строки, поэтому при
+    /// корректном вызове с "## 2" секция «не находилась» — а нода чтения
+    /// базы по номеру от pattern_finder ломалась бы на всём пути паттерна 2.
+    #[test]
+    fn gate_inner_contour_headings() {
+        let (_, _, team) = psycho_dirs();
+        let path = team.join("database/inner_contour_9_patterns.md");
+        let text = std::fs::read_to_string(&path).expect("база паттернов читается");
+
+        let mut headings: Vec<&str> = text
+            .lines()
+            .filter(|l| l.trim_start().starts_with("## ") && !l.trim_start().starts_with("###"))
+            .map(|l| l.trim())
+            .collect();
+        headings.sort_unstable();
+        let expected: Vec<String> = (1..=9).map(|n| format!("## {}", n)).collect();
+        assert_eq!(
+            headings, expected,
+            "заголовки лечебной базы обязаны быть ровно ## 1..## 9 без постфиксов"
+        );
+    }
+
+    /// gate_tool_contract (реальный Deno): общий тул read_md_section по
+    /// heading "## 2" отвечает JSON с непустым content секции лечебной базы.
+    #[test]
+    #[ignore]
+    fn real_deno_read_md_section_contract() {
+        let log = |msg: String| println!("[log] {}", msg);
+        let bins_dir = std::env::temp_dir().join("king_orch_bins");
+        std::fs::create_dir_all(&bins_dir).expect("создано");
+        let deno = resolve_deno(&bins_dir, &log).expect("deno доступен");
+        let (tools, transitions, _) = psycho_dirs();
+
+        let (stdout, stderr, status) = run_deno(
+            &deno,
+            &tools,
+            &transitions,
+            &tools.join("read_md_section.ts"),
+            r###"{"file":"psychotherapist/database/inner_contour_9_patterns.md","heading":"## 2"}"###,
+        )
+        .expect("тул выполнен");
+        assert!(status.success(), "exit: {}, stderr: {}", status, String::from_utf8_lossy(&stderr));
+        let output: serde_json::Value =
+            serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
+        assert_eq!(output["file"], "psychotherapist/database/inner_contour_9_patterns.md");
+        assert_eq!(output["heading"], "## 2");
+        let content = output["content"].as_str().expect("content — строка");
+        assert!(
+            content.contains("требуемая фиксация") && content.contains("Кинетический"),
+            "секция 2 лечебной базы: {}",
+            content
+        );
+    }
+
+    /// Честный отказ: несуществующий заголовок → exit≠0, пустой stdout,
+    /// объяснение в stderr (тихий пропуск воскресил бы «лечение без базы»).
+    #[test]
+    #[ignore]
+    fn real_deno_read_md_section_rejects_missing_heading() {
+        let log = |msg: String| println!("[log] {}", msg);
+        let bins_dir = std::env::temp_dir().join("king_orch_bins");
+        std::fs::create_dir_all(&bins_dir).expect("создано");
+        let deno = resolve_deno(&bins_dir, &log).expect("deno доступен");
+        let (tools, transitions, _) = psycho_dirs();
+
+        let (stdout, stderr, status) = run_deno(
+            &deno,
+            &tools,
+            &transitions,
+            &tools.join("read_md_section.ts"),
+            r###"{"file":"psychotherapist/database/inner_contour_9_patterns.md","heading":"## 99"}"###,
+        )
+        .expect("процесс запущен");
+        assert!(!status.success(), "несуществующая секция обязана дать exit≠0");
+        assert!(stdout.is_empty(), "ошибочный тул не пишет stdout");
+        let stderr_text = String::from_utf8_lossy(&stderr);
+        assert!(
+            stderr_text.contains("не найдена"),
+            "stderr объясняет отказ: {}",
+            stderr_text
+        );
+    }
+
+    /// Честный отказ: путь вне agents/ → exit≠0 (containment как у движка).
+    #[test]
+    #[ignore]
+    fn real_deno_read_md_section_rejects_path_escape() {
+        let log = |msg: String| println!("[log] {}", msg);
+        let bins_dir = std::env::temp_dir().join("king_orch_bins");
+        std::fs::create_dir_all(&bins_dir).expect("создано");
+        let deno = resolve_deno(&bins_dir, &log).expect("deno доступен");
+        let (tools, transitions, _) = psycho_dirs();
+
+        let (stdout, stderr, status) = run_deno(
+            &deno,
+            &tools,
+            &transitions,
+            &tools.join("read_md_section.ts"),
+            r###"{"file":"../outside/db.md","heading":"## 1"}"###,
+        )
+        .expect("процесс запущен");
+        assert!(!status.success(), "путь вне agents/ обязан дать exit≠0");
+        assert!(stdout.is_empty(), "ошибочный тул не пишет stdout");
+        let stderr_text = String::from_utf8_lossy(&stderr);
+        assert!(
+            stderr_text.contains("пределы agents/"),
+            "stderr объясняет отказ: {}",
+            stderr_text
+        );
+    }
 }

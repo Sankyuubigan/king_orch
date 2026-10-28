@@ -681,7 +681,7 @@ fn write_report(
     let report = json!({
         "note": "Иерархическая воронка 9 элементов невроза: 3 агента-слоя из \
                  agents/psychotherapist/backend/, контракты — из signals/root.schema.json, \
-                 состав — из database/validator_layers.yaml. Вход — одно сообщение пациента \
+                 состав — из experiments/validator_layers.yaml. Вход — одно сообщение пациента \
                  (как в gate_end_to_end_ornith.json). Маршрут кейса — из боевого гейта \
                  mental_presence (артефакт fact_extractor_mental_*.json), золото для \
                  маршрутизации не используется. Гейты объявлены ДО прогона в \

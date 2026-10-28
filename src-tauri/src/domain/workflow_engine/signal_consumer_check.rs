@@ -112,7 +112,8 @@ fn signal_contracts(signals_dir: Option<&Path>) -> HashMap<String, String> {
 /// - первый сегмент field-путей condition-узлов (`validator_report.e3` →
 ///   `validator_report`; `has_problem` → `has_problem` — факт, но пусть
 ///   просто не совпадёт с чьим-то ключом контракта);
-/// - `{{ signals.<key> ... }}` в `input` / `input_object` / `task`.
+/// - `{{ signals.<key> ... }}` в `input` / `input_object` / `task`
+///   и в строковых значениях `args` (`custom_tool_call`).
 fn consumed_signal_keys(workflow: &WorkflowDef) -> HashSet<String> {
     let mut used = HashSet::new();
 
@@ -135,6 +136,18 @@ fn consumed_signal_keys(workflow: &WorkflowDef) -> HashSet<String> {
         {
             for key in signals_from_template(template) {
                 used.insert(key);
+            }
+        }
+
+        // args custom_tool_call: значения обязаны быть строками (проверяет
+        // custom_tool::build_args_json), шаблоны в них резолвит движок.
+        if let Some(args) = &node.args {
+            for value in args.values() {
+                if let Some(text) = value.as_str() {
+                    for key in signals_from_template(text) {
+                        used.insert(key);
+                    }
+                }
             }
         }
     }
@@ -325,6 +338,25 @@ edges: []
         assert!(
             collect_dead_signal_diagnostics(&via_template).is_empty(),
             "шаблон {{{{ signals.<key> }}}} обязан потреблять ключ"
+        );
+
+        // Потребление через args custom_tool_call: сигнал подаётся на вход тула.
+        let via_tool_args = parse_workflow(
+            &format!(
+                "{base}- id: read_section
+    type: custom_tool_call
+    tool_file: ../tools/read.ts
+    args:
+      file: some/db.md
+      heading: '{{{{ signals.test_signal_key }}}}'
+edges: []
+"
+            ),
+            &graph_dir,
+        );
+        assert!(
+            collect_dead_signal_diagnostics(&via_tool_args).is_empty(),
+            "шаблон {{{{ signals.<key> }}}} в args custom_tool_call обязан потреблять ключ"
         );
 
         let _ = fs::remove_dir_all(graph_dir.parent().unwrap());

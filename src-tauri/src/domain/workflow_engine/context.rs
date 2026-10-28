@@ -80,7 +80,8 @@ impl WorkflowContext {
         self.signals.insert(key, value);
     }
 
-    /// Разрешает шаблонные переменные вида `{{ nodes.X.output.Y }}` и `{{ user_message }}`
+    /// Разрешает шаблонные переменные вида `{{ nodes.X.output.Y }}`,
+    /// `{{ signals.<key> }}` и `{{ user_message }}`
     pub fn resolve_template(&self, template: &str) -> String {
         let mut result = template.to_string();
 
@@ -96,6 +97,20 @@ impl WorkflowContext {
             let signals_json =
                 serde_json::to_string(&self.signals).unwrap_or_else(|_| "{}".to_string());
             result = result.replace("{{ signals }}", &signals_json);
+        }
+
+        // {{ signals.<key> }} — значение одного сигнала (строка — как есть).
+        // Литералы не пересекаются: "{{ signals }}" не матчится внутри
+        // "{{ signals.<key> }}" (после "signals" идёт точка, а не пробел+скобка).
+        // Отсутствующий ключ остаётся литералом — как и у nodes.*: потребитель
+        // (например custom_tool) обязан сам честно отказать на невалидном значении.
+        for (key, value) in &self.signals {
+            let placeholder = format!("{{{{ signals.{} }}}}", key);
+            let val_str = match value {
+                serde_json::Value::String(s) => s.clone(),
+                _ => serde_json::to_string(value).unwrap_or_default(),
+            };
+            result = result.replace(&placeholder, &val_str);
         }
 
         // {{ messages }} — история сессии для LLM: только не-thought и не-signal сообщения
@@ -167,5 +182,40 @@ mod tests {
         assert!(!resolved.contains("D:\\private"));
         assert!(!resolved.contains("/home/user"));
         assert_eq!(resolved.matches("[filesystem path omitted]").count(), 2);
+    }
+
+    /// `{{ signals.<key> }}` — значение одного сигнала: строка как есть,
+    /// не-строка сериализуется, отсутствующий ключ остаётся литералом,
+    /// литерал `{{ signals }}` (весь bus) не сломан.
+    #[test]
+    fn signals_dot_key_template_resolves_single_value() {
+        let mut context = WorkflowContext::new("test".to_string(), vec![], vec![]);
+        context.insert_signal("pattern_type".to_string(), serde_json::json!("2"));
+
+        assert_eq!(
+            context.resolve_template("## {{ signals.pattern_type }}"),
+            "## 2",
+            "строковое значение подставляется как есть"
+        );
+
+        context.insert_signal("obj".to_string(), serde_json::json!({"a": 1}));
+        assert_eq!(
+            context.resolve_template("{{ signals.obj }}"),
+            r#"{"a":1}"#,
+            "не-строка сериализуется в JSON"
+        );
+
+        assert_eq!(
+            context.resolve_template("{{ signals.absent_key }}"),
+            "{{ signals.absent_key }}",
+            "отсутствующий ключ остаётся литералом (честный отказ downstream)"
+        );
+
+        let whole = context.resolve_template("{{ signals }}");
+        assert!(
+            whole.contains("pattern_type"),
+            "литерал {{{{ signals }}}} обязан резолвиться в весь bus: {}",
+            whole
+        );
     }
 }

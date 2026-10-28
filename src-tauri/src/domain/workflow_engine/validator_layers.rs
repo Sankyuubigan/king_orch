@@ -1,6 +1,8 @@
 //! Состав и порядок слоёв иерархической проверки 9 элементов.
 //!
-//! Файл объявления — `agents/<команда>/database/validator_layers.yaml`.
+//! Файл объявления — `agents/<команда>/experiments/validator_layers.yaml`
+//! (переехал из `database/` 28.10.26: слоёная воронка — эксперимент, боевой
+//! граф проверяет элементы плоским `validator`).
 //! Почему он, а не код: порядок слоёв и «кто видит чей результат» — это правила
 //! предметной области, а не устройство движка (AGENTS.md §4: бизнес-логика в
 //! папке агента, маршрутизация — в графе). Движок и стенд читают одно и то же
@@ -36,7 +38,7 @@ use std::path::Path;
 use crate::domain::signals::SignalContract;
 
 /// Имя файла объявления внутри папки команды.
-pub const LAYERS_FILE: &str = "database/validator_layers.yaml";
+pub const LAYERS_FILE: &str = "experiments/validator_layers.yaml";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ValidatorLayer {

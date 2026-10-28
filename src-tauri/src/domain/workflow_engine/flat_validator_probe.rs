@@ -84,7 +84,7 @@ use crate::infra::{
 };
 
 /// Агент плоской формы. Живёт рядом со слоями, но в воронку не входит: состав
-/// слоёв объявляет `database/validator_layers.yaml`, и плоский агент там не значится.
+/// слоёв объявляет `experiments/validator_layers.yaml`, и плоский агент там не значится.
 const FLAT_AGENT: &str = "validator_flat";
 
 /// Идентификатор системы в книге приёмки

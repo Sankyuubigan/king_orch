@@ -126,16 +126,32 @@ nodes:
     x: 2834
     y: 44
 
+- id: read_pattern_section
+  type: custom_tool_call
+  tool_file: ../../_shared/tools/read_md_section.ts
+  args:
+    file: psychotherapist/database/inner_contour_9_patterns.md
+    heading: '## {{ signals.pattern_type }}'
+  ui_pos:
+    x: 3018
+    y: 44
+
 - id: call_healer
   type: llm_worker
   agent: neuro_healer
   task: |
-    Из отчёта pattern_finder_by_elements возьми номер типа паттерна.
-    Затем выполни ШАГ 2 — прочитай описание этого паттерна в базе знаний инструментом ReadSection.
-    После этого переведи паттерн на контекст проблемы пользователя.
+    Данные переданы готовыми — вызывать инструменты не требуется.
+    Ниже описание лечебного паттерна из базы знаний (пайплайн прочитал секцию по номеру от pattern_finder_by_elements) и разбор аналитика.
+
+    === ОПИСАНИЕ ПАТТЕРНА ИЗ БАЗЫ ===
+    {{ nodes.read_pattern_section.output.content }}
+
+    === РАЗБОР ОТ АНАЛИТИКА ===
+    {{ nodes.call_pattern_finder.output.result }}
+
+    Переведи описание паттерна на контекст проблемы пользователя, следуя ИНСТРУКЦИИ и формату вывода из системного промпта.
   output_type: message
   inject_response:
-  - pattern_finder_by_elements
   - synthesizer
   - decomposer
   - shadow_worker
@@ -319,6 +335,9 @@ edges:
   to: call_pattern_finder
 
 - from: call_pattern_finder
+  to: read_pattern_section
+
+- from: read_pattern_section
   to: call_healer
 
 - from: call_validator
