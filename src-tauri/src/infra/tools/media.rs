@@ -14,6 +14,14 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::infra::tools::{Tool, ToolCtx, ToolError};
+use tauri_plugin_image_engine::engine::LoraSpec;
+
+// LoRA-аргументы image-тулов (PRP 29.10.26): извлечение/резолв/лог — SSOT
+// содержимого резолва живёт в плагине (resolve_lora_names), здесь — только
+// мостики для тулов. Приватно: этот файл единственный потребитель.
+// #[path]: файл-сиблинг (та же логика, что и у media_tests ниже).
+#[path = "media_lora.rs"]
+mod media_lora;
 
 static OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -218,6 +226,7 @@ fn run_generate(
     prompt_en: &str,
     ref_paths: &[String],
     ctx: &ToolCtx,
+    loras: &[LoraSpec],
 ) -> Result<ImageRunOutput, ToolError> {
     let entry = resolve_bundle_for_tools()?;
     if !ref_paths.is_empty() && !entry.files.iter().any(|f| f.role == "mmproj") {
@@ -252,7 +261,7 @@ fn run_generate(
             prompt_en,
             entry.preset.width, entry.preset.height, entry.preset.steps,
             entry.preset.cfg_scale, entry.preset.seed,
-            &out_path, None, log_cb,
+            &out_path, loras, None, log_cb,
         )
     } else {
         tauri_plugin_image_engine::engine::edit_image_files(
@@ -261,7 +270,7 @@ fn run_generate(
             prompt_en, ref_paths,
             entry.preset.width, entry.preset.height, entry.preset.steps,
             entry.preset.cfg_scale, entry.preset.seed,
-            &out_path, None, log_cb,
+            &out_path, loras, None, log_cb,
         )
     };
     match res {
@@ -309,7 +318,8 @@ fn run_upscale(
         tauri_plugin_image_engine::engine::UPSCALE_STRENGTH_DEFAULT,
         source_path,
         entry.preset.seed,
-        &out_path, None, log_cb,
+        // loras: апскейл LoRA-стек не ведёт (решение PRP — tool upscale не трогаем).
+        &out_path, &[], None, log_cb,
     )
     .map(|r| ImageRunOutput { path: r.path, time_sec: r.time_sec })
     .map_err(ToolError::Io)
@@ -415,7 +425,9 @@ impl Tool for GenerateImage {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "prompt_en": {"type": "string", "description": "Развёрнутый английский промпт: объект, композиция, свет, стиль, детали."}
+                "prompt_en": {"type": "string", "description": "Развёрнутый английский промпт: объект, композиция, свет, стиль, детали."},
+                "lora": {"type": "array", "minItems": 1, "items": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}, "strength": {"type": "number", "minimum": 0, "maximum": 2}}}]}, "description": "Опционально: элементы — строка (стем файла LoRA без расширения) ИЛИ объект {\"name\": стем, \"strength\": 0–2}. Смешивать формы можно. Сила элемента переопределяет lora_strength; без strength применяется lora_strength (общий дефолт, по умолчанию 1.0). Какие лоры и с какой силой ставить — правило вашего агента (например, категория «взрослый контент»; обычные запросы не получают LoRA). Файлы LoRA лежат в подпапке базы активного движка (…\\image_loras\\<база>\\): ищите стемы только этой базы — лора чужой базы найдена не будет."},
+                "lora_strength": {"type": "number", "minimum": 0, "maximum": 2, "description": "Общая сила-дефолт LoRA (0–2, по умолчанию 1.0): применяется к элементам lora БЕЗ собственной strength. Передавать только вместе с lora."}
             },
             "required": ["prompt_en"]
         })
@@ -445,7 +457,9 @@ impl Tool for EditImage {
             "type": "object",
             "properties": {
                 "prompt_en": {"type": "string", "description": "Английский промпт правки: что изменить, что сохранить. При 2+ картинках адресуй их тегами <image1>, <image2>: <image1> — холст (композиция/поза/фон сохраняются), <image2> — источник идентичности. Для замены лица указывай на референс тегом, не описывая признаки словами."},
-                "source_image_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "ID изображений из блока доступных изображений, в порядке ролей: первым — холст (<image1>), дальше — источники. Файловые пути запрещены."}
+                "source_image_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "description": "ID изображений из блока доступных изображений, в порядке ролей: первым — холст (<image1>), дальше — источники. Файловые пути запрещены."},
+                "lora": {"type": "array", "minItems": 1, "items": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}, "strength": {"type": "number", "minimum": 0, "maximum": 2}}}]}, "description": "Опционально: элементы — строка (стем файла LoRA без расширения) ИЛИ объект {\"name\": стем, \"strength\": 0–2}. Смешивать формы можно. Сила элемента переопределяет lora_strength; без strength применяется lora_strength (общий дефолт, по умолчанию 1.0). Какие лоры и с какой силой ставить — правило вашего агента (например, категория «взрослый контент»; обычные запросы не получают LoRA). Файлы LoRA лежат в подпапке базы активного движка (…\\image_loras\\<база>\\): ищите стемы только этой базы — лора чужой базы найдена не будет."},
+                "lora_strength": {"type": "number", "minimum": 0, "maximum": 2, "description": "Общая сила-дефолт LoRA (0–2, по умолчанию 1.0): применяется к элементам lora БЕЗ собственной strength. Передавать только вместе с lora."}
             },
             "required": ["prompt_en", "source_image_ids"]
         })
@@ -557,8 +571,23 @@ pub fn execute_image_tool(
                         .and_then(|output| format_image_result(output, name, ctx)),
                 );
             }
+            // LoRA-прокидка (PRP 29.10.26): опциональные поля taла;
+            // невалидные имена/сила — честный отказUsage/NotFound ДО
+            // обращения к движку. Пусто/отсутствие — прежний путь без лор.
+            let loras = match media_lora::extract_lora_request(args) {
+                Ok(None) => Vec::new(),
+                Ok(Some(req)) => {
+                    let specs = match media_lora::resolve_specs(&req) {
+                        Ok(specs) => specs,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    log::info!("{}", media_lora::status_line(&req, &specs));
+                    specs
+                }
+                Err(e) => return Some(Err(e)),
+            };
             Some(
-                run_generate(prompt, &refs, ctx)
+                run_generate(prompt, &refs, ctx, &loras)
                     .and_then(|output| format_image_result(output, name, ctx)),
             )
         }

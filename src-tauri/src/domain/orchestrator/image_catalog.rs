@@ -32,7 +32,16 @@ enum ImageOrigin {
 
 #[derive(Clone, Debug)]
 struct ImageCandidate {
+    /// Реальный id (легаси-схема: hex-хвост). Алиасы не стабильны между
+    /// прогонами (нумерация от старых к новым), поэтому при сравнении
+    /// вне одного build'а («id выживает удаление соседа») — надёжнее hex.
     id: String,
+    /// Короткий алиас для промпта модели (F1, 29.10.26): модель получает
+    /// ТОЛЬКО алиасы (`req_0`, `hist_01`…), сырой hex покидает хост только
+    /// как легаси-путь резолва. Модель перестаёт пересказывать 16
+    /// случайных hex-символов — источник зацикливания image_editor
+    /// (сессия 1793282510012) устранён конструктивно.
+    alias: String,
     locator: ImageLocator,
     origin: ImageOrigin,
     message_id: String,
@@ -77,6 +86,12 @@ impl RequestMedia {
         let mut candidates = Vec::new();
         let mut stored_request_attachments = Vec::new();
         let mut attachment_refs = Vec::new();
+        // Алиасы истории от старых к новым (порядок обхода messages). Две
+        // цифры ровно: `hist_01`…`hist_25` — канонические виды алиасов не
+        // содержатся друг в друге («hist01» ⊄ «hist02»), так что стадия
+        // embedded-подстроки в lookup_id не порождает ложных матчей между
+        // алиасами (у одноцифровой схемы `hist_1`/`hist_10` было бы).
+        let mut history_sequence = 0usize;
 
         for (index, attachment) in request_attachments.iter().enumerate() {
             attachment_refs.push(serde_json::json!({
@@ -91,6 +106,7 @@ impl RequestMedia {
             }
             let candidate = ImageCandidate {
                 id: format!("req_{index}"),
+                alias: format!("req_{index}"),
                 locator: ImageLocator::Request(stored_request_attachments.len()),
                 origin: ImageOrigin::CurrentRequest,
                 message_id: current_user_id.clone(),
@@ -134,8 +150,10 @@ impl RequestMedia {
                 if !attachment.mime_type.starts_with("image/") {
                     continue;
                 }
+                history_sequence += 1;
                 candidates.push(ImageCandidate {
                     id: history_image_id(&message_id, attachment_index, attachment),
+                    alias: format!("hist_{:02}", history_sequence),
                     locator: ImageLocator::Message {
                         message_id: message_id.clone(),
                         message_index,
@@ -200,10 +218,13 @@ impl RequestMedia {
         out
     }
 
+    /// Алиасы кандидатов — ЕДИНСТВЕННАЯ форма id, которую видит модель
+    /// (промпт, suffix, списки допустимых). Сырой hex наружу не идёт;
+    /// `resolve` принимает и его как легаси-путь.
     pub fn candidate_ids(&self) -> Vec<&str> {
         self.candidates
             .iter()
-            .map(|candidate| candidate.id.as_str())
+            .map(|candidate| candidate.alias.as_str())
             .collect()
     }
 
@@ -219,7 +240,7 @@ impl RequestMedia {
             };
             out.push_str(&format!(
                 "- id=\"{}\"; origin={}; message_id={}; author={}; file=\"{}\"; mime={}; context=\"{}\"\n",
-                candidate.id,
+                candidate.alias,
                 origin,
                 candidate.message_id,
                 candidate.author,
@@ -245,7 +266,7 @@ impl RequestMedia {
             .candidates
             .iter()
             .filter(|candidate| candidate.message_id == message_id)
-            .map(|candidate| format!("\"{}\"", candidate.id))
+            .map(|candidate| format!("\"{}\"", candidate.alias))
             .collect::<Vec<_>>();
         if ids.is_empty() {
             String::new()
@@ -293,17 +314,32 @@ impl RequestMedia {
             if !seen.insert(source_id.clone()) {
                 continue;
             }
-            // Терпимый ресолв (image_ids): модель регулярно искажает id в
-            // свободном тексте (лог 21.10.2026 00:51–00:57 — три «Неизвестный
-            // source_image_id» подряд при верном контексте). Канонизация
-            // (скобки/кавычки/подчёркивания) + восстановление по ≤2 простым
-            // правкам. Неоднозначность и «далёкие» — честный отказ, не выбор.
-            let candidate_ids: Vec<&str> = self
+            // Двухфазный ресолв (F1, 29.10.26). Сцена 1 — алиасы: модель видит
+            // ТОЛЬКО их, поэтому это первый и основной путь (терпимый
+            // ресолв image_ids: канонизация + embedded + Левенштейн ≤2).
+            // Сцена 2 — легаси: сырой hex `hist_<16hex>` из старой схемы
+            // чата всё ещё принимается точным/близким матчем, чтобы
+            // закешированные в истории сессии формы продолжали работать.
+            // Фазы раздельные НАРОЧНО: алиасы короткие («hist01»), а
+            // fuzz-восстановление по hex-списку не должно иметь шанса
+            // сматчить короткую форму (insertion-дистанция до 16-символьного
+            // hex — заведомо > 2). Ошибки показывают только алиасы.
+            let alias_ids: Vec<&str> = self
+                .candidates
+                .iter()
+                .map(|candidate| candidate.alias.as_str())
+                .collect();
+            let real_ids: Vec<&str> = self
                 .candidates
                 .iter()
                 .map(|candidate| candidate.id.as_str())
                 .collect();
-            let lookup = super::image_ids::lookup_id(source_id, &candidate_ids);
+            let lookup = super::image_ids::lookup_id(source_id, &alias_ids);
+            let lookup = if matches!(lookup, super::image_ids::IdLookup::NotFound { .. }) {
+                super::image_ids::lookup_id(source_id, &real_ids)
+            } else {
+                lookup
+            };
             let matched_id = super::image_ids::finalize_lookup(
                 lookup,
                 source_id,
@@ -312,7 +348,7 @@ impl RequestMedia {
             let candidate = self
                 .candidates
                 .iter()
-                .find(|candidate| candidate.id == matched_id)
+                .find(|candidate| candidate.alias == matched_id || candidate.id == matched_id)
                 .ok_or_else(|| {
                     format!(
                         "Изображение '{}' исчезло из каталога между стадиями ресолва",
@@ -372,7 +408,7 @@ impl RequestMedia {
         }
         self.candidates
             .iter()
-            .map(|candidate| candidate.id.as_str())
+            .map(|candidate| candidate.alias.as_str())
             .collect::<Vec<_>>()
             .join(", ")
     }
@@ -558,6 +594,9 @@ mod tests {
 
     #[test]
     fn history_ids_survive_previous_message_deletion() {
+        // Реальный id (hex) стабилен по содержанию сообщения; алиас — нет
+        // (нумерация от старых к новым сдвигается при удалении соседа).
+        // Сравнивая `id`, проверяем инвариант легаси-формы.
         let first = message("msg_1", "user", "one", vec![attachment("one.png", "one")]);
         let kept = message("msg_2", "user", "two", vec![attachment("two.png", "two")]);
         let before = RequestMedia::build(&[], &[first.clone(), kept.clone()]);
@@ -568,8 +607,89 @@ mod tests {
             .find(|candidate| candidate.message_id == "msg_2")
             .map(|candidate| candidate.id.clone())
             .unwrap();
-        let after_id = after.candidate_ids().into_iter().next().unwrap();
+        let after_id = after
+            .candidates
+            .iter()
+            .next()
+            .map(|candidate| candidate.id.clone())
+            .unwrap();
         assert_eq!(after_id, before_id);
+    }
+
+    /// F1 (29.10.26): алиасы короткие и уникальные, нумерация истории —
+    /// от старых к новым. Никаких 16-символьных hex в форме для модели.
+    #[test]
+    fn catalog_aliases_are_short_sequential_and_unique() {
+        let messages = vec![
+            message("msg_1", "image_generator", "first", vec![attachment("one.png", "one")]),
+            message("msg_2", "user", "second", vec![attachment("two.png", "two")]),
+            message("msg_3", "image_generator", "third", vec![attachment("three.png", "three")]),
+        ];
+        let media = RequestMedia::build(&[], &messages);
+        let aliases = media.candidate_ids();
+        assert_eq!(aliases, vec!["hist_01", "hist_02", "hist_03"], "{:?}", aliases);
+        // Уникальность (инвариант на любом размере каталога).
+        let unique: std::collections::HashSet<_> = aliases.iter().collect();
+        assert_eq!(unique.len(), aliases.len());
+        // Короткость: каждый алиас короче любого hex-идентификатора
+        // (> 16+5 символов в легаси-форме) — вся суть F1.
+        for alias in &aliases {
+            assert!(alias.len() <= 10, "алиас {} слишком длинный", alias);
+        }
+    }
+
+    /// F1: промпт модели показывает ТОЛЬКО алиасы — сырой hex покидает хост.
+    #[test]
+    fn candidate_prompt_shows_aliases_not_hex() {
+        let messages = vec![message(
+            "msg_1",
+            "image_generator",
+            "result",
+            vec![attachment("image.png", "data")],
+        )];
+        let media = RequestMedia::build(&[], &messages);
+        let prompt = media.candidate_prompt();
+        let real_id = media
+            .candidates
+            .iter()
+            .next()
+            .map(|candidate| candidate.id.clone())
+            .unwrap();
+        assert!(real_id.starts_with("hist_") && real_id.len() > 10, "{}", real_id);
+        assert!(!prompt.contains(&real_id), "hex утёк в промпт: {}", prompt);
+        assert!(prompt.contains("id=\"hist_01\""), "{}", prompt);
+        // Список допустимых в ошибках — тоже алиасы.
+        let error = media.resolve(&["нет-такого-id".to_string()], &messages).unwrap_err();
+        assert!(error.contains("hist_01"), "{}", error);
+        assert!(!error.contains(&real_id), "hex утёк в ошибку: {}", error);
+    }
+
+    /// F1: алиас принимает канонизацию/кавычки/обрамление и полный
+    /// fuzzy-класс (≤2 правок) — как раньше делал hex; легаси hex тоже
+    /// принимается.
+    #[test]
+    fn resolve_accepts_alias_forms_and_legacy_hex() {
+        let messages = vec![
+            message("msg_1", "user", "sources", vec![attachment("one.png", "one")]),
+            message("msg_2", "user", "sources", vec![attachment("two.png", "two")]),
+        ];
+        let media = RequestMedia::build(&[], &messages);
+        // Точный алиас + обрамление кавычками/скобками/лишним подчёркиванием.
+        for form in ["hist_01", "\"hist_01\"", "(hist_01)", "hist__01"] {
+            let resolved = media
+                .resolve(&[form.to_string()], &messages)
+                .unwrap_or_else(|error| panic!("форма '{}' должна резолвиться: {}", form, error));
+            assert_eq!(resolved[0].file_name, "one.png");
+        }
+        // Легаси: точный hex-id из прошлых прогонов продолжает работать.
+        let real_id = media
+            .candidates
+            .iter()
+            .next()
+            .map(|candidate| candidate.id.clone())
+            .unwrap();
+        let resolved = media.resolve(&[real_id], &messages).unwrap();
+        assert_eq!(resolved[0].file_name, "one.png");
     }
 
     #[test]

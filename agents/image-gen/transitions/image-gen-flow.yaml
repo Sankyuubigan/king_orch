@@ -32,15 +32,31 @@ nodes:
     input_object: "{{ nodes.extract_facts.output }}"
     cases_priority:
       - key: needs_image_edit
-        to: edit_image
+        to: enhance_prompt_edit
       - key: needs_image_upscale
         to: upscale_image
       - key: needs_image_generate
-        to: generate_image
+        to: enhance_prompt_gen
     default: no_image_task
     ui_pos:
       x: 140
       y: 40
+
+  # ── Промпт-энхансер (PRP 29.10.26 Шаг 3): backend-ноды, работающие
+  #    ДО терминальных исполнителей; их результат потребляется через шаблоны
+  #    {{ nodes.enhance_prompt_*.output.result }} (у llm_worker выход — поле
+  #    result). Не потокят в чат: output_type по умолчанию (thought). ──
+
+  - id: enhance_prompt_edit
+    type: llm_worker
+    agent: image_prompt_enhancer
+    task: |
+      Режим: ПРАВКА изображения.
+
+      Исходная идея пользователя: {{ nodes.user_message.output.text }}
+    ui_pos:
+      x: 250
+      y: -120
 
   # ── Ветка редактирования (терминальная) ──
 
@@ -51,6 +67,10 @@ nodes:
       Отредактируй изображение, на которое пользователь указал в переписке или прикрепил к сообщению.
 
       Правка: {{ nodes.user_message.output.text }}
+
+      Улучшенный промпт (заготовка от Улучшителя — используй как основу для
+      своего промпта правки; описания референсов словами переведи в теги
+      <imageN> по своим правилам): {{ nodes.enhance_prompt_edit.output.result }}
     output_type: message
     ui_pos:
       x: 360
@@ -71,6 +91,19 @@ nodes:
       x: 360
       y: 40
 
+  # ── Промпт-энхансер: генерация (PRP 29.10.26 Шаг 3) ──
+
+  - id: enhance_prompt_gen
+    type: llm_worker
+    agent: image_prompt_enhancer
+    task: |
+      Режим: ГЕНЕРАЦИЯ изображения с нуля.
+
+      Исходная идея пользователя: {{ nodes.user_message.output.text }}
+    ui_pos:
+      x: 250
+      y: 120
+
   # ── Ветка генерации (терминальная) ──
 
   - id: generate_image
@@ -81,6 +114,9 @@ nodes:
 
       Описание задачи: {{ nodes.extract_facts.output.rewritten_query }}
       Исходный текст пользователя: {{ nodes.user_message.output.text }}
+
+      Улучшенный промпт (заготовка от Улучшителя — используй как основу для
+      своего английского промпта): {{ nodes.enhance_prompt_gen.output.result }}
     output_type: message
     ui_pos:
       x: 360
@@ -109,3 +145,9 @@ edges:
 
   - from: extract_facts
     to: route
+
+  - from: enhance_prompt_edit
+    to: edit_image
+
+  - from: enhance_prompt_gen
+    to: generate_image
