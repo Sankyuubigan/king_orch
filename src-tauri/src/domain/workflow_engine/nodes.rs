@@ -790,6 +790,7 @@ where
                 context.history.clone(),
             )
             .with_image_candidates(context.image_candidates.clone())
+            .with_video_loras(context.video_loras.clone())
             .with_request_media(context.request_media.clone());
 
             let sub_result = match super::run_workflow(sub_wf, &mut sub_ctx, runner) {

@@ -134,6 +134,7 @@
 ### 0.5. Конфиг приложения
 - Путь: `C:\Users\user\AppData\Roaming\com.kingorch.app\app_config.json`
 - Содержит список `.gguf` моделей, последнюю использованную модель (`last_model`), параметры (`model_params`), настройки контекста.
+- Ошибки юзеров в Aptabase: скрипт чтения `D:\Projects\my-tauri-plugins\tauri-plugin-logs\scripts\aptabase_read.mjs`, дока-SSOT `tauri-plugin-logs/docs/README.md` (раздел «Чтение отчётов из Aptabase»), кука в `%APPDATA%\aptabase\`.
 
 >
 > ### 1. Движок llama.cpp — отдельный процесс (НЕ нативная линковка)

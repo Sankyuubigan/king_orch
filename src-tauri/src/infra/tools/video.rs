@@ -114,6 +114,7 @@ fn run_generate_video(
     seconds: u32,
     final_quality: bool,
     init_path: Option<&str>,
+    loras: &[tauri_plugin_image_engine::engine::LoraSpec],
     ctx: &ToolCtx,
 ) -> Result<VideoRunOutput, ToolError> {
     let entry = resolve_video_bundle_for_tools()?;
@@ -156,6 +157,7 @@ fn run_generate_video(
         init_path,
         &out_path,
         None,
+        loras,
         log_cb,
     )
     .map(|r| {
@@ -262,16 +264,18 @@ impl Tool for GenerateVideo {
         "generate_video"
     }
     fn description(&self) -> &str {
-        "Сгенерировать короткое видео (+аудио) по английскому промпту: либо с нуля по тексту, либо ПО ПРИКРЕПЛЁННОЙ КАРТИНКЕ (она станет первым кадром — передай её ID в source_image_ids). Клип будет приложен к ответу как файл."
+        "Сгенерировать короткое видео (+аудио) по английскому промпту: либо с нуля по тексту, либо ПО ПРИКРЕПЛЁННОЙ КАРТИНКЕ (она станет первым кадром — передай её ID в source_image_ids). Речь персонажа задаётся в промпте (реплика дословно). Клип будет приложен к ответу как файл."
     }
     fn parameters(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "prompt_en": {"type": "string", "description": "Развёрнутый английский промпт: объект, действие/движение, окружение, свет, стиль. Описывай ДВИЖЕНИЕ сцены и камеры, а не статичную картинку. При i2va описывай, КАК сцена на картинке оживает и движется."},
+                "prompt_en": {"type": "string", "description": "Развёрнутый английский промпт: объект, действие/движение, окружение, свет, стиль. Описывай ДВИЖЕНИЕ сцены и камеры, а не статичную картинку. При i2va описывай, КАК сцена на картинке оживает и движется. Если пользователь просит РЕЧЬ/озвучку/диалог — включи реплику ДОСЛОВНО на языке пользователя, не переводя: The woman looks at the camera and says in Russian: <реплика> (реплика ≤10–12 слов, без кавычек и спецсимволов), и добавь в конец промпта: No subtitles, no captions, no on-screen text."},
                 "source_image_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 1, "description": "РОВНО ОДИН ID картинки из блока доступных изображений — она станет первым кадром видео (image-to-video). Опционально: без него видео генерируется с нуля по тексту. Файловые пути запрещены."},
                 "seconds": {"type": "integer", "minimum": 1, "maximum": 15, "description": "Длительность клипа в секундах (по умолчанию 5). Лимит зависит от выбранного набора моделей: больше — только если пользователь прямо попросил."},
-                "final_quality": {"type": "boolean", "description": "false (по умолчанию) = черновик (быстро, минуты). true = финальное качество (медленно: 10+ минут на 5 секунд — предупреждай пользователя о времени)."}
+                "final_quality": {"type": "boolean", "description": "false (по умолчанию) = черновик (быстро, минуты). true = финальное качество (медленно: 10+ минут на 5 секунд — предупреждай пользователя о времени)."},
+                "lora": {"type": "array", "minItems": 1, "items": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}, "strength": {"type": "number", "minimum": 0, "maximum": 2}}}]}, "description": "Опционально: элементы — строка (стем файла LoRA без расширения) ИЛИ объект {\"name\": стем, \"strength\": 0–2}. Смешивать формы можно. Сила элемента переопределяет lora_strength; без strength применяется lora_strength (общий дефолт, по умолчанию 1.0). Какие лоры и с какой силой ставить — правило вашего агента (например, категория «взрослый контент»; обычные запросы не получают LoRA). Файлы LoRA лежат в подпапке базы активного видео-движка (…\\video_loras\\<база>\\): ищите стемы только этой базы — лора чужой базы найдена не будет."},
+                "lora_strength": {"type": "number", "minimum": 0, "maximum": 2, "description": "Общая сила-дефолт LoRA (0–2, по умолчанию 1.0): применяется к элементам lora БЕЗ собственной strength. Передавать только вместе с lora."}
             },
             "required": ["prompt_en"]
         })
@@ -344,9 +348,34 @@ pub fn execute_video_tool(
                 .get("final_quality")
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false);
+            // LoRA-прокидка (зеркало media.rs): опциональные поля; невалидные
+            // имена/сила — честный отказ Usage/NotFound ДО обращения к движку.
+            // Пусто/отсутствие — прежний путь без лор.
+            let loras = match crate::infra::tools::media::media_lora::extract_lora_request(args) {
+                Ok(None) => Vec::new(),
+                Ok(Some(req)) => {
+                    let specs = match crate::infra::tools::media::media_lora::resolve_video_specs(&req) {
+                        Ok(specs) => specs,
+                        Err(e) => return Some(Err(e)),
+                    };
+                    log::info!(
+                        "{}",
+                        crate::infra::tools::media::media_lora::video_status_line(&req, &specs)
+                    );
+                    specs
+                }
+                Err(e) => return Some(Err(e)),
+            };
             Some(
-                run_generate_video(prompt, seconds, final_quality, init_path.as_deref(), ctx)
-                    .and_then(|output| format_video_result(output, ctx)),
+                run_generate_video(
+                    prompt,
+                    seconds,
+                    final_quality,
+                    init_path.as_deref(),
+                    &loras,
+                    ctx,
+                )
+                .and_then(|output| format_video_result(output, ctx)),
             )
         }
         _ => None,

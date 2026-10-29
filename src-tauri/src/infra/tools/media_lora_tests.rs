@@ -606,3 +606,70 @@ fn upscale_schema_has_no_lora() {
     let required = schema.get("required").and_then(|v| v.as_array()).expect("required");
     assert_eq!(required.len(), 2, "старый required: {required:?}");
 }
+
+// ─────────────────────────── каталог лор юзера ({{ video_loras }}) ───────────────────────────
+
+use super::{scan_video_lora_catalog_in, video_loras_prompt_in};
+
+/// Sidecar-описание парсится: description / triggers (в обеих формах) /
+/// default_strength / category; сам .md не попадает в каталог как лора.
+#[test]
+fn scan_catalog_parses_sidecar_frontmatter() {
+    let dir = sandbox("catalog_sidecar");
+    std::fs::write(dir.join("alpha.safetensors"), b"x").unwrap();
+    std::fs::write(
+        dir.join("alpha.md"),
+        "---\ndescription: Универсальный NSFW-разблокировщик\ntriggers: [nude, topless]\ndefault_strength: 0.5\ncategory: nsfw_universal\n---\nТело игнорируется.\n",
+    )
+    .unwrap();
+    let entries = scan_video_lora_catalog_in(&dir);
+    assert_eq!(entries.len(), 1);
+    let e = &entries[0];
+    assert_eq!(e.stem, "alpha");
+    assert_eq!(e.file, "alpha.safetensors");
+    assert_eq!(e.description, "Универсальный NSFW-разблокировщик");
+    assert_eq!(e.triggers, vec!["nude", "topless"]);
+    assert_eq!(e.default_strength, Some(0.5));
+    assert_eq!(e.category, "nsfw_universal");
+}
+
+/// Лора без sidecar — голый стем с пустыми полями; битый frontmatter не роняет
+/// скан; посторонние файлы (.md без пары, .json) в каталог не попадают;
+/// сортировка по стему стабильна (регистронезависимо).
+#[test]
+fn scan_catalog_survives_missing_and_broken_sidecars() {
+    let dir = sandbox("catalog_broken");
+    std::fs::write(dir.join("b_beta.safetensors"), b"x").unwrap();
+    std::fs::write(dir.join("a_alpha.safetensors"), b"x").unwrap();
+    std::fs::write(dir.join("a_alpha.md"), "не frontmatter, просто текст").unwrap();
+    std::fs::write(dir.join("orphan.md"), "---\ndescription: без пары\n---\n").unwrap();
+    std::fs::write(dir.join("notes.json"), "{}").unwrap();
+    let entries = scan_video_lora_catalog_in(&dir);
+    let stems: Vec<&str> = entries.iter().map(|e| e.stem.as_str()).collect();
+    assert_eq!(stems, vec!["a_alpha", "b_beta"], "сорт по стему, мусор отфильтрован");
+    let alpha = &entries[0];
+    assert!(alpha.description.is_empty(), "битый sidecar = пустые поля");
+    assert!(alpha.triggers.is_empty());
+    assert_eq!(alpha.default_strength, None);
+}
+
+/// Блок для агента: по строке на лору со стемом/описанием/триггерами/силой;
+/// пустой каталог — честная заглушка, а не тишина.
+#[test]
+fn prompt_block_lists_entries_and_falls_back_on_empty() {
+    let dir = sandbox("catalog_prompt");
+    assert!(
+        video_loras_prompt_in(&dir).contains("пусто"),
+        "пустой каталог — честная заглушка"
+    );
+    std::fs::write(dir.join("alpha.safetensors"), b"x").unwrap();
+    std::fs::write(
+        dir.join("alpha.md"),
+        "---\ndescription: Кожа и реализм\ntriggers: none\ndefault_strength: 1.2\ncategory: realism\n---\n",
+    )
+    .unwrap();
+    let block = video_loras_prompt_in(&dir);
+    assert!(block.contains("- alpha — Кожа и реализм"), "{}", block);
+    assert!(block.contains("[realism]"), "{}", block);
+    assert!(block.contains("1.20"), "сила в блоке: {}", block);
+}

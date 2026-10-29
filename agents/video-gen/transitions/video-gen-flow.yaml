@@ -30,11 +30,27 @@ nodes:
     input_object: "{{ nodes.extract_facts.output }}"
     cases_priority:
       - key: needs_video_generate
-        to: make_video
+        to: enhance_prompt_video
     default: no_video_task
     ui_pos:
       x: 140
       y: 40
+
+  # ── Промпт-энхансер (зеркало image-gen): backend-нода, работающая ДО
+  #    терминального исполнителя; её результат потребляется через шаблон
+  #    {{ nodes.enhance_prompt_video.output.result }} (у llm_worker выход —
+  #    поле result). Не потокит в чат: output_type по умолчанию (thought). ──
+
+  - id: enhance_prompt_video
+    type: llm_worker
+    agent: video_prompt_enhancer
+    task: |
+      Режим: ГЕНЕРАЦИЯ видео с нуля.
+
+      Исходная идея пользователя: {{ nodes.user_message.output.text }}
+    ui_pos:
+      x: 250
+      y: -40
 
   # ── Ветка генерации (терминальная) ──
   - id: make_video
@@ -45,6 +61,13 @@ nodes:
 
       Описание задачи: {{ nodes.extract_facts.output.rewritten_query }}
       Исходный текст пользователя: {{ nodes.user_message.output.text }}
+
+      Улучшенный промпт (заготовка от Улучшителя — используй как основу для
+      своего английского промпта): {{ nodes.enhance_prompt_video.output.result }}
+
+      Доступные LoRA пользователя (стемы для аргумента `lora`; выбор — по
+      правилам твоего агента, обычному запросу LoRA не нужны):
+      {{ video_loras }}
     output_type: message
     ui_pos:
       x: 360
@@ -73,3 +96,6 @@ edges:
 
   - from: extract_facts
     to: route
+
+  - from: enhance_prompt_video
+    to: make_video

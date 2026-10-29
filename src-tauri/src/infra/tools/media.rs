@@ -16,12 +16,13 @@ use std::sync::Mutex;
 use crate::infra::tools::{Tool, ToolCtx, ToolError};
 use tauri_plugin_image_engine::engine::LoraSpec;
 
-// LoRA-аргументы image-тулов (PRP 29.10.26): извлечение/резолв/лог — SSOT
+// LoRA-аргументы media-тулов (PRP 29.10.26): извлечение/резолв/лог — SSOT
 // содержимого резолва живёт в плагине (resolve_lora_names), здесь — только
-// мостики для тулов. Приватно: этот файл единственный потребитель.
-// #[path]: файл-сиблинг (та же логика, что и у media_tests ниже).
+// мостики для тулов. pub(crate): потребители — этот файл (image-тулы) и
+// video.rs (generate_video). #[path]: файл-сиблинг (та же логика, что и у
+// media_tests ниже).
 #[path = "media_lora.rs"]
-mod media_lora;
+pub(crate) mod media_lora;
 
 static OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 

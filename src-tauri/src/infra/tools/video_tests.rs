@@ -105,6 +105,65 @@ fn video_schema_declares_source_image_ids() {
     assert!(tool.description().contains("source_image_ids"));
 }
 
+/// LoRA-стек в схеме тула: поля lora/lora_strength задекларированы,
+/// prompt_en документирует прокидку реплики речи (русская речь — дословно).
+#[test]
+fn video_schema_declares_lora_stack_and_speech() {
+    let tool = GenerateVideo;
+    let params = tool.parameters();
+    let lora = params
+        .pointer("/properties/lora")
+        .expect("lora объявлен в схеме");
+    assert_eq!(lora.get("type").and_then(|v| v.as_str()), Some("array"));
+    assert_eq!(lora.get("minItems").and_then(|v| v.as_i64()), Some(1));
+    let strength = params
+        .pointer("/properties/lora_strength")
+        .expect("lora_strength объявлен в схеме");
+    assert_eq!(strength.get("maximum").and_then(|v| v.as_f64()), Some(2.0));
+    let prompt_en = params
+        .pointer("/properties/prompt_en")
+        .and_then(|v| v.get("description"))
+        .and_then(|v| v.as_str())
+        .expect("описание prompt_en");
+    assert!(
+        prompt_en.contains("says in Russian"),
+        "схема несёт формат речи с маркером языка: {}",
+        prompt_en
+    );
+    assert!(prompt_en.contains("No subtitles"), "схема несёт запрет субтитров");
+}
+
+/// lora_strength без lora — Usage ДО всякого обращения к бандлу/движку
+/// (зеркало media; герметично: ошибка на границе extract_lora_request).
+#[test]
+fn video_lora_strength_without_lora_is_usage() {
+    let ctx = test_ctx(None);
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"prompt_en": "тест", "lora_strength": 1.5}),
+        &ctx,
+        &[],
+    )
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
+    assert!(matches!(err, ToolError::Usage(_)));
+}
+
+/// Пустой массив lora — Usage: поле без имён бессмысленно, опустите его.
+#[test]
+fn video_empty_lora_array_is_usage() {
+    let ctx = test_ctx(None);
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"prompt_en": "тест", "lora": []}),
+        &ctx,
+        &[],
+    )
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
+    assert!(matches!(err, ToolError::Usage(_)));
+}
+
 /// Две и больше картинок — честный Usage-отказ ДО всякого обращения к бандлу
 /// (fl2va/ref2va в туле не открыты; молча взять первую — потеря данных юзера).
 #[test]

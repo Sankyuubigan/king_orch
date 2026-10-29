@@ -624,6 +624,9 @@ where
             recent_history.clone(),
         )
         .with_image_candidates(request_media.candidate_prompt())
+        // Каталог видео-лор юзера (скан папки + sidecar-описания): дёшево
+        // (десятки файлов), резолвится только там, где граф шаблоном просит.
+        .with_video_loras(crate::infra::tools::media::media_lora::video_loras_prompt())
         .with_request_media(request_media.clone());
         // Переопределение режима из чата. Разбирается ОДИН раз здесь, чтобы
         // невалидное значение упало до прогона, а не внутри цикла нод.
