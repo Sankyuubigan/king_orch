@@ -18,6 +18,7 @@ pub(crate) use consts::*;
 pub(crate) use grammar::*;
 pub use image_catalog::RequestMedia;
 pub use image_catalog::agent_consumes_image_catalog;
+pub use image_catalog::active_image_bundle_marker;
 pub(crate) use invocation::*;
 pub(crate) use prompt_log::*;
 pub(crate) use result::*;
@@ -1174,10 +1175,27 @@ where
         is_cloud,
     );
     if agent_consumes_image_catalog(agent) {
-        let image_candidates = request_media.candidate_prompt();
-        if !image_candidates.is_empty() {
+        // F5 (29.10.26): маркер активного бандла в системный промпт меди-агента —
+        // СРАЗУ ПОСЛЕ каталога изображений, та же точка сборки. Fail-soft: нет
+        // конфига/недокачанный бандл — маркера нет (агент живёт как раньше),
+        // причина — в логе (виден в last_logs.txt).
+        let facts = image_catalog::active_image_bundle_facts();
+        if let Some(item) = facts.as_ref() {
+            log::info!(
+                "[IMG] [АКТИВНЫЙ БОНДЛ] в контексте агента «{}»: {} (base={}, ref_edit={})",
+                agent.name,
+                item.name,
+                item.base,
+                item.ref_edit
+            );
+        }
+        let media_block = image_catalog::media_prompt_block(
+            &request_media.candidate_prompt(),
+            facts.as_ref().map(|item| item.marker.as_str()),
+        );
+        if !media_block.is_empty() {
             system_prompt.push_str("\n\n");
-            system_prompt.push_str(&image_candidates);
+            system_prompt.push_str(&media_block);
         }
     }
     // 4.5: плагин-слой — точка расширения системного промпта (pass-through, если плагинов нет),

@@ -14,6 +14,171 @@ pub fn agent_consumes_image_catalog(agent: &AgentProfile) -> bool {
         .any(|tool| tool == "edit_image" || tool == "upscale_image")
 }
 
+// ─────────────── F5 (29.10.26): маркер активного бандла ───────────────
+// Корень инцидентов F4: агент НЕ ЗНАЕТ, какой бандл активен — знания о базе
+// жили только в хвосте правил, а чек-лист говорил «теги обязательны»
+// универсально. PRP F5 §3.2: runtime-контекст = данные, правила = текст —
+// агент получает record-факт активного бандла тем же механизмом, что и
+// блок `[ДОСТУПНЫЕ ИЗОБРАЖЕНИЯ]` (F1). SSOT один: `image_models_catalog.json`
+// + `app_config.json` (та же цепочка, что у тулов: `media.rs::
+// resolve_bundle_for_tools` / `media_lora.rs::active_lora_base`).
+
+/// Факты активного бандла: marker-текст (инжектится в системный промпт) +
+/// отдельные поля для лога.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActiveBundleFacts {
+    /// Текст маркера — ровно то, что получит агент.
+    pub marker: String,
+    /// Имя бандла в каталоге (ключ `selected_bundle`).
+    pub name: String,
+    /// База (`lora_base` каталога): qwen / krea2 / - (не задана).
+    pub base: String,
+    /// ref-edit-режим каталога: native / edit_lora / нет.
+    pub ref_edit: String,
+}
+
+impl ActiveBundleFacts {
+    /// Record-факт активного бандла из записи каталога (НЕ инструкция:
+    /// ветвление правил живёт в `image_editor.md`, по маркеру).
+    fn from_entry(entry: &crate::infra::ImageBundleEntry) -> Self {
+        let base = entry
+            .lora_base
+            .as_deref()
+            .map(str::trim)
+            .filter(|base| !base.is_empty());
+        let base = base.unwrap_or("-");
+        let base_line = if base == "-" {
+            "base=- (в каталоге не указана)".to_string()
+        } else {
+            format!("base={}", base)
+        };
+        let ref_edit = match entry.ref_edit_mode {
+            Some(crate::infra::RefEditMode::Native) => "native",
+            Some(crate::infra::RefEditMode::EditLora) => "edit_lora",
+            None => "нет",
+        };
+        let ref_edit_line = match entry.ref_edit_mode {
+            Some(crate::infra::RefEditMode::Native) => {
+                "ref_edit=native — референс-conditioning вшит в стек".to_string()
+            }
+            Some(crate::infra::RefEditMode::EditLora) => {
+                let lora = entry.ref_edit_lora.as_deref().unwrap_or("");
+                let preset = entry.ref_edit_preset.as_deref().unwrap_or("");
+                format!(
+                    "ref_edit=edit_lora — identity-лора {} подключается движком сама \
+                     (preset={}, сила {:.2}; сила живёт в каталоге, не в сетке агента)",
+                    if lora.is_empty() { "(стем не указан)" } else { lora },
+                    if preset.is_empty() { "(не задан)" } else { preset },
+                    entry.ref_edit_lora_strength
+                )
+            }
+            None => "ref_edit=нет — редактирование по референсам не поддержано".to_string(),
+        };
+        let bundle_line = if entry.label.trim().is_empty() {
+            format!("bundle={}", entry.name)
+        } else {
+            format!("bundle={} — «{}»", entry.name, entry.label)
+        };
+        let marker = format!(
+            "[АКТИВНЫЙ БОНДЛ]\n{}\n{}\n{}",
+            bundle_line, base_line, ref_edit_line
+        );
+        Self {
+            marker,
+            name: entry.name.clone(),
+            base: base.to_string(),
+            ref_edit: ref_edit.to_string(),
+        }
+    }
+}
+
+/// Активный бандл SSOT-цепочки по готовности файлов. Выбор юзера (
+/// `selected_bundle` из конфига) → дефолт каталога; файлы бандла не
+/// докачаны / бандл отсутствует в каталоге → `None`.
+///
+/// Fail-soft по PRP F5 §3.3: маркер — добавление к промпту, не условие
+/// работоспособности; при деградации агент живёт как раньше, а причина
+/// фиксируется в логе (правило честности §2.2) — боевая сессия не падает.
+/// Полнота файлов проверяется как у `resolve_bundle_for_tools`:
+/// маркер описывает работоспособный бандл, а не ожидание закачки.
+fn marker_facts_from_selection(
+    selected: Option<&str>,
+    bundle_dir: &std::path::Path,
+) -> Option<ActiveBundleFacts> {
+    let selected = selected.map(str::trim).filter(|selected| !selected.is_empty());
+    let entry = match selected {
+        Some(name) => match crate::infra::bundle_by_name(name) {
+            Some(entry) => entry,
+            None => {
+                log::warn!(
+                    "[IMG] [АКТИВНЫЙ БОНДЛ] не собран: бандл «{}» (активный) в каталоге отсутствует",
+                    name
+                );
+                return None;
+            }
+        },
+        None => match crate::infra::default_bundle_entry() {
+            Some(entry) => entry,
+            None => {
+                log::warn!(
+                    "[IMG] [АКТИВНЫЙ БОНДЛ] не собран: в каталоге нет бандла по умолчанию"
+                );
+                return None;
+            }
+        },
+    };
+    let missing: Vec<&str> = entry
+        .files
+        .iter()
+        .filter(|file| !bundle_dir.join(&file.filename).exists())
+        .map(|file| file.filename.as_str())
+        .collect();
+    if !missing.is_empty() {
+        log::warn!(
+            "[IMG] [АКТИВНЫЙ БОНДЛ] не собран: у «{}» не скачаны файлы {}",
+            entry.name,
+            missing.join(", ")
+        );
+        return None;
+    }
+    Some(ActiveBundleFacts::from_entry(&entry))
+}
+
+/// Факты активного бандла в момент вызова: текущий конфиг хоста (`app_config.
+/// json`) + папка бандлов. `None` — маркера в промпте не будет (fail-soft).
+pub fn active_image_bundle_facts() -> Option<ActiveBundleFacts> {
+    let cfg = crate::infra::load_image_config_early();
+    marker_facts_from_selection(
+        cfg.selected_bundle.as_deref(),
+        &crate::infra::bundle_dir_early(),
+    )
+}
+
+/// Маркер активного бандла (F5) — текст `[АКТИВНЫЙ БОНДЛ]` для системного
+/// промпта меди-агента. Точка вызова: сборка системного промпта меди-агента (
+/// `orchestrator::run_agent_node`) и превью промпта (`api/chat.rs`).
+pub fn active_image_bundle_marker() -> Option<String> {
+    active_image_bundle_facts().map(|facts| facts.marker)
+}
+
+/// Сборка меди-блока системного промпта (та же точка, где строился каталог
+/// изображений): каталог `[ДОСТУПНЫЕ ИЗОБРАЖЕНИЯ]` + маркер `[АКТИВНЫЙ БОНДЛ]`
+/// СРАЗУ ПОСЛЕ каталога. Порядок частей зафиксирован тестами. Пустые части
+/// не порождают пустых разделов.
+pub(crate) fn media_prompt_block(catalog: &str, marker: Option<&str>) -> String {
+    let mut block = String::new();
+    if !catalog.is_empty() {
+        block.push_str(catalog);
+    }
+    if let Some(marker) = marker {
+        if !block.is_empty() {
+            block.push_str("\n\n");
+        }
+        block.push_str(marker);
+    }
+    block
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ImageLocator {
     Request(usize),
@@ -729,5 +894,170 @@ mod tests {
         let error = media.resolve(&["C:\\image.png".to_string()], &messages).unwrap_err();
         assert!(error.contains(&valid_id));
         assert!(error.contains("Неизвестный source_image_id"));
+    }
+
+    // ─────────────── F5 (29.10.26): маркер активного бандла ───────────────
+
+    /// Уникальная temp-подпапка теста (паттерн media_lora_tests: pid + метка
+    /// + наносекунды — параллельные тесты и повторные прогоны не пересекаются).
+    fn marker_sandbox(tag: &str) -> std::path::PathBuf {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "image_catalog_marker_{}_{tag}_{stamp}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("temp-папка создана");
+        dir
+    }
+
+    fn stub_bundle_files(dir: &std::path::Path, entry: &crate::infra::ImageBundleEntry) {
+        for file in &entry.files {
+            std::fs::write(dir.join(&file.filename), b"stub").expect("файл-заглушка записан");
+        }
+    }
+
+    /// M1: маркер содержит имя бандла и base (record-факт, а не инструкция).
+    #[test]
+    fn marker_facts_contain_bundle_name_and_base() {
+        let entry: crate::infra::ImageBundleEntry = serde_json::from_str(
+            r#"{"name":"krea2-test-q4km","label":"Krea 2 Test","lora_base":"krea2",
+                "ref_edit_mode":"edit_lora","ref_edit_lora":"krea2_identity_edit_v2_r128",
+                "ref_edit_preset":"krea2_edit","ref_edit_lora_strength":1.0,
+                "files":[{"role":"diffusion","filename":"krea2-test.gguf","download_url":"https://example.invalid/krea2.gguf"}]}"#,
+        )
+        .expect("синтетический бандл разобран");
+        let facts = ActiveBundleFacts::from_entry(&entry);
+        assert!(facts.marker.contains("bundle=krea2-test-q4km"), "{}", facts.marker);
+        assert!(facts.marker.contains("base=krea2"), "{}", facts.marker);
+        assert!(facts.marker.contains("ref_edit=edit_lora"), "{}", facts.marker);
+        // SSOT: описание identity-лоры берётся из каталога, без дублей в коде.
+        assert!(
+            facts.marker.contains("krea2_identity_edit_v2_r128"),
+            "{}",
+            facts.marker
+        );
+    }
+
+    /// M1: native-режим (Qwen) — факт без ссылок на identity-лору.
+    #[test]
+    fn marker_facts_native_mode_recorded() {
+        let entry: crate::infra::ImageBundleEntry = serde_json::from_str(
+            r#"{"name":"qwen-test-turbo","lora_base":"qwen","ref_edit_mode":"native",
+                "files":[{"role":"diffusion","filename":"qwen-test.gguf","download_url":"https://example.invalid/qwen.gguf"}]}"#,
+        )
+        .expect("синтетический бандл разобран");
+        let facts = ActiveBundleFacts::from_entry(&entry);
+        assert!(facts.marker.contains("bundle=qwen-test-turbo"), "{}", facts.marker);
+        assert!(facts.marker.contains("base=qwen"), "{}", facts.marker);
+        assert!(facts.marker.contains("ref_edit=native"), "{}", facts.marker);
+        assert_eq!(facts.base, "qwen");
+        assert_eq!(facts.ref_edit, "native");
+    }
+
+    /// PRP F5 §6: кастомный бандл — маркер показывает известные поля,
+    /// факты не выдумываются (base=-, ref_edit=нет).
+    #[test]
+    fn marker_facts_unknown_base_is_recorded_not_invented() {
+        let entry: crate::infra::ImageBundleEntry = serde_json::from_str(
+            r#"{"name":"custom-bundle","files":[{"role":"diffusion","filename":"custom.gguf","download_url":"https://example.invalid/custom.gguf"}]}"#,
+        )
+        .expect("синтетический бандл разобран");
+        let facts = ActiveBundleFacts::from_entry(&entry);
+        assert!(facts.marker.contains("base=-"), "{}", facts.marker);
+        assert!(facts.marker.contains("ref_edit=нет"), "{}", facts.marker);
+        assert_eq!(facts.base, "-");
+        assert_eq!(facts.ref_edit, "нет");
+    }
+
+    /// M1: пустой конфиг (выбор не задан) на папке без скачанных файлов —
+    /// `None`, без паники; после докачки файлов дефолта — маркер собирается.
+    #[test]
+    fn marker_resolves_default_bundle_and_requires_files() {
+        let dir = marker_sandbox("default");
+        // Ни один файл не скачан → None (fail-soft).
+        assert!(
+            marker_facts_from_selection(None, &dir).is_none(),
+            "пустой бандл-каталог не должен давать маркер"
+        );
+        let default = crate::infra::default_bundle_entry().expect("каталог содержит дефолт");
+        stub_bundle_files(&dir, &default);
+        let facts = marker_facts_from_selection(None, &dir).expect("файлы на месте");
+        assert_eq!(facts.name, default.name);
+        let expected_base = default.lora_base.clone().unwrap_or_else(|| "-".to_string());
+        assert!(
+            facts.marker.contains(&format!("base={}", expected_base)),
+            "{}",
+            facts.marker
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M1: несуществующий бандл в `selected_bundle` — None (не паника).
+    #[test]
+    fn marker_unknown_selected_bundle_is_none() {
+        let dir = marker_sandbox("unknown_selected");
+        assert!(marker_facts_from_selection(Some("net-takogo-bundle"), &dir).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M1: файлы готовятся по выбранному бандлу — у krea2 свои файлы; если
+    /// скачан только дефолтный qwen-набор, маркер krea2 не собирается.
+    #[test]
+    fn marker_requires_files_of_the_selected_bundle() {
+        let dir = marker_sandbox("selected_krea2");
+        let default = crate::infra::default_bundle_entry().expect("каталог содержит дефолт");
+        stub_bundle_files(&dir, &default);
+        let krea = crate::infra::bundle_by_name("krea2-turbo-q4km").expect("krea2 в каталоге");
+        stub_bundle_files(&dir, &krea);
+        let facts = marker_facts_from_selection(Some("krea2-turbo-q4km"), &dir)
+            .expect("krea2-файлы на месте");
+        assert_eq!(facts.name, "krea2-turbo-q4km");
+        assert_eq!(facts.base, "krea2");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// M2: сборка меди-блока — маркер идёт СРАЗУ ПОСЛЕ каталога изображений
+    /// (PRP F5 M1: «маркер идёт СРАЗУ ПОСЛЕ каталога»).
+    #[test]
+    fn media_prompt_block_appends_marker_after_catalog() {
+        let facts: crate::infra::ImageBundleEntry = serde_json::from_str(
+            r#"{"name":"qwen-test","lora_base":"qwen","ref_edit_mode":"native",
+                "files":[{"role":"diffusion","filename":"qwen-test.gguf","download_url":"https://example.invalid/qwen.gguf"}]}"#,
+        )
+        .expect("синтетический бандл разобран");
+        let facts = ActiveBundleFacts::from_entry(&facts);
+        let block = media_prompt_block(
+            "[ДОСТУПНЫЕ ИЗОБРАЖЕНИЯ]\n- id=\"hist_01\"",
+            Some(&facts.marker),
+        );
+        let catalog_pos = block.find("[ДОСТУПНЫЕ ИЗОБРАЖЕНИЯ]").expect("каталог на месте");
+        let marker_pos = block.find("[АКТИВНЫЙ БОНДЛ]").expect("маркер на месте");
+        assert!(marker_pos > catalog_pos, "маркер после каталога: {}", block);
+        assert!(
+            block.contains("base=qwen"),
+            "маркер просочился с базой: {}",
+            block
+        );
+    }
+
+    /// M2: маркер НЕ гейтится каталогом — бандл-факт полезен и без вложений
+    /// в текущем ходе (история чата может содержать картинки).
+    #[test]
+    fn media_prompt_block_marker_alone_without_catalog() {
+        let entry: crate::infra::ImageBundleEntry = serde_json::from_str(
+            r#"{"name":"solo","lora_base":"krea2","ref_edit_mode":"edit_lora",
+                "ref_edit_lora":"lora_x","ref_edit_preset":"preset_x",
+                "files":[{"role":"diffusion","filename":"solo.gguf","download_url":"https://example.invalid/solo.gguf"}]}"#,
+        )
+        .expect("синтетический бандл разобран");
+        let facts = ActiveBundleFacts::from_entry(&entry);
+        let block = media_prompt_block("", Some(&facts.marker));
+        assert_eq!(block, facts.marker, "без каталога маркер без пустых разделов");
+        // И наоборот: ни каталога, ни маркера — пустой блок (не «\n\n» мусор).
+        assert_eq!(media_prompt_block("", None), "");
+        assert_eq!(media_prompt_block("CAT", None), "CAT");
     }
 }

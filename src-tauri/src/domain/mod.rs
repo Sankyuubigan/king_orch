@@ -18,6 +18,7 @@ pub use orchestrator::run_chat;
 pub use orchestrator::build_worst_agent_prompt;
 pub use orchestrator::RequestMedia;
 pub use orchestrator::agent_consumes_image_catalog;
+pub use orchestrator::active_image_bundle_marker;
 pub use orchestrator::StreamMeta;
 pub use orchestrator::prompt::build_system_prompt;
 pub use orchestrator::builtin_tools;

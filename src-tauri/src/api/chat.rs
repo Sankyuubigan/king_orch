@@ -726,6 +726,13 @@ pub fn get_prompt_preview(
             system_prompt.push_str("\n\n");
             system_prompt.push_str(&candidates);
         }
+        // F5 (29.10.26): превью обязано показывать ровно тот промпт, который
+        // получит модель, — включая маркер активного бандла (иную базу, чем в
+        // превью, модель никогда не увидит — расхождение здесь = ложь юзеру).
+        if let Some(marker) = crate::domain::active_image_bundle_marker() {
+            system_prompt.push_str("\n\n");
+            system_prompt.push_str(&marker);
+        }
     }
 
     let mut llm_messages: Vec<LlmMessage> = vec![LlmMessage {

@@ -25,7 +25,13 @@ pub mod network_diagnostics;
 // Движок llama.cpp — переиспользуемый плагин (SSOT). Глоб-реэкспорт тенят
 // явные `pub use`/`pub mod` хоста ниже (explicit item > glob import).
 pub use tauri_plugin_llama_engine::engine::*;
-pub use tauri_plugin_image_engine::engine::models_catalog::default_bundle_entry;
+// Замок image-бандла (F5, 29.10.26): домен собирает маркер `[АКТИВНЫЙ БОНДЛ]`
+// из этого SSOT (image_models_catalog.json + app_config.json) только через
+// эту дверь — прямых обращений домена к крейту плагина быть не должно.
+pub use tauri_plugin_image_engine::engine::models_catalog::{
+    bundle_by_name, default_bundle_entry, ImageBundleEntry, RefEditMode,
+};
+pub use tauri_plugin_image_engine::engine::{bundle_dir_early, load_image_config_early};
 
 // Хелпер хоста (setup): папка движка `<exe>/llamacpp` (или из конфига).
 pub use tauri_plugin_llama_engine::get_engine_dir;

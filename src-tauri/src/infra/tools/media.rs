@@ -235,6 +235,38 @@ fn run_generate(
             entry.name
         )));
     }
+    // F4 (29.10.26): SSOT-планировщик ref-edit — гейт ДО планирования
+    // (fail-closed). Krea2 без обученной edit-лоры под вшитый сервером
+    // ref-конвейер — ровно боевой баг «серые квадраты» (ostris issue #1);
+    // бандл без контракта — честный отказ тула, Krea2 с контрактом —
+    // автоподключение identity-лоры + preset krea2_edit.
+    let (loras, ref_image_args) = if ref_paths.is_empty() {
+        (loras.to_vec(), None)
+    } else {
+        match tauri_plugin_image_engine::engine::plan_ref_edit(
+            &entry,
+            &tauri_plugin_image_engine::engine::image_lora_dir_early(),
+            loras.to_vec(),
+        ) {
+            Ok(tauri_plugin_image_engine::engine::RefEditPlan::Unsupported { reason }) => {
+                log::warn!("[IMG-TOOL] ref-edit отказ (fail-closed): бандл «{}»", entry.name);
+                return Err(ToolError::Usage(reason));
+            }
+            Ok(tauri_plugin_image_engine::engine::RefEditPlan::Ready { loras: plan_loras, ref_image_args }) => {
+                let stack: Vec<String> = plan_loras
+                    .iter()
+                    .map(|l| format!("{}×{:.2}", l.path, l.multiplier))
+                    .collect();
+                log::info!(
+                    "[IMG-TOOL] ref-edit plan: loras=[{}], ref_image_args={}",
+                    stack.join(" + "),
+                    ref_image_args.clone().unwrap_or_else(|| "(native — сервер сам)".to_string())
+                );
+                (plan_loras, ref_image_args)
+            }
+            Err(e) => return Err(ToolError::Usage(e)),
+        }
+    };
     let cfg = tauri_plugin_image_engine::engine::load_image_config_early();
     let engine_dir = tauri_plugin_image_engine::engine::engine_dir_early();
     let bundle_dir = tauri_plugin_image_engine::engine::bundle_dir_early();
@@ -261,7 +293,7 @@ fn run_generate(
             prompt_en,
             entry.preset.width, entry.preset.height, entry.preset.steps,
             entry.preset.cfg_scale, entry.preset.seed,
-            &out_path, loras, None, log_cb,
+            &out_path, &loras, None, log_cb,
         )
     } else {
         tauri_plugin_image_engine::engine::edit_image_files(
@@ -270,7 +302,8 @@ fn run_generate(
             prompt_en, ref_paths,
             entry.preset.width, entry.preset.height, entry.preset.steps,
             entry.preset.cfg_scale, entry.preset.seed,
-            &out_path, loras, None, log_cb,
+            &out_path, &loras, None, log_cb,
+            ref_image_args.as_deref(),
         )
     };
     match res {
@@ -450,7 +483,7 @@ impl Tool for EditImage {
         "edit_image"
     }
     fn description(&self) -> &str {
-        "Отредактировать выбранные изображения из чата по английскому промпту. Обязательно передавай source_image_ids из блока доступных изображений. Первый ID = холст (<image1>, чья композиция сохраняется), остальные = источники материала (<image2>, ...). В промпте адресуй картинки тегами <image1>, <image2> — иначе модель не поймёт, откуда взять лицо/идентичность."
+        "Отредактировать выбранные изображения из чата по английскому промпту. Обязательно передавай source_image_ids из блока доступных изображений. Первый ID = холст (<image1>, чья композиция сохраняется), остальные = источники материала (<image2>, ...). В промпте адресуй картинки тегами <image1>, <image2> — иначе модель не поймёт, откуда взять лицо/идентичность. На Krea2-бандле edit-лора identity подключается автоматически (в lora её заявлять НЕ нужно); Krea2 сильна в restage/композициях/сценах, для точной замены лица лицом используй Qwen-бандл."
     }
     fn parameters(&self) -> Value {
         serde_json::json!({
