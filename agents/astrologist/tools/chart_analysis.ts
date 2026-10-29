@@ -87,6 +87,24 @@ export function housesOwned(lagnaSignIdx: number, planetKey: string): number[] |
         .sort((a, b) => a - b);
 }
 
+/** Управитель знака — инверсия OWN_SIGNS (таблица существует ровно в одном месте). */
+const SIGN_LORDS: string[] = (() => {
+    const lords = new Array<string>(12).fill("");
+    for (const [planet, signs] of Object.entries(OWN_SIGNS)) {
+        for (const s of signs) lords[s] = planet;
+    }
+    return lords;
+})();
+
+/** Управитель знака (индекс 0..11 от Овна) — ключ грахи. */
+export function signLordOf(signIdx: number): string {
+    const lord = SIGN_LORDS[signIdx];
+    if (!lord) {
+        throw new Error(`signLordOf: для знака ${signIdx} нет управителя — таблица OWN_SIGNS неполна`);
+    }
+    return lord;
+}
+
 /**
  * Граха-дришти: номера домов (1..12), на которые смотрит граха из дома houseD1.
  * k-й дом от h = ((h+k−2) mod 12)+1 (k=1 — тот же дом; 7-й — общий аспект).

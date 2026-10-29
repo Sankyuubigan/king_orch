@@ -3,7 +3,7 @@
  *
  * Вход: один argv-токен — плоский JSON строк вида
  *   {"lagna": "<вывод calc_chart.output.lagna>", "planets": "<...output.planets>",
- *    "topic": "<...output.question_topic>"}
+ *    "topic": "<...output.question_topic>", "transits": "<...output.transits>"}
  * Движок сериализует не-строки в JSON-строку (как у tarot lookup), поэтому поля
  * принимаются и строкой-JSON, и готовым объектом/массивом.
  *
@@ -12,13 +12,32 @@
  *
  * Выход ТОЛЬКО JSON в stdout:
  *   {"text": "...", "files_used": [...], "sections": N}
- * Состав досье: файл лагны + все 12 связок «управитель дома в доме» этой карты
- * (каждый дом имеет ровно одного управителя среди 7 грах; Раху/Кету владений
- * не имеют) + файл темы вопроса (неизвестная/пустая тема → general).
+ * Состав досье:
+ *   - файл лагны;
+ *   - все 12 связок «управитель дома в доме» этой карты (7 грах-управителей,
+ *     Раху/Кету владений не имеют);
+ *   - йоги, детектированные в карте (vedastro_detect.ts) — только они, секции
+ *     из yogas.md; недетектированные йоги в досье не попадают (00.2);
+ *   - гочара: ровно по одной транзитной секции на граху (дома от Луны), из gochara.md;
+ *   - правила периодов даш: универсальные + солнечные по состоянию Солнца,
+ *     из dasha_rules.md;
+ *   - файл темы вопроса (неизвестная/пустая тема → general).
  *
- * Любая недостающая часть БЗ или битый вход — stderr + exit 1: честный отказ,
- * workflow останавливается, тихой деградации нет.
+ * Любая недостающая часть БЗ, битый вход или детектированный id без секции в
+ * базе — stderr + exit 1: честный отказ, workflow останавливается, тихой
+ * деградации нет.
  */
+
+import { SIGNS } from "./vedic_math.ts";
+import {
+    DetectPlanet,
+    DetectTransit,
+    RU_NAME_TO_KEY,
+    detectDashaRules,
+    detectGochara,
+    detectYogas,
+} from "./vedastro_detect.ts";
+import { Dignity } from "./chart_analysis.ts";
 
 /** Русское имя знака → файл лагны в database/lagnas/. */
 const SIGN_FILES: Record<string, string> = {
@@ -48,6 +67,7 @@ interface PlanetIn {
     name?: unknown;
     house_d1?: unknown;
     ruled_houses_d1?: unknown;
+    dignity?: unknown;
 }
 
 export interface SelectedSection {
@@ -78,6 +98,13 @@ export function lagnaFileFor(signRu: string): string {
         throw new Error(`неизвестный знак лагны "${signRu}" — файла в database/lagnas/ нет`);
     }
     return file;
+}
+
+/** Русское имя знака → индекс 0..11 (источник — SIGNS vedic_math.ts). */
+export function signIndexFor(signRu: string): number {
+    const idx = SIGNS.indexOf(signRu);
+    if (idx < 0) throw new Error(`неизвестный знак "${signRu}" — нет в SIGNS (vedic_math.ts)`);
+    return idx;
 }
 
 /** Тема → имя файла; пустая/неизвестная/не-строка → general (тема — совет, не контракт). */
@@ -127,6 +154,60 @@ export function lordPlacements(planets: PlanetIn[]): { lord: string; ruled: numb
     return placements;
 }
 
+const DIGNITIES: Dignity[] = ["exalted", "moolatrikona", "own_sign", "debilitated", "neutral"];
+
+/**
+ * JSON-грахи calc_chart → срез детекции. Русское имя должно быть известно
+ * (RU_NAME_TO_KEY), достоинство — из словаря или null (узлы).
+ */
+export function toDetectPlanets(planets: PlanetIn[]): DetectPlanet[] {
+    const mapped = planets.map((p) => {
+        const name = typeof p?.name === "string" ? p.name : "";
+        const key = RU_NAME_TO_KEY[name];
+        if (!key) throw new Error(`планета с именем "${name}" не известна детекции (RU_NAME_TO_KEY)`);
+        if (!Number.isInteger(p?.house_d1) || (p.house_d1 as number) < 1 || (p.house_d1 as number) > 12) {
+            throw new Error(`планета "${name}": дом house_d1 вне 1..12 (${String(p?.house_d1)})`);
+        }
+        let dignity: Dignity | null = null;
+        if (p.dignity !== null && p.dignity !== undefined) {
+            if (typeof p.dignity !== "string" || !DIGNITIES.includes(p.dignity as Dignity)) {
+                throw new Error(`планета "${name}": некорректное dignity (${String(p.dignity)})`);
+            }
+            dignity = p.dignity as Dignity;
+        }
+        const ruled = p.ruled_houses_d1;
+        if (ruled !== null && ruled !== undefined && !Array.isArray(ruled)) {
+            throw new Error(`планета "${name}": ruled_houses_d1 не массив — данные calc_chart повреждены`);
+        }
+        return {
+            key,
+            houseD1: p.house_d1 as number,
+            dignity,
+            ruledHousesD1: ruled === null || ruled === undefined ? null : (ruled as number[]),
+        };
+    });
+    if (mapped.length !== 9) {
+        throw new Error(`ожидалось 9 грах, получено ${mapped.length}`);
+    }
+    return mapped;
+}
+
+/** Транзиты calc_chart → срез детекции (имя + проходимый дом натальной карты). */
+export function toDetectTransits(raw: unknown): DetectTransit[] {
+    const transits = normalizeField<Record<string, unknown>>(raw, "transits");
+    if (!Array.isArray(transits.grahas)) {
+        throw new Error("transits.grahas не массив — данные calc_chart повреждены");
+    }
+    return (transits.grahas as Record<string, unknown>[]).map((g) => {
+        const name = typeof g?.name === "string" ? g.name : "";
+        if (!RU_NAME_TO_KEY[name]) throw new Error(`транзитная граха "${name}" не известна детекции`);
+        if (!Number.isInteger(g?.house_transited)) {
+            throw new Error(`транзит "${name}": house_transited не число (${String(g?.house_transited)})`);
+        }
+        return { name, houseTransited: g.house_transited as number };
+    });
+}
+
 /** Заголовки секций строго в формате «## Управитель N-го дома в M-м доме». */
 function parseSections(md: string, sourceName: string): Map<string, SelectedSection> {
     const lines = md.split(/\r?\n/);
@@ -146,6 +227,33 @@ function parseSections(md: string, sourceName: string): Map<string, SelectedSect
         if (m) {
             flush();
             current = { key: `${m[1]}-${m[2]}`, heading: line.trim(), body: [] };
+        } else if (current) {
+            current.body.push(line);
+        }
+    }
+    flush();
+    return map;
+}
+
+/** Заголовки секций-идентификаторов: «## <LatinId>» (yogas.md / gochara.md / dasha_rules.md). */
+function parseIdSections(md: string, sourceName: string): Map<string, SelectedSection> {
+    const lines = md.split(/\r?\n/);
+    const map = new Map<string, SelectedSection>();
+    let current: { key: string; body: string[] } | null = null;
+    const flush = () => {
+        if (current) {
+            if (map.has(current.key)) {
+                throw new Error(`${sourceName}: дублирующаяся секция «${current.key}»`);
+            }
+            map.set(current.key, { heading: `## ${current.key}`, text: current.body.join("\n").trim() });
+        }
+    };
+    const re = /^## ([A-Za-z][A-Za-z0-9]*)\s*$/;
+    for (const line of lines) {
+        const m = re.exec(line);
+        if (m) {
+            flush();
+            current = { key: m[1], body: [] };
         } else if (current) {
             current.body.push(line);
         }
@@ -183,6 +291,23 @@ export function selectBhavaSections(
     return selected.sort((a, b) => Number(a.heading.match(/\d+/)![0]) - Number(b.heading.match(/\d+/)![0]));
 }
 
+/**
+ * Секции-идентификаторы по списку id (порядок списка сохраняется).
+ * Детектированный id без секции в базе — fail-fast (битая БЗ, а не тихий пропуск).
+ */
+export function selectIdSections(
+    md: string,
+    sourceName: string,
+    ids: string[],
+): SelectedSection[] {
+    const map = parseIdSections(md, sourceName);
+    const missing = ids.filter((id) => !map.has(id));
+    if (missing.length > 0) {
+        throw new Error(`${sourceName}: нет секций для детектированных записей: ${missing.join(", ")}`);
+    }
+    return ids.map((id) => map.get(id)!);
+}
+
 export interface KnowledgeInput {
     lagnaSign: string;
     placements: { lord: string; ruled: number; placed: number }[];
@@ -191,16 +316,59 @@ export interface KnowledgeInput {
     lowContent: string;
     highContent: string;
     topicContent: string;
+    yogasContent: string;
+    gocharaContent: string;
+    dashaRulesContent: string;
+    detectedYogaIds: string[];
+    detectedGocharaIds: string[];
+    detectedDashaRuleIds: string[];
+}
+
+/** Секции «id-файла» в текст досье; пустой набор — честная строка вместо пустоты. */
+function idSectionsBlock(
+    md: string,
+    sourceName: string,
+    ids: string[],
+    emptyNote: string,
+): string {
+    if (ids.length === 0) return emptyNote;
+    return selectIdSections(md, sourceName, ids)
+        .map((s) => `${s.heading}\n${s.text}`)
+        .join("\n\n");
 }
 
 /** Сборка итогового текста досье. */
 export function assembleText(input: KnowledgeInput): string {
     const sections = selectBhavaSections(input.lowContent, input.highContent, input.placements);
+    const yogasBlock = idSectionsBlock(
+        input.yogasContent,
+        "yogas.md",
+        input.detectedYogaIds,
+        "Детектируемых йог этого набора в карте не обнаружено.",
+    );
+    const gocharaBlock = idSectionsBlock(
+        input.gocharaContent,
+        "gochara.md",
+        input.detectedGocharaIds,
+        "Транзитные секции гочары не выбраны (список транзитных грах пуст).",
+    );
+    const dashaBlock = idSectionsBlock(
+        input.dashaRulesContent,
+        "dasha_rules.md",
+        input.detectedDashaRuleIds,
+        "Правил периодов даш не выбрано.",
+    );
     const parts = [
         `=== ФУНКЦИОНАЛЬНАЯ ПРИРОДА ГРАХ ДЛЯ ЛАГНЫ ${input.lagnaSign.toUpperCase()} ===`,
         input.lagnaContent.trim(),
         `=== УПРАВИТЕЛИ ДОМОВ В ДОМАХ (связки этой карты) ===`,
         sections.map((s) => `${s.heading}\n${s.text}`).join("\n\n"),
+        `=== ЙОГИ ЭТОЙ КАРТЫ (детектированы автоматически; применять только этот список) ===`,
+        yogasBlock,
+        `=== ТРАНЗИТЫ GOCHARA: ЭФФЕКТ ТЕКУЩЕГО ТРАНЗИТА КАЖДОЙ ГРАХИ (номер дома — от Луны) ===`,
+        gocharaBlock,
+        `=== ПРАВИЛА ПЕРИОДОВ ДАШ (универсальные и по состоянию Солнца) ===`,
+        dashaBlock,
         `=== ПРАВИЛА ТЕМЫ ВОПРОСА: ${input.topicFile.replace(".md", "")} ===`,
         input.topicContent.trim(),
     ];
@@ -209,7 +377,9 @@ export function assembleText(input: KnowledgeInput): string {
 
 async function main() {
     const raw = Deno.args[0];
-    if (!raw) throw new Error("не переданы аргументы (ожидался JSON с lagna, planets, topic)");
+    if (!raw) {
+        throw new Error("не переданы аргументы (ожидался JSON с lagna, planets, topic, transits)");
+    }
     const args = normalizeField<Record<string, unknown>>(raw, "args");
 
     const lagna = normalizeField<Record<string, unknown>>(args.lagna, "lagna");
@@ -218,6 +388,14 @@ async function main() {
     if (!sign) throw new Error("в lagna нет строкового поля sign — данные calc_chart повреждены");
 
     const placements = lordPlacements(planets);
+    const detectPlanets = toDetectPlanets(planets);
+    const detectTransits = toDetectTransits(args.transits);
+    const lagnaIdx = signIndexFor(sign);
+
+    const detectedYogaIds = detectYogas(detectPlanets, lagnaIdx);
+    const detectedGocharaIds = detectGochara(detectPlanets, detectTransits);
+    const detectedDashaRuleIds = detectDashaRules(detectPlanets, lagnaIdx);
+
     const lagnaFile = lagnaFileFor(sign);
     const topicFile = topicFileFor(args.topic);
 
@@ -236,6 +414,9 @@ async function main() {
     const lowContent = await read("bhava_lords_1_6.md");
     const highContent = await read("bhava_lords_7_12.md");
     const topicContent = await read(`topics/${topicFile}`);
+    const yogasContent = await read("yogas.md");
+    const gocharaContent = await read("gochara.md");
+    const dashaRulesContent = await read("dasha_rules.md");
 
     const text = assembleText({
         lagnaSign: sign,
@@ -245,12 +426,32 @@ async function main() {
         lowContent,
         highContent,
         topicContent,
+        yogasContent,
+        gocharaContent,
+        dashaRulesContent,
+        detectedYogaIds,
+        detectedGocharaIds,
+        detectedDashaRuleIds,
     });
 
     console.log(JSON.stringify({
         text,
-        files_used: [`lagnas/${lagnaFile}`, "bhava_lords_1_6.md", "bhava_lords_7_12.md", `topics/${topicFile}`],
-        sections: placements.length,
+        files_used: [
+            `lagnas/${lagnaFile}`,
+            "bhava_lords_1_6.md",
+            "bhava_lords_7_12.md",
+            "yogas.md",
+            "gochara.md",
+            "dasha_rules.md",
+            `topics/${topicFile}`,
+        ],
+        sections: placements.length + detectedYogaIds.length + detectedGocharaIds.length +
+            detectedDashaRuleIds.length,
+        detected: {
+            yogas: detectedYogaIds,
+            gochara: detectedGocharaIds,
+            dasha_rules: detectedDashaRuleIds,
+        },
     }));
 }
 

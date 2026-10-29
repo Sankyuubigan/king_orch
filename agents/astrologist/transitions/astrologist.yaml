@@ -116,6 +116,7 @@ nodes:
     lagna: '{{ nodes.calc_chart.output.lagna }}'
     topic: '{{ nodes.extract_facts.output.question_topic }}'
     planets: '{{ nodes.calc_chart.output.planets }}'
+    transits: '{{ nodes.calc_chart.output.transits }}'
 
 - id: ask_attach
   type: llm_worker
@@ -148,7 +149,7 @@ nodes:
     {{ nodes.calc_chart.output }}
     Транзиты на момент запроса (положения грах и дома натальной карты, которые они проходят):
     {{ nodes.calc_chart.output.transits }}
-    База знаний под эту карту и вопрос (функциональная природа грах для лагны, все связки «управитель дома в доме» этой карты, правила темы вопроса):
+    База знаний под эту карту и вопрос (функциональная природа грах для лагны, все связки «управитель дома в доме» этой карты, йоги, детектированные в карте, эффекты текущих транзитов по гочаре от Луны, правила периодов даш, правила темы вопроса):
     {{ nodes.build_knowledge.output.text }}
 
     Правила разбора:
