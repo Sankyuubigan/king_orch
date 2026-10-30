@@ -525,6 +525,11 @@ where
                 &current_sub_calls,
                 &runner.image_artifacts,
             ).map_err(|e| log::error!("[VID-TOOL] Видео не приложены (узел '{}'): {}", agent_id, e)).unwrap_or(0);
+            let excel_attached = crate::infra::attach_saved_excel_from_sub_calls(
+                &mut msg,
+                &current_sub_calls,
+                &runner.image_artifacts,
+            ).map_err(|e| log::error!("[EXCEL] Файлы не приложены (узел '{}'): {}", agent_id, e)).unwrap_or(0);
             if attached > 0 {
                 (runner.log_cb)(format!(
                     "🖼 Прикреплено изображений к ответу узла '{}': {}",
@@ -535,6 +540,12 @@ where
                 (runner.log_cb)(format!(
                     "🎬 Прикреплено видео к ответу узла '{}': {}",
                     agent_id, videos_attached
+                ));
+            }
+            if excel_attached > 0 {
+                (runner.log_cb)(format!(
+                    "📊 Прикреплено файлов Excel к ответу узла '{}': {}",
+                    agent_id, excel_attached
                 ));
             }
             push_report(&mut context.messages, msg, agent.replace_report, Some(2));
@@ -791,6 +802,7 @@ where
             )
             .with_image_candidates(context.image_candidates.clone())
             .with_video_loras(context.video_loras.clone())
+            .with_spreadsheet_files(context.spreadsheet_files.clone())
             .with_request_media(context.request_media.clone());
 
             let sub_result = match super::run_workflow(sub_wf, &mut sub_ctx, runner) {

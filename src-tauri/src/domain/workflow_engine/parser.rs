@@ -866,6 +866,7 @@ mod tests {
         "agents/coder/transitions/coding-team.yaml",
         "agents/research/transitions/search-specialist.yaml",
         "agents/image-gen/transitions/image-gen-flow.yaml",
+        "agents/excel/transitions/excel-flow.yaml",
         "agents/tarot-master/transitions/tarot_master.yaml",
         "agents/astrologist/transitions/astrologist.yaml",
     ];
@@ -1595,8 +1596,8 @@ edges: []
 
     /// Настоящий граф обязан распознаваться как граф и грузиться.
     ///
-    /// На 25.10.26 в `agents/` живёт 7 графов (добавлен tarot_master — расклад
-    /// карт команды «Таролог», агент tarot_reader/tarot_helper). Вариант
+    /// На 31.10.26 в `agents/` живёт 9 графов (добавлен excel-flow — команда
+    /// «Excel-таблицы», агенты excel_operator/excel_helper). Вариант
     /// психотерапевта из `experiments/` удалён коммитом `83e37f9` вместе с нодой
     /// System-1.
     #[test]
@@ -1614,6 +1615,7 @@ edges: []
                 "analyst-team",
                 "astrologist",
                 "coding-team",
+                "excel-flow",
                 "image-gen-flow",
                 "main_conversation_flow",
                 "search-specialist",

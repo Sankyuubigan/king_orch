@@ -698,6 +698,7 @@ pub fn get_prompt_preview(
                 let mut tools = crate::domain::builtin_tools();
                 tools.extend(crate::infra::image_tool_schemas(&agent.tools));
                 tools.extend(crate::infra::video_tool_schemas(&agent.tools));
+                tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
                 let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
                 let prompt = crate::domain::build_system_prompt(
                     agent, &history, has_tools, &tools, 2048, false, false, false, false,

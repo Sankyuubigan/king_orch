@@ -165,6 +165,12 @@ pub struct AppConfig {
     /// Папка видео-бандлов ImageGEN (ключ плагина image-engine; MiniMax H3).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub video_bundle_dir: Option<String>,
+    /// Путь к soffice.exe (LibreOffice) для Excel-тулов: пересчёт формул и
+    /// PDF-рендер. None = авто-детект (PATH → стандартные пути установки,
+    /// см. ko_excel_tools::soffice::detect_soffice). Пересчёт опционален:
+    /// статические гейты формул работают и без него.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub libreoffice_path: Option<String>,
 }
 
 fn default_translator_lang() -> String {
@@ -220,6 +226,7 @@ impl Default for AppConfig {
             sdcpp_dir: None,
             image_bundle_dir: None,
             video_bundle_dir: None,
+            libreoffice_path: None,
         }
     }
 }

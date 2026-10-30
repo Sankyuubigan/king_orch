@@ -35,3 +35,4 @@ test_out.txt
 build_output.txt
 src-tauri/tauri-dev-override.json
 /.zcode
+/nul

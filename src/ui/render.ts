@@ -4,6 +4,7 @@ import type { MessageMenuCallbacks } from "./message-menu";
 import { createImageAttachmentElement } from "./image-attachment";
 import type { ImageAttachmentCallbacks } from "./image-attachment";
 import { createVideoAttachmentElement } from "./video-attachment";
+import { createFileAttachmentElement } from "./file-attachment";
 import type { Attachment } from "../types";
 
 
@@ -46,15 +47,9 @@ export function createMessageElement(
       } else if (att.mime_type?.startsWith("video/")) {
         attDiv.appendChild(createVideoAttachmentElement(att, imageCallbacks));
       } else {
-        const chip = document.createElement("button");
-        chip.type = "button";
-        chip.className = "msg-attachment-file";
-        chip.textContent = `${att.is_dir ? "📁" : "📎"} ${att.file_name || "файл"}`;
-        if (att.file_path) chip.title = att.file_path;
-        if (att.file_path && imageCallbacks?.onOpenPath) {
-          chip.addEventListener("click", () => imageCallbacks.onOpenPath?.(att));
-        }
-        attDiv.appendChild(chip);
+        // Документы (.xlsx/.csv/.pdf и пр.) — карточка с проводником (файл
+        // на диске) или сохранением (только base64).
+        attDiv.appendChild(createFileAttachmentElement(att, imageCallbacks));
       }
     }
     msgDiv.appendChild(attDiv);

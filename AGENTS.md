@@ -288,6 +288,15 @@ pub struct ChatMessage {
 {"thought": "...", "tool": "имя", "arguments": {...}}
 ```
 
+### Нативные Excel-тулы (📊 Capability excel, паттерн медиа-тулов)
+
+- **SSOT-ядро** — lib-крейт `D:\Projects\my-tauri-plugins\ko-excel-tools` (umya-spreadsheet-операции, QA-гейты формул, recalc/PDF через LibreOffice). Хост-адаптер — `infra/tools/excel/mod.rs` (6 тулов: `excel_inspect`/`excel_read`/`excel_apply`/`excel_audit`/`excel_render`/`excel_convert`, `EXCEL_TOOL_NAMES`).
+- **Подключение агенту**: frontmatter `tools: {excel_apply: true, ...}` → `excel_tool_schemas(&agent.tools)` — 3 точки инъекции схем (`orchestrator/mod.rs` worst-prompt + run_agent, `api/chat.rs`), диспетчеризация — ветка `is_excel_tool` в `dispatch.rs` с grant-проверкой (`meta == "excel"`).
+- **Гейт источников (§00.2)**: читаются ТОЛЬКО файлы из allow-read списка (вложения пользователя, `request_media.current_attachment_paths()`) ИЛИ из `<exe>/excel_outputs/<session_id>/` — произвольные пути диска структурно недоступны (`ensure_allowed_source`: абсолютный путь, без `..`, is_file).
+- **Артефакты**: результат `excel_apply`/`excel_render` → маркер `[EXCEL_SAVED id=N]` → `attach_saved_excel_from_sub_calls` → `ChatAttachment{file_path}` (без base64) → фронт-карточка `src/ui/file-attachment.ts` (📂 проводник / ⬇ сохранение). Стем ВСЕГДА через `sequenced_stem` (счётчик `stem-<seq>`) — защита от коллизии «два apply за секунду → тихая перезапись».
+- **Каталог таблиц**: `RequestMedia::spreadsheet_files_prompt()` → `{{ spreadsheet_files }}` в контексте графа (xlsx/csv/tsv с путями; xls/xlsm/ods — блок «НЕ ПОДДЕРЖИВАЕТСЯ»). Конфиг-ключ `libreoffice_path` (§0.5): None = авто-детект soffice; без LibreOffice recalc/PDF недоступны — агент обязан честно сказать, что пересчёта значений не было.
+- **Граф**: `agents/excel/transitions/excel-flow.yaml` (entry `user_message` → факт `needs_table_file` → `excel_operator` / `excel_helper`, оба терминальные). Зарегистрирован в `parser.rs` PRODUCTION_GRAPHS + stems-тест. Формулы — только совместимый набор (VLOOKUP/INDEX+MATCH/SUMIF(S)/SUMPRODUCT); динамические функции Excel 365 (XLOOKUP, LET, LAMBDA…) запрещены QA-гейтом ядра.
+
 ## 5. Код-стайл
 
 ### TypeScript (frontend)

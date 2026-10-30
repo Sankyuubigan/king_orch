@@ -447,6 +447,54 @@ impl RequestMedia {
         out
     }
 
+    /// Каталог таблиц для Excel-агента (`{{ spreadsheet_files }}`): вложения
+    /// .xlsx/.csv/.tsv (+ честная пометка для не поддерживаемых .xls/.xlsm —
+    /// молча терять файл юзера запрещено). Источник путей — attachment_refs
+    /// (политика видимости 28.10.2026: пути видны модели; excel-тулы гейтят
+    /// их allow-read списком `current_attachment_paths()`).
+    pub fn spreadsheet_files_prompt(&self) -> String {
+        let table_exts = ["xlsx", "csv", "tsv"];
+        let rejected_exts = ["xls", "xlsm", "ods"];
+        let mut rows = String::new();
+        let mut rejected = String::new();
+        for r in &self.attachment_refs {
+            let name = r.get("file_name").and_then(|v| v.as_str()).unwrap_or("");
+            let ext = name
+                .rsplit('.')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let origin = match r.get("origin").and_then(|v| v.as_str()) {
+                Some("current") => "текущий запрос",
+                _ => "история чата",
+            };
+            let path = r.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+            if table_exts.contains(&ext.as_str()) {
+                rows.push_str(&format!("- file=\"{}\"; path={}; origin={}\n", name, path, origin));
+            } else if rejected_exts.contains(&ext.as_str()) {
+                rejected.push_str(&format!("- file=\"{}\" (origin={})\n", name, origin));
+            }
+        }
+        if rows.is_empty() && rejected.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from("[ТАБЛИЦЫ ЗАПРОСА]\n");
+        if !rows.is_empty() {
+            out.push_str(&rows);
+            out.push_str(
+                "Передавай path из этого списка в аргумент `path` excel-тулов. Файлы истории \
+                 тоже доступны: юзер уже отдавал их в чат.\n",
+            );
+        }
+        if !rejected.is_empty() {
+            out.push_str(&format!(
+                "[НЕ ПОДДЕРЖИВАЮТСЯ] старые форматы (честно скажи пользователю, что нужен .xlsx):\n{}",
+                rejected
+            ));
+        }
+        out
+    }
+
     pub fn message_suffix(&self, message_id: Option<&str>) -> String {
         let Some(message_id) = message_id else {
             return String::new();
@@ -921,6 +969,49 @@ mod tests {
     }
 
     // ─────────────── F5 (29.10.26): маркер активного бандла ───────────────
+
+    /// Каталог таблиц: xlsx/csv/tsv — с путями и origin; xls/xlsm — честная
+    /// пометка «не поддерживается»; без таблиц — пустой блок.
+    #[test]
+    fn spreadsheet_files_prompt_lists_tables_and_rejects_old_formats() {
+        let xlsx = ChatAttachment {
+            file_name: "отчёт.xlsx".to_string(),
+            mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string(),
+            data_base64: String::new(),
+            file_path: Some("C:\\Users\\user\\Desktop\\отчёт.xlsx".to_string()),
+            is_dir: Some(false),
+        };
+        let csv = ChatAttachment {
+            file_name: "данные.csv".to_string(),
+            mime_type: "text/csv".to_string(),
+            data_base64: String::new(),
+            file_path: Some("C:\\Downloads\\данные.csv".to_string()),
+            is_dir: Some(false),
+        };
+        let old = ChatAttachment {
+            file_name: "старый.xls".to_string(),
+            mime_type: "application/vnd.ms-excel".to_string(),
+            data_base64: String::new(),
+            file_path: Some("C:\\Downloads\\старый.xls".to_string()),
+            is_dir: Some(false),
+        };
+        let png = attachment("картинка.png", "img");
+        let all = vec![xlsx, csv, old, png];
+        let current = message("msg_1", "user", "ход", all.clone());
+
+        let media = RequestMedia::build(&all, &[current]);
+        let prompt = media.spreadsheet_files_prompt();
+        assert!(prompt.contains("file=\"отчёт.xlsx\""), "{prompt}");
+        assert!(prompt.contains("path=C:\\Users\\user\\Desktop\\отчёт.xlsx"), "{prompt}");
+        assert!(prompt.contains("origin=текущий запрос"), "{prompt}");
+        assert!(prompt.contains("данные.csv"), "{prompt}");
+        assert!(prompt.contains("НЕ ПОДДЕРЖИВАЮТСЯ"), "{prompt}");
+        assert!(prompt.contains("старый.xls"), "{prompt}");
+        assert!(!prompt.contains("картинка.png"), "не-таблицы не попадают в каталог: {prompt}");
+
+        // Пустой набор — пустой блок (без мусорных заголовков).
+        assert_eq!(RequestMedia::empty().spreadsheet_files_prompt(), "");
+    }
 
     /// Уникальная temp-подпапка теста (паттерн media_lora_tests: pid + метка
     /// + наносекунды — параллельные тесты и повторные прогоны не пересекаются).

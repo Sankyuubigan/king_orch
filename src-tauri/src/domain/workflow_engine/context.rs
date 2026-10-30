@@ -48,6 +48,10 @@ pub struct WorkflowContext {
     /// описания). Заполняется при создании контекста (orchestrator), резолвится
     /// шаблоном `{{ video_loras }}` — по образцу `{{ image_candidates }}`.
     pub video_loras: String,
+    /// Каталог таблиц (`{{ spreadsheet_files }}`): вложения .xlsx/.csv/.tsv
+    /// текущего запроса и истории с абсолютными путями — источники excel-тулов.
+    /// Заполняется при создании контекста (orchestrator) из RequestMedia.
+    pub spreadsheet_files: String,
     pub request_media: Arc<RequestMedia>,
 }
 
@@ -70,6 +74,7 @@ impl WorkflowContext {
             image_candidates: String::new(),
             video_image_candidates: String::new(),
             video_loras: String::new(),
+            spreadsheet_files: String::new(),
             request_media: Arc::new(RequestMedia::empty()),
         }
     }
@@ -86,6 +91,11 @@ impl WorkflowContext {
 
     pub fn with_video_loras(mut self, block: String) -> Self {
         self.video_loras = block;
+        self
+    }
+
+    pub fn with_spreadsheet_files(mut self, block: String) -> Self {
+        self.spreadsheet_files = block;
         self
     }
 
@@ -112,6 +122,7 @@ impl WorkflowContext {
         result = result.replace("{{ image_candidates }}", &self.image_candidates);
         result = result.replace("{{ video_image_candidates }}", &self.video_image_candidates);
         result = result.replace("{{ video_loras }}", &self.video_loras);
+        result = result.replace("{{ spreadsheet_files }}", &self.spreadsheet_files);
 
         // {{ signals }} — JSON-объект из signal bus (ключ → значение)
         if result.contains("{{ signals }}") {

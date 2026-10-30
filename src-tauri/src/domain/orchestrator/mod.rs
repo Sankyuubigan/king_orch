@@ -255,6 +255,7 @@ pub fn build_worst_agent_prompt(
             tools.extend(runtime::agent_code_tool_schemas(agent));
             tools.extend(crate::infra::image_tool_schemas(&agent.tools));
             tools.extend(crate::infra::video_tool_schemas(&agent.tools));
+            tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
             let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
             let mut sp =
                 build_system_prompt(agent, history, has_tools, &tools, 2048, false, false, false, false);
@@ -397,6 +398,7 @@ where
                  tools.extend(runtime::agent_code_tool_schemas(agent));
                  tools.extend(crate::infra::image_tool_schemas(&agent.tools));
                  tools.extend(crate::infra::video_tool_schemas(&agent.tools));
+                 tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
                  let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
                 (
                     build_system_prompt(
@@ -630,6 +632,9 @@ where
         // Каталог видео-лор юзера (скан папки + sidecar-описания): дёшево
         // (десятки файлов), резолвится только там, где граф шаблоном просит.
         .with_video_loras(crate::infra::tools::media::media_lora::video_loras_prompt())
+        // Каталог таблиц (`{{ spreadsheet_files }}`): вложения .xlsx/.csv/.tsv
+        // текущего запроса и истории с путями — источники excel-тулов.
+        .with_spreadsheet_files(request_media.spreadsheet_files_prompt())
         .with_request_media(request_media.clone());
         // Переопределение режима из чата. Разбирается ОДИН раз здесь, чтобы
         // невалидное значение упало до прогона, а не внутри цикла нод.
@@ -820,11 +825,19 @@ where
             &current_sub_calls,
             &image_artifacts,
         ).map_err(|e| log::error!("[VID-TOOL] Видео не приложены: {}", e)).unwrap_or(0);
+        let excel_attached = crate::infra::attach_saved_excel_from_sub_calls(
+            &mut final_message,
+            &current_sub_calls,
+            &image_artifacts,
+        ).map_err(|e| log::error!("[EXCEL] Файлы не приложены: {}", e)).unwrap_or(0);
         if attached > 0 {
             log_cb(format!("🖼 Прикреплено изображений к ответу: {}", attached));
         }
         if videos_attached > 0 {
             log_cb(format!("🎬 Прикреплено видео к ответу: {}", videos_attached));
+        }
+        if excel_attached > 0 {
+            log_cb(format!("📊 Прикреплено файлов Excel к ответу: {}", excel_attached));
         }
         messages_store.push(final_message);
         // Сигнал агента — ПОСЛЕ его ответа (как в nodes.rs:517-528).
@@ -1089,6 +1102,11 @@ where
     // tauri-plugin-image-engine, референсы — аттачменты текущего запроса.
     all_tools.extend(crate::infra::image_tool_schemas(&agent.tools));
     all_tools.extend(crate::infra::video_tool_schemas(&agent.tools));
+
+    // 📊 Capability Excel: `tools: {excel_inspect: true, ...}` в .md → схемы
+    // excel-тулов (мета-имя "excel"). Исполнение — нативно через ko-excel-tools
+    // (umya + LibreOffice), источники — allow-read вложения и outputs сессии.
+    all_tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
 
     let has_real_tools = !all_tools.is_empty() || !agent.tools.is_empty();
 

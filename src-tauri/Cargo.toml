@@ -42,6 +42,9 @@ ko-json-store = { path = "../../my-tauri-plugins/ko-json-store" }
 # Ядро кодо-тулов (SSOT, репозиторий my-tauri-plugins): чит/поиск/shell-тулы.
 # Регулярные функции переехали в ядро; host оставляет только политику записи.
 ko-code-tools = { path = "../../my-tauri-plugins/ko-code-tools" }
+# Ядро Excel-тулов (SSOT): umya-spreadsheet-операции, QA-гейты формул,
+# recalc/PDF через LibreOffice (soffice — внешняя программа, не зависимость).
+ko-excel-tools = { path = "../../my-tauri-plugins/ko-excel-tools" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["full"] }

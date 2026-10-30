@@ -159,6 +159,7 @@ heartbeat сторожа (проценты больше не отображаю�
 
 - **Render** (`src/ui/render.ts`) — сообщения, мысли, сабагенты, инструменты
 - **ImageAttachment** (`src/ui/image-attachment.ts`) — картинка сообщения по сохранённому пути или legacy base64, кнопка сохранения и открытие просмотра
+- **FileAttachment** (`src/ui/file-attachment.ts`) — карточка документа (.xlsx/.csv/.pdf и прочие не-image/не-video вложения): файл на диске → 📂 «Показать в проводнике» (клик по карточке или кнопке), только base64 → ⬇ сохранение
 - **File drop** (`src/controllers/chat-router.ts`, `src/controllers/chat.ts`) — нативный Tauri drag-and-drop из Проводника; файлы и папки сохраняются как прямые пути, картинки читаются для превью, а байты для LLM создаются на границе отправки
 - **ImageViewer** (`src/ui/image-viewer.ts`) — полноэкранный просмотр картинки с закрытием по крестику, клику мимо и Esc
 - **MessageMenu** (`src/ui/message-menu.ts`) — контекстное меню сообщения
@@ -201,7 +202,7 @@ heartbeat сторожа (проценты больше не отображаю�
 | `orchestrator/mod.rs` | Главный цикл: парсинг ответа LLM, вызов сабагентов/инструментов, рекурсивный `run_agent_node()`, built-in `get_agent_report`. В legacy .md режиме вся история non-thought сообщений inject'ится в `llm_messages` как отдельные ChatMessage. **Точка входа `run_chat()` автоматически определяет: запускать workflow YAML или legacy `run_agent_node()`** |
 | `orchestrator/prompt.rs` | Сборка системного промпта, инструкция по `get_agent_report` вместо рендера состояния |
 | `orchestrator/runtime.rs` | Загрузка и запуск MCP-серверов, раскрытие `code_read`/`code_write`/explicit-тулов из `agent.tools` (`agent_code_tool_schemas`) |
-| `orchestrator/dispatch.rs` | Диспетчеризация инструментов. Ветка код-тулов (до MCP): **capability-проверка `is_tool_granted`** (тул должен быть выдан в промпт — defense-in-depth), затем `execute_tool` |
+| `orchestrator/dispatch.rs` | Диспетчеризация инструментов. Нативные ветки (до MCP), каждая с **capability-проверкой** (тул должен быть выдан в промпт — defense-in-depth): код-тулы (`is_tool_granted` → `execute_tool`), media/image/video, excel (`execute_excel_tool` с allow-read гейтом источников) |
 | `workflow_engine/mod.rs` | **Графовый движок маршрутизации.** Исполняет YAML-графы (workflows). Точка входа — `run_workflow()` |
 | `workflow_engine/parser.rs` | Парсинг YAML workflow файлов, структуры `WorkflowDef` (включая `entry` — точку входа), `NodeDef`, `EdgeDef`, `resolve_entry`, поиск по `file_stem` |
 | `workflow_engine/nodes.rs` | Исполнение узлов графа: `user_message` (точка входа, LLM не вызывается), `llm_worker`, `llm_fact_extractor`, `llm_freeform`, `system_condition`, `sub_workflow`, `switch`, `note` (pass-through), `return` |
@@ -222,7 +223,7 @@ heartbeat сторожа (проценты больше не отображаю�
 | `mcp_client.rs` | JSON-RPC клиент для MCP-серверов через stdin/stdout |
 | `downloader.rs` | Скачивание .gguf файлов с прогрессом |
 | `bin_downloader.rs` | Скачивание sidecar-бинарников (deno, yt-dlp) с распаковкой zip |
-| `tools/` | **Инструменты кодинга.** Трейт `Tool` + реестр `all_tools()`: тонкие адаптеры (макрос `adapter_tool!`) над ядром `ko-code-tools` (SSOT-реализация в `my-tauri-plugins`; чтение/поиск/shell). `code_read`/`code_write` — фильтры по `is_readonly()`, explicit-имена добавляются к базе. Диспетчер только исполняет |
+| `tools/` | **Нативные инструменты.** Кодинг: трейт `Tool` + реестр `all_tools()`: тонкие адаптеры (макрос `adapter_tool!`) над ядром `ko-code-tools` (SSOT-реализация в `my-tauri-plugins`; чтение/поиск/shell). `code_read`/`code_write` — фильтры по `is_readonly()`, explicit-имена добавляются к базе. Диспетчер только исполняет. Excel: `tools/excel/` — 6 тулов (`excel_inspect/read/apply/audit/render/convert`) над ядром `ko-excel-tools` (SSOT в `my-tauri-plugins`): правка .xlsx живыми формулами (umya-spreadsheet), QA-гейты формул, пересчёт/PDF через LibreOffice (опционально, ключ `libreoffice_path` в конфиге), артефакты в `<exe>/excel_outputs/<session_id>/`, allow-read гейт — только вложения пользователя и файлы своей сессии |
 | `permissions.rs` | Система разрешений: `PermissionApprover` (auto-allow в корне для мутаторов, read-only авто везде, session-grants, pending-запросы). Тул-события → плашка в UI |
 
 ---

@@ -66,3 +66,6 @@ pub use tools::video::{
     attach_saved_videos_from_sub_calls, execute_video_tool, video_image_gate_error,
     video_tool_schemas,
 };
+pub use tools::excel::{
+    attach_saved_excel_from_sub_calls, execute_excel_tool, excel_tool_schemas, is_excel_tool,
+};
