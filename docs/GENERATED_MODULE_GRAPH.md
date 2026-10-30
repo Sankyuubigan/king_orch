@@ -49,6 +49,7 @@ flowchart TD
   crate__domain__signals["crate::domain::signals"]
   crate__domain__workflow_engine__agent_frame["crate::domain::workflow_engine::agent_frame"]
   crate__domain__workflow_engine__context["crate::domain::workflow_engine::context"]
+  crate__domain__workflow_engine__custom_tool["crate::domain::workflow_engine::custom_tool"]
   crate__domain__workflow_engine__editor_fidelity["crate::domain::workflow_engine::editor_fidelity"]
   crate__domain__workflow_engine__editor_fidelity_tests["crate::domain::workflow_engine::editor_fidelity_tests"]
   crate__domain__workflow_engine__fact_extractor["crate::domain::workflow_engine::fact_extractor"]
@@ -84,8 +85,12 @@ flowchart TD
   crate__infra__storage["crate::infra::storage"]
   crate__infra__system_proxy["crate::infra::system_proxy"]
   crate__infra__tools__media["crate::infra::tools::media"]
+  crate__infra__tools__media_lora["crate::infra::tools::media_lora"]
+  crate__infra__tools__media_lora_tests["crate::infra::tools::media_lora_tests"]
   crate__infra__tools__media_tests["crate::infra::tools::media_tests"]
   crate__infra__tools["crate::infra::tools"]
+  crate__infra__tools__video["crate::infra::tools::video"]
+  crate__infra__tools__video_tests["crate::infra::tools::video_tests"]
   crate__main["crate::main"]
 ```
 

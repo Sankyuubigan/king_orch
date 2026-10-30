@@ -624,6 +624,9 @@ where
             recent_history.clone(),
         )
         .with_image_candidates(request_media.candidate_prompt())
+        // Каталог изображений для видео-графов: те же кандидаты, но футер с
+        // правилами ролей видео (первый кадр vs референс), не image-редактора.
+        .with_video_image_candidates(request_media.video_candidate_prompt())
         // Каталог видео-лор юзера (скан папки + sidecar-описания): дёшево
         // (десятки файлов), резолвится только там, где граф шаблоном просит.
         .with_video_loras(crate::infra::tools::media::media_lora::video_loras_prompt())
@@ -1001,7 +1004,14 @@ where
     // Инструментам медиа это не мешает: `edit_image` получает файлы напрямую
     // из `request_media` (dispatch.rs), минуя LLM-вызов.
     let attachments = if agent.vision {
-        request_media.current_attachments().to_vec()
+        // В LLM едут ТОЛЬКО картинки (mime image/*): прочие вложения (.jhd и
+        // т.п.) зрение не принимает — их тул получает по каталогу ID.
+        request_media
+            .current_attachments()
+            .iter()
+            .filter(|a| a.mime_type.starts_with("image/"))
+            .cloned()
+            .collect::<Vec<_>>()
     } else {
         if !request_media.current_attachments().is_empty() {
             log_cb(format!(

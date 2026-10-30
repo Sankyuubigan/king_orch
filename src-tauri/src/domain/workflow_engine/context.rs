@@ -40,6 +40,10 @@ pub struct WorkflowContext {
     /// взят из чата, а не из файла (§2.2: UI не должен молчать о подмене).
     pub strategy_source: &'static str,
     pub image_candidates: String,
+    /// Каталог изображений для ВИДЕО-агентов (`{{ video_image_candidates }}`):
+    /// футер с правилами ролей (первый кадр vs референс) вместо image-редакторного
+    /// «холст → материалы». По образцу `{{ image_candidates }}`.
+    pub video_image_candidates: String,
     /// Блок «Доступные LoRA» для видео-агентов (скан папки юзера + sidecar-
     /// описания). Заполняется при создании контекста (orchestrator), резолвится
     /// шаблоном `{{ video_loras }}` — по образцу `{{ image_candidates }}`.
@@ -64,6 +68,7 @@ impl WorkflowContext {
             strategy_override: None,
             strategy_source: "файл графа",
             image_candidates: String::new(),
+            video_image_candidates: String::new(),
             video_loras: String::new(),
             request_media: Arc::new(RequestMedia::empty()),
         }
@@ -71,6 +76,11 @@ impl WorkflowContext {
 
     pub fn with_image_candidates(mut self, candidates: String) -> Self {
         self.image_candidates = candidates;
+        self
+    }
+
+    pub fn with_video_image_candidates(mut self, candidates: String) -> Self {
+        self.video_image_candidates = candidates;
         self
     }
 
@@ -100,6 +110,7 @@ impl WorkflowContext {
             &super::nodes::user_message_text(self),
         );
         result = result.replace("{{ image_candidates }}", &self.image_candidates);
+        result = result.replace("{{ video_image_candidates }}", &self.video_image_candidates);
         result = result.replace("{{ video_loras }}", &self.video_loras);
 
         // {{ signals }} — JSON-объект из signal bus (ключ → значение)

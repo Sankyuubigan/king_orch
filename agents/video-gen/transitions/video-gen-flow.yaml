@@ -68,6 +68,10 @@ nodes:
       Доступные LoRA пользователя (стемы для аргумента `lora`; выбор — по
       правилам твоего агента, обычному запросу LoRA не нужны):
       {{ video_loras }}
+
+      Доступные изображения (id для `source_image_ids`; роль картинки —
+      first_frame или reference — по правилам твоего агента):
+      {{ video_image_candidates }}
     output_type: message
     ui_pos:
       x: 360

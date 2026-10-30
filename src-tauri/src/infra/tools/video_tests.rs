@@ -232,6 +232,55 @@ fn video_refuses_i2va_on_bundle_without_mode() {
     assert!(ensure_bundle_supports_i2va(&ref2va).is_err());
 }
 
+/// Гейт роли картинки (§00.2): раньше состояния «роль» не существовало и
+/// диспетчер при любом вложении принуждал i2va (эскиз-референс становился
+/// первым кадром; сессия 1793324737511 — 2 попытки впустую). Теперь выбор явный.
+#[test]
+fn video_image_gate_matrix() {
+    // Без вложений и без роли — t2va разрешён.
+    assert!(video_image_gate_error(None, false, false).is_none());
+    // Вложения есть + source_image_ids без роли — легаси-путь i2va разрешён.
+    assert!(video_image_gate_error(None, true, true).is_none());
+    // Явный reference — t2va разрешён; source_image_ids при reference запрещён.
+    assert!(video_image_gate_error(Some("reference"), false, true).is_none());
+    assert!(video_image_gate_error(Some("reference"), true, true).is_some());
+    // first_frame без источника — отказ; с источником — ок (в т.ч. из истории).
+    assert!(video_image_gate_error(Some("first_frame"), false, false).is_some());
+    assert!(video_image_gate_error(Some("first_frame"), true, false).is_none());
+    // Вложения есть, роль не выбрана, ID нет — принудительный выбор с обоими режимами.
+    let err = video_image_gate_error(None, false, true).expect("выбор роли обязателен");
+    assert!(err.contains("first_frame") && err.contains("reference"), "{}", err);
+    // Неизвестное значение — отказ с перечнем допустимых.
+    let err = video_image_gate_error(Some("canvas"), false, false).expect("неизвестная роль");
+    assert!(err.contains("first_frame") && err.contains("reference"), "{}", err);
+}
+
+/// Схема тула объявляет image_usage (обе роли) и не делает его required:
+/// t2va без вложений остаётся легальным вызовом.
+#[test]
+fn video_schema_declares_image_usage() {
+    let tool = GenerateVideo;
+    let params = tool.parameters();
+    let usage = params
+        .pointer("/properties/image_usage")
+        .expect("image_usage объявлен в схеме");
+    assert_eq!(usage.get("type").and_then(|v| v.as_str()), Some("string"));
+    let variants = usage
+        .get("enum")
+        .and_then(|v| v.as_array())
+        .expect("enum ролей");
+    assert_eq!(variants.len(), 2);
+    assert!(variants.iter().any(|v| v == "first_frame"));
+    assert!(variants.iter().any(|v| v == "reference"));
+    let required = params
+        .pointer("/required")
+        .and_then(|v| v.as_array())
+        .unwrap();
+    assert!(!required.iter().any(|v| v == "image_usage"));
+    assert!(tool.description().contains("image_usage"));
+    assert!(tool.description().contains("ПЕРВЫМ КАДРОМ"));
+}
+
 #[test]
 fn video_artifact_resolves_only_for_generate_video() {
     let registry = ImageArtifactRegistry::new();

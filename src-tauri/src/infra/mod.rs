@@ -63,5 +63,6 @@ pub use tools::media::{
     ImageArtifactRegistry,
 };
 pub use tools::video::{
-    attach_saved_videos_from_sub_calls, execute_video_tool, video_tool_schemas,
+    attach_saved_videos_from_sub_calls, execute_video_tool, video_image_gate_error,
+    video_tool_schemas,
 };

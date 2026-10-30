@@ -506,13 +506,23 @@ where
                     }
                 }
             }
-            // generate_video: source_image_ids ОПЦИОНАЛЕН (t2va — видео с нуля),
-            // поэтому общий resolve_arguments (там ключ обязателен) не подходит.
-            // Но если картинки к запросу прикреплены, а модель их не запросила —
-            // молча терять данные юзера запрещено: честный отказ с инструкцией,
-            // а не тихий t2va (tasks-план 27.10.26, «Гейты отказа»).
+            // generate_video: явная роль картинки (§00.2, video_image_gate_error).
+            // source_image_ids опционален (t2va — видео с нуля), поэтому общий
+            // resolve_arguments (там ключ обязателен) не подходит. Молча терять
+            // данные юзера запрещено, но и молча делать вложение первым кадром
+            // нельзя: эскиз-референс обязан уезжать в t2va (image_usage:"reference").
             if tool_output.is_none() && tool_name == "generate_video" {
-                if arguments.get("source_image_ids").is_some() {
+                let image_usage = arguments.get("image_usage").and_then(|v| v.as_str());
+                if let Some(error) = crate::infra::video_image_gate_error(
+                    image_usage,
+                    arguments.get("source_image_ids").is_some(),
+                    !self.request_media.current_attachments().is_empty(),
+                ) {
+                    tool_output = Some(super::vram::tool_error_to_output(
+                        tool_name,
+                        crate::infra::ToolError::Usage(error),
+                    ));
+                } else if arguments.get("source_image_ids").is_some() {
                     match self
                         .request_media
                         .resolve_arguments(arguments, &*self.messages)
@@ -532,13 +542,6 @@ where
                             ));
                         }
                     }
-                } else if !self.request_media.current_attachments().is_empty() {
-                    tool_output = Some(super::vram::tool_error_to_output(
-                        tool_name,
-                        crate::infra::ToolError::Usage(
-                            "К текущему запросу прикреплены изображения. Чтобы сделать видео ПО КАРТИНКЕ, передай 'source_image_ids' с её ID (она станет первым кадром). Видео с нуля по тексту — только когда картинок в запросе нет.".to_string(),
-                        ),
-                    ));
                 }
             }
             if tool_output.is_none() {

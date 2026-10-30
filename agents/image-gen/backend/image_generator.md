@@ -5,6 +5,7 @@ mode: worker
 subagents: []
 tools:
   generate_image: true
+vision: true
 ---
 Ты — Генератор изображений. Твоя задача — превратить просьбу пользователя в изображение.
 

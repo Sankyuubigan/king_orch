@@ -6,12 +6,13 @@ use std::collections::HashSet;
 /// Агент потребляет каталог изображений (нужен список `hist_*` / `req_*` id
 /// вложений сессии). SSOT для ранее размножившегося условия, где у апскейлера
 /// каталог не появлялся вовсе (`tool == "edit_image"` ×6: orchestrator/mod.rs
-/// ×4, api/chat.rs ×2 — см. tasks/21.10.26 …md §1.1).
+/// ×4, api/chat.rs ×2 — см. tasks/21.10.26 …md §1.1). `generate_video` тоже:
+/// без каталога видео-агент подбирал ID вслепую по имени файла (сессия
+/// 1793324737511 — попытка 2 из 3 ушла на «Неизвестный source_image_id»).
 pub fn agent_consumes_image_catalog(agent: &AgentProfile) -> bool {
-    agent
-        .tools
-        .iter()
-        .any(|tool| tool == "edit_image" || tool == "upscale_image")
+    agent.tools.iter().any(|tool| {
+        tool == "edit_image" || tool == "upscale_image" || tool == "generate_video"
+    })
 }
 
 // ─────────────── F5 (29.10.26): маркер активного бандла ───────────────
@@ -393,11 +394,9 @@ impl RequestMedia {
             .collect()
     }
 
-    pub fn candidate_prompt(&self) -> String {
-        if self.candidates.is_empty() {
-            return String::new();
-        }
-        let mut out = String::from("[ДОСТУПНЫЕ ИЗОБРАЖЕНИЯ]\n");
+    /// Строки перечисления кандидатов — общие для image- и video-каталога.
+    fn candidate_rows(&self) -> String {
+        let mut out = String::new();
         for candidate in &self.candidates {
             let origin = match candidate.origin {
                 ImageOrigin::CurrentRequest => "текущий запрос",
@@ -414,11 +413,36 @@ impl RequestMedia {
                 candidate.context
             ));
         }
+        out
+    }
+
+    pub fn candidate_prompt(&self) -> String {
+        if self.candidates.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from("[ДОСТУПНЫЕ ИЗОБРАЖЕНИЯ]\n");
+        out.push_str(&self.candidate_rows());
         out.push_str(
             "Выбирай только существующие id. Порядок source_image_ids = роли картинок: \
              первый id — холст (<image1>, его композиция/поза/фон сохраняются), дальше — \
              источники материала (<image2>, ...). В промпте адресуй картинки тегами \
              <image1>, <image2>.",
+        );
+        out
+    }
+
+    /// Каталог для видео-агента (`{{ video_image_candidates }}`): порядок
+    /// «холст → материалы» из image-редактора тут не действует — у видео ровно
+    /// одна картинка и явная роль (первый кадр vs референс, см. тул-схему
+    /// generate_video / video_maker.md).
+    pub fn video_candidate_prompt(&self) -> String {
+        if self.candidates.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from("[ДОСТУПНЫЕ ИЗОБРАЖЕНИЯ]\n");
+        out.push_str(&self.candidate_rows());
+        out.push_str(
+            "Выбирай только существующие id. РОВНО ОДИН id в `source_image_ids` = картинка-ПЕРВЫЙ КАДР (аргумент image_usage:\"first_frame\"). Если картинка — эскиз/референс желаемой сцены, а не будущий первый кадр: image_usage:\"reference\" без source_image_ids (видео с нуля по тексту). Правила выбора роли — в правилах твоего агента.",
         );
         out
     }
