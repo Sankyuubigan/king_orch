@@ -84,8 +84,9 @@ fn unknown_tool_returns_none_and_empty_prompt_is_usage() {
     assert!(matches!(err, ToolError::Usage(_)));
 }
 
-/// Схема тула объявляет i2va-вход: source_image_ids (ровно один ID) — опционален,
-/// t2va остаётся путём по умолчанию (образец media_tests.rs).
+/// Схема тула объявляет вход картинок: source_image_ids (1–3 ID: first_frame —
+/// ровно один, reference — до трёх референсов) — опционален, t2va остаётся
+/// путём по умолчанию (образец media_tests.rs).
 #[test]
 fn video_schema_declares_source_image_ids() {
     let tool = GenerateVideo;
@@ -95,7 +96,11 @@ fn video_schema_declares_source_image_ids() {
         .expect("source_image_ids объявлен в схеме");
     assert_eq!(ids.get("type").and_then(|v| v.as_str()), Some("array"));
     assert_eq!(ids.get("minItems").and_then(|v| v.as_i64()), Some(1));
-    assert_eq!(ids.get("maxItems").and_then(|v| v.as_i64()), Some(1));
+    // Лимит 3 — структурный: референсов >6 модель ломает следование (§9 BUNDLES),
+    // тул принимает 1–3; schema-гейт + счётный отказ тула.
+    assert_eq!(ids.get("maxItems").and_then(|v| v.as_i64()), Some(3));
+    let ids_desc = ids.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(ids_desc.contains("reference"), "схема описывает ref-ветку: {}", ids_desc);
     // Не в required: видео с нуля по тексту — легальный вызов без картинок.
     let required = params
         .pointer("/required")
@@ -164,32 +169,24 @@ fn video_empty_lora_array_is_usage() {
     assert!(matches!(err, ToolError::Usage(_)));
 }
 
-/// Две и больше картинок — честный Usage-отказ ДО всякого обращения к бандлу
-/// (fl2va/ref2va в туле не открыты; молча взять первую — потеря данных юзера).
+/// Счётные отказы ролей — Usage ДО всякого resolve (без обращения к диску):
+/// first_frame = ровно один, reference = ≤3, вложения без роли = честный отказ.
 #[test]
-fn video_refuses_multiple_attachments_honestly() {
+fn video_refuses_wrong_attachment_counts_before_resolve() {
     let ctx = test_ctx(None);
-    let attachments = vec![
-        crate::infra::ChatAttachment {
-            file_name: "a.png".to_string(),
-            mime_type: "image/png".to_string(),
-            data_base64: String::new(),
-            file_path: Some("D:\\no\\a.png".to_string()),
-            is_dir: Some(false),
-        },
-        crate::infra::ChatAttachment {
-            file_name: "b.png".to_string(),
-            mime_type: "image/png".to_string(),
-            data_base64: String::new(),
-            file_path: Some("D:\\no\\b.png".to_string()),
-            is_dir: Some(false),
-        },
-    ];
+    let mk = |name: &str| crate::infra::ChatAttachment {
+        file_name: format!("{}.png", name),
+        mime_type: "image/png".to_string(),
+        data_base64: String::new(),
+        file_path: Some(format!("D:\\no\\{}.png", name)),
+        is_dir: Some(false),
+    };
+    // first_frame с двумя картинками — РОВНО одну.
     let err = execute_video_tool(
         "generate_video",
-        &serde_json::json!({"prompt_en": "тест"}),
+        &serde_json::json!({"prompt_en": "тест", "image_usage": "first_frame"}),
         &ctx,
-        &attachments,
+        &[mk("a"), mk("b")],
     )
     .expect("generate_video обрабатывается")
     .unwrap_err();
@@ -199,51 +196,86 @@ fn video_refuses_multiple_attachments_honestly() {
         }
         other => panic!("ожидался Usage, получен: {:?}", other),
     }
-}
-
-/// Гейт режима бандла (Шаг 4): i2va-запрос на бандле без «i2va» в modes —
-/// честный Usage-отказ с инструкцией, а НЕ тихий t2va. Синтетический entry
-/// из встроенного каталога (герметично, без реального конфига машины).
-#[test]
-fn video_refuses_i2va_on_bundle_without_mode() {
-    let mut ref2va = tauri_plugin_image_engine::engine::video_bundle_by_name(
-        "minimax_h3_ref2va_pruned-q3k",
+    // reference с четырьмя картинками — структурный лимит 3.
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"prompt_en": "тест", "image_usage": "reference"}),
+        &ctx,
+        &[mk("a"), mk("b"), mk("c"), mk("d")],
     )
-    .expect("ref2va-бандл в каталоге");
-    assert!(!ref2va.modes.iter().any(|m| m == "i2va"));
-    let err = ensure_bundle_supports_i2va(&ref2va).unwrap_err();
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
     match err {
         ToolError::Usage(msg) => {
-            assert!(msg.contains("не поддерживает генерацию по картинке"), "{}", msg);
+            assert!(msg.contains("от 1 до 3"), "отказ называет лимит референсов: {}", msg);
+        }
+        other => panic!("ожидался Usage, получен: {:?}", other),
+    }
+    // Две картинки без роли — отказ с выбором роли (молча взять первую = потеря).
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"prompt_en": "тест"}),
+        &ctx,
+        &[mk("a"), mk("b")],
+    )
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
+    match err {
+        ToolError::Usage(msg) => {
+            assert!(msg.contains("без роли"), "отказ требует роль: {}", msg);
+        }
+        other => panic!("ожидался Usage, получен: {:?}", other),
+    }
+}
+
+/// Гейт режима бандла: запрос режима, которого нет в modes, — честный
+/// Usage-отказ с инструкцией, а НЕ тихая деградация. Синтетические мутации
+/// встроенного каталога (герметично, без реального конфига машины).
+#[test]
+fn video_refuses_unsupported_mode_on_bundle() {
+    // uni-бандл умеет i2va и ref2va — гейт пропускает оба.
+    let uni = tauri_plugin_image_engine::engine::video_bundle_by_name("minimax_h3_uni-q3k")
+        .expect("uni-бандл в каталоге");
+    assert!(uni.modes.iter().any(|m| m == "i2va"));
+    assert!(uni.modes.iter().any(|m| m == "ref2va"));
+    assert!(ensure_bundle_supports_mode(&uni, "i2va").is_ok());
+    assert!(ensure_bundle_supports_mode(&uni, "ref2va").is_ok());
+    assert!(ensure_bundle_supports_mode(&uni, "t2va").is_ok());
+    // ref2va-запрос на бандле без ref2va — отказ называет режим.
+    let mut frames_only = uni.clone();
+    frames_only.modes = vec!["t2va".to_string(), "i2va".to_string(), "fl2va".to_string()];
+    let err = ensure_bundle_supports_mode(&frames_only, "ref2va").unwrap_err();
+    match err {
+        ToolError::Usage(msg) => {
+            assert!(msg.contains("не поддерживает режим «ref2va»"), "{}", msg);
             assert!(msg.contains("modes"), "отказ перечисляет modes: {}", msg);
             assert!(msg.contains("Настройки"), "отказ даёт инструкцию: {}", msg);
         }
         other => panic!("ожидался Usage, получен: {:?}", other),
     }
-    // fl2va-бандл с i2va — гейт пропускает.
-    let mut fl2va = tauri_plugin_image_engine::engine::video_bundle_by_name(
-        "minimax_h3_fl2va_pruned-q4km",
-    )
-    .expect("fl2va-бандл в каталоге");
-    assert!(fl2va.modes.iter().any(|m| m == "i2va"));
-    assert!(ensure_bundle_supports_i2va(&fl2va).is_ok());
     // Бандл вообще без modes (добавленный кодом) — гейт отказывает.
-    ref2va.modes.clear();
-    assert!(ensure_bundle_supports_i2va(&ref2va).is_err());
+    let mut no_modes = uni;
+    no_modes.modes.clear();
+    assert!(ensure_bundle_supports_mode(&no_modes, "t2va").is_err());
 }
 
 /// Гейт роли картинки (§00.2): раньше состояния «роль» не существовало и
 /// диспетчер при любом вложении принуждал i2va (эскиз-референс становился
-/// первым кадром; сессия 1793324737511 — 2 попытки впустую). Теперь выбор явный.
+/// первым кадром; сессия 1793324737511 — 2 попытки впустую). Теперь выбор явный;
+/// reference = реальные референсы движка (1–3 ID).
 #[test]
 fn video_image_gate_matrix() {
     // Без вложений и без роли — t2va разрешён.
     assert!(video_image_gate_error(None, false, false).is_none());
     // Вложения есть + source_image_ids без роли — легаси-путь i2va разрешён.
     assert!(video_image_gate_error(None, true, true).is_none());
-    // Явный reference — t2va разрешён; source_image_ids при reference запрещён.
-    assert!(video_image_gate_error(Some("reference"), false, true).is_none());
-    assert!(video_image_gate_error(Some("reference"), true, true).is_some());
+    // reference с ID — референсы движка, разрешено (счёт проверяет тул).
+    assert!(video_image_gate_error(Some("reference"), true, true).is_none());
+    // reference без ID при вложениях — отказ: картинки тихо не дойдут до движка.
+    assert!(video_image_gate_error(Some("reference"), false, true).is_some());
+    // reference без ID и без вложений — бессмысленная роль, но не потеря
+    // данных: t2va продолжается.
+    assert!(video_image_gate_error(Some("reference"), false, false).is_none());
     // first_frame без источника — отказ; с источником — ок (в т.ч. из истории).
     assert!(video_image_gate_error(Some("first_frame"), false, false).is_some());
     assert!(video_image_gate_error(Some("first_frame"), true, false).is_none());
@@ -279,6 +311,9 @@ fn video_schema_declares_image_usage() {
     assert!(!required.iter().any(|v| v == "image_usage"));
     assert!(tool.description().contains("image_usage"));
     assert!(tool.description().contains("ПЕРВЫМ КАДРОМ"));
+    // reference задокументирован как референсы движка (1–3 ID).
+    let usage_desc = usage.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(usage_desc.contains("1–3"), "reference описывает 1–3 референса: {}", usage_desc);
 }
 
 #[test]

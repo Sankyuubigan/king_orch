@@ -69,8 +69,9 @@ nodes:
       правилам твоего агента, обычному запросу LoRA не нужны):
       {{ video_loras }}
 
-      Доступные изображения (id для `source_image_ids`; роль картинки —
-      first_frame или reference — по правилам твоего агента):
+      Доступные изображения (id для `source_image_ids`; роль картинок —
+      first_frame (один id, первый кадр) или reference (1–3 id, референсы
+      движка) — по правилам твоего агента):
       {{ video_image_candidates }}
     output_type: message
     ui_pos:

@@ -432,8 +432,8 @@ impl RequestMedia {
     }
 
     /// Каталог для видео-агента (`{{ video_image_candidates }}`): порядок
-    /// «холст → материалы» из image-редактора тут не действует — у видео ровно
-    /// одна картинка и явная роль (первый кадр vs референс, см. тул-схему
+    /// «холст → материалы» из image-редактора тут не действует — у видео явная
+    /// роль картинок (первый кадр vs референсы 1–3, см. тул-схему
     /// generate_video / video_maker.md).
     pub fn video_candidate_prompt(&self) -> String {
         if self.candidates.is_empty() {
@@ -442,7 +442,7 @@ impl RequestMedia {
         let mut out = String::from("[ДОСТУПНЫЕ ИЗОБРАЖЕНИЯ]\n");
         out.push_str(&self.candidate_rows());
         out.push_str(
-            "Выбирай только существующие id. РОВНО ОДИН id в `source_image_ids` = картинка-ПЕРВЫЙ КАДР (аргумент image_usage:\"first_frame\"). Если картинка — эскиз/референс желаемой сцены, а не будущий первый кадр: image_usage:\"reference\" без source_image_ids (видео с нуля по тексту). Правила выбора роли — в правилах твоего агента.",
+            "Выбирай только существующие id. РОВНО ОДИН id в `source_image_ids` = картинка-ПЕРВЫЙ КАДР (аргумент image_usage:\"first_frame\"). 1–3 id = РЕФЕРЕНСЫ сцены/персонажа — движок возьмёт их как образцы (image_usage:\"reference\"). Правила выбора роли — в правилах твоего агента.",
         );
         out
     }

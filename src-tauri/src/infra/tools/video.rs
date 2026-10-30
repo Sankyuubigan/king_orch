@@ -90,21 +90,24 @@ fn resolve_video_bundle_for_tools() -> Result<
     Ok(entry)
 }
 
-/// Гейт режима бандла (декларативный, SSOT каталога): i2va-запрос на бандле
-/// без i2va — честный отказ с инструкцией, а НЕ тихий t2va (молчаливое
-/// отклонение картинки юзера = ложь). Выделен в чистую функцию для герметичного
-/// теста на синтетическом entry (без реального конфига машины).
-fn ensure_bundle_supports_i2va(
+/// Гейт режима бандла (декларативный, SSOT каталога): запрос режима, которого
+/// нет в `modes` бандла, — честный отказ с инструкцией, а НЕ тихая деградация
+/// (молчаливое отклонение картинок юзера = ложь). Референсы (ref2va) и кадры
+/// (i2va) ловятся здесь ДО обращения к движку. Выделен в чистую функцию для
+/// герметичного теста на синтетическом entry (без реального конфига машины).
+fn ensure_bundle_supports_mode(
     entry: &tauri_plugin_image_engine::engine::VideoBundleEntry,
+    mode: &str,
 ) -> Result<(), ToolError> {
-    if entry.modes.iter().any(|m| m == "i2va") {
+    if entry.modes.iter().any(|m| m == mode) {
         return Ok(());
     }
     Err(ToolError::Usage(format!(
-        "Активный видео-бандл «{}» не поддерживает генерацию по картинке (modes: {}). \
-         Активируйте fl2va-набор в Настройки → «Модели ImageGEN» (вкладка «Видео») \
+        "Активный видео-бандл «{}» не поддерживает режим «{}» (modes: {}). \
+         Активируйте бандл с нужным режимом в Настройки → «Модели ImageGEN» (вкладка «Видео») \
          и повторите.",
         entry.name,
+        mode,
         entry.modes.join(", ")
     )))
 }
@@ -114,13 +117,30 @@ fn run_generate_video(
     seconds: u32,
     final_quality: bool,
     init_path: Option<&str>,
+    ref_paths: &[String],
     loras: &[tauri_plugin_image_engine::engine::LoraSpec],
     ctx: &ToolCtx,
 ) -> Result<VideoRunOutput, ToolError> {
     let entry = resolve_video_bundle_for_tools()?;
-    if init_path.is_some() {
-        ensure_bundle_supports_i2va(&entry)?;
+    // ref2va и i2va взаимоисключающие (api.md: Ref2VA нельзя комбинировать
+    // с init_image) — отказ ДО чтения файлов, зеркало resolve_mode плагина.
+    let has_refs = ref_paths.iter().any(|p| !p.trim().is_empty());
+    if has_refs && init_path.is_some() {
+        return Err(ToolError::Usage(
+            "generate_video принимает ЛИБО картинку-первый-кадр (first_frame), \
+             ЛИБО референсы (reference, 1–3), но не одновременно."
+                .to_string(),
+        ));
     }
+    // Режим — из заполненных полей (SSOT имен — VideoMode плагина).
+    let mode: &str = if has_refs {
+        "ref2va"
+    } else if init_path.is_some() {
+        "i2va"
+    } else {
+        "t2va"
+    };
+    ensure_bundle_supports_mode(&entry, mode)?;
     let engine_dir = tauri_plugin_image_engine::engine::engine_dir_early();
     let bundle_dir = tauri_plugin_image_engine::engine::video_bundle_dir_early();
 
@@ -136,7 +156,7 @@ fn run_generate_video(
         entry.name,
         seconds,
         if final_quality { "final" } else { "draft" },
-        if init_path.is_some() { "i2va" } else { "t2va" }
+        mode
     );
     let out_dir = video_session_outputs_dir(ctx.session_id);
     let ts = std::time::SystemTime::now()
@@ -155,6 +175,7 @@ fn run_generate_video(
         seconds,
         final_quality,
         init_path,
+        ref_paths,
         &out_path,
         None,
         loras,
@@ -271,6 +292,7 @@ pub fn video_image_gate_error(
         Some("first_frame") | None => {
             if has_source_image_ids {
                 // ID есть (текущий запрос или история) — resolve решит.
+                // first_frame допускает РОВНО ОДИН id — счёт проверяет тул.
                 return None;
             }
             if image_usage == Some("first_frame") {
@@ -282,21 +304,28 @@ pub fn video_image_gate_error(
                 // Вложения есть, роль не выбрана — молча терять данные юзера
                 // запрещено, но и молча делать картинку первым кадром нельзя.
                 return Some(
-                    "К текущему запросу прикреплены изображения — выбери их роль явно. Хочешь картинку ПЕРВЫМ КАДРОМ (оживить/продолжить её): передай 'source_image_ids' с её ID и image_usage:\"first_frame\". Картинка — эскиз/референс желаемой сцены (видео с нуля по тексту): передай image_usage:\"reference\" без source_image_ids.".to_string(),
+                    "К текущему запросу прикреплены изображения — выбери их роль явно. Хочешь картинку ПЕРВЫМ КАДРОМ (оживить/продолжить её): передай 'source_image_ids' с её ID и image_usage:\"first_frame\". Картинки — РЕФЕРЕНСЫ сцены/персонажа (движок учтёт их как образцы): передай их ID (1–3) и image_usage:\"reference\".".to_string(),
                 );
             }
             None
         }
         Some("reference") => {
-            if has_source_image_ids {
+            // reference теперь идёт в движок как ref_images (режим ref2va):
+            // 1–3 ID разрешены. reference БЕЗ ID при прикреплённых картинках —
+            // отказ: иначе картинки юзера тихо не дойдут до движка (ложь).
+            // Счёт (≤3) проверяет тул структурно.
+            if !has_source_image_ids && has_current_attachments {
                 return Some(
-                    "При image_usage:\"reference\" не передавай source_image_ids — видео генерируется с нуля по тексту, картинка первым кадром не станет.".to_string(),
+                    "image_usage:\"reference\" требует source_image_ids (1–3 ID картинок) — \
+                     референсы уходят в движок как образцы сцены/персонажа. \
+                     Если картинка должна стать ПЕРВЫМ КАДРОМ — используйте first_frame с одним ID."
+                        .to_string(),
                 );
             }
             None
         }
         Some(other) => Some(format!(
-            "Неизвестное image_usage:\"{}\" — допустимы \"first_frame\" (картинка = первый кадр) или \"reference\" (картинка = референс сцены).",
+            "Неизвестное image_usage:\"{}\" — допустимы \"first_frame\" (картинка = первый кадр) или \"reference\" (картинки = референсы сцены).",
             other
         )),
     }
@@ -309,15 +338,15 @@ impl Tool for GenerateVideo {
         "generate_video"
     }
     fn description(&self) -> &str {
-        "Сгенерировать короткое видео (+аудио) по английскому промпту: либо с нуля по тексту, либо ПО ПРИКРЕПЛЁННОЙ КАРТИНКЕ. Роль картинки задаёт image_usage: \"first_frame\" — картинка станет ПЕРВЫМ КАДРОМ видео (передай её ID в source_image_ids); \"reference\" — картинка лишь эскиз/референс желаемой сцены, видео генерируется с нуля по тексту. Речь персонажа задаётся в промпте (реплика дословно). Клип будет приложен к ответу как файл."
+        "Сгенерировать короткое видео (+аудио) по английскому промпту: либо с нуля по тексту, либо ПО ПРИКРЕПЛЁННОЙ КАРТИНКЕ. Роль картинки задаёт image_usage: \"first_frame\" — картинка станет ПЕРВЫМ КАДРОМ видео (передай её ID в source_image_ids); \"reference\" — картинки-референсы (персонаж, стиль, позы): передай их ID (1–3) в source_image_ids, и движок учтёт их при генерации (речь персонажа референса задаётся в промпте). Клип будет приложен к ответу как файл."
     }
     fn parameters(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
-                "prompt_en": {"type": "string", "description": "Развёрнутый английский промпт: объект, действие/движение, окружение, свет, стиль. Описывай ДВИЖЕНИЕ сцены и камеры, а не статичную картинку. При i2va описывай, КАК сцена на картинке оживает и движется. Если пользователь просит РЕЧЬ/озвучку/диалог — включи реплику ДОСЛОВНО на языке пользователя, не переводя: The woman looks at the camera and says in Russian: <реплика> (реплика ≤10–12 слов, без кавычек и спецсимволов), и добавь в конец промпта: No subtitles, no captions, no on-screen text."},
-                "image_usage": {"type": "string", "enum": ["first_frame", "reference"], "description": "Роль прикреплённой картинки. \"first_frame\" — картинка станет ПЕРВЫМ КАДРОМ видео (оживить/продолжить само изображение): требует source_image_ids. \"reference\" — картинка (эскиз, скетч, схема, пример позы/стиля) лишь описывает желаемую сцену: видео генерируется С НУЛЯ по тексту, source_image_ids НЕ передавай. Передавай всегда, когда к запросу прикреплены изображения."},
-                "source_image_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 1, "description": "РОВНО ОДИН ID картинки из блока доступных изображений — она станет первым кадром видео (image-to-video, режим first_frame). Опционально: без него видео генерируется с нуля по тексту. Файловые пути запрещены."},
+                "prompt_en": {"type": "string", "description": "Развёрнутый английский промпт: объект, действие/движение, окружение, свет, стиль. Описывай ДВИЖЕНИЕ сцены и камеры, а не статичную картинку. При i2va описывай, КАК сцена на картинке оживает и движется; при reference — желаемую сцену с учётом референсов (что взять с каждой). Если пользователь просит РЕЧЬ/озвучку/диалог — включи реплику ДОСЛОВНО на языке пользователя, не переводя: The woman looks at the camera and says in Russian: <реплика> (реплика ≤10–12 слов, без кавычек и спецсимволов), и добавь в конец промпта: No subtitles, no captions, no on-screen text."},
+                "image_usage": {"type": "string", "enum": ["first_frame", "reference"], "description": "Роль прикреплённых картинок. \"first_frame\" — картинка станет ПЕРВЫМ КАДРОМ видео (оживить/продолжить само изображение): требует ровно один source_image_ids. \"reference\" — картинки (персонаж, character sheet, эскиз, пример позы/стиля) — референсы сцены: передай их ID (1–3), движок учтёт их как образцы; без ID сцена описывается только текстом. Передавай всегда, когда к запросу прикреплены изображения."},
+                "source_image_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 3, "description": "ID картинок из блока доступных изображений. first_frame: РОВНО ОДИН ID — картинка станет первым кадром (image-to-video). reference: 1–3 ID — картинки пойдут в движок референсами (консистентный персонаж/стиль); больше 3 не принимается. Опционально: без него видео генерируется с нуля по тексту. Файловые пути запрещены."},
                 "seconds": {"type": "integer", "minimum": 1, "maximum": 15, "description": "Длительность клипа в секундах (по умолчанию 5). Лимит зависит от выбранного набора моделей: больше — только если пользователь прямо попросил."},
                 "final_quality": {"type": "boolean", "description": "false (по умолчанию) = черновик (быстро, минуты). true = финальное качество (медленно: 10+ минут на 5 секунд — предупреждай пользователя о времени)."},
                 "lora": {"type": "array", "minItems": 1, "items": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}, "strength": {"type": "number", "minimum": 0, "maximum": 2}}}]}, "description": "Опционально: элементы — строка (стем файла LoRA без расширения) ИЛИ объект {\"name\": стем, \"strength\": 0–2}. Смешивать формы можно. Сила элемента переопределяет lora_strength; без strength применяется lora_strength (общий дефолт, по умолчанию 1.0). Какие лоры и с какой силой ставить — правило вашего агента (например, категория «взрослый контент»; обычные запросы не получают LoRA). Файлы LoRA лежат в подпапке базы активного видео-движка (…\\video_loras\\<база>\\): ищите стемы только этой базы — лора чужой базы найдена не будет."},
@@ -350,9 +379,10 @@ pub fn video_tool_schemas(agent_tools: &[String]) -> Vec<(String, String, Value)
 }
 
 /// Исполнить video-тул по имени (диспетчер; VRAM-suspend делает вызывающий).
-/// `attachments` — ресолвнутые по source_image_ids картинки текущего запроса:
-/// ровно одна → i2va (первый кадр), ни одной → t2va, две и больше — честный
-/// отказ (fl2va/ref2va в туле не открыты — см. tasks-план 27.10.26 §5).
+/// `attachments` — ресолвнутые по source_image_ids картинки текущего запроса.
+/// Роль из args (`image_usage`) решает трактовку: first_frame = ровно одна
+/// картинка-первый-кадр (i2va); reference = 1–3 референса (ref2va, идут в
+/// движок как ref_images); без роли и картинок — t2va.
 pub fn execute_video_tool(
     name: &str,
     args: &Value,
@@ -369,21 +399,56 @@ pub fn execute_video_tool(
             if prompt.is_empty() {
                 return Some(Err(ToolError::Usage("prompt_en пуст".to_string())));
             }
-            if attachments.len() > 1 {
-                return Some(Err(ToolError::Usage(format!(
-                    "generate_video принимает РОВНО одну картинку (первый кадр), передано {}. \
-                     Режим «первый + последний кадр» в этой задаче не открыт.",
-                    attachments.len()
-                ))));
+            // Роль картинок решает, что означает вложение/ID: first_frame =
+            // РОВНО один первый кадр (i2va); reference = 1–3 референса (ref2va,
+            // структурный лимит: референсов >6 модель ломает следование, лимит
+            // 3 зашит сюда и в схему); без роли при вложениях диспетчер уже
+            // отказал (video_image_gate_error) — здесь её отсутствие = t2va.
+            // Счётные проверки — ДО resolve (отказ без обращения к диску).
+            let role = args
+                .get("image_usage")
+                .and_then(|value| value.as_str())
+                .unwrap_or("");
+            match role {
+                "first_frame" if attachments.len() != 1 => {
+                    return Some(Err(ToolError::Usage(format!(
+                        "first_frame принимает РОВНО одну картинку (первый кадр), передано {}. \
+                         Режим «первый + последний кадр» в этой задаче не открыт.",
+                        attachments.len()
+                    ))));
+                }
+                "reference" if attachments.len() > 3 => {
+                    return Some(Err(ToolError::Usage(format!(
+                        "reference принимает от 1 до 3 референсов (больше модель не выдерживает: \
+                         ломается следование), передано {}.",
+                        attachments.len()
+                    ))));
+                }
+                _ if attachments.len() > 1 => {
+                    // Вложения без роли сюда дойти не должны (диспетчерский
+                    // гейт), но молча терять лишние запрещено и здесь.
+                    return Some(Err(ToolError::Usage(format!(
+                        "Передано {} картинок без роли — укажи image_usage \
+                         (\"first_frame\" для первого кадра, \"reference\" для референсов).",
+                        attachments.len()
+                    ))));
+                }
+                _ => {}
             }
-            let init_path: Option<String> = if attachments.is_empty() {
-                None
+            // Пустой запрос без картинок — чистый t2va: resolve не зовём
+            // (он на пустом списке честно ошибается «Не выбрано изображение»).
+            let paths = if attachments.is_empty() {
+                Vec::new()
             } else {
                 match crate::infra::tools::media::resolve_ref_paths(attachments, ctx.session_id) {
-                    Ok(paths) if !paths.is_empty() => Some(paths[0].clone()),
-                    Ok(_) => None,
+                    Ok(paths) => paths,
                     Err(error) => return Some(Err(ToolError::Usage(error))),
                 }
+            };
+            let (init_path, ref_paths): (Option<String>, Vec<String>) = match role {
+                "first_frame" => (Some(paths[0].clone()), Vec::new()),
+                "reference" => (None, paths),
+                _ => (paths.into_iter().next(), Vec::new()),
             };
             let seconds = args
                 .get("seconds")
@@ -418,6 +483,7 @@ pub fn execute_video_tool(
                     seconds,
                     final_quality,
                     init_path.as_deref(),
+                    &ref_paths,
                     &loras,
                     ctx,
                 )
