@@ -421,6 +421,8 @@ pub fn attach_saved_images_from_sub_calls(
 }
 
 /// Прочитать PNG с диска как ChatAttachment (для показа в чате).
+/// file_path обязателен: файл лежит на диске, и кнопка «Показать в
+/// проводнике» в чате открывает его по этому пути.
 pub fn image_path_to_attachment(
     path: &str,
 ) -> Result<crate::infra::ChatAttachment, String> {
@@ -441,7 +443,7 @@ pub fn image_path_to_attachment(
         file_name,
         mime_type: "image/png".to_string(),
         data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
-        file_path: None,
+        file_path: Some(path.to_string()),
         is_dir: Some(false),
     })
 }

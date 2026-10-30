@@ -52,18 +52,20 @@ export function createVideoAttachmentElement(
     }
   });
 
-  if (callbacks?.onSave && attachment.file_path) {
-    const save = document.createElement("button");
-    save.type = "button";
-    save.className = "msg-attachment-save";
-    save.title = "Сохранить видео";
-    save.setAttribute("aria-label", "Сохранить видео");
-    save.textContent = "⬇";
-    save.addEventListener("click", (event) => {
+  // Клип всегда лежит на диске (base64 не хранится) — кнопка открывает
+  // папку с выделенным файлом, повторное сохранение не нужно.
+  if (callbacks?.onOpenPath && attachment.file_path) {
+    const reveal = document.createElement("button");
+    reveal.type = "button";
+    reveal.className = "msg-attachment-action";
+    reveal.title = "Показать в проводнике";
+    reveal.setAttribute("aria-label", "Показать в проводнике");
+    reveal.textContent = "📂";
+    reveal.addEventListener("click", (event) => {
       event.stopPropagation();
-      callbacks.onSave?.(attachment);
+      callbacks.onOpenPath?.(attachment);
     });
-    wrapper.appendChild(save);
+    wrapper.appendChild(reveal);
   }
 
   wrapper.appendChild(video);

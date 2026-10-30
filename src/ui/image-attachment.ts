@@ -40,17 +40,29 @@ export function createImageAttachmentElement(
   }
 
   if (callbacks) {
-    const save = document.createElement("button");
-    save.type = "button";
-    save.className = "msg-attachment-save";
-    save.title = "Сохранить изображение";
-    save.setAttribute("aria-label", "Сохранить изображение");
-    save.textContent = "⬇";
-    save.addEventListener("click", (event) => {
-      event.stopPropagation();
-      callbacks.onSave(attachment);
-    });
-    wrapper.appendChild(save);
+    // Файл на диске → «Показать в проводнике» (повторное сохранение не нужно).
+    // Только base64 (вложение юзера без пути) → остаётся сохранение на диск.
+    const action = document.createElement("button");
+    action.type = "button";
+    action.className = "msg-attachment-action";
+    if (attachment.file_path) {
+      action.title = "Показать в проводнике";
+      action.setAttribute("aria-label", "Показать в проводнике");
+      action.textContent = "📂";
+      action.addEventListener("click", (event) => {
+        event.stopPropagation();
+        callbacks.onOpenPath?.(attachment);
+      });
+    } else {
+      action.title = "Сохранить изображение";
+      action.setAttribute("aria-label", "Сохранить изображение");
+      action.textContent = "⬇";
+      action.addEventListener("click", (event) => {
+        event.stopPropagation();
+        callbacks.onSave(attachment);
+      });
+    }
+    wrapper.appendChild(action);
   }
 
   wrapper.appendChild(preview);
