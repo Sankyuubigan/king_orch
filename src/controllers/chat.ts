@@ -458,6 +458,29 @@ export class ChatController {
     this.updateEngineBadge(p.mode || "cpu", p.tok_per_sec || 0, p.detail || "");
   }
 
+  /**
+   * Уведомление плагина о памяти (`vram_notice`) — в чат системным сообщением
+   * вместо модалки (tasks/31.10.26: прогноз ≠ факт, окно врало оценкой).
+   * Событие машинно-уровневое (локальный движок один), доставляется роутером
+   * в АКТИВНУЮ вкладку; нет сессии — persistSession сам не сохранит.
+   * Во время восстановления истории push потерялся бы при перерисовке —
+   * туда не лезем, инфо уходит в лог.
+   */
+  onVramNotice(p: { note?: string }) {
+    const note = (p?.note ?? "").trim();
+    if (!note) return;
+    if (this.state.isRestoringSession) {
+      logFront(`[chat] vram_notice во время восстановления сессии пропущен: ${note}`);
+      return;
+    }
+    this.state.history.push({ type: "message", author: "system", content: note });
+    this.state.uidList.push(this.state.nextUid());
+    this.renderChatFromHistory();
+    this.persistSession().catch((e) => {
+      logFront(`[chat] история не сохранена после vram_notice: ${e}`);
+    });
+  }
+
   // ── Вспомогательные ──
 
   private scrollToBottomIfNearEnd(el: HTMLElement) {

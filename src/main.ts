@@ -3,7 +3,7 @@
  * Вся логика изолирована в модулях-контроллерах.
  * Импорты идут через двери (index.ts) — модули не лезут в кишки друг друга.
  */
-import { initConfirmDialog, initImageViewer, initPermissionDialog, initVramDialog, showToast } from "./ui";
+import { initConfirmDialog, initImageViewer, initPermissionDialog, showToast } from "./ui";
 // Регистрирует Web Component <about-updates-panel>, <logs-panel> и <llama-*-panel> из переиспользуемых плагинов.
 import "@my-tauri-plugins/plugin-about-updates";
 import "@my-tauri-plugins/plugin-logs";
@@ -47,7 +47,6 @@ async function initApp() {
   initConfirmDialog();
   initImageViewer();
   initPermissionDialog();
-  initVramDialog();
   // Плотная упаковка карточек в разделах (Настройки/Движки/тесты).
   // До старта сетки работают в запасном режиме — разметка не зависит от JS.
   initCardLayout();

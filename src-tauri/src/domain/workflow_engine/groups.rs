@@ -601,9 +601,14 @@ pub fn undeclared_routing_keys_with_facts(
 
 /// GBNF-контракт склеенного вызова: think-block + строгий JSON с точными ключами.
 ///
-/// Гибрид (Method 3) — тот же приём, что у `llm_fact_extractor`: `build_json_only_grammar`
-/// запрещает think, а здесь think разрешён, но ограничен по символам, иначе бюджет
-/// `n_predict` уходит в размышление и нода обрывается без JSON.
+/// Гибрид (Method 3) — тот же приём, что у `llm_fact_extractor`: think разрешён
+/// и НЕ ограничен грамматикой. Подавление размышления — подсказка движка
+/// (`disable_reasoning`), бюджет генерации задаёт `max_gen_tokens` из конфига
+/// пользователя (как у слоёв воронки — `signals.rs`). Ограничение think
+/// в грамматике (300 симв.) существовало 31.10.2026 один день и откатлено
+/// решением владельца: перестраховка резала качество мышления на машинах,
+/// где бага нет; остаточные риски закрывают сторож живости stderr (плагин)
+/// и Phase-2 JSON-only fallback (`orchestrator/mod.rs`).
 pub fn build_fused_grammar(
     workflow: &WorkflowDef,
     group: &GroupDef,

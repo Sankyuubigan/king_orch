@@ -15,7 +15,8 @@ export { confirmDialog, initConfirmDialog } from './confirm'
 
 export { initPermissionDialog, showPermissionRequest } from './permission'
 
-export { initVramDialog, showVramRequest } from './vram'
+// VRAM-модалка убрана (tasks/31.10.26): уведомления плагина о памяти идут
+// системным сообщением в чат (ChatController.onVramNotice ← chat-router.ts).
 
 export { createMessageMenu } from './message-menu'
 export type { MessageMenuCallbacks } from './message-menu'

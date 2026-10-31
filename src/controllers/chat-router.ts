@@ -3,7 +3,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { formatSpeed } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import type { DragDropPayload } from "../types";
-import { showPermissionRequest, showVramRequest } from "../ui";
+import { showPermissionRequest } from "../ui";
 import { getChatControllerForSession, getActiveChatController } from "./tabs";
 
 /**
@@ -42,11 +42,16 @@ export function initChatEventRouter(): void {
     getActiveChatController()?.onFileDragEvent(event.payload as DragDropPayload);
   });
 
-  // Плашки разрешений и VRAM — глобальные модалы, к контроллеру чата не
-  // привязаны: очередь плашек разрешений живёт в ui/permission.ts (FIFO по
-  // request_id), VRAM-предупреждение машинно-уровневое (локальный движок один).
+  // Плашка разрешений — глобальный модал (очередь живёт в ui/permission.ts,
+  // FIFO по request_id). Уведомление о памяти — машинно-уровневое, но модалка
+  // убрана (tasks/31.10.26): доставляем В ЧАТ активной вкладки системным
+  // сообщением (ChatController.onVramNotice); нет активной вкладки — в лог.
   listen("tool_permission_request", (e) => showPermissionRequest(e.payload));
-  listen("vram_notice", (e) => showVramRequest(e.payload));
+  listen("vram_notice", (e) => {
+    const ctrl = getActiveChatController();
+    if (ctrl) ctrl.onVramNotice(e.payload);
+    else logFront(`🎛️ ${e?.payload?.note ?? ""}`);
+  });
 
   // Скачивание модели/движка — единый движок downloader (прогресс speed/ETA).
   listen("downloader:progress", (e) => {
