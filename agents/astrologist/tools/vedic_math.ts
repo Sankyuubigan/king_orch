@@ -240,3 +240,36 @@ export function chainToPlain(chain: DashaPeriod[]): { level: number; lord: strin
         endIso: new Date(p.endMs).toISOString(),
     }));
 }
+
+/**
+ * Братские списки каждого уровня активной ветки: для уровня k список братьев
+ * — список, в котором лежит активный период уровня k. Уровни 1-3 читаются из
+ * дерева; списки уровней 4-5 (сукшма/прана) дописывает вызывающий код, т.к.
+ * они генерируются локально вдоль активной ветки (см. calc_chart.ts).
+ */
+export function levelSlicesOfChain(tree: DashaPeriod[], chain: DashaPeriod[]): DashaPeriod[][] {
+    const slices: DashaPeriod[][] = [];
+    let slice: DashaPeriod[] | undefined = tree;
+    for (const period of chain) {
+        if (!slice) break;
+        slices.push(slice);
+        slice = period.subPeriods;
+    }
+    return slices;
+}
+
+/**
+ * Следующие (после активных) периоды каждого уровня: сосед активного периода
+ * в его братском списке. Отсутствие соседа на уровне — уровень просто не
+ * попадает в результат (нет данных — нет выдумки).
+ */
+export function findUpcomingChain(chain: DashaPeriod[], levelLists: DashaPeriod[][]): DashaPeriod[] {
+    const upcoming: DashaPeriod[] = [];
+    chain.forEach((period, i) => {
+        const siblings = levelLists[i];
+        if (!siblings) return;
+        const idx = siblings.indexOf(period);
+        if (idx >= 0 && idx + 1 < siblings.length) upcoming.push(siblings[idx + 1]);
+    });
+    return upcoming;
+}

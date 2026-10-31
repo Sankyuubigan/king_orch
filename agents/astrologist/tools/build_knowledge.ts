@@ -37,6 +37,7 @@ import {
     detectGochara,
     detectYogas,
 } from "./vedastro_detect.ts";
+import { buildChartSummary } from "./chart_summary.ts";
 import { Dignity } from "./chart_analysis.ts";
 
 /** Русское имя знака → файл лагны в database/lagnas/. */
@@ -309,6 +310,7 @@ export function selectIdSections(
 }
 
 export interface KnowledgeInput {
+    chartSummary: string;
     lagnaSign: string;
     placements: { lord: string; ruled: number; placed: number }[];
     topicFile: string;
@@ -359,6 +361,7 @@ export function assembleText(input: KnowledgeInput): string {
         "Правил периодов даш не выбрано.",
     );
     const parts = [
+        input.chartSummary,
         `=== ФУНКЦИОНАЛЬНАЯ ПРИРОДА ГРАХ ДЛЯ ЛАГНЫ ${input.lagnaSign.toUpperCase()} ===`,
         input.lagnaContent.trim(),
         `=== УПРАВИТЕЛИ ДОМОВ В ДОМАХ (связки этой карты) ===`,
@@ -384,8 +387,20 @@ async function main() {
 
     const lagna = normalizeField<Record<string, unknown>>(args.lagna, "lagna");
     const planets = normalizeField<PlanetIn[]>(args.planets, "planets");
+    const dasha = normalizeField<Record<string, unknown>>(args.dasha, "dasha");
     const sign = typeof lagna.sign === "string" ? lagna.sign : "";
     if (!sign) throw new Error("в lagna нет строкового поля sign — данные calc_chart повреждены");
+
+    // Сводка истины человеческим языком: дериват данных calc_chart, без
+    // собственных расчётов. Даты отображаем в зоне машины пользователя
+    // (TimezoneOffset отрицателен восточнее UTC, поэтому знак переворачиваем).
+    const tzOffsetMinutes = -new Date().getTimezoneOffset();
+    const chartSummary = buildChartSummary({
+        lagna: lagna,
+        planets: planets,
+        dasha: dasha,
+        transits: args.transits as { grahas?: unknown } | null,
+    });
 
     const placements = lordPlacements(planets);
     const detectPlanets = toDetectPlanets(planets);
@@ -419,6 +434,7 @@ async function main() {
     const dashaRulesContent = await read("dasha_rules.md");
 
     const text = assembleText({
+        chartSummary,
         lagnaSign: sign,
         placements,
         topicFile,

@@ -22,7 +22,9 @@ import {
     calculateVimshottari,
     chainToPlain,
     findActiveDashaChain,
+    findUpcomingChain,
     generateSubPeriods,
+    levelSlicesOfChain,
     PointInfo,
 } from "./vedic_math.ts";
 import { tropicalAscendant } from "./houses.ts";
@@ -205,6 +207,9 @@ async function main() {
     const nowMs = Date.now();
     const dashaTree = calculateVimshottari(moonLon, input.birthUtcMs, 3, VEDIC_SYSTEM_CONFIG.dashaYearDays);
     let activeChain = findActiveDashaChain(dashaTree, nowMs);
+    // Братские списки уровней активной ветки: следующий период уровня ищется
+    // среди его же братьев (уровни 1-3 — из дерева; уровни 4-5 допишем ниже).
+    const levelLists = levelSlicesOfChain(dashaTree, activeChain);
     // Достраиваем SD и PAD только вдоль активной ветки (всё дерево 5 уровней — 53к узлов).
     if (activeChain.length === 3) {
         const pd = activeChain[2];
@@ -216,10 +221,14 @@ async function main() {
             const pads = generateSubPeriods(5, 5, activeSd.lordIdx, activeSd.startMs, sdDays);
             const activePad = pads.find((p) => nowMs >= p.startMs && nowMs < p.endMs);
             activeChain = [...activeChain, activeSd, ...(activePad ? [activePad] : [])].filter(Boolean);
+            levelLists.push(sds);
+            if (activePad) levelLists.push(pads);
         } else {
             activeChain = [...activeChain, ...sds.filter((p) => nowMs >= p.startMs)].slice(0, 3);
         }
     }
+    // Что наступит ПОСЛЕ каждого из текущих периодов (для вопросов о будущем).
+    const upcomingChain = findUpcomingChain(activeChain, levelLists);
 
     // ── 7. Транзиты: положения грах на текущий момент ──
     const jdUtNow = Date.now() / 1000.0 / 86400.0 + 2440587.5;
@@ -319,6 +328,7 @@ async function main() {
                 end: new Date(md.endMs).toISOString(),
             })),
             active_chain: chainToPlain(activeChain),
+            upcoming: chainToPlain(upcomingChain),
             now_iso: new Date(nowMs).toISOString(),
         },
         transits: {
