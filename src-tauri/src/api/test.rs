@@ -28,11 +28,21 @@ pub struct SingleTestResult {
 
 // ─── Лог-файл последнего запуска ───
 static LAST_TEST_LOG_FILE: Mutex<Option<std::fs::File>> = Mutex::new(None);
+// Truncate — один раз на процесс, а не на каждый тест: батч из 9 моделей
+// custom-промпта затирал лог на каждой модели и оставлял только последнюю
+// (сырые логи прогона 31.10.2026 по LFM2.5/granite потеряны именно поэтому).
+static FIRST_LOG_INIT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 pub fn init_test_log_file() {
     let path = std::path::PathBuf::from("test").join("last_test_log.txt");
     let _ = std::fs::create_dir_all("test");
-    if let Ok(file) = std::fs::File::create(&path) {
+    let truncate = FIRST_LOG_INIT.swap(false, Ordering::SeqCst);
+    let opened = if truncate {
+        std::fs::File::create(&path)
+    } else {
+        std::fs::OpenOptions::new().append(true).create(true).open(&path)
+    };
+    if let Ok(file) = opened {
         if let Ok(mut guard) = LAST_TEST_LOG_FILE.lock() {
             *guard = Some(file);
         }
@@ -914,7 +924,28 @@ pub async fn run_custom_prompt_test(
             image_artifacts: std::sync::Arc::new(crate::infra::ImageArtifactRegistry::new()),
             write_outside: crate::infra::WriteOutside::Deny,
         };
-        let mut ctx = domain::workflow_engine::context::WorkflowContext::new(prompt, vec![], vec![]);
+        // Промпт юзера кладётся в messages[] как user-сообщение — так же, как в
+        // боевом чате (chat.ts:commitUserMessage → orchestrator передаёт history
+        // в WorkflowContext, mod.rs:625). Задачи нод графа текст жалобы не
+        // содержат (soma_translator — константа, decomposer/synthesizer/validator
+        // — дефолт «Выполни задачу.»), а жалобу в графе читает только
+        // факт-экстрактор. Пустой messages[] оставлял всех llm_worker на голодном
+        // пайке (прогон 31.10.2026, custom_report_2026-10-31_13-12-49.md: честные
+        // модели — «я не знаю», granite — галлюцинированный «все true»).
+        let seed_msg = ChatMessage {
+            id: None,
+            msg_type: "message".to_string(),
+            content: prompt.clone(),
+            sub_calls: None,
+            author: Some("user".to_string()),
+            model: None,
+            time_sec: None,
+            attachments: None,
+            phase: None,
+            author_name: None,
+        };
+        let mut ctx =
+            domain::workflow_engine::context::WorkflowContext::new(prompt, vec![seed_msg], vec![]);
         match domain::workflow_engine::run_workflow(workflow, &mut ctx, &mut runner) {
             Ok(response) => (Ok(response), ctx.messages),
             Err((e, msgs)) => (Err(e), msgs),
