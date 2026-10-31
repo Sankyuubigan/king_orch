@@ -353,6 +353,7 @@
             <select id="s-{p}-test-mode-select" style="width:100%; padding:6px;">
               <option value="yaml">YAML тест (input/output сравнение)</option>
               <option value="pipeline">Pipeline test (fixture-папка, 3-уровневая валидация)</option>
+              <option value="custom">Кастомный промпт (свой текст → агент/пайплайн)</option>
             </select>
           </div>
 
@@ -420,6 +421,7 @@
 
             <div class="group-box">
               <button id="s-{p}-btn-run-pipeline-test" class="btn-primary" disabled>▶ Запустить тест</button>
+              <button id="s-{p}-btn-stop-pipeline-test" class="btn-secondary" style="display:none;">⏹ Остановить</button>
               <div id="s-{p}-pipeline-progress" class="test-progress" style="display:none;">
                 <div class="status-label" id="s-{p}-pipeline-status-label">Подготовка...</div>
                 <div class="progress-bar-container">
@@ -431,6 +433,46 @@
             <div class="group-box" id="s-{p}-pipeline-results-box" data-span="full" style="display:none;">
               <div class="group-title">Результаты</div>
               <div id="s-{p}-pipeline-results-content"></div>
+            </div>
+            </div>
+          </div>
+
+          <!-- Custom prompt mode -->
+          <div id="s-{p}-custom-test-panel" style="display:none;">
+            <div class="cards-grid">
+            <div class="group-box">
+              <div class="group-title">1. Промпт для теста</div>
+              <textarea id="s-{p}-custom-prompt-input" rows="5" style="width:100%; padding:6px; resize:vertical; box-sizing:border-box;" placeholder="Введите текст промпта — он уйдёт выбранному агенту/пайплайну на каждой выбранной модели..."></textarea>
+            </div>
+
+            <div class="group-box">
+              <div class="group-title">2. Выберите агента или пайплайн</div>
+              <div id="s-{p}-custom-agent-list" class="test-checklist">
+                <span class="test-hint">Загрузка агентов...</span>
+              </div>
+            </div>
+
+            <div class="group-box">
+              <div class="group-title">3. Выберите модели LLM (можно несколько)</div>
+              <div id="s-{p}-custom-model-list" class="test-checklist">
+                <span class="test-hint">Загрузка моделей...</span>
+              </div>
+            </div>
+
+            <div class="group-box">
+              <button id="s-{p}-btn-run-custom-test" class="btn-primary" disabled>▶ Запустить тест</button>
+              <button id="s-{p}-btn-stop-custom-test" class="btn-secondary" style="display:none;">⏹ Остановить</button>
+              <div id="s-{p}-custom-progress" class="test-progress" style="display:none;">
+                <div class="status-label" id="s-{p}-custom-status-label">Подготовка...</div>
+                <div class="progress-bar-container">
+                  <div id="s-{p}-custom-progress-bar" class="progress-bar"></div>
+                </div>
+              </div>
+            </div>
+
+            <div class="group-box" id="s-{p}-custom-results-box" data-span="full" style="display:none;">
+              <div class="group-title">Результаты</div>
+              <div id="s-{p}-custom-results-content"></div>
             </div>
             </div>
           </div>

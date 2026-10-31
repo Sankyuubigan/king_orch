@@ -5,7 +5,14 @@ import { showToast } from "../ui";
 import { store } from "../store";
 import { bus } from "../events";
 import { trackError } from "../telemetry";
-import type { AgentEntry, TestCaseDef, SingleTestResult, PipelineTestInfo, PipelineTestResult } from "../types";
+import type { AgentEntry, TestCaseDef, SingleTestResult, PipelineTestInfo, PipelineTestResult, CustomPromptResult } from "../types";
+
+/** Одна строка батч-прогона: результат харнесса либо ошибка запуска модели. */
+interface PipelineBatchEntry {
+  model: string;
+  error: string | null;
+  result: PipelineTestResult | null;
+}
 
 export interface AgentTestElements {
   testFilePath: HTMLInputElement;
@@ -30,6 +37,18 @@ export interface AgentTestElements {
   pipelineProgressBar: HTMLDivElement;
   pipelineResultsBox: HTMLDivElement;
   pipelineResultsContent: HTMLDivElement;
+  btnStopPipelineTest: HTMLButtonElement;
+  customTestPanel: HTMLDivElement;
+  customPromptInput: HTMLTextAreaElement;
+  customAgentList: HTMLDivElement;
+  customModelList: HTMLDivElement;
+  btnRunCustomTest: HTMLButtonElement;
+  btnStopCustomTest: HTMLButtonElement;
+  customProgress: HTMLDivElement;
+  customStatusLabel: HTMLDivElement;
+  customProgressBar: HTMLDivElement;
+  customResultsBox: HTMLDivElement;
+  customResultsContent: HTMLDivElement;
 }
 
 export class AgentTestController {
@@ -44,7 +63,21 @@ export class AgentTestController {
   // Pipeline test state
   private pipelineTests: PipelineTestInfo[] = [];
   private selectedPipelineTest: string | null = null;
-  private selectedPipelineModel: string | null = null;
+  /** Мультивыбор: фикстуру можно прогнать сразу на нескольких моделях (по очереди — VRAM §6.5). */
+  private selectedPipelineModels: Set<string> = new Set();
+  /** Активный батч: сколько моделей всего / завершено. null = батча нет (одиночный режим событий). */
+  private pipelineBatch: { total: number; done: number } | null = null;
+  /** Подпись текущей модели батча — события статуса движка приклеиваются к ней. */
+  private pipelineBatchLabel = "";
+  /** true = юзер нажал «Остановить»: текущая модель доиграет/прервётся, следующие не стартуют. */
+  private pipelineBatchCancelled = false;
+
+  // Custom prompt test state
+  private customAgentId: string | null = null;
+  private selectedCustomModels: Set<string> = new Set();
+  private customBatch: { total: number; done: number } | null = null;
+  private customBatchLabel = "";
+  private customBatchCancelled = false;
   private pipelineTestsLoaded = false;
   private pipelineModelsLoaded = false;
   private pipelineListenersSetup = false;
@@ -99,6 +132,8 @@ export class AgentTestController {
     if (!this.modelsLoaded) this.loadModels();
     if (!this.pipelineTestsLoaded) this.loadPipelineTests();
     if (!this.pipelineModelsLoaded) this.loadPipelineModels();
+    this.loadCustomAgents();
+    this.loadCustomModels();
     this.setupPipelineListeners();
   }
 
@@ -110,13 +145,19 @@ export class AgentTestController {
     this.el.btnSaveTestResults.addEventListener("click", () => this.saveResults());
     this.el.testModeSelect.addEventListener("change", () => this.switchMode());
     this.el.btnRunPipelineTest.addEventListener("click", () => this.runPipelineTest());
+    this.el.btnStopPipelineTest.addEventListener("click", () => this.stopPipelineBatch());
+    this.el.btnRunCustomTest.addEventListener("click", () => this.runCustomTest());
+    this.el.btnStopCustomTest.addEventListener("click", () => this.stopCustomBatch());
+    this.el.customPromptInput.addEventListener("input", () => this.updateCustomRunButton());
   }
 
   private switchMode(): void {
     const mode = this.el.testModeSelect.value;
     const isPipeline = mode === "pipeline";
-    this.el.yamlTestPanel.style.display = isPipeline ? "none" : "block";
+    const isCustom = mode === "custom";
+    this.el.yamlTestPanel.style.display = isPipeline || isCustom ? "none" : "block";
     this.el.pipelineTestPanel.style.display = isPipeline ? "block" : "none";
+    this.el.customTestPanel.style.display = isCustom ? "block" : "none";
   }
 
   // ─── YAML test mode (existing) ───
@@ -329,11 +370,12 @@ export class AgentTestController {
       for (const m of config.models || []) {
         const label = document.createElement("label");
         const cb = document.createElement("input");
-        cb.type = "radio";
-        cb.name = "pipeline-model";
+        cb.type = "checkbox";
         cb.value = m;
+        if (this.selectedPipelineModels.has(m)) cb.checked = true;
         cb.addEventListener("change", () => {
-          this.selectedPipelineModel = m;
+          if (cb.checked) this.selectedPipelineModels.add(m);
+          else this.selectedPipelineModels.delete(m);
           this.updatePipelineRunButton();
         });
         label.appendChild(cb);
@@ -348,7 +390,7 @@ export class AgentTestController {
   }
 
   private updatePipelineRunButton(): void {
-    this.el.btnRunPipelineTest.disabled = !(this.selectedPipelineTest && this.selectedPipelineModel);
+    this.el.btnRunPipelineTest.disabled = !(this.selectedPipelineTest && this.selectedPipelineModels.size > 0);
   }
 
   private setupPipelineListeners(): void {
@@ -356,31 +398,75 @@ export class AgentTestController {
     this.pipelineListenersSetup = true;
 
     this.trackListen(
-      listen<string>("pipeline_status", (e) => {
-        this.el.pipelineStatusLabel.textContent = e.payload;
-      }),
-    );
-    this.trackListen(
       listen<number>("pipeline_progress", (e) => {
+        if (this.pipelineBatch) {
+          // Прогресс текущей модели ребейсится на весь батч:
+          // (завершено моделей + доля текущей) / всего моделей.
+          this.setPipelineBatchProgress(e.payload);
+          return;
+        }
         const pct = Math.max(0, Math.min(100, e.payload));
         this.el.pipelineProgressBar.style.width = `${pct}%`;
       }),
     );
     this.trackListen(
+      listen<string>("pipeline_status", (e) => {
+        if (this.pipelineBatch) {
+          this.el.pipelineStatusLabel.textContent = `${this.pipelineBatchLabel} — ${e.payload}`;
+          return;
+        }
+        this.el.pipelineStatusLabel.textContent = e.payload;
+      }),
+    );
+    this.trackListen(
       listen<boolean>("pipeline_done", (e) => {
+        if (this.pipelineBatch) {
+          // Финал отдельной модели: полосу и тосты ведёт батч-цикл,
+          // иначе 100% и тост середины батча перекрыли бы следующую модель.
+          return;
+        }
         const passed = e.payload;
         this.el.pipelineStatusLabel.textContent = passed ? "✅ Тест пройден" : "❌ Тест НЕ пройден";
         this.el.pipelineProgressBar.style.width = "100%";
         showToast(passed ? "Pipeline test пройден!" : "Pipeline test НЕ пройден", passed ? "success" : "error");
       }),
     );
+    this.trackListen(
+      listen<string>("custom_test_status", (e) => {
+        if (this.customBatch) {
+          this.el.customStatusLabel.textContent = `${this.customBatchLabel} — ${e.payload}`;
+          return;
+        }
+        this.el.customStatusLabel.textContent = e.payload;
+      }),
+    );
+    this.trackListen(
+      listen<number>("custom_test_progress", (e) => {
+        if (this.customBatch) {
+          this.setCustomBatchProgress(e.payload);
+          return;
+        }
+        const pct = Math.max(0, Math.min(100, e.payload));
+        this.el.customProgressBar.style.width = `${pct}%`;
+      }),
+    );
   }
 
+  /**
+   * Батч-прогон фикстуры на всех отмеченных моделях.
+   *
+   * Модели гоняются строго последовательно: каждая — через свой `run_pipeline_test_cmd`,
+   * где backend берёт permit гейта локального движка (VRAM §6.5, модели не делят VRAM).
+   * Ошибка одной модели не роняет батч — она попадает строкой в сводку и в отчёт.
+   */
   private async runPipelineTest(): Promise<void> {
-    if (!this.selectedPipelineTest || !this.selectedPipelineModel) {
-      showToast("Выберите тест и модель", "error");
+    if (!this.selectedPipelineTest || this.selectedPipelineModels.size === 0) {
+      showToast("Выберите тест и хотя бы одну модель", "error");
       return;
     }
+
+    const testId = this.selectedPipelineTest;
+    const modelPaths = Array.from(this.selectedPipelineModels);
 
     this.el.btnRunPipelineTest.disabled = true;
     this.el.pipelineProgress.style.display = "block";
@@ -388,33 +474,100 @@ export class AgentTestController {
     this.el.pipelineStatusLabel.textContent = "Подготовка...";
     this.el.pipelineProgressBar.style.width = "0%";
 
-    try {
-      const result = await invoke<PipelineTestResult>("run_pipeline_test_cmd", {
-        testId: this.selectedPipelineTest,
-        modelPath: this.selectedPipelineModel,
-      });
+    this.pipelineBatch = { total: modelPaths.length, done: 0 };
+    this.pipelineBatchCancelled = false;
+    const entries: PipelineBatchEntry[] = [];
 
-      this.displayPipelineResults(result);
+    this.el.btnStopPipelineTest.style.display = "inline-block";
+
+    try {
+      for (let i = 0; i < modelPaths.length; i++) {
+        if (this.pipelineBatchCancelled) break;
+        const modelPath = modelPaths[i];
+        const shortName = modelPath.split(/[/\\]/).pop() || modelPath;
+        this.pipelineBatchLabel = `Модель ${i + 1}/${modelPaths.length} (${shortName})`;
+        this.el.pipelineStatusLabel.textContent = `${this.pipelineBatchLabel} — запуск...`;
+        try {
+          const result = await invoke<PipelineTestResult>("run_pipeline_test_cmd", {
+            testId,
+            modelPath,
+          });
+          entries.push({ model: modelPath, error: null, result });
+        } catch (e) {
+          entries.push({ model: modelPath, error: String(e), result: null });
+          void trackError("agentTest.runPipelineBatch", e);
+        }
+        this.pipelineBatch.done = i + 1;
+        this.setPipelineBatchProgress(0);
+      }
+
+      const passedCount = entries.filter((e) => e.result?.overall_passed).length;
+      const crashedCount = entries.filter((e) => e.error).length;
+
+      this.el.pipelineStatusLabel.textContent = this.pipelineBatchCancelled
+        ? `Остановлено пользователем: выполнено ${entries.length} из ${modelPaths.length}`
+        : `Готово: ✅ ${passedCount} · ❌ ${entries.length - passedCount - crashedCount} · 💥 ${crashedCount} из ${entries.length}`;
+      this.el.pipelineProgressBar.style.width = "100%";
+      this.displayPipelineBatchResults(testId, entries);
       this.el.pipelineResultsBox.style.display = "block";
-    } catch (e) {
-      this.el.pipelineStatusLabel.textContent = `Ошибка: ${e}`;
-      showToast(`Ошибка pipeline test: ${e}`, "error");
-      void trackError("agentTest.runPipelineTest", e);
+
+      // Сводный отчёт батча — на диск в папку фикстуры (рядом с report_*.md).
+      try {
+        const reportPath = await invoke<string>("write_pipeline_batch_report", { testId, entries });
+        showToast(`Сводный отчёт: ${reportPath}`, "success");
+      } catch (e) {
+        showToast(`Не удалось сохранить сводный отчёт: ${e}`, "error");
+        void trackError("agentTest.saveBatchReport", e);
+      }
+
+      showToast(
+        crashedCount > 0
+          ? `Батч завершён: пройдено ${passedCount}, ошибок запуска ${crashedCount}`
+          : passedCount === entries.length
+            ? "Все модели пройдены!"
+            : `Пройдено ${passedCount} из ${entries.length}`,
+        passedCount === entries.length && crashedCount === 0 ? "success" : "error",
+      );
     } finally {
+      this.pipelineBatch = null;
+      this.pipelineBatchLabel = "";
       this.el.btnRunPipelineTest.disabled = false;
+      this.el.btnStopPipelineTest.style.display = "none";
     }
   }
 
-  private displayPipelineResults(result: PipelineTestResult): void {
+  /**
+   * «Остановить» в pipeline-режиме: текущая модель прерывается через
+   * `cancel_test_run` (убийство llama-server → workflow падает за секунды),
+   * а батч-цикл по флагу не стартует следующие модели.
+   */
+  private stopPipelineBatch(): void {
+    if (!this.pipelineBatch) return;
+    this.pipelineBatchCancelled = true;
+    void invoke("cancel_test_run").catch(() => {});
+    showToast("Останавливаю текущую модель...", "info");
+  }
+
+  /** Прогресс батча: доля завершённых моделей + доля текущей (из событий движка). */
+  private setPipelineBatchProgress(currentModelPct: number): void {
+    if (!this.pipelineBatch) return;
+    const current = Math.max(0, Math.min(100, currentModelPct)) / 100;
+    const overall = ((this.pipelineBatch.done + current) / this.pipelineBatch.total) * 100;
+    this.el.pipelineProgressBar.style.width = `${Math.max(0, Math.min(100, overall))}%`;
+  }
+
+  private pipelineResultHtml(result: PipelineTestResult): string {
     const levelClass = (passed: boolean) => passed ? "color: var(--green, #4caf50)" : "color: var(--red, #f44336)";
     const levelIcon = (passed: boolean) => passed ? "✅" : "❌";
 
-    const html = `
+    return `
       <div style="margin-bottom:12px;">
         <strong>Тест:</strong> ${this.escapeHtml(result.test_id)}<br/>
         <strong>Модель:</strong> ${this.escapeHtml(result.model_name)}<br/>
         <strong>Пайплайн:</strong> ${this.escapeHtml(result.workflow_name)}<br/>
         <strong>Длительность:</strong> ${(result.duration_ms / 1000).toFixed(1)}s<br/>
+        <strong>VRAM:</strong> ${this.fmtVram(result.vram_delta_mb, result.vram_peak_mb)}<br/>
+        <strong>ОЗУ llama-server (пик):</strong> ${this.fmtMb(result.ram_peak_mb)}<br/>
         <strong>Итог:</strong> <span style="${levelClass(result.overall_passed)}; font-weight:bold">
           ${levelIcon(result.overall_passed)} ${result.overall_passed ? "ПРОЙДЕН" : "НЕ ПРОЙДЕН"}
         </span>
@@ -446,12 +599,284 @@ export class AgentTestController {
 
       ${result.report_path ? `<div style="margin-top:8px;"><strong>Отчёт:</strong> <code>${this.escapeHtml(result.report_path)}</code></div>` : ""}
     `;
-    this.el.pipelineResultsContent.innerHTML = html;
+  }
+
+  /** Сводка батча: таблица моделей + детали каждой (как раньше для одиночного прогона). */
+  private displayPipelineBatchResults(testId: string, entries: PipelineBatchEntry[]): void {
+    const border = "1px solid var(--border, #444)";
+    const rows = entries.map((e, i) => {
+      const short = e.model.split(/[/\\]/).pop() || e.model;
+      if (e.error) {
+        return `<tr>
+          <td style="padding:4px 8px; border-bottom:${border}">${i + 1}</td>
+          <td style="padding:4px 8px; border-bottom:${border}">${this.escapeHtml(short)}</td>
+          <td colspan="3" style="padding:4px 8px; border-bottom:${border}; color: var(--red, #f44336)">💥 Ошибка запуска: ${this.escapeHtml(e.error.substring(0, 300))}</td>
+        </tr>`;
+      }
+      const r = e.result!;
+      const color = r.overall_passed ? "var(--green, #4caf50)" : "var(--red, #f44336)";
+      return `<tr>
+        <td style="padding:4px 8px; border-bottom:${border}">${i + 1}</td>
+        <td style="padding:4px 8px; border-bottom:${border}">${this.escapeHtml(short)}</td>
+        <td style="padding:4px 8px; border-bottom:${border}; color:${color}; font-weight:bold">${r.overall_passed ? "✅ ПРОЙДЕН" : "❌ НЕ ПРОЙДЕН"}</td>
+        <td style="padding:4px 8px; border-bottom:${border}">${(r.duration_ms / 1000).toFixed(1)}s</td>
+        <td style="padding:4px 8px; border-bottom:${border}">${this.fmtVram(r.vram_delta_mb, r.vram_peak_mb)}</td>
+        <td style="padding:4px 8px; border-bottom:${border}">${this.fmtMb(r.ram_peak_mb)}</td>
+        <td style="padding:4px 8px; border-bottom:${border}">${r.report_path ? `<code>${this.escapeHtml(r.report_path)}</code>` : ""}</td>
+      </tr>`;
+    }).join("");
+
+    const table = `
+      <div style="margin-bottom:12px;"><strong>Тест:</strong> ${this.escapeHtml(testId)} · моделей: ${entries.length}</div>
+      <table style="border-collapse:collapse; width:100%; margin-bottom:16px;">
+        <thead><tr>
+          <th style="text-align:left; padding:4px 8px; border-bottom:${border}">#</th>
+          <th style="text-align:left; padding:4px 8px; border-bottom:${border}">Модель</th>
+          <th style="text-align:left; padding:4px 8px; border-bottom:${border}">Итог</th>
+          <th style="text-align:left; padding:4px 8px; border-bottom:${border}">Время</th>
+          <th style="text-align:left; padding:4px 8px; border-bottom:${border}">VRAM</th>
+          <th style="text-align:left; padding:4px 8px; border-bottom:${border}">ОЗУ</th>
+          <th style="text-align:left; padding:4px 8px; border-bottom:${border}">Отчёт</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+
+    const details = entries
+      .filter((e) => e.result)
+      .map((e) => this.pipelineResultHtml(e.result!))
+      .join('<hr style="border:none; border-top:1px solid var(--border, #444); margin:12px 0"/>');
+
+    this.el.pipelineResultsContent.innerHTML = table + details;
+  }
+
+  // ─── Custom prompt test mode (третий режим) ───
+
+  async loadCustomAgents(): Promise<void> {
+    try {
+      const agents: AgentEntry[] = await invoke("get_agents");
+      this.el.customAgentList.innerHTML = "";
+      for (const a of agents) {
+        const label = document.createElement("label");
+        const rb = document.createElement("input");
+        rb.type = "radio";
+        rb.name = "custom-agent";
+        rb.value = a.id;
+        rb.addEventListener("change", () => {
+          this.customAgentId = a.id;
+          this.updateCustomRunButton();
+        });
+        label.appendChild(rb);
+        const icon = a.entry_type === "workflow" ? "📁" : "📊";
+        label.appendChild(document.createTextNode(` ${icon} ${a.name} (${a.id})`));
+        this.el.customAgentList.appendChild(label);
+      }
+    } catch (e) {
+      this.el.customAgentList.innerHTML = `<span class="test-hint">Ошибка загрузки: ${e}</span>`;
+      void trackError("agentTest.loadCustomAgents", e);
+    }
+  }
+
+  async loadCustomModels(): Promise<void> {
+    try {
+      const config: any = await invoke("get_config");
+      this.el.customModelList.innerHTML = "";
+      for (const m of config.models || []) {
+        const label = document.createElement("label");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = m;
+        if (this.selectedCustomModels.has(m)) cb.checked = true;
+        cb.addEventListener("change", () => {
+          if (cb.checked) this.selectedCustomModels.add(m);
+          else this.selectedCustomModels.delete(m);
+          this.updateCustomRunButton();
+        });
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(` ${m.split(/[/\\]/).pop() || m}`));
+        this.el.customModelList.appendChild(label);
+      }
+    } catch (e) {
+      this.el.customModelList.innerHTML = `<span class="test-hint">Ошибка загрузки: ${e}</span>`;
+      void trackError("agentTest.loadCustomModels", e);
+    }
+  }
+
+  private updateCustomRunButton(): void {
+    const hasPrompt = this.el.customPromptInput.value.trim().length > 0;
+    this.el.btnRunCustomTest.disabled = !(hasPrompt && this.customAgentId && this.selectedCustomModels.size > 0);
+  }
+
+  private stopCustomBatch(): void {
+    if (!this.customBatch) return;
+    this.customBatchCancelled = true;
+    void invoke("cancel_test_run").catch(() => {});
+    showToast("Останавливаю текущую модель...", "info");
+  }
+
+  /**
+   * Батч-прогон своего промпта через выбранного агента/пайплайн на всех
+   * отмеченных моделях — последовательно, как pipeline-батч (VRAM §6.5).
+   */
+  private async runCustomTest(): Promise<void> {
+    const prompt = this.el.customPromptInput.value.trim();
+    if (!prompt || !this.customAgentId || this.selectedCustomModels.size === 0) {
+      showToast("Введите промпт, выберите агента и хотя бы одну модель", "error");
+      return;
+    }
+
+    const agentId = this.customAgentId;
+    const modelPaths = Array.from(this.selectedCustomModels);
+
+    this.el.btnRunCustomTest.disabled = true;
+    this.el.customProgress.style.display = "block";
+    this.el.customResultsBox.style.display = "none";
+    this.el.customStatusLabel.textContent = "Подготовка...";
+    this.el.customProgressBar.style.width = "0%";
+    this.el.btnStopCustomTest.style.display = "inline-block";
+
+    this.customBatch = { total: modelPaths.length, done: 0 };
+    this.customBatchCancelled = false;
+    const entries: { model: string; error: string | null; result: CustomPromptResult | null }[] = [];
+
+    try {
+      for (let i = 0; i < modelPaths.length; i++) {
+        if (this.customBatchCancelled) break;
+        const modelPath = modelPaths[i];
+        const shortName = modelPath.split(/[/\\]/).pop() || modelPath;
+        this.customBatchLabel = `Модель ${i + 1}/${modelPaths.length} (${shortName})`;
+        this.el.customStatusLabel.textContent = `${this.customBatchLabel} — запуск...`;
+        try {
+          const result = await invoke<CustomPromptResult>("run_custom_prompt_test", {
+            prompt,
+            agentId,
+            modelPath,
+          });
+          entries.push({ model: modelPath, error: null, result });
+        } catch (e) {
+          entries.push({ model: modelPath, error: String(e), result: null });
+          void trackError("agentTest.runCustomBatch", e);
+        }
+        this.customBatch.done = i + 1;
+        this.setCustomBatchProgress(0);
+      }
+
+      this.el.customProgressBar.style.width = "100%";
+      this.el.customStatusLabel.textContent = this.customBatchCancelled
+        ? `Остановлено пользователем: выполнено ${entries.length} из ${modelPaths.length}`
+        : `Готово: ${entries.filter((e) => e.result && !e.result.error).length}/${entries.length} ответов получено`;
+      this.displayCustomBatchResults(agentId, prompt, entries);
+      this.el.customResultsBox.style.display = "block";
+
+      try {
+        const reportPath = await invoke<string>("write_custom_prompt_report", {
+          agentId,
+          prompt,
+          entries,
+        });
+        showToast(`Сводный отчёт: ${reportPath}`, "success");
+      } catch (e) {
+        showToast(`Не удалось сохранить сводный отчёт: ${e}`, "error");
+        void trackError("agentTest.saveCustomReport", e);
+      }
+    } finally {
+      this.customBatch = null;
+      this.customBatchLabel = "";
+      this.el.btnRunCustomTest.disabled = false;
+      this.el.btnStopCustomTest.style.display = "none";
+    }
+  }
+
+  private setCustomBatchProgress(currentModelPct: number): void {
+    if (!this.customBatch) return;
+    const current = Math.max(0, Math.min(100, currentModelPct)) / 100;
+    const overall = ((this.customBatch.done + current) / this.customBatch.total) * 100;
+    this.el.customProgressBar.style.width = `${Math.max(0, Math.min(100, overall))}%`;
+  }
+
+  private displayCustomBatchResults(
+    agentId: string,
+    prompt: string,
+    entries: { model: string; error: string | null; result: CustomPromptResult | null }[],
+  ): void {
+    const border = "1px solid var(--border, #444)";
+    const rows = entries.map((e, i) => {
+      const short = e.model.split(/[/\\]/).pop() || e.model;
+      if (e.error) {
+        return `<tr>
+          <td style="padding:4px 8px; border-bottom:${border}">${i + 1}</td>
+          <td style="padding:4px 8px; border-bottom:${border}">${this.escapeHtml(short)}</td>
+          <td colspan="4" style="padding:4px 8px; border-bottom:${border}; color: var(--red, #f44336)">💥 Ошибка запуска: ${this.escapeHtml(e.error.substring(0, 300))}</td>
+        </tr>`;
+      }
+      const r = e.result!;
+      const failed = !!r.error;
+      const color = failed ? "var(--red, #f44336)" : "var(--green, #4caf50)";
+      return `<tr>
+        <td style="padding:4px 8px; border-bottom:${border}">${i + 1}</td>
+        <td style="padding:4px 8px; border-bottom:${border}">${this.escapeHtml(short)}</td>
+        <td style="padding:4px 8px; border-bottom:${border}; color:${color}; font-weight:bold">${failed ? "💥 ОШИБКА" : "✅ ОТВЕТ"}</td>
+        <td style="padding:4px 8px; border-bottom:${border}">${(r.duration_ms / 1000).toFixed(1)}s</td>
+        <td style="padding:4px 8px; border-bottom:${border}">${this.fmtVram(r.vram_delta_mb, r.vram_peak_mb)}</td>
+        <td style="padding:4px 8px; border-bottom:${border}">${this.fmtMb(r.ram_peak_mb)}</td>
+      </tr>`;
+    }).join("");
+
+    const table = `
+      <div style="margin-bottom:12px;">
+        <strong>Агент/пайплайн:</strong> ${this.escapeHtml(agentId)} · моделей: ${entries.length}<br/>
+        <strong>Промпт:</strong> ${this.escapeHtml(prompt.substring(0, 300))}
+      </div>
+      <table style="border-collapse:collapse; width:100%; margin-bottom:16px;">
+        <thead><tr>
+          <th style="text-align:left; padding:4px 8px; border-bottom:${border}">#</th>
+          <th style="text-align:left; padding:4px 8px; border-bottom:${border}">Модель</th>
+          <th style="text-align:left; padding:4px 8px; border-bottom:${border}">Итог</th>
+          <th style="text-align:left; padding:4px 8px; border-bottom:${border}">Время</th>
+          <th style="text-align:left; padding:4px 8px; border-bottom:${border}">VRAM</th>
+          <th style="text-align:left; padding:4px 8px; border-bottom:${border}">ОЗУ</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>`;
+
+    const details = entries.map((e, i) => {
+      const short = e.model.split(/[/\\]/).pop() || e.model;
+      let html = `<div style="margin-bottom:16px;"><strong>${i + 1}. ${this.escapeHtml(short)}</strong>`;
+      if (e.error) {
+        html += `<pre style="white-space:pre-wrap; color: var(--red, #f44336)">${this.escapeHtml(e.error)}</pre>`;
+      }
+      if (e.result) {
+        if (e.result.error) {
+          html += `<pre style="white-space:pre-wrap; color: var(--red, #f44336)">${this.escapeHtml(e.result.error)}</pre>`;
+        } else {
+          html += `<pre style="white-space:pre-wrap; margin:6px 0;">${this.escapeHtml(e.result.response)}</pre>`;
+        }
+        const msgs = e.result.messages.filter((m) => m.author).map((m) =>
+          `<li><strong>[${this.escapeHtml(m.msg_type)}] ${this.escapeHtml(m.author)}:</strong> ${this.escapeHtml(m.content_preview)}</li>`,
+        ).join("");
+        if (msgs) html += `<ul style="margin:4px 0 0 20px; padding:0;">${msgs}</ul>`;
+      }
+      return html + "</div>";
+    }).join('<hr style="border:none; border-top:1px solid var(--border, #444); margin:12px 0"/>');
+
+    this.el.customResultsContent.innerHTML = table + details;
   }
 
   private escapeHtml(s: string): string {
     const div = document.createElement("div");
     div.textContent = s;
     return div.innerHTML;
+  }
+
+  private fmtMb(mb: number | null | undefined): string {
+    return typeof mb === "number" && mb > 0 ? `${mb.toFixed(0)} МБ` : "—";
+  }
+
+  /** VRAM в сводке: Δ (сравнимая между моделями) + абсолютный пик в скобках. */
+  private fmtVram(delta: number | null | undefined, peak: number | null | undefined): string {
+    if (typeof delta === "number" && delta > 0 && typeof peak === "number" && peak > 0) {
+      return `Δ${delta.toFixed(0)} (из ${peak.toFixed(0)}) МБ`;
+    }
+    if (typeof peak === "number" && peak > 0) return `${peak.toFixed(0)} МБ`;
+    return "—";
   }
 }

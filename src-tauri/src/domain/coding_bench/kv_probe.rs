@@ -17,7 +17,10 @@ const MAX_CTX: u32 = 131_072;
 const MAX_ITERATIONS: u32 = 12;
 
 /// Текущая занятая VRAM GPU (NVML, device-level), МБ.
-fn vram_used_mb() -> Option<f64> {
+///
+/// Единая точка чтения VRAM для бенчей и тестов: под WDDM per-process VRAM
+/// недоступна (см. mem_profiler), поэтому везде device-level + дельта от базы.
+pub(crate) fn vram_used_mb() -> Option<f64> {
     let nvml = nvml_wrapper::Nvml::init().ok()?;
     let device = nvml.device_by_index(0).ok()?;
     let mem = device.memory_info().ok()?;

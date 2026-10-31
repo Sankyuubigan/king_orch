@@ -90,6 +90,15 @@ pub struct PipelineTestResult {
     pub overall_passed: bool,
     pub messages: Vec<AgentMessage>,
     pub report_path: Option<String>,
+    /// Пиковое ОЗУ процессов llama-server за прогон, МБ (None — замер не вёлся, например в CLI).
+    #[serde(default)]
+    pub ram_peak_mb: Option<f64>,
+    /// Пиковая занятая VRAM GPU за прогон, МБ (device-level NVML — вся GPU, не только наша модель).
+    #[serde(default)]
+    pub vram_peak_mb: Option<f64>,
+    /// VRAM Δ: пик минус база до запуска движка — сравнимая между моделями величина.
+    #[serde(default)]
+    pub vram_delta_mb: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -457,6 +466,10 @@ pub fn run_pipeline_test(
         overall_passed,
         messages,
         report_path,
+        // Замер памяти ведёт хост (api/test.rs) вокруг вызова; в CLI-прогоне остаётся None.
+        ram_peak_mb: None,
+        vram_peak_mb: None,
+        vram_delta_mb: None,
     })
 }
 

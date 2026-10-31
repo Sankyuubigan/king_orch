@@ -164,6 +164,18 @@ export function buildAgentStudioPage(instanceKey = ""): AgentStudioPage {
     pipelineProgressBar: pick<HTMLDivElement>(root, prefix, "pipeline-progress-bar"),
     pipelineResultsBox: pick<HTMLDivElement>(root, prefix, "pipeline-results-box"),
     pipelineResultsContent: pick<HTMLDivElement>(root, prefix, "pipeline-results-content"),
+    btnStopPipelineTest: pick<HTMLButtonElement>(root, prefix, "btn-stop-pipeline-test"),
+    customTestPanel: pick<HTMLDivElement>(root, prefix, "custom-test-panel"),
+    customPromptInput: pick<HTMLTextAreaElement>(root, prefix, "custom-prompt-input"),
+    customAgentList: pick<HTMLDivElement>(root, prefix, "custom-agent-list"),
+    customModelList: pick<HTMLDivElement>(root, prefix, "custom-model-list"),
+    btnRunCustomTest: pick<HTMLButtonElement>(root, prefix, "btn-run-custom-test"),
+    btnStopCustomTest: pick<HTMLButtonElement>(root, prefix, "btn-stop-custom-test"),
+    customProgress: pick<HTMLDivElement>(root, prefix, "custom-progress"),
+    customStatusLabel: pick<HTMLDivElement>(root, prefix, "custom-status-label"),
+    customProgressBar: pick<HTMLDivElement>(root, prefix, "custom-progress-bar"),
+    customResultsBox: pick<HTMLDivElement>(root, prefix, "custom-results-box"),
+    customResultsContent: pick<HTMLDivElement>(root, prefix, "custom-results-content"),
   };
 
   const codingTest: CodingTestElements = {

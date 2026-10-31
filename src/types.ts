@@ -137,6 +137,24 @@ export interface PipelineTestResult {
     overall_passed: boolean;
     messages: { author: string; content_preview: string; msg_type: string }[];
     report_path: string | null;
+    /** Пиковая память за прогон, МБ (null — замер не вёлся). */
+    ram_peak_mb?: number | null;
+    vram_peak_mb?: number | null;
+    /** VRAM Δ: пик минус база до запуска движка — сравнимая между моделями величина. */
+    vram_delta_mb?: number | null;
+}
+
+/** Результат одного прогона кастомного промпта на одной модели (run_custom_prompt_test). */
+export interface CustomPromptResult {
+    model_name: string;
+    agent_id: string;
+    response: string;
+    error: string | null;
+    duration_ms: number;
+    ram_peak_mb: number | null;
+    vram_peak_mb: number | null;
+    vram_delta_mb: number | null;
+    messages: { author: string; content_preview: string; msg_type: string }[];
 }
 
 export interface Attachment {
