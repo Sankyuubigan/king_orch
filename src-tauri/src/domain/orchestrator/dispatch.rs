@@ -698,6 +698,72 @@ where
                     }
                 }
             }
+        } else if crate::infra::is_diag_tool(tool_name) {
+            // 🩺 Diag-тулы (SSOT в ko-diag-tools): snapshot (readonly) +
+            // recorder start/stop («чёрный ящик», фоновый поток хоста).
+            // Источники/записи только в <exe>/diag_outputs/<session_id>/ —
+            // excel-гейт источников не нужен (чужих файлов diag не читает).
+            // VRAM-suspend не нужен: sysinfo/PowerShell — CPU-задачи.
+            tool_found = true;
+            let granted = self
+                .all_tools
+                .iter()
+                .any(|(meta, name, _)| meta == "diag" && name == tool_name);
+            if !granted {
+                tool_output = Some(format!(
+                    "Ошибка '{}': инструмент недоступен агенту '{}'",
+                    tool_name, self.agent.id
+                ));
+            } else {
+                let code_ctx = crate::infra::ToolCtx {
+                    workspace_root: &self.workspace_root,
+                    write_root: &self.write_root,
+                    write_outside: self.write_outside,
+                    session_id: &self.session_id,
+                    approver: &self.approver,
+                    agent_id: &self.agent.id,
+                    bins_dir: self.bins_dir,
+                    image_artifacts: None,
+                };
+                match crate::infra::execute_diag_tool(tool_name, arguments, &code_ctx) {
+                    Some(Ok(result)) => {
+                        tool_output = Some(result);
+                        tool_succeeded = true;
+                        crate::infra::event_bus::global_bus().publish(
+                            crate::infra::event_bus::AgentEvent::ToolCall {
+                                agent: self.agent.id.clone(),
+                                tool: tool_name.to_string(),
+                            },
+                        );
+                    }
+                    Some(Err(error)) => {
+                        let raw_error = error.to_string();
+                        log::error!(
+                            "Ошибка diag-тула '{}' (агент '{}'): {}",
+                            tool_name,
+                            self.agent.id,
+                            raw_error
+                        );
+                        // Честный текст (core §2.2): Usage/NotFound/Forbidden несут
+                        // конкретную причину — маскировать её «внутренней ошибкой»
+                        // нельзя (иначе агент гоняет ретраи детерминированного отказа).
+                        if super::vram::is_resource_error(&raw_error)
+                            || super::vram::is_honest_tool_error(&error)
+                        {
+                            tool_output =
+                                Some(super::vram::tool_error_to_output(tool_name, error));
+                        } else {
+                            tool_output = Some(format!(
+                                "Ошибка '{}': внутренняя ошибка диагностики",
+                                tool_name
+                            ));
+                        }
+                    }
+                    None => {
+                        tool_output = Some(format!("Ошибка: Инструмент '{}' не найден.", tool_name));
+                    }
+                }
+            }
         } else if let Some((mcp_name, _, _)) = self
             .all_tools
             .iter()

@@ -1,0 +1,74 @@
+name: Диагностика ПК
+description: Сбор фактов о состоянии Windows (аудит, криминалистика сбоев, «чёрный ящик» рекордер) и понятный отчёт с гипотезами по зависаниям, тормозам, чёрным экранам и сбоям запуска.
+
+config:
+  facts_file: facts.yaml
+  default_llm_params: strict
+
+# Точка входа графа — текст, отправленный пользователем в чат.
+entry: user_message
+
+nodes:
+  # ── Источник данных: текст пользователя (без LLM) ──
+  - id: user_message
+    type: user_message
+    ui_pos:
+      x: -320
+      y: 40
+
+  # ── Классификация: это запрос на диагностику компьютера? ──
+  - id: extract_facts
+    type: llm_fact_extractor
+    input: "{{ nodes.user_message.output.text }}"
+    llm_params: strict
+    ui_pos:
+      x: -80
+      y: 40
+
+  - id: route
+    type: switch
+    input_object: "{{ nodes.extract_facts.output }}"
+    cases_priority:
+      - key: pc_diagnostics_request
+        to: run_diagnostics
+    default: no_diagnostics_task
+    ui_pos:
+      x: 140
+      y: 40
+
+  # ── Ветка диагностики (терминальная) ──
+  - id: run_diagnostics
+    type: llm_worker
+    agent: diag_specialist
+    task: |
+      Режим: диагностика компьютера.
+
+      Запрос пользователя (самодостаточная форма): {{ nodes.extract_facts.output.rewritten_query }}
+      Исходный текст пользователя: {{ nodes.user_message.output.text }}
+    output_type: message
+    ui_pos:
+      x: 360
+      y: 40
+
+  # ── Не запрос на диагностику: помощник (ответ в чат, уточнение) ──
+  - id: no_diagnostics_task
+    type: llm_worker
+    agent: diag_helper
+    task: |
+      Классификатор НЕ распознал запрос как проблему с компьютером: пользователь
+      либо спросил о возможностях команды, либо описал не-диагностическую задачу,
+      либо описал проблему слишком расплывчато. Ответь по правилам твоего агента.
+      НЕ вызывай инструменты (у тебя их нет).
+
+      Сообщение пользователя: {{ nodes.user_message.output.text }}
+    output_type: message
+    ui_pos:
+      x: 360
+      y: 160
+
+edges:
+  - from: user_message
+    to: extract_facts
+
+  - from: extract_facts
+    to: route

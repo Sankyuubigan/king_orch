@@ -256,6 +256,7 @@ pub fn build_worst_agent_prompt(
             tools.extend(crate::infra::image_tool_schemas(&agent.tools));
             tools.extend(crate::infra::video_tool_schemas(&agent.tools));
             tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
+            tools.extend(crate::infra::diag_tool_schemas(&agent.tools));
             let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
             let mut sp =
                 build_system_prompt(agent, history, has_tools, &tools, 2048, false, false, false, false);
@@ -399,6 +400,7 @@ where
                  tools.extend(crate::infra::image_tool_schemas(&agent.tools));
                  tools.extend(crate::infra::video_tool_schemas(&agent.tools));
                  tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
+                 tools.extend(crate::infra::diag_tool_schemas(&agent.tools));
                  let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
                 (
                     build_system_prompt(
@@ -1107,6 +1109,11 @@ where
     // excel-тулов (мета-имя "excel"). Исполнение — нативно через ko-excel-tools
     // (umya + LibreOffice), источники — allow-read вложения и outputs сессии.
     all_tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
+
+    // 🩺 Capability Diag: `tools: {diag_snapshot: true, ...}` в .md → схемы
+    // диагностических тулов (мета-имя "diag"). Исполнение — нативно через
+    // ko-diag-tools (sysinfo/реестр/PowerShell + «чёрный ящик» рекордера).
+    all_tools.extend(crate::infra::diag_tool_schemas(&agent.tools));
 
     let has_real_tools = !all_tools.is_empty() || !agent.tools.is_empty();
 

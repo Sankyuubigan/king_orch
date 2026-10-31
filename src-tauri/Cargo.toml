@@ -45,6 +45,10 @@ ko-code-tools = { path = "../../my-tauri-plugins/ko-code-tools" }
 # Ядро Excel-тулов (SSOT): umya-spreadsheet-операции, QA-гейты формул,
 # recalc/PDF через LibreOffice (soffice — внешняя программа, не зависимость).
 ko-excel-tools = { path = "../../my-tauri-plugins/ko-excel-tools" }
+# Ядро диагностических тулов (SSOT): аудит системы Windows, криминалистика
+# сбоев (журнал/дампы), «чёрный ящик» рекордера с sync_all. PowerShell —
+# внешняя программа, не зависимость.
+ko-diag-tools = { path = "../../my-tauri-plugins/ko-diag-tools" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["full"] }

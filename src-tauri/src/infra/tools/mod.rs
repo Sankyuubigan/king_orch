@@ -15,6 +15,7 @@ use serde_json::Value;
 
 use crate::infra::permissions::PermissionApprover;
 
+pub mod diag;
 pub mod excel;
 pub mod media;
 pub mod video;
