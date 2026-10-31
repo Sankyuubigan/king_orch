@@ -5,13 +5,30 @@ import { showToast } from "../ui";
 import { store } from "../store";
 import { bus } from "../events";
 import { trackError } from "../telemetry";
-import type { AgentEntry, TestCaseDef, SingleTestResult, PipelineTestInfo, PipelineTestResult, CustomPromptResult } from "../types";
+import type { AgentEntry, TestCaseDef, SingleTestResult, PipelineTestInfo, PipelineTestResult, CustomPromptResult, TestReportMeta } from "../types";
 
 /** Одна строка батч-прогона: результат харнесса либо ошибка запуска модели. */
 interface PipelineBatchEntry {
   model: string;
   error: string | null;
   result: PipelineTestResult | null;
+}
+
+/**
+ * Одна строка батча кастомного промпта (совпадает с Rust `CustomPromptEntry`
+ * и с entries в JSON-отчёте — просмотрщик читает отчёты той же структурой).
+ */
+interface CustomPromptEntry {
+  model: string;
+  error: string | null;
+  result: CustomPromptResult | null;
+}
+
+/** Сообщение цепочки переходов (совпадает с Rust AgentMessage в отчётах). */
+interface ChainMessage {
+  author: string;
+  content_preview: string;
+  msg_type: string;
 }
 
 export interface AgentTestElements {
@@ -49,6 +66,9 @@ export interface AgentTestElements {
   customProgressBar: HTMLDivElement;
   customResultsBox: HTMLDivElement;
   customResultsContent: HTMLDivElement;
+  reportSelect: HTMLSelectElement;
+  btnRefreshReports: HTMLButtonElement;
+  reportView: HTMLDivElement;
 }
 
 export class AgentTestController {
@@ -134,6 +154,7 @@ export class AgentTestController {
     if (!this.pipelineModelsLoaded) this.loadPipelineModels();
     this.loadCustomAgents();
     this.loadCustomModels();
+    this.loadReportList();
     this.setupPipelineListeners();
   }
 
@@ -149,6 +170,8 @@ export class AgentTestController {
     this.el.btnRunCustomTest.addEventListener("click", () => this.runCustomTest());
     this.el.btnStopCustomTest.addEventListener("click", () => this.stopCustomBatch());
     this.el.customPromptInput.addEventListener("input", () => this.updateCustomRunButton());
+    this.el.btnRefreshReports.addEventListener("click", () => this.loadReportList());
+    this.el.reportSelect.addEventListener("change", () => this.viewSelectedReport());
   }
 
   private switchMode(): void {
@@ -477,6 +500,7 @@ export class AgentTestController {
     this.pipelineBatch = { total: modelPaths.length, done: 0 };
     this.pipelineBatchCancelled = false;
     const entries: PipelineBatchEntry[] = [];
+    const batchStart = Date.now();
 
     this.el.btnStopPipelineTest.style.display = "inline-block";
 
@@ -501,19 +525,24 @@ export class AgentTestController {
         this.setPipelineBatchProgress(0);
       }
 
+      const totalMs = Date.now() - batchStart;
       const passedCount = entries.filter((e) => e.result?.overall_passed).length;
       const crashedCount = entries.filter((e) => e.error).length;
 
       this.el.pipelineStatusLabel.textContent = this.pipelineBatchCancelled
-        ? `Остановлено пользователем: выполнено ${entries.length} из ${modelPaths.length}`
-        : `Готово: ✅ ${passedCount} · ❌ ${entries.length - passedCount - crashedCount} · 💥 ${crashedCount} из ${entries.length}`;
+        ? `Остановлено пользователем: выполнено ${entries.length} из ${modelPaths.length} · общее время: ${(totalMs / 1000).toFixed(1)}s`
+        : `Готово: ✅ ${passedCount} · ❌ ${entries.length - passedCount - crashedCount} · 💥 ${crashedCount} из ${entries.length} · общее время: ${(totalMs / 1000).toFixed(1)}s`;
       this.el.pipelineProgressBar.style.width = "100%";
-      this.displayPipelineBatchResults(testId, entries);
+      this.displayPipelineBatchResults(testId, entries, totalMs);
       this.el.pipelineResultsBox.style.display = "block";
 
-      // Сводный отчёт батча — на диск в папку фикстуры (рядом с report_*.md).
+      // Сводный отчёт батча — на диск в папку фикстуры (JSON для просмотрщика + md).
       try {
-        const reportPath = await invoke<string>("write_pipeline_batch_report", { testId, entries });
+        const reportPath = await invoke<string>("write_pipeline_batch_report", {
+          testId,
+          entries,
+          totalDurationMs: totalMs,
+        });
         showToast(`Сводный отчёт: ${reportPath}`, "success");
       } catch (e) {
         showToast(`Не удалось сохранить сводный отчёт: ${e}`, "error");
@@ -602,7 +631,12 @@ export class AgentTestController {
   }
 
   /** Сводка батча: таблица моделей + детали каждой (как раньше для одиночного прогона). */
-  private displayPipelineBatchResults(testId: string, entries: PipelineBatchEntry[]): void {
+  private displayPipelineBatchResults(testId: string, entries: PipelineBatchEntry[], totalMs: number | null = null): void {
+    this.el.pipelineResultsContent.innerHTML = this.pipelineBatchHtml(testId, entries, totalMs);
+  }
+
+  /** HTML сводки pipeline-батча: общий для живых результатов и просмотрщика отчётов. */
+  private pipelineBatchHtml(testId: string, entries: PipelineBatchEntry[], totalMs: number | null = null): string {
     const border = "1px solid var(--border, #444)";
     const rows = entries.map((e, i) => {
       const short = e.model.split(/[/\\]/).pop() || e.model;
@@ -626,8 +660,11 @@ export class AgentTestController {
       </tr>`;
     }).join("");
 
+    const totalPart = typeof totalMs === "number"
+      ? ` · <strong>общее время батча:</strong> ${(totalMs / 1000).toFixed(1)}s`
+      : "";
     const table = `
-      <div style="margin-bottom:12px;"><strong>Тест:</strong> ${this.escapeHtml(testId)} · моделей: ${entries.length}</div>
+      <div style="margin-bottom:12px;"><strong>Тест:</strong> ${this.escapeHtml(testId)} · моделей: ${entries.length}${totalPart}</div>
       <table style="border-collapse:collapse; width:100%; margin-bottom:16px;">
         <thead><tr>
           <th style="text-align:left; padding:4px 8px; border-bottom:${border}">#</th>
@@ -643,10 +680,17 @@ export class AgentTestController {
 
     const details = entries
       .filter((e) => e.result)
-      .map((e) => this.pipelineResultHtml(e.result!))
+      .map((e) => {
+        const r = e.result!;
+        return (
+          this.pipelineResultHtml(r) +
+          this.finalAnswerHtml(this.finalAuthorOf(r.messages), this.finalTextOf(r.messages)) +
+          this.chainHtml(r.messages)
+        );
+      })
       .join('<hr style="border:none; border-top:1px solid var(--border, #444); margin:12px 0"/>');
 
-    this.el.pipelineResultsContent.innerHTML = table + details;
+    return table + details;
   }
 
   // ─── Custom prompt test mode (третий режим) ───
@@ -736,7 +780,8 @@ export class AgentTestController {
 
     this.customBatch = { total: modelPaths.length, done: 0 };
     this.customBatchCancelled = false;
-    const entries: { model: string; error: string | null; result: CustomPromptResult | null }[] = [];
+    const entries: CustomPromptEntry[] = [];
+    const batchStart = Date.now();
 
     try {
       for (let i = 0; i < modelPaths.length; i++) {
@@ -760,11 +805,12 @@ export class AgentTestController {
         this.setCustomBatchProgress(0);
       }
 
+      const totalMs = Date.now() - batchStart;
       this.el.customProgressBar.style.width = "100%";
       this.el.customStatusLabel.textContent = this.customBatchCancelled
-        ? `Остановлено пользователем: выполнено ${entries.length} из ${modelPaths.length}`
-        : `Готово: ${entries.filter((e) => e.result && !e.result.error).length}/${entries.length} ответов получено`;
-      this.displayCustomBatchResults(agentId, prompt, entries);
+        ? `Остановлено пользователем: выполнено ${entries.length} из ${modelPaths.length} · общее время: ${(totalMs / 1000).toFixed(1)}s`
+        : `Готово: ${entries.filter((e) => e.result && !e.result.error).length}/${entries.length} ответов получено · общее время: ${(totalMs / 1000).toFixed(1)}s`;
+      this.displayCustomBatchResults(agentId, prompt, entries, totalMs);
       this.el.customResultsBox.style.display = "block";
 
       try {
@@ -772,6 +818,7 @@ export class AgentTestController {
           agentId,
           prompt,
           entries,
+          totalDurationMs: totalMs,
         });
         showToast(`Сводный отчёт: ${reportPath}`, "success");
       } catch (e) {
@@ -796,8 +843,19 @@ export class AgentTestController {
   private displayCustomBatchResults(
     agentId: string,
     prompt: string,
-    entries: { model: string; error: string | null; result: CustomPromptResult | null }[],
+    entries: CustomPromptEntry[],
+    totalMs: number | null = null,
   ): void {
+    this.el.customResultsContent.innerHTML = this.customBatchHtml(agentId, prompt, entries, totalMs);
+  }
+
+  /** HTML сводки кастом-батча: общий для живых результатов и просмотрщика отчётов. */
+  private customBatchHtml(
+    agentId: string,
+    prompt: string,
+    entries: CustomPromptEntry[],
+    totalMs: number | null = null,
+  ): string {
     const border = "1px solid var(--border, #444)";
     const rows = entries.map((e, i) => {
       const short = e.model.split(/[/\\]/).pop() || e.model;
@@ -821,9 +879,12 @@ export class AgentTestController {
       </tr>`;
     }).join("");
 
+    const totalPart = typeof totalMs === "number"
+      ? ` · <strong>общее время батча:</strong> ${(totalMs / 1000).toFixed(1)}s`
+      : "";
     const table = `
       <div style="margin-bottom:12px;">
-        <strong>Агент/пайплайн:</strong> ${this.escapeHtml(agentId)} · моделей: ${entries.length}<br/>
+        <strong>Агент/пайплайн:</strong> ${this.escapeHtml(agentId)} · моделей: ${entries.length}${totalPart}<br/>
         <strong>Промпт:</strong> ${this.escapeHtml(prompt.substring(0, 300))}
       </div>
       <table style="border-collapse:collapse; width:100%; margin-bottom:16px;">
@@ -848,17 +909,141 @@ export class AgentTestController {
         if (e.result.error) {
           html += `<pre style="white-space:pre-wrap; color: var(--red, #f44336)">${this.escapeHtml(e.result.error)}</pre>`;
         } else {
-          html += `<pre style="white-space:pre-wrap; margin:6px 0;">${this.escapeHtml(e.result.response)}</pre>`;
+          html += this.finalAnswerHtml(this.finalAuthorOf(e.result.messages), e.result.response);
         }
-        const msgs = e.result.messages.filter((m) => m.author).map((m) =>
-          `<li><strong>[${this.escapeHtml(m.msg_type)}] ${this.escapeHtml(m.author)}:</strong> ${this.escapeHtml(m.content_preview)}</li>`,
-        ).join("");
-        if (msgs) html += `<ul style="margin:4px 0 0 20px; padding:0;">${msgs}</ul>`;
+        html += this.chainHtml(e.result.messages);
       }
       return html + "</div>";
     }).join('<hr style="border:none; border-top:1px solid var(--border, #444); margin:12px 0"/>');
 
-    this.el.customResultsContent.innerHTML = table + details;
+    return table + details;
+  }
+
+  // ─── Плашки итога и цепочки переходов (общие для живых результатов и отчётов) ───
+
+  /** Автор итогового ответа: последнее message-сообщение от агента (зеркало backend-логики). */
+  private finalAuthorOf(messages: ChainMessage[]): string {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.msg_type === "message" && m.author && m.author !== "user") return m.author;
+    }
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].author) return messages[i].author;
+    }
+    return "неизвестно";
+  }
+
+  /** Текст итогового ответа из цепочки (для pipeline-отчётов, где response нет). */
+  private finalTextOf(messages: ChainMessage[]): string {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.msg_type === "message" && m.author && m.author !== "user") return m.content_preview;
+    }
+    return "";
+  }
+
+  /** Плашка «Итоговый ответ»: выделена рамкой, подписана именем агента. */
+  private finalAnswerHtml(author: string, text: string): string {
+    if (!text) return "";
+    return `
+      <div style="margin:8px 0; padding:8px 10px; border:1px solid var(--border, #444); border-left:4px solid var(--accent, #4a9eff); border-radius:4px; background:rgba(74,158,255,0.06);">
+        <div style="margin-bottom:4px;">🏁 <strong>Итоговый ответ</strong> <span style="opacity:0.75;">— агент: ${this.escapeHtml(author)}</span></div>
+        <pre style="white-space:pre-wrap; margin:4px 0 0 0;">${this.escapeHtml(text)}</pre>
+      </div>`;
+  }
+
+  /** Блок «Цепочка переходов»: нумерованные шаги — кто отвечал, что выдал. */
+  private chainHtml(messages: ChainMessage[]): string {
+    const steps = messages.filter((m) => m.author);
+    if (steps.length === 0) return "";
+    const typeIcon = (t: string) => (t === "signal" ? "📡" : t === "thought" ? "💭" : "💬");
+    const items = steps.map((m) =>
+      `<li style="margin-bottom:2px;">${typeIcon(m.msg_type)} <strong>${this.escapeHtml(m.author)}</strong> <span style="opacity:0.6;">[${this.escapeHtml(m.msg_type)}]</span> — ${this.escapeHtml(m.content_preview)}</li>`,
+    ).join("");
+    return `
+      <div style="margin:8px 0;">
+        <div style="margin-bottom:4px;">🔗 <strong>Цепочка переходов</strong> <span style="opacity:0.6;">(${steps.length} шагов)</span></div>
+        <ol style="margin:4px 0 0 20px; padding:0;">${items}</ol>
+      </div>`;
+  }
+
+  // ─── Просмотрщик сохранённых отчётов (загрузка из JSON на диске) ───
+
+  /**
+   * Заполнить список сохранённых отчётов (list_test_reports).
+   *
+   * Список — метки из JSON-файлов на диске; выбранную позицию стараемся
+   * сохранить при обновлении (кейс: юзер смотрит отчёт и жмёт «Обновить»).
+   */
+  private async loadReportList(): Promise<void> {
+    const select = this.el.reportSelect;
+    const previous = select.value;
+    try {
+      const reports = await invoke<TestReportMeta[]>("list_test_reports");
+      if (reports.length === 0) {
+        select.innerHTML = `<option value="">— отчётов пока нет —</option>`;
+        this.el.reportView.style.display = "none";
+        return;
+      }
+      const options = reports.map((r) => {
+        const kind = r.kind === "custom" ? "промпт" : "фикстура";
+        const date = new Date(r.created_ms).toLocaleString();
+        const label = `${kind}: ${r.label} · ${r.file_name} · ${date}`;
+        const selected = r.path === previous ? " selected" : "";
+        return `<option value="${this.escapeHtml(r.path)}"${selected}>${this.escapeHtml(label)}</option>`;
+      }).join("");
+      select.innerHTML = options;
+      if (previous && select.value !== previous) {
+        // Прежний выбор пропал (файл удалён) — спрятать его вид.
+        this.el.reportView.style.display = "none";
+      }
+    } catch (e) {
+      showToast(`Не удалось получить список отчётов: ${String(e)}`);
+    }
+  }
+
+  /**
+   * Показать выбранный отчёт: читаем JSON с диска (read_test_report) и рендерим
+   * теми же билдерами, что и живые результаты — отображение из файла идентично
+   * отображению на странице сразу после прогона.
+   */
+  private async viewSelectedReport(): Promise<void> {
+    const path = this.el.reportSelect.value;
+    const view = this.el.reportView;
+    if (!path) {
+      view.style.display = "none";
+      view.innerHTML = "";
+      return;
+    }
+    try {
+      const json = await invoke<Record<string, unknown>>("read_test_report", { path });
+      const type = typeof json.type === "string" ? json.type : "";
+      const entries = Array.isArray(json.entries) ? json.entries : [];
+      const totalMs = typeof json.total_duration_ms === "number" ? json.total_duration_ms : null;
+      const sourceNote = `<div style="opacity:0.6; margin-bottom:8px;">Источник: ${this.escapeHtml(path)}</div>`;
+      let html: string;
+      if (type === "pipeline_batch_report") {
+        html = this.pipelineBatchHtml(
+          typeof json.test_id === "string" ? json.test_id : "—",
+          entries as PipelineBatchEntry[],
+          totalMs,
+        );
+      } else if (type === "custom_prompt_report") {
+        html = this.customBatchHtml(
+          typeof json.agent_id === "string" ? json.agent_id : "—",
+          typeof json.prompt === "string" ? json.prompt : "",
+          entries as CustomPromptEntry[],
+          totalMs,
+        );
+      } else {
+        html = `<div style="color: var(--red, #f44336)">Неизвестный формат отчёта (type: ${this.escapeHtml(type || "—")})</div>`;
+      }
+      view.innerHTML = sourceNote + html;
+      view.style.display = "";
+    } catch (e) {
+      view.innerHTML = `<div style="color: var(--red, #f44336)">Ошибка чтения отчёта: ${this.escapeHtml(String(e))}</div>`;
+      view.style.display = "";
+    }
   }
 
   private escapeHtml(s: string): string {

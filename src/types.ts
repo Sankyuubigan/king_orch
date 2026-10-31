@@ -157,6 +157,16 @@ export interface CustomPromptResult {
     messages: { author: string; content_preview: string; msg_type: string }[];
 }
 
+/** Метка сохранённого сводного отчёта (list_test_reports) для просмотрщика. */
+export interface TestReportMeta {
+    file_name: string;
+    path: string;
+    /** "custom" (кастомный промпт) | "pipeline" (батч фикстуры). */
+    kind: 'custom' | 'pipeline';
+    label: string;
+    created_ms: number;
+}
+
 export interface Attachment {
     file_name: string;
     mime_type: string;

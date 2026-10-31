@@ -476,6 +476,20 @@
             </div>
             </div>
           </div>
+
+          <!-- Просмотрщик сохранённых отчётов (общий для всех режимов) -->
+          <div class="cards-grid">
+          <div class="group-box" id="s-{p}-reports-viewer-box" data-span="full">
+            <div class="group-title">📁 Сохранённые отчёты (загружаются из файлов на диске)</div>
+            <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
+              <select id="s-{p}-report-select" style="flex:1; padding:4px 6px;">
+                <option value="">— выберите отчёт —</option>
+              </select>
+              <button id="s-{p}-btn-refresh-reports" class="btn-secondary" title="Обновить список">⟳ Обновить</button>
+            </div>
+            <div id="s-{p}-report-view" style="display:none;"></div>
+          </div>
+          </div>
         </div>
 
 

@@ -420,6 +420,136 @@ fn fmt_vram_cell(delta: Option<f64>, peak: Option<f64>) -> String {
     }
 }
 
+/// Суммарное время батча для отчётов: None — фронт не передал (старая версия).
+fn fmt_total_duration(total_ms: Option<u64>) -> String {
+    match total_ms {
+        Some(ms) => format!("{:.1}s", ms as f64 / 1000.0),
+        None => "—".to_string(),
+    }
+}
+
+/// Цепочка переходов одним плоским текстом (для маркдауна, в ограждении):
+/// по строке на сообщение, новые строки внутри превью сплющены в пробел —
+/// иначе маркдаун ответов моделей ломает структуру списка («поплывёт»).
+fn chain_flat_text(messages: &[domain::pipeline_test::AgentMessage]) -> String {
+    messages
+        .iter()
+        .filter(|m| !m.author.is_empty())
+        .map(|m| {
+            format!(
+                "[{}] {}: {}\n",
+                m.msg_type,
+                m.author,
+                m.content_preview.replace(['\r', '\n'], " ")
+            )
+        })
+        .collect()
+}
+
+/// Автор итогового ответа: последнее message-сообщение от агента (не сигнал,
+/// не user). Если цепочка пуста — "неизвестно".
+fn final_answer_author(messages: &[domain::pipeline_test::AgentMessage]) -> String {
+    messages
+        .iter()
+        .rev()
+        .find(|m| m.msg_type == "message" && !m.author.is_empty() && m.author != "user")
+        .or_else(|| messages.iter().rev().find(|m| !m.author.is_empty()))
+        .map(|m| m.author.clone())
+        .unwrap_or_else(|| "неизвестно".to_string())
+}
+
+// ─── Просмотрщик сохранённых отчётов ───
+
+/// Метка отчёта для выпадающего списка на странице теста.
+#[derive(Serialize)]
+pub struct TestReportMeta {
+    pub file_name: String,
+    pub path: String,
+    /// "custom" (кастомный промпт) | "pipeline" (батч фикстуры).
+    pub kind: String,
+    /// Агент/пайплайн (custom) или id фикстуры (pipeline).
+    pub label: String,
+    pub created_ms: u64,
+}
+
+/// Список сохранённых сводных отчётов (JSON): custom_runs + batch-отчёты фикстур.
+#[tauri::command]
+pub fn list_test_reports(app: AppHandle) -> Vec<TestReportMeta> {
+    let agents_dir = infra::find_agents_dir(&app);
+    let project_root = agents_dir.parent().unwrap_or(&agents_dir).to_path_buf();
+    let test_cases = project_root.join("test_cases");
+    let mut reports: Vec<TestReportMeta> = Vec::new();
+
+    let scan = |dir: &std::path::Path, pattern: &str, kind: &str, reports: &mut Vec<TestReportMeta>| {
+        let Ok(rd) = std::fs::read_dir(dir) else { return };
+        for e in rd.flatten() {
+            let p = e.path();
+            let Some(name) = p.file_name().and_then(|n| n.to_str()) else { continue };
+            if !name.starts_with(pattern) || !name.ends_with(".json") {
+                continue;
+            }
+            let Ok(content) = std::fs::read_to_string(&p) else { continue };
+            let Ok(v) = serde_json::from_str::<serde_json::Value>(&content) else { continue };
+            let label = v
+                .get("agent_id")
+                .or_else(|| v.get("test_id"))
+                .and_then(|x| x.as_str())
+                .unwrap_or("?")
+                .to_string();
+            let created_ms = e
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0);
+            reports.push(TestReportMeta {
+                file_name: name.to_string(),
+                path: p.display().to_string(),
+                kind: kind.to_string(),
+                label,
+                created_ms,
+            });
+        }
+    };
+
+    scan(&test_cases.join("custom_runs"), "custom_report_", "custom", &mut reports);
+    if let Ok(rd) = std::fs::read_dir(test_cases.join("fixtures")) {
+        for fixture in rd.flatten() {
+            scan(&fixture.path(), "batch_report_", "pipeline", &mut reports);
+        }
+    }
+    reports.sort_by(|a, b| b.created_ms.cmp(&a.created_ms));
+    reports
+}
+
+/// Прочитать сохранённый JSON-отчёт для просмотрщика.
+///
+/// Гейт источников: путь обязан лежать внутри `<project>/test_cases` (без `..`),
+/// иначе произвольное чтение диска через команду.
+#[tauri::command]
+pub fn read_test_report(app: AppHandle, path: String) -> Result<serde_json::Value, String> {
+    let agents_dir = infra::find_agents_dir(&app);
+    let project_root = agents_dir.parent().unwrap_or(&agents_dir).to_path_buf();
+    let base = project_root
+        .join("test_cases")
+        .canonicalize()
+        .map_err(|e| format!("test_cases недоступна: {}", e))?;
+    let p = std::path::PathBuf::from(&path);
+    if !p.is_absolute() || p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err("Недопустимый путь отчёта".to_string());
+    }
+    let canonical = p
+        .canonicalize()
+        .map_err(|e| format!("Файл отчёта недоступен: {}", e))?;
+    if !canonical.starts_with(&base) || !canonical.is_file() {
+        return Err("Отчёт должен лежать внутри test_cases".to_string());
+    }
+    let content = std::fs::read_to_string(&canonical)
+        .map_err(|e| format!("Ошибка чтения {}: {}", canonical.display(), e))?;
+    serde_json::from_str(&content).map_err(|e| format!("Отчёт не JSON: {}", e))
+}
+
 /// Дописать в индивидуальный отчёт секцию памяти (отчёт пишется доменом ДО того,
 /// как хост узнает пики, поэтому секция добавляется хостом пост-фактум).
 fn append_memory_section(
@@ -452,7 +582,8 @@ fn append_memory_section(
 /// Ошибка запуска (движок не загрузился, модель не найдена) не должна ронять весь
 /// батч — фронтенд продолжает со следующей моделью, а несостоявшийся прогон попадает
 /// в сводный отчёт отдельной строкой, чтобы «тихо пропавшая модель» была видна.
-#[derive(Deserialize)]
+/// Serialize — батч-отчёт пишется и в JSON (точный формат для просмотрщика отчётов).
+#[derive(Serialize, Deserialize)]
 pub struct PipelineBatchEntry {
     pub model: String,
     pub error: Option<String>,
@@ -468,11 +599,17 @@ fn short_model_name(model: &str) -> &str {
 /// Пишется в папку фикстуры (`test_cases/fixtures/<test_id>/batch_report_<ts>.md`),
 /// рядом с одиночными `report_*.md`, которые харнесс сохраняет за каждый прогон:
 /// сводная таблица + ошибки запуска + детали уровней по каждой модели.
+///
+/// Точный артефакт — `.json` рядом (его читает просмотрщик отчётов на странице
+/// теста): маркдаун — человекочитаемый экспорт, в нём превью сообщений, а
+/// содержимое моделей обёрнуто в ограждения, чтобы их маркдаун не ломал структуру.
+/// `total_duration_ms` — суммарное время батча (стена), меряет фронтенд.
 #[tauri::command]
 pub fn write_pipeline_batch_report(
     app: AppHandle,
     test_id: String,
     entries: Vec<PipelineBatchEntry>,
+    total_duration_ms: Option<u64>,
 ) -> Result<String, String> {
     let agents_dir = infra::find_agents_dir(&app);
     let project_root = agents_dir.parent().unwrap_or(&agents_dir).to_path_buf();
@@ -482,12 +619,15 @@ pub fn write_pipeline_batch_report(
 
     let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let report_path = report_dir.join(format!("batch_report_{}.md", timestamp));
+    let json_path = report_dir.join(format!("batch_report_{}.json", timestamp));
 
+    let total_line = fmt_total_duration(total_duration_ms);
     let mut md = format!(
-        "# Сводный отчёт батч-прогона: {}\n\nДата: {}\nМоделей в прогоне: {}\n\n",
+        "# Сводный отчёт батч-прогона: {}\n\nДата: {}\nМоделей в прогоне: {}\nОбщее время батча: {}\n\n",
         test_id,
         timestamp,
         entries.len(),
+        total_line,
     );
 
     md.push_str("| # | Модель | Итог | Время | VRAM | ОЗУ | Индивидуальный отчёт |\n");
@@ -554,11 +694,31 @@ pub fn write_pipeline_batch_report(
                 md.push_str(&format!("- {}\n", d));
             }
         }
+        md.push_str("\n**Цепочка переходов:**\n\n```\n");
+        md.push_str(&chain_flat_text(&r.messages));
+        md.push_str("```\n");
     }
 
     std::fs::write(&report_path, &md)
         .map_err(|e| format!("Ошибка записи {}: {}", report_path.display(), e))?;
-    Ok(report_path.display().to_string())
+
+    // JSON — точный артефакт для просмотрщика отчётов (полная структура без
+    // маркдаун-экранирования): type/created/total_duration_ms/entries.
+    let json = serde_json::json!({
+        "type": "pipeline_batch_report",
+        "created": timestamp,
+        "test_id": test_id,
+        "total_duration_ms": total_duration_ms,
+        "markdown_path": report_path.display().to_string(),
+        "entries": entries,
+    });
+    std::fs::write(
+        &json_path,
+        serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("Ошибка записи {}: {}", json_path.display(), e))?;
+
+    Ok(json_path.display().to_string())
 }
 
 // ─── Кастомный промпт (третий режим теста) ───
@@ -579,7 +739,8 @@ pub struct CustomPromptResult {
     pub messages: Vec<domain::pipeline_test::AgentMessage>,
 }
 
-#[derive(Deserialize)]
+/// Serialize — entries целиком уходят в JSON-отчёт (просмотрщик отчётов).
+#[derive(Serialize, Deserialize)]
 pub struct CustomPromptEntry {
     pub model: String,
     pub error: Option<String>,
@@ -806,13 +967,19 @@ pub async fn run_custom_prompt_test(
     })
 }
 
-/// Сводный отчёт батч-прогона кастомного промпта: `test_cases/custom_runs/custom_report_<ts>.md`.
+/// Сводный отчёт батч-прогона кастомного промпта.
+///
+/// Пишется пара: `custom_report_<ts>.json` (точный артефакт для просмотрщика
+/// отчётов) + `custom_report_<ts>.md` (человекочитаемый экспорт). Содержимое
+/// моделей в маркдауне обёрнуто в ограждения, чтобы их маркдаун не ломал структуру.
+/// `total_duration_ms` — суммарное время батча (стена), меряет фронтенд.
 #[tauri::command]
 pub fn write_custom_prompt_report(
     app: AppHandle,
     agent_id: String,
     prompt: String,
     entries: Vec<CustomPromptEntry>,
+    total_duration_ms: Option<u64>,
 ) -> Result<String, String> {
     let agents_dir = infra::find_agents_dir(&app);
     let project_root = agents_dir.parent().unwrap_or(&agents_dir).to_path_buf();
@@ -822,12 +989,14 @@ pub fn write_custom_prompt_report(
 
     let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let report_path = report_dir.join(format!("custom_report_{}.md", timestamp));
+    let json_path = report_dir.join(format!("custom_report_{}.json", timestamp));
 
     let mut md = format!(
-        "# Кастомный промпт — сводный отчёт\n\nДата: {}\nАгент/пайплайн: `{}`\nМоделей в прогоне: {}\n\n## Промпт\n\n```\n{}\n```\n\n",
+        "# Кастомный промпт — сводный отчёт\n\nДата: {}\nАгент/пайплайн: `{}`\nМоделей в прогоне: {}\nОбщее время батча: {}\n\n## Промпт\n\n```\n{}\n```\n\n",
         timestamp,
         agent_id,
         entries.len(),
+        fmt_total_duration(total_duration_ms),
         prompt,
     );
 
@@ -876,26 +1045,40 @@ pub fn write_custom_prompt_report(
                 md.push_str(&format!("**Ошибка выполнения:**\n\n```\n{}\n```\n", err));
             } else {
                 md.push_str(&format!(
-                    "Время: {:.1}s · VRAM: {} · ОЗУ: {}\n\n**Ответ:**\n\n```\n{}\n```\n",
+                    "Время: {:.1}s · VRAM: {} · ОЗУ: {}\n\n**Итоговый ответ** (агент: {}):\n\n````\n{}\n````\n",
                     r.duration_ms as f64 / 1000.0,
                     fmt_vram_cell(r.vram_delta_mb, r.vram_peak_mb),
                     fmt_mb(r.ram_peak_mb),
+                    final_answer_author(&r.messages),
                     r.response,
                 ));
             }
-            for m in &r.messages {
-                if m.author.is_empty() {
-                    continue;
-                }
-                md.push_str(&format!("\n- **[{}] {}**: {}", m.msg_type, m.author, m.content_preview));
-            }
-            md.push('\n');
+            md.push_str("\n**Цепочка переходов:**\n\n```\n");
+            md.push_str(&chain_flat_text(&r.messages));
+            md.push_str("```\n");
         }
     }
 
     std::fs::write(&report_path, &md)
         .map_err(|e| format!("Ошибка записи {}: {}", report_path.display(), e))?;
-    Ok(report_path.display().to_string())
+
+    // JSON — точный артефакт для просмотрщика отчётов (полная структура).
+    let json = serde_json::json!({
+        "type": "custom_prompt_report",
+        "created": timestamp,
+        "agent_id": agent_id,
+        "prompt": prompt,
+        "total_duration_ms": total_duration_ms,
+        "markdown_path": report_path.display().to_string(),
+        "entries": entries,
+    });
+    std::fs::write(
+        &json_path,
+        serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("Ошибка записи {}: {}", json_path.display(), e))?;
+
+    Ok(json_path.display().to_string())
 }
 
 /// Остановка текущего тест-прогона (pipeline / кастомный промпт).

@@ -176,6 +176,9 @@ export function buildAgentStudioPage(instanceKey = ""): AgentStudioPage {
     customProgressBar: pick<HTMLDivElement>(root, prefix, "custom-progress-bar"),
     customResultsBox: pick<HTMLDivElement>(root, prefix, "custom-results-box"),
     customResultsContent: pick<HTMLDivElement>(root, prefix, "custom-results-content"),
+    reportSelect: pick<HTMLSelectElement>(root, prefix, "report-select"),
+    btnRefreshReports: pick<HTMLButtonElement>(root, prefix, "btn-refresh-reports"),
+    reportView: pick<HTMLDivElement>(root, prefix, "report-view"),
   };
 
   const codingTest: CodingTestElements = {

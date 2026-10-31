@@ -257,6 +257,8 @@ async fn main() {
             api::test::write_pipeline_batch_report,
             api::test::run_custom_prompt_test,
             api::test::write_custom_prompt_report,
+            api::test::list_test_reports,
+            api::test::read_test_report,
             api::test::cancel_test_run,
             api::coding_test::get_coding_bench_info,
             api::coding_test::run_coding_bench,
