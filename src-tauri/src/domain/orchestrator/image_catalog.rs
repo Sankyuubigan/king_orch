@@ -195,6 +195,66 @@ pub(crate) fn media_prompt_block(catalog: &str, marker: Option<&str>) -> String 
     block
 }
 
+/// Относительный путь документации баз от корня agents/ (решение юзера
+/// 01.11.26: документация по каждой модели — отдельный файл).
+const BRANCH_DOCS_REL: &str = "image-gen/backend/branches";
+
+/// Документация активной базы (`[ВЕТКА БАЗЫ]`) — правила адресации
+/// референсов и LoRA-стемы КОНКРЕТНОГО стека, `agents/<BRANCH_DOCS_REL>/
+/// <base>.md`. Инжектится хостом только для активной базы (§00.2): выбор
+/// ветки делает код, а не модель — чужие базы в контексте агента физически
+/// отсутствуют, смешение веток структурно невозможно. Fail-soft: файла нет —
+/// блока нет (агент живёт по общим правилам), причина — в логе.
+pub fn branch_doc_block(base: &str) -> Option<String> {
+    branch_doc_block_from(&crate::infra::find_agents_dir_early(), base)
+}
+
+fn branch_doc_block_from(agents_root: &std::path::Path, base: &str) -> Option<String> {
+    let base = base.trim();
+    // base уходит в построение файлового пути; имена баз из каталога —
+    // только [a-z0-9_-] (защита от traversal/мусора до join).
+    let valid = !base.is_empty()
+        && base
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-');
+    if !valid {
+        log::warn!("[IMG] [ВЕТКА БАЗЫ] пропущена: некорректное имя базы «{}»", base);
+        return None;
+    }
+    let path = agents_root.join(BRANCH_DOCS_REL).join(format!("{}.md", base));
+    match std::fs::read_to_string(&path) {
+        Ok(doc) if !doc.trim().is_empty() => {
+            Some(format!("[ВЕТКА БАЗЫ: {}]\n{}", base, doc.trim()))
+        }
+        Ok(_) => {
+            log::warn!("[IMG] [ВЕТКА БАЗЫ] файл пустой: {}", path.display());
+            None
+        }
+        Err(err) => {
+            log::warn!("[IMG] [ВЕТКА БАЗЫ] файл не прочитан ({}): {}", path.display(), err);
+            None
+        }
+    }
+}
+
+/// ЕДИНЫЙ сборщик меди-блока системного промпта — SSOT для оркестратора
+/// (`run_agent_node`) и превью (`api/chat.rs`): превью показывает ровно тот
+/// промпт, который получит модель. Порядок частей: каталог `[ДОСТУПНЫЕ
+/// ИЗОБРАЖЕНИЯ]` → маркер `[АКТИВНЫЙ БОНДЛ]` → ветка `[ВЕТКА БАЗЫ]`.
+/// Пустые части не порождают пустых разделов.
+pub fn full_media_prompt_block(catalog: &str, facts: Option<&ActiveBundleFacts>) -> String {
+    let mut block = media_prompt_block(catalog, facts.map(|item| item.marker.as_str()));
+    if let Some(facts) = facts {
+        if let Some(branch) = branch_doc_block(&facts.base) {
+            if !block.is_empty() {
+                block.push_str("\n\n");
+            }
+            block.push_str(&branch);
+        }
+    }
+    block
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum ImageLocator {
     Request(usize),
@@ -1229,5 +1289,53 @@ mod tests {
         assert!(agent_consumes_image_catalog(&video));
         assert!(!agent_receives_bundle_marker(&plain));
         assert!(!agent_consumes_image_catalog(&plain));
+    }
+
+    /// G7 (решение юзера 01.11.26): ветка активной базы инжектится файлом,
+    /// некорректная base отсекается до join (traversal), отсутствующий файл —
+    /// fail-soft (None + никакой части блока).
+    #[test]
+    fn branch_doc_block_reads_active_base_file_only() {
+        let root = marker_sandbox("branch-docs");
+        let dir = root.join("image-gen").join("backend").join("branches");
+        std::fs::create_dir_all(&dir).expect("ветки-каталог создан");
+        std::fs::write(dir.join("flux.md"), "# База FLUX\nАдресация словами.\n")
+            .expect("ветка flux записана");
+
+        let block = branch_doc_block_from(&root, "flux").expect("ветка flux найдена");
+        assert!(block.starts_with("[ВЕТКА БАЗЫ: flux]\n"), "заголовок: {}", block);
+        assert!(block.contains("Адресация словами"), "тело: {}", block);
+
+        // Чужая/несуществующая база — блока нет (не содержимое другой базы).
+        assert!(branch_doc_block_from(&root, "qwen").is_none());
+        // Traversal и мусор отсекаются ДО join.
+        assert!(branch_doc_block_from(&root, "../evil").is_none());
+        assert!(branch_doc_block_from(&root, "").is_none());
+        assert!(branch_doc_block_from(&root, "FLUX").is_none());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// G7: единый сборщик — порядок каталог → маркер → ветка; без фактов
+    /// (None) и без каталога — пусто/только ветка по наличию частей.
+    #[test]
+    fn full_media_block_orders_catalog_marker_branch() {
+        let entry: crate::infra::ImageBundleEntry = serde_json::from_str(
+            r#"{"name":"flux-test","lora_base":"flux","ref_edit_mode":"native",
+                "files":[{"role":"diffusion","filename":"flux-test.gguf","download_url":"https://example.invalid/flux.gguf"}]}"#,
+        )
+        .expect("синтетический бандл разобран");
+        let facts = ActiveBundleFacts::from_entry(&entry);
+        // base=flux взят из бандла, файл ветки в раннем резолвере искать нельзя
+        // (зависимость от машины) — порядок проверяем на части с маркером.
+        let block = full_media_prompt_block("[ДОСТУПНЫЕ ИЗОБРАЖЕНИЯ]\n- id=\"hist_01\"", Some(&facts));
+        let catalog_pos = block.find("[ДОСТУПНЫЕ ИЗОБРАЖЕНИЯ]").expect("каталог на месте");
+        let marker_pos = block.find("[АКТИВНЫЙ БОНДЛ]").expect("маркер на месте");
+        assert!(marker_pos > catalog_pos, "маркер после каталога: {}", block);
+        // Ветка flux реально лежит в репо — в dev-чекоуте early-резолвер её
+        // находит; если не находит (нет agents/) — блок просто без ветки.
+        if let Some(branch_pos) = block.find("[ВЕТКА БАЗЫ: flux]") {
+            assert!(branch_pos > marker_pos, "ветка после маркера: {}", block);
+        }
+        assert_eq!(full_media_prompt_block("", None), "", "без фактов — пусто");
     }
 }

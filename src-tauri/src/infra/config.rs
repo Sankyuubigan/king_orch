@@ -409,6 +409,28 @@ pub fn find_agents_dir(app: &AppHandle) -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("agents"))
 }
 
+/// agents-каталог БЕЗ AppHandle — для domain-слоя (инъекция `[ВЕТКА БАЗЫ]`,
+/// 01.11.26). Порядок приоритетов тот же, что у `find_agents_dir`, но путь
+/// exe — через `std::env::current_exe()` (правило rules.md:53), а Resource-
+/// ветка опущена: ресурсы Tauri резолвятся только с AppHandle.
+pub fn find_agents_dir_early() -> std::path::PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(exe_dir) = exe.parent() {
+            // Dev-чекout: 3 уровня вверх от exe (target/<profile>/ → target/ →
+            // src-tauri/ → корень проекта) — приоритет исходников, как в
+            // `find_agents_dir`.
+            let repo_agents = exe_dir.join("..").join("..").join("..").join("agents");
+            if repo_agents.exists() {
+                return repo_agents;
+            }
+            if exe_dir.join("agents").exists() {
+                return exe_dir.join("agents");
+            }
+        }
+    }
+    PathBuf::from("agents")
+}
+
 pub fn find_mcp_servers_dir(app: &AppHandle) -> PathBuf {
     let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
     let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));

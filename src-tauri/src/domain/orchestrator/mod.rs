@@ -19,7 +19,9 @@ pub(crate) use grammar::*;
 pub use image_catalog::RequestMedia;
 pub use image_catalog::agent_consumes_image_catalog;
 pub use image_catalog::agent_receives_bundle_marker;
+pub use image_catalog::active_image_bundle_facts;
 pub use image_catalog::active_image_bundle_marker;
+pub use image_catalog::full_media_prompt_block;
 pub(crate) use invocation::*;
 pub(crate) use prompt_log::*;
 pub(crate) use result::*;
@@ -1232,9 +1234,12 @@ where
         // причина — в логе (виден в last_logs.txt).
         // FLUX (01.11.26): гейт расширен на generate-only агентов — с третьей
         // базой (flux) выбор LoRA-стека обязан опираться на ФАКТ активного
-        // бандла. Каталог изображений — только каталог-агентам
-        // (`media_prompt_block` с пустым каталогом возвращает чистый маркер —
-        // тест `media_prompt_block_marker_alone_without_catalog`).
+        // бандла. Каталог изображений — только каталог-агентам.
+        // Рефактор веток (01.11.26, §00.2): сборка через ЕДИНЫЙ
+        // `full_media_prompt_block` (каталог → маркер → [ВЕТКА БАЗЫ]) —
+        // документация активной базы инжектится файлом, чужих баз в контексте
+        // нет (выбор ветки делает код, а не модель); превью идёт через тот же
+        // сборщик, расхождение структурно невозможно.
         let facts = image_catalog::active_image_bundle_facts();
         if let Some(item) = facts.as_ref() {
             log::info!(
@@ -1250,10 +1255,7 @@ where
         } else {
             String::new()
         };
-        let media_block = image_catalog::media_prompt_block(
-            &catalog_part,
-            facts.as_ref().map(|item| item.marker.as_str()),
-        );
+        let media_block = image_catalog::full_media_prompt_block(&catalog_part, facts.as_ref());
         if !media_block.is_empty() {
             system_prompt.push_str("\n\n");
             system_prompt.push_str(&media_block);

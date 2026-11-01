@@ -738,23 +738,26 @@ pub fn get_prompt_preview(
             }
         };
     let request_media = crate::domain::RequestMedia::build(&attachments, &history);
-    if uses_image_selection {
-        let candidates = request_media.candidate_prompt();
-        if !candidates.is_empty() {
-            system_prompt.push_str("\n\n");
-            system_prompt.push_str(&candidates);
-        }
-    }
     // F5 (29.10.26): превью обязано показывать ровно тот промпт, который
-    // получит модель, — включая маркер активного бандла (иную базу, чем в
-    // превью, модель никогда не увидит — расхождение здесь = ложь юзеру).
-    // FLUX (01.11.26): маркер получают и generate-only агенты (оркестратор
-    // инжектит его им без каталога) — превью повторяет это ровно.
-    if uses_image_selection || receives_bundle_marker {
-        if let Some(marker) = crate::domain::active_image_bundle_marker() {
-            system_prompt.push_str("\n\n");
-            system_prompt.push_str(&marker);
-        }
+    // получит модель. FLUX (01.11.26): маркер получают и generate-only агенты.
+    // Рефактор веток (01.11.26): сборка через ЕДИНЫЙ
+    // `full_media_prompt_block` (каталог → маркер → [ВЕТКА БАЗЫ]) — тот же
+    // сборщик, что у оркестратора, расхождение превью и промпта структурно
+    // невозможно.
+    let media_facts = if uses_image_selection || receives_bundle_marker {
+        crate::domain::active_image_bundle_facts()
+    } else {
+        None
+    };
+    let catalog_part = if uses_image_selection {
+        request_media.candidate_prompt()
+    } else {
+        String::new()
+    };
+    let media_block = crate::domain::full_media_prompt_block(&catalog_part, media_facts.as_ref());
+    if !media_block.is_empty() {
+        system_prompt.push_str("\n\n");
+        system_prompt.push_str(&media_block);
     }
 
     let mut llm_messages: Vec<LlmMessage> = vec![LlmMessage {
