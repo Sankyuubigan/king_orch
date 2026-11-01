@@ -217,6 +217,51 @@ where
         }
     }
 
+    /// SSOT пуска think-тел в чат: ОДИН прогон агента = ОДНО thought-сообщение.
+    /// Черновики слотов сигнального контракта (drafts-блок, по слоту на элемент
+    /// — e1…e9 валидатора) склеиваются в один текст "\n\n": раньше каждый слот
+    /// пушился отдельным сообщением, и один вызов валидатора рисовался N
+    /// строками чата. Бюджеты прежние: THOUGHT_STORE_MAX_CHARS режет КАЖДОЕ
+    /// тело в ЛОГЕ (суммарный объём не растёт), в messages[] и phase1_thinking
+    /// идёт полный склеенный текст (как раньше — полные тела). Возвращает
+    /// true, если запись добавлена (bodies непусты); пустой список ничего
+    /// не трогает (phase1_thinking не перезатирается).
+    pub(crate) fn push_thinking_message(
+        &mut self,
+        bodies: &[String],
+        label: &str,
+        elapsed_sec: f32,
+    ) -> bool {
+        if bodies.is_empty() {
+            return false;
+        }
+        let full = bodies.join("\n\n");
+        let loggable = bodies
+            .iter()
+            .map(|t| safe_truncate(t, THOUGHT_STORE_MAX_CHARS))
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        self.phase1_thinking = Some(full.clone());
+        (self.log_cb)(format!(
+            "💭 Мысль {} [d={}] ({}) [⏱{:.1}с]: {}",
+            self.agent.name, self.depth, label, elapsed_sec, loggable
+        ));
+        self.messages.push(ChatMessage {
+            id: Some(format!("msg_{}", self.msg_counter)),
+            msg_type: "thought".to_string(),
+            content: full,
+            sub_calls: None,
+            author: Some(self.agent.id.clone()),
+            model: Some(extract_model_filename(self.engine.model_path())),
+            time_sec: None,
+            attachments: None,
+            phase: Some(1),
+            author_name: None,
+        });
+        *self.msg_counter += 1;
+        true
+    }
+
     /// GUARD «финал без тулов»: вердикт для текущего ответа.
     ///
     /// Два контракта нарушаются одинаково — «ответ текстом, ни один инструмент

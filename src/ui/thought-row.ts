@@ -11,8 +11,10 @@
 /// Правило chevron (конструктив, не угадка): рисуется, если у строки ЕСТЬ детали
 /// и (для мысли/сигнала) summary фактически не влезает в линию
 /// (замер scrollWidth > clientWidth). У тула детали есть всегда → chevron всегда.
-/// Если деталей вообще нет — chevron не рисуется. Фолбэк по длине текста —
-/// только для окружения без layout (jsdom: размеры всегда 0), назван честно.
+/// Если деталей вообще нет — chevron не рисуется, строка некликабельна.
+/// Замер двухфазный: при создании строка ещё вне DOM (размеры 0), окончательный
+/// пересчёт — в rAF после вставки. Фолбэк по длине текста — только для окружения
+/// без layout (jsdom: размеры всегда 0), назван честно.
 
 import type { ThoughtMenuCallbacks } from "../types";
 import { confirmDialog } from "./confirm";
@@ -87,22 +89,31 @@ function summaryOverflows(row: HTMLDivElement): boolean {
   return false;
 }
 
+/** Есть ли у строки что разворачивать: детали присутствуют и (у тула — всегда,
+ *  у мысли/сигнала) summary фактически не влезает в линию. SSOT решения
+ *  «кликабельна ли строка»: и chevron, и клик по строке идут через неё. */
+function canExpand(row: HTMLDivElement): boolean {
+  const detail = row.querySelector<HTMLElement>(".thought-row__detail");
+  if (!detail || detail.childElementCount === 0) return false;
+  const isTool = row.classList.contains("thought-row--tool");
+  return isTool || summaryOverflows(row);
+}
+
 /** Пересчёт видимости chevron по факту переполнения/наличия деталей.
  *  Раскрытое состояние (thought-row--open) НЕ сбрасывается: chevron —
  *  индикатор «есть что развернуть», закрыть панель можно кликом по строке. */
 function refreshToggle(row: HTMLDivElement): void {
-  const detail = row.querySelector<HTMLElement>(".thought-row__detail");
   const toggle = row.querySelector<HTMLElement>(".thought-row__toggle");
-  if (!detail || !toggle) return;
-  const hasDetail = detail.childElementCount > 0;
-  const isTool = row.classList.contains("thought-row--tool");
-  const needed = hasDetail && (isTool || summaryOverflows(row));
-  toggle.hidden = !needed;
+  if (!toggle) return;
+  toggle.hidden = !canExpand(row);
 }
 
 function toggleRow(row: HTMLDivElement): void {
   const detail = row.querySelector<HTMLElement>(".thought-row__detail");
   if (!detail || detail.childElementCount === 0) return;
+  // Открытие — только если строке есть что разворачивать (однолинейная мысль
+  // некликабельна); закрытие разрешено всегда, если панель уже открыта.
+  if (!row.classList.contains("thought-row--open") && !canExpand(row)) return;
   const open = row.classList.toggle("thought-row--open");
   detail.hidden = !open;
 }
@@ -250,6 +261,11 @@ export function createThoughtRow(opts: ThoughtRowOptions): HTMLDivElement {
   row.appendChild(line);
   row.appendChild(detail);
   refreshToggle(row);
+  // Строка ещё НЕ в DOM — scrollWidth/clientWidth равны 0, и jsdom-фолбэк
+  // по длине сработал бы в браузере для любой длинной мысли. Повторный замер
+  // после вставки (rAF — до отрисовки, без мигания) показывает chevron только
+  // там, где summary реально не влезает в линию.
+  requestAnimationFrame(() => refreshToggle(row));
   return row;
 }
 

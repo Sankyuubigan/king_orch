@@ -2269,34 +2269,14 @@ where
                 &raw_response
             };
             // Извлечено до dispatch (покрывает и Break-пути сигнальных агентов).
+            // Один прогон = одно thought-сообщение: слоты drafts-блока (валидатор)
+            // склеиваются SSOT-методом, а не пушатся по слоту отдельными строками.
             let extracted = last_think_bodies.clone();
-            if !extracted.is_empty() {
-                ctx.phase1_thinking = Some(extracted.join("\n\n"));
-            }
-            for t in &extracted {
-                let stored = safe_truncate(t, THOUGHT_STORE_MAX_CHARS);
-                log_cb(format!(
-                    "💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}",
-                    agent.name,
-                    depth,
-                    gen_start.elapsed().as_secs_f32(),
-                    stored
-                ));
-                ctx.messages.push(ChatMessage {
-                    id: Some(format!("msg_{}", ctx.msg_counter)),
-                    msg_type: "thought".to_string(),
-                    content: t.clone(),
-                    sub_calls: None,
-                    author: Some(agent.id.clone()),
-                    model: Some(extract_model_filename(engine.model_path())),
-                    time_sec: None,
-                    attachments: None,
-                    phase: Some(1),
-                    author_name: None,
-                });
-                *ctx.msg_counter += 1;
-            }
-            bodies_pushed = !extracted.is_empty();
+            bodies_pushed = ctx.push_thinking_message(
+                &extracted,
+                "размышление",
+                gen_start.elapsed().as_secs_f32(),
+            );
             if extracted.is_empty() && !thought_source.contains("<think") {
                 if !reasoning.trim().is_empty() {
                     // Reasoning-парсер движка вынес дум-блоки в отдельный канал
@@ -2306,51 +2286,17 @@ where
                     // thought-сообщения делает тела видимыми в чате depth 0.
                     // (В режиме докачки reasoning копится последней итерацией —
                     // для одноходовых сигнальных агентов это весь ответ.)
-                    ctx.phase1_thinking = Some(reasoning.clone());
-                    let stored = safe_truncate(&reasoning, THOUGHT_STORE_MAX_CHARS);
-                    log_cb(format!(
-                        "💭 Мысль {} [d={}] (reasoning-канал) [⏱{:.1}с]: {}",
-                        agent.name,
-                        depth,
+                    ctx.push_thinking_message(
+                        std::slice::from_ref(&reasoning),
+                        "reasoning-канал",
                         gen_start.elapsed().as_secs_f32(),
-                        stored
-                    ));
-                    ctx.messages.push(ChatMessage {
-                        id: Some(format!("msg_{}", ctx.msg_counter)),
-                        msg_type: "thought".to_string(),
-                        content: reasoning.clone(),
-                        sub_calls: None,
-                        author: Some(agent.id.clone()),
-                        model: Some(extract_model_filename(engine.model_path())),
-                        time_sec: None,
-                        attachments: None,
-                        phase: Some(1),
-                        author_name: None,
-                    });
-                    *ctx.msg_counter += 1;
+                    );
                 } else if let Some(t) = extract_thought_from_partial_json(thought_source) {
-                    ctx.phase1_thinking = Some(t.clone());
-                    let stored = safe_truncate(&t, THOUGHT_STORE_MAX_CHARS);
-                    log_cb(format!(
-                        "💭 Мысль {} [d={}] (размышление) [⏱{:.1}с]: {}",
-                        agent.name,
-                        depth,
+                    ctx.push_thinking_message(
+                        std::slice::from_ref(&t),
+                        "размышление",
                         gen_start.elapsed().as_secs_f32(),
-                        stored
-                    ));
-                    ctx.messages.push(ChatMessage {
-                        id: Some(format!("msg_{}", ctx.msg_counter)),
-                        msg_type: "thought".to_string(),
-                        content: t.clone(),
-                        sub_calls: None,
-                        author: Some(agent.id.clone()),
-                        model: Some(extract_model_filename(engine.model_path())),
-                        time_sec: None,
-                        attachments: None,
-                        phase: Some(1),
-                        author_name: None,
-                    });
-                    *ctx.msg_counter += 1;
+                    );
                 }
             }
         }
@@ -2790,33 +2736,15 @@ where
     // Сигнальные агенты выходят из итерации через DispatchCtl::Break
     // (handle_emit_signal / execute_native_tool_calls) — thought-блок внутри
     // цикла не доходит до пуша, и тела think-блоков (слоты валидатора)
-    // терялись из messages[] и SubCall.thinking. Допушиваем здесь; для
-    // обычных текстовых финалов тела уже запушены в цикле (bodies_pushed).
-    if !bodies_pushed && !last_think_bodies.is_empty() {
-        ctx.phase1_thinking = Some(last_think_bodies.join("\n\n"));
-        for t in &last_think_bodies {
-            let stored = safe_truncate(t, THOUGHT_STORE_MAX_CHARS);
-            log_cb(format!(
-                "💭 Мысль {} [d={}] (размышление, signal-путь) [⏱{:.1}с]: {}",
-                ctx.agent.name,
-                depth,
-                start_time.elapsed().as_secs_f32(),
-                stored
-            ));
-            ctx.messages.push(ChatMessage {
-                id: Some(format!("msg_{}", ctx.msg_counter)),
-                msg_type: "thought".to_string(),
-                content: t.clone(),
-                sub_calls: None,
-                author: Some(ctx.agent.id.clone()),
-                model: Some(extract_model_filename(engine.model_path())),
-                time_sec: None,
-                attachments: None,
-                phase: Some(1),
-                author_name: None,
-            });
-            *ctx.msg_counter += 1;
-        }
+    // терялись из messages[] и SubCall.thinking. Допушиваем здесь одним
+    // склеенным сообщением; для обычных текстовых финалов тела уже запушены
+    // в цикле (bodies_pushed).
+    if !bodies_pushed {
+        ctx.push_thinking_message(
+            &last_think_bodies,
+            "размышление, signal-путь",
+            start_time.elapsed().as_secs_f32(),
+        );
     }
 
     if ctx.depth > 0 {

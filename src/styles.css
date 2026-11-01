@@ -263,15 +263,29 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
    Прежний gap 15px делал список строк воздушным; вертикаль теперь задаётся
    отступами элементов: пузырь↔пузырь 6+3+6 = 15px (как было), соседние
    строки-действия 2+3+2 = 7px. */
-.chat-history { flex: 1; background-color: var(--chat-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; box-shadow: inset 0 2px 5px rgba(0,0,0,0.05); }
+/* Горизонтальный отступ 10% с КАЖДОЙ стороны — воздух от краёв окна для пузырей
+   и строк-действий (как в мессенджерах), масштабируется с шириной окна.
+   Все элементы чата сдвигаются этим паддингом РАВНОМЕРНО, поэтому ось выравнивания
+   (текст пузыря ↔ иконка thought-row ↔ крутилка, см. --chat-row-indent ниже)
+   не ломается. Ось = .message padding-left (15px) ≡ --chat-row-indent (15px)
+   от общего края контента. Правый край колонки общий для ВСЕХ детей .chat-history
+   (stretch): пузыри агентов и tool-call-блоки добиваются до него через
+   max-width: 100% (см. ниже), пользовательские пузыри прижаты к нему flex-end. */
+.chat-history { flex: 1; background-color: var(--chat-bg); border: 1px solid var(--border); border-radius: 6px; padding: 15px 10%; overflow-y: auto; display: flex; flex-direction: column; gap: 3px; box-shadow: inset 0 2px 5px rgba(0,0,0,0.05); }
 
 /* Кнопка «Показать ещё» над окном рендера истории (CHAT_RENDER_WINDOW). */
 .chat-load-more { align-self: center; margin: 4px 0 8px; padding: 6px 14px; font-size: 12px; color: var(--text); background-color: var(--msg-system); border: 1px solid var(--border); border-radius: 12px; cursor: pointer; }
 .chat-load-more:hover { border-color: var(--primary); color: var(--primary); }
 
-.message { max-width: 85%; padding: 10px 15px; border-radius: 8px; line-height: 1.5; font-size: calc(var(--chat-font-scale, 1) * 14px); word-wrap: break-word; position: relative; color: var(--text); margin: 6px 0; }
+/* box-sizing: border-box ОБЯЗАТЕЛЕН: .message-agent растянут на width:100%,
+   и без border-box паддинг 10px 15px добавлялся бы СВЕРХ 100% — горизонтальное
+   переполнение .chat-history на 30px (скроллбар внизу чата). */
+.message { max-width: 85%; padding: 10px 15px; border-radius: 8px; line-height: 1.5; font-size: calc(var(--chat-font-scale, 1) * 14px); word-wrap: break-word; position: relative; color: var(--text); margin: 6px 0; box-sizing: border-box; }
 .message-user { align-self: flex-end; background-color: var(--msg-user); border-bottom-right-radius: 0; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
-.message-agent { align-self: flex-start; background-color: var(--msg-agent); border-bottom-left-radius: 0; box-shadow: 0 1px 2px rgba(0,0,0,0.1); width: 100%; }
+/* max-width: 100% перебивает .message { max-width: 85% }: пузырь агента занимает
+   всю колонку, его правый край совпадает с thought-row/крутилкой (общий край
+   колонки .chat-history), иначе справа видно «ступеньку» между пузырём и строками. */
+.message-agent { align-self: flex-start; background-color: var(--msg-agent); border-bottom-left-radius: 0; box-shadow: 0 1px 2px rgba(0,0,0,0.1); width: 100%; max-width: 100%; }
 .message-system { align-self: center; background-color: var(--msg-system); color: #888; font-size: calc(var(--chat-font-scale, 1) * 13px); border-radius: 12px; padding: 10px 15px; text-align: left; }
 .agent-name { font-weight: bold; font-size: 12px; color: #777; margin-bottom: 5px; display: block; border-bottom: 1px solid var(--border); padding-bottom: 3px; }
 .msg-time { font-size: 11px; color: #888; margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 4px; display: flex; justify-content: space-between; align-items: center; }
@@ -290,7 +304,9 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .msg-attachment-file-wrap { position: relative; display: inline-flex; align-items: center; gap: 4px; }
 .msg-attachment-file-wrap .msg-attachment-action { position: static; width: 24px; height: 24px; font-size: 13px; flex: none; }
 
-.tool-call-block { background-color: var(--sidebar-bg); border-left: 3px solid var(--primary); padding: 8px 12px; margin: 10px 0; border-radius: 4px; font-family: monospace; font-size: 12px; align-self: flex-start; width: 90%; }
+/* border-box — та же причина, что у .message: width:100% + паддинг 8px 12px
+   без border-box даёт переполнение колонки на 24px. */
+.tool-call-block { background-color: var(--sidebar-bg); border-left: 3px solid var(--primary); padding: 8px 12px; margin: 10px 0; border-radius: 4px; font-family: monospace; font-size: 12px; align-self: flex-start; width: 100%; max-width: 100%; box-sizing: border-box; }
 .tool-call-header { font-weight: bold; color: var(--primary); margin-bottom: 5px; }
 .tool-call-args { color: #888; margin-bottom: 8px; word-break: break-all; }
 .tool-call-result { color: var(--text); max-height: 150px; overflow-y: auto; white-space: pre-wrap; background: var(--bg-color); padding: 8px; border-radius: 4px; border: 1px solid var(--border); }
