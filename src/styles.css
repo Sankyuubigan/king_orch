@@ -1586,6 +1586,20 @@ body.edge-reconnecting {
 .test-checklist label:hover { background: var(--session-hover); }
 .test-checklist input[type="checkbox"] { margin: 0; }
 .test-hint { color: #888; font-size: 13px; font-style: italic; }
+/* Счётчик выбранных моделей общего пула (решение владельца 01.11.2026). */
+.test-model-counter {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-style: normal;
+  background: var(--session-hover);
+  color: var(--text);
+}
+.test-model-counter--empty {
+  background: transparent;
+  color: #888;
+}
 .test-progress { margin-top: 10px; }
 
 .test-file-path {

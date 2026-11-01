@@ -75,6 +75,7 @@ use crate::domain::orchestrator::prompt::{build_system_prompt, finalize_system_p
 use crate::domain::orchestrator::RequestMedia;
 use crate::domain::signals::{
     build_signal_envelope_grammar_with_think_budget, load_all_signal_contracts, per_draft_budget_chars,
+    slot_min_chars,
     required_field_count, SignalContract,
 };
 use crate::infra::config::load_config_early;
@@ -875,11 +876,20 @@ fn prompt_draft_order_matches_contract() {
         ] {
             let runtime =
                 prepare_flat(&dir, 2048, Some(budget)).expect("слой собран");
+            // Минимум содержания (Вариант A) ужал потолок: в грамматике обязаны
+            // быть ОБЕ части тела слота — прогон по slot_min_chars и ужатый хвост.
+            let min = slot_min_chars(Some(budget));
+            let draft_line = runtime
+                .grammar
+                .lines()
+                .find(|line| line.starts_with("draft-1 ::="))
+                .expect("якорный слот 1 обязан быть в грамматике движка");
             assert!(
-                runtime.grammar.contains(&format!("{{0,{}}}", budget)),
-                "в грамматике нет границы {{0,{}}} — граница не дошла до движка: {}",
-                budget,
-                runtime.grammar.lines().next().unwrap_or_default()
+                draft_line.contains(&format!("[^<]{{{}}} [^<]{{0,{}}}", min, budget - min)),
+                "в грамматике нет минимума {} и ужатого потолка {} — граница не дошла до движка: {}",
+                min,
+                budget - min,
+                draft_line
             );
         }
     }

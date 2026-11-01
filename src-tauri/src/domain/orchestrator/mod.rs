@@ -40,9 +40,10 @@ use crate::domain::parsers::{
     split_thinking_and_answer,
 };
 use crate::domain::signals::{
+    assemble_slot_signal_value, auto_think_budget_chars,
     build_signal_envelope_grammar_with_think_budget, build_signal_envelope_json_only_grammar,
-    draft_count_for_contract, extract_signal_value_from_text, load_signal_contract,
-    SignalContract,
+    draft_count_for_contract, slot_anchor_labels, extract_signal_value_from_text,
+    load_signal_contract, SignalContract,
 };
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, NodeType, WorkflowContext, WorkflowDef, WorkflowRunner,
@@ -1404,6 +1405,26 @@ where
     // Сигнальные агенты (signals/root.schema.json) отвечают под Method 3 гибридной GBNF
     // (docs/gbnf.md): think-block + JSON, disable_reasoning для Method 3 не включается.
     // agent_grammar / is_hybrid / hybrid_gbnf вычислены ВЫШЕ (перед build_system_prompt).
+    //
+    // ── Потолок размышления сигнальных агентов (draft-блоки грамматики) ──
+    // frontmatter `think_budget:` — явный выбор автора агента и приоритетен.
+    // БЕЗ него потолок считается АВТОМАТИЧЕСКИ (решение владельца 31.10.2026 —
+    // всем сигнальным агентам): думатель, заполнивший капы движка, оставляет
+    // конверт недостижимым, и ответ уходит в деградирующие ретраи (батч
+    // 31.10.2026: LFM2.5-8B сжёг 1491 из 1500 токенов размышления — «думатель
+    // без ответа» ×3). Авто-потолок — МАКСИМУМ, а не норма: короткий сигнал
+    // остаётся коротким и быстрым, потолок лишь делает «конверта нет»
+    // структурно невозможным. Кап спрашиваем У ДВИЖКА: фолбэки запуска могут
+    // отключить reasoning-флаги, тогда конфигурационный кап недействителен.
+    let signal_think_budget: Option<usize> = signal_contract.as_ref().map(|contract| {
+        agent.think_budget_chars.or_else(|| {
+            auto_think_budget_chars(
+                max_gen_tokens,
+                engine.reasoning_budget() as usize,
+                draft_count_for_contract(&contract.value_schema),
+            )
+        })
+    }).flatten();
     if let Some(gbnf) = &agent_grammar {
         if is_hybrid {
             engine.set_grammar(None);
@@ -1429,20 +1450,24 @@ where
         // и весь конверт уходит в reasoning_content. Рассуждению сигнала служат
         // draft-блоки самой грамматики.
         //
-        // Граница размышления берётся из frontmatter агента (`think_budget:`).
-        // Без неё модель может выжечь весь n_predict в think и не вернуть сигнал
-        // вовсе (измерено на `tasks/09.10.26 …md` §7) — это отказ формата, и он
-        // устраняется зашивкой бюджета в грамматику, а не ретраем.
+        // Граница размышления: frontmatter агента (`think_budget:`) или
+        // авто-расчёт от бюджетов движка (signal_think_budget выше). Без неё
+        // модель может выжечь весь n_predict в think и не вернуть сигнал
+        // вовсе (измерено на `tasks/09.10.26 …md` §7 и батче 31.10.2026) —
+        // это отказ формата, и он устраняется зашивкой бюджета в грамматику,
+        // а не ретраем.
         let grammar = build_signal_envelope_grammar_with_think_budget(
             contract,
-            agent.think_budget_chars,
+            signal_think_budget,
         );
         engine.set_grammar(Some(GrammarSpec {
             gbnf: Some(grammar),
             json_schema: None,
         }));
         if engine.supports_grammar() {
-            log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены), граница размышления: {:?} симв. слотов отчёта: {}", agent.id, agent.think_budget_chars, draft_count_for_contract(&contract.value_schema)));
+            let slot_count = draft_count_for_contract(&contract.value_schema);
+            let anchored = slot_anchor_labels(&contract.value_schema, slot_count).is_some();
+            log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены), граница размышления: {:?} симв ({}), слотов отчёта: {} ({})", agent.id, signal_think_budget, if agent.think_budget_chars.is_some() { "frontmatter" } else { "авто-расчёт от бюджетов движка" }, slot_count, if anchored { "якорные слоты — метка Element N в каждом" } else { "свободные" }));
         } else {
             // set_grammar для такого движка — no-op (см. LlmEngine::supports_grammar).
             // Контракт сигнала держится на системном промпте + native tools, и все
@@ -1472,7 +1497,7 @@ where
     } else if let Some(contract) = &signal_contract {
         let grammar = build_signal_envelope_grammar_with_think_budget(
             contract,
-            agent.think_budget_chars,
+            signal_think_budget,
         );
         Some(GrammarSpec {
             gbnf: Some(grammar),
@@ -1555,6 +1580,15 @@ where
     // сигнал у них держится на промпте + native tools, см. has_agent_grammar
     // ниже по функции.
     let has_agent_grammar = agent_grammar.is_some() && !uses_method_3;
+    // Тела think-блоков последней попытки + флаг «уже запушены в цикле».
+    // Сигнальный путь завершает попытку через DispatchCtl::Break
+    // (handle_emit_signal / execute_native_tool_calls), поэтому thought-блок
+    // внутри цикла для сигнальных агентов не выполняется — пуш тел делаем
+    // после цикла (перед SubCall), иначе тела слотов валидатора теряются
+    // из messages[] и SubCall.thinking (пустой reasoning_full в отчётах).
+    let mut last_think_bodies: Vec<String> = Vec::new();
+    let mut bodies_pushed = false;
+
     for iter in 1..=30 {
         if cancel_flag.load(Ordering::SeqCst) {
             return Err("Прервано пользователем".to_string());
@@ -1568,6 +1602,9 @@ where
         // Нативные инструменты (OpenAI tools[]) — тоже consume-and-clear
         // (take_pending_tools); восстанавливаются на КАЖДОЙ итерации native-агентов.
         ctx.restore_tools();
+
+        // Тела think-блоков считаются на каждой попытке (ниже) и переживают
+        // выход из цикла через внешние last_think_bodies / bodies_pushed.
 
         let mut ideal_ctx;
         loop {
@@ -1842,6 +1879,22 @@ where
             raw_response.len()
         ));
 
+        // ── Режим продолжения: парсим весь накопленный текст, а не последний кусок
+        // (JSON/ответ может быть разорван между итерациями докачки) ──
+        // Вычисляется ДО native/dispatch-веток: извлечение think-тел ниже должно
+        // покрыть ЛЮБОЙ выход из итерации, включая их DispatchCtl::Break.
+        let is_continuation = ctx.continuation_mark.is_some();
+        let combined = if is_continuation {
+            format!("{}\n{}", ctx.continuation_raw, raw_response)
+        } else {
+            raw_response.clone()
+        };
+        last_think_bodies = if is_continuation {
+            extract_think_content(&combined)
+        } else {
+            extract_think_content(&raw_response)
+        };
+
         // ── Нативный OpenAI tools[]: модель вернула ПРЯМЫЕ tool_calls (без
         // legacy-JSON-конверта). Исполняем все вызовы за один ход (execute_native_tool_calls,
         // OpenAI-формат истории: assistant c tool_calls + role "tool") и переходим к
@@ -1869,14 +1922,6 @@ where
         ctx.action_found = false;
         ctx.thought_logged = false;
 
-        // ── Режим продолжения: парсим весь накопленный текст, а не последний кусок
-        // (JSON/ответ может быть разорван между итерациями докачки) ──
-        let is_continuation = ctx.continuation_mark.is_some();
-        let combined = if is_continuation {
-            format!("{}\n{}", ctx.continuation_raw, raw_response)
-        } else {
-            raw_response.clone()
-        };
         let parse_target = if is_continuation {
             clean_thought_tags(&combined)
         } else {
@@ -2063,6 +2108,43 @@ where
                 DispatchCtl::Break => break,
                 DispatchCtl::Return(v) => return Ok(v),
             }
+        } else if let Some(value) = signal_contract
+            .as_ref()
+            .and_then(|c| assemble_slot_signal_value(&c.value_schema, &parse_target))
+        {
+            // ── Вариант B (слотовые вердикты): конверта с булями нет ──
+            // Каждый слот e-контракта закончился собственным вердиктом
+            // `"e<k>": true|false`, обусловленным дум-телом своего элемента.
+            // Значение собрано из слотов (SSOT, assemble_slot_signal_value) и
+            // проходит штатную валидацию/сохранение через handle_emit_signal.
+            // Если вердиктов не хватает (грамматика не применялась — облако),
+            // ветка не срабатывает и ответ идёт дальше по обычным путям.
+            let contract = signal_contract.as_ref().expect("проверено веткой выше");
+            let mut slot_args = serde_json::Map::new();
+            slot_args.insert(
+                "key".to_string(),
+                serde_json::Value::String(contract.key.clone()),
+            );
+            slot_args.insert("value".to_string(), value);
+            let slot_arguments = serde_json::Value::Object(slot_args);
+            log_cb(format!(
+                "🧩 [{}] сигнал собран из слотовых вердиктов (Вариант B, конверт без булей)",
+                agent.name
+            ));
+            match ctx.handle_emit_signal(
+                &slot_arguments,
+                "",
+                gen_start,
+                &raw_response,
+                &combined,
+                &parse_target,
+                &response,
+                false,
+            )? {
+                DispatchCtl::Continue => continue,
+                DispatchCtl::Break => break,
+                DispatchCtl::Return(v) => return Ok(v),
+            }
         } else if ctx.has_tools_for_prompt {
             log_cb(format!("⚠️ parse_tool_call: не удалось распознать tool call в ответе агента '{}' (первые 200 симв.): {}", agent.name, safe_truncate(&parse_target, 200)));
             // Feedback-loop: модель явно пыталась вызвать инструмент (виден
@@ -2146,7 +2228,8 @@ where
             } else {
                 &raw_response
             };
-            let extracted = extract_think_content(thought_source);
+            // Извлечено до dispatch (покрывает и Break-пути сигнальных агентов).
+            let extracted = last_think_bodies.clone();
             if !extracted.is_empty() {
                 ctx.phase1_thinking = Some(extracted.join("\n\n"));
             }
@@ -2173,8 +2256,39 @@ where
                 });
                 *ctx.msg_counter += 1;
             }
+            bodies_pushed = !extracted.is_empty();
             if extracted.is_empty() && !thought_source.contains("<think") {
-                if let Some(t) = extract_thought_from_partial_json(thought_source) {
+                if !reasoning.trim().is_empty() {
+                    // Reasoning-парсер движка вынес дум-блоки в отдельный канал
+                    // (gen.reasoning): в тексте их нет, extract_think_content
+                    // вернул пусто. Мост кормит и SubCall.thinking (валидатор —
+                    // глубина 1, SubCall создаётся), и отчёты тестов; пуш
+                    // thought-сообщения делает тела видимыми в чате depth 0.
+                    // (В режиме докачки reasoning копится последней итерацией —
+                    // для одноходовых сигнальных агентов это весь ответ.)
+                    ctx.phase1_thinking = Some(reasoning.clone());
+                    let stored = safe_truncate(&reasoning, THOUGHT_STORE_MAX_CHARS);
+                    log_cb(format!(
+                        "💭 Мысль {} [d={}] (reasoning-канал) [⏱{:.1}с]: {}",
+                        agent.name,
+                        depth,
+                        gen_start.elapsed().as_secs_f32(),
+                        stored
+                    ));
+                    ctx.messages.push(ChatMessage {
+                        id: Some(format!("msg_{}", ctx.msg_counter)),
+                        msg_type: "thought".to_string(),
+                        content: reasoning.clone(),
+                        sub_calls: None,
+                        author: Some(agent.id.clone()),
+                        model: Some(extract_model_filename(engine.model_path())),
+                        time_sec: None,
+                        attachments: None,
+                        phase: Some(1),
+                        author_name: None,
+                    });
+                    *ctx.msg_counter += 1;
+                } else if let Some(t) = extract_thought_from_partial_json(thought_source) {
                     ctx.phase1_thinking = Some(t.clone());
                     let stored = safe_truncate(&t, THOUGHT_STORE_MAX_CHARS);
                     log_cb(format!(
@@ -2622,6 +2736,38 @@ where
             } else {
                 log_cb(format!("⚠️ Fallback не смог извлечь сигнал '{}' из текста ответа агента '{}' (тип контракта: проверь supporting enum/bool extraction)", contract.key, agent.id));
             }
+        }
+    }
+
+    // Сигнальные агенты выходят из итерации через DispatchCtl::Break
+    // (handle_emit_signal / execute_native_tool_calls) — thought-блок внутри
+    // цикла не доходит до пуша, и тела think-блоков (слоты валидатора)
+    // терялись из messages[] и SubCall.thinking. Допушиваем здесь; для
+    // обычных текстовых финалов тела уже запушены в цикле (bodies_pushed).
+    if !bodies_pushed && !last_think_bodies.is_empty() {
+        ctx.phase1_thinking = Some(last_think_bodies.join("\n\n"));
+        for t in &last_think_bodies {
+            let stored = safe_truncate(t, THOUGHT_STORE_MAX_CHARS);
+            log_cb(format!(
+                "💭 Мысль {} [d={}] (размышление, signal-путь) [⏱{:.1}с]: {}",
+                ctx.agent.name,
+                depth,
+                start_time.elapsed().as_secs_f32(),
+                stored
+            ));
+            ctx.messages.push(ChatMessage {
+                id: Some(format!("msg_{}", ctx.msg_counter)),
+                msg_type: "thought".to_string(),
+                content: t.clone(),
+                sub_calls: None,
+                author: Some(ctx.agent.id.clone()),
+                model: Some(extract_model_filename(engine.model_path())),
+                time_sec: None,
+                attachments: None,
+                phase: Some(1),
+                author_name: None,
+            });
+            *ctx.msg_counter += 1;
         }
     }
 

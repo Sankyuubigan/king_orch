@@ -82,10 +82,28 @@ pub fn read_verdicts(
 }
 
 /// Конверт из одного канала ответа.
+///
+/// Вариант B: для e-контрактов (слотовые вердикты) значение собирается ИЗ
+/// СЛОТОВ (`assemble_slot_signal_value`) — это SSOT боевого пути, конверта
+/// с булями у таких контрактов больше нет. Конвертная ветка остаётся для
+/// прочих форм контрактов и для старых конвертов в уже записанных ответах.
 pub fn read_verdicts_from(
     contract: &SignalContract,
     text: &str,
 ) -> Result<BTreeMap<String, bool>, String> {
+    if let Some(value) = crate::domain::signals::assemble_slot_signal_value(&contract.value_schema, text) {
+        let object = value
+            .as_object()
+            .ok_or_else(|| format!("слотовое значение — не объект: {}", preview(text)))?;
+        let mut verdicts = BTreeMap::new();
+        for (element, flag) in object {
+            let flag = flag
+                .as_bool()
+                .ok_or_else(|| format!("поле {} не boolean", element))?;
+            verdicts.insert(element.clone(), flag);
+        }
+        return Ok(verdicts);
+    }
     let (tool, arguments, _thought) = crate::domain::parsers::parse_tool_call(text)
         .ok_or_else(|| format!("в ответе нет конверта инструмента: {}", preview(text)))?;
     if tool != "emit_signal" {
@@ -159,6 +177,18 @@ mod tests {
     fn envelope_is_read_into_verdicts() {
         let verdicts = read_verdicts(&contract(), &envelope(json!({"e1": true, "e2": false})), "")
             .expect("конверт прочитан");
+        assert_eq!(verdicts.get("e1"), Some(&true));
+        assert_eq!(verdicts.get("e2"), Some(&false));
+    }
+
+    /// Вариант B (01.11.2026): слотовые вердикты читаются БЕЗ конверта —
+    /// якорный текст с `"eN": true|false` после каждого think-тела. Это SSOT
+    /// боевого пути: грамматика e-контрактов конверт больше не выпускает.
+    #[test]
+    fn slot_verdicts_are_read_without_envelope() {
+        let text = "Element 1: цитата найдена, разбор, \"e1\": true\n\
+                    Element 2: подтверждений нет, \"e2\": false";
+        let verdicts = read_verdicts(&contract(), text, "").expect("слоты прочитаны");
         assert_eq!(verdicts.get("e1"), Some(&true));
         assert_eq!(verdicts.get("e2"), Some(&false));
     }

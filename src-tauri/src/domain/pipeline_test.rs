@@ -105,7 +105,17 @@ pub struct PipelineTestResult {
 pub struct AgentMessage {
     pub author: String,
     pub content_preview: String,
+    /// Полный текст сообщения — без него причина смены траектории вердикта
+    /// (обрез черновика потолком размышления / недетерминизм движка)
+    /// недоказуема по отчёту: превью в 300 символов теряет хвост черновика.
+    #[serde(default)]
+    pub content_full: String,
     pub msg_type: String,
+    /// Размышления агента (reasoning-канал движка — тела слотов валидатора).
+    /// Без них причина «весь-true» недоказуема по отчёту: тела слотов
+    /// отличают «плохое суждение по нормальному разбору» от «мусора в размышлении».
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_full: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -400,12 +410,46 @@ pub fn run_pipeline_test(
 
     status_cb("Валидация результатов...".to_string(), 80);
 
+    // Размышления узлов — из SubCall.thinking (мост reasoning-канала в оркестраторе);
+    // без них тела слотов валидатора в отчёт не попадают.
+    let reasoning_by_author: std::collections::HashMap<&str, &str> = runner
+        .all_sub_calls
+        .iter()
+        .filter_map(|s| {
+            s.thinking
+                .as_ref()
+                .filter(|t| !t.trim().is_empty())
+                .map(|t| (s.agent_name.as_str(), t.as_str()))
+        })
+        .collect();
+
     // Собираем сообщения агентов
     let messages: Vec<AgentMessage> = ctx.messages.iter().map(|m| {
         AgentMessage {
             author: m.author.clone().unwrap_or_default(),
             content_preview: m.content.chars().take(300).collect(),
+            content_full: m.content.clone(),
             msg_type: m.msg_type.clone(),
+            // Тела-мысли сами являются reasoning (content == тело) — не дублируем
+            // канал на них; reasoning_full несёт сообщение-результат (анализ ноды).
+            // Приоритет — sub_calls самого сообщения: SubCall хранит display-name
+            // (agent_name), а author сообщения — id агента, сверка по ключам
+            // «Валидатор данных» vs «validator» не сходится (пустой канал 01.11.26).
+            reasoning_full: m
+                .sub_calls
+                .as_ref()
+                .and_then(|scs| {
+                    scs.iter()
+                        .find_map(|s| s.thinking.as_ref().filter(|t| !t.trim().is_empty()))
+                })
+                .map(|t| t.to_string())
+                .or_else(|| {
+                    m.author
+                        .as_deref()
+                        .and_then(|a| reasoning_by_author.get(a))
+                        .map(|t| t.to_string())
+                })
+                .filter(|t| !(m.msg_type == "thought" && t.contains(m.content.trim()))),
         }
     }).collect();
 

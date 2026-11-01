@@ -47,7 +47,6 @@ export interface AgentTestElements {
   yamlTestPanel: HTMLDivElement;
   pipelineTestPanel: HTMLDivElement;
   pipelineTestList: HTMLDivElement;
-  pipelineModelList: HTMLDivElement;
   btnRunPipelineTest: HTMLButtonElement;
   pipelineProgress: HTMLDivElement;
   pipelineStatusLabel: HTMLDivElement;
@@ -58,7 +57,7 @@ export interface AgentTestElements {
   customTestPanel: HTMLDivElement;
   customPromptInput: HTMLTextAreaElement;
   customAgentList: HTMLDivElement;
-  customModelList: HTMLDivElement;
+  modelCounter: HTMLSpanElement;
   btnRunCustomTest: HTMLButtonElement;
   btnStopCustomTest: HTMLButtonElement;
   customProgress: HTMLDivElement;
@@ -71,10 +70,27 @@ export interface AgentTestElements {
   reportView: HTMLDivElement;
 }
 
+/**
+ * Обновить счётчик выбранных моделей пула. Вынесен из класса для прямого
+ * юнит-теста (vitest): DOM-логика счётчика не должна требовать сборки контроллера.
+ *
+ * `--empty` при нуле — визуальный сигнал «запуск невозможен»: все три кнопки
+ * запуска в этот момент disabled.
+ */
+export function updateModelCounter(label: HTMLElement, count: number): void {
+  label.textContent = `Выбрано: ${count}`;
+  label.classList.toggle("test-model-counter--empty", count === 0);
+}
+
 export class AgentTestController {
   private el: AgentTestElements;
   private testCases: TestCaseDef[] = [];
   private selectedAgents: Set<string> = new Set();
+  /**
+   * Общий пул выбранных моделей на ВСЕ три режима теста ( solution владельца
+   * 01.11.2026 — слияние трёх дублирующих списков: pipeline/custom использовали
+   * собственные Set'ы с собственными чекбоксами, и выбор не переносился).
+   */
   private selectedModels: Set<string> = new Set();
   private results: SingleTestResult[] | null = null;
   private agentsLoaded = false;
@@ -83,8 +99,6 @@ export class AgentTestController {
   // Pipeline test state
   private pipelineTests: PipelineTestInfo[] = [];
   private selectedPipelineTest: string | null = null;
-  /** Мультивыбор: фикстуру можно прогнать сразу на нескольких моделях (по очереди — VRAM §6.5). */
-  private selectedPipelineModels: Set<string> = new Set();
   /** Активный батч: сколько моделей всего / завершено. null = батча нет (одиночный режим событий). */
   private pipelineBatch: { total: number; done: number } | null = null;
   /** Подпись текущей модели батча — события статуса движка приклеиваются к ней. */
@@ -94,12 +108,10 @@ export class AgentTestController {
 
   // Custom prompt test state
   private customAgentId: string | null = null;
-  private selectedCustomModels: Set<string> = new Set();
   private customBatch: { total: number; done: number } | null = null;
   private customBatchLabel = "";
   private customBatchCancelled = false;
   private pipelineTestsLoaded = false;
-  private pipelineModelsLoaded = false;
   private pipelineListenersSetup = false;
   /**
    * Отписки от подписок, которые переживают закрытие вкладки студии.
@@ -151,9 +163,7 @@ export class AgentTestController {
     if (!this.agentsLoaded) this.loadAgents();
     if (!this.modelsLoaded) this.loadModels();
     if (!this.pipelineTestsLoaded) this.loadPipelineTests();
-    if (!this.pipelineModelsLoaded) this.loadPipelineModels();
     this.loadCustomAgents();
-    this.loadCustomModels();
     this.loadReportList();
     this.setupPipelineListeners();
   }
@@ -234,13 +244,16 @@ export class AgentTestController {
         cb.addEventListener("change", () => {
           if (cb.checked) this.selectedModels.add(m);
           else this.selectedModels.delete(m);
-          this.updateRunButton();
+          this.refreshModelDerivedUi();
         });
         label.appendChild(cb);
         label.appendChild(document.createTextNode(` ${m.split(/[/\\]/).pop() || m}`));
         this.el.testModelList.appendChild(label);
       }
       this.modelsLoaded = true;
+      // Счётчик и кнопки зависят от состояния пула — синхронизируем и при пересборке
+      // списка (модель могла быть отмечена, но счётчик ещё не построен).
+      this.refreshModelDerivedUi();
     } catch (e) {
       this.el.testModelList.innerHTML = `<span class="test-hint">Ошибка загрузки: ${e}</span>`;
       void trackError("agentTest.loadModels", e);
@@ -252,6 +265,21 @@ export class AgentTestController {
     const hasAgents = this.selectedAgents.size > 0;
     const hasModels = this.selectedModels.size > 0;
     this.el.btnRunTest.disabled = !(hasCases && hasAgents && hasModels);
+  }
+
+  /**
+   * Общий refresh производной UI от состояния пула моделей.
+   *
+   * Один пул на три режима означает одно состояние — и один источник правды для
+   * всех зависимостей: счётчик «Выбрано: N» и все три кнопки запуска. Без общего
+   * метода чекбокс одного режима обновлял бы только «свою» кнопку, а остальные
+   * оставались бы с протухшим disabled на основе старого Set'а.
+   */
+  private refreshModelDerivedUi(): void {
+    updateModelCounter(this.el.modelCounter, this.selectedModels.size);
+    this.updateRunButton();
+    this.updatePipelineRunButton();
+    this.updateCustomRunButton();
   }
 
   private async selectFile(): Promise<void> {
@@ -386,34 +414,8 @@ export class AgentTestController {
     }
   }
 
-  async loadPipelineModels(): Promise<void> {
-    try {
-      const config: any = await invoke("get_config");
-      this.el.pipelineModelList.innerHTML = "";
-      for (const m of config.models || []) {
-        const label = document.createElement("label");
-        const cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.value = m;
-        if (this.selectedPipelineModels.has(m)) cb.checked = true;
-        cb.addEventListener("change", () => {
-          if (cb.checked) this.selectedPipelineModels.add(m);
-          else this.selectedPipelineModels.delete(m);
-          this.updatePipelineRunButton();
-        });
-        label.appendChild(cb);
-        label.appendChild(document.createTextNode(` ${m.split(/[/\\]/).pop() || m}`));
-        this.el.pipelineModelList.appendChild(label);
-      }
-      this.pipelineModelsLoaded = true;
-    } catch (e) {
-      this.el.pipelineModelList.innerHTML = `<span class="test-hint">Ошибка загрузки: ${e}</span>`;
-      void trackError("agentTest.loadPipelineModels", e);
-    }
-  }
-
   private updatePipelineRunButton(): void {
-    this.el.btnRunPipelineTest.disabled = !(this.selectedPipelineTest && this.selectedPipelineModels.size > 0);
+    this.el.btnRunPipelineTest.disabled = !(this.selectedPipelineTest && this.selectedModels.size > 0);
   }
 
   private setupPipelineListeners(): void {
@@ -483,13 +485,13 @@ export class AgentTestController {
    * Ошибка одной модели не роняет батч — она попадает строкой в сводку и в отчёт.
    */
   private async runPipelineTest(): Promise<void> {
-    if (!this.selectedPipelineTest || this.selectedPipelineModels.size === 0) {
+    if (!this.selectedPipelineTest || this.selectedModels.size === 0) {
       showToast("Выберите тест и хотя бы одну модель", "error");
       return;
     }
 
     const testId = this.selectedPipelineTest;
-    const modelPaths = Array.from(this.selectedPipelineModels);
+    const modelPaths = Array.from(this.selectedModels);
 
     this.el.btnRunPipelineTest.disabled = true;
     this.el.pipelineProgress.style.display = "block";
@@ -720,34 +722,9 @@ export class AgentTestController {
     }
   }
 
-  async loadCustomModels(): Promise<void> {
-    try {
-      const config: any = await invoke("get_config");
-      this.el.customModelList.innerHTML = "";
-      for (const m of config.models || []) {
-        const label = document.createElement("label");
-        const cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.value = m;
-        if (this.selectedCustomModels.has(m)) cb.checked = true;
-        cb.addEventListener("change", () => {
-          if (cb.checked) this.selectedCustomModels.add(m);
-          else this.selectedCustomModels.delete(m);
-          this.updateCustomRunButton();
-        });
-        label.appendChild(cb);
-        label.appendChild(document.createTextNode(` ${m.split(/[/\\]/).pop() || m}`));
-        this.el.customModelList.appendChild(label);
-      }
-    } catch (e) {
-      this.el.customModelList.innerHTML = `<span class="test-hint">Ошибка загрузки: ${e}</span>`;
-      void trackError("agentTest.loadCustomModels", e);
-    }
-  }
-
   private updateCustomRunButton(): void {
     const hasPrompt = this.el.customPromptInput.value.trim().length > 0;
-    this.el.btnRunCustomTest.disabled = !(hasPrompt && this.customAgentId && this.selectedCustomModels.size > 0);
+    this.el.btnRunCustomTest.disabled = !(hasPrompt && this.customAgentId && this.selectedModels.size > 0);
   }
 
   private stopCustomBatch(): void {
@@ -763,13 +740,13 @@ export class AgentTestController {
    */
   private async runCustomTest(): Promise<void> {
     const prompt = this.el.customPromptInput.value.trim();
-    if (!prompt || !this.customAgentId || this.selectedCustomModels.size === 0) {
+    if (!prompt || !this.customAgentId || this.selectedModels.size === 0) {
       showToast("Введите промпт, выберите агента и хотя бы одну модель", "error");
       return;
     }
 
     const agentId = this.customAgentId;
-    const modelPaths = Array.from(this.selectedCustomModels);
+    const modelPaths = Array.from(this.selectedModels);
 
     this.el.btnRunCustomTest.disabled = true;
     this.el.customProgress.style.display = "block";

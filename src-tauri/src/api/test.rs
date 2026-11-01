@@ -482,13 +482,63 @@ pub struct TestReportMeta {
     pub created_ms: u64,
 }
 
-/// Список сохранённых сводных отчётов (JSON): custom_runs + batch-отчёты фикстур.
-#[tauri::command]
-pub fn list_test_reports(app: AppHandle) -> Vec<TestReportMeta> {
+/// Единственный канонический корень отчётов (SSOT формы пути): абсолютный
+/// `<project>/test_cases`. И листинг, и чтение оперируют им — форма отказа
+/// «листинг выдал в дропдаун путь, который читатель гарантированно отклонит»
+/// устранена по дизайну (раньше листинг брал корень из `find_agents_dir`,
+/// который в релизной сборке относительный, и пути выходили с `..`).
+fn report_base_dir(app: &AppHandle) -> Result<std::path::PathBuf, String> {
     let agents_dir = infra::find_agents_dir(&app);
     let project_root = agents_dir.parent().unwrap_or(&agents_dir).to_path_buf();
-    let test_cases = project_root.join("test_cases");
+    project_root
+        .join("test_cases")
+        .canonicalize()
+        .map_err(|e| format!("test_cases недоступна: {}", e))
+}
+
+/// SSOT-инвариант пути отчёта (чистая функция): путь обязан быть абсолютным,
+/// без `..`, канонизироваться в существующий файл и лежать внутри базы.
+/// Гейт против произвольного чтения диска — не ослаблен, только вынесен
+/// в единственное место.
+fn validated_report_path(base: &std::path::Path, path: &str) -> Result<std::path::PathBuf, String> {
+    let p = std::path::PathBuf::from(path);
+    if !p.is_absolute() || p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err("Недопустимый путь отчёта".to_string());
+    }
+    let canonical = p
+        .canonicalize()
+        .map_err(|e| format!("Файл отчёта недоступен: {}", e))?;
+    if !canonical.starts_with(base) || !canonical.is_file() {
+        return Err("Отчёт должен лежать внутри test_cases".to_string());
+    }
+    Ok(canonical)
+}
+
+/// Канонизация пути для меты листинга: `..`/относительность срезаны
+/// `canonicalize`, Windows-вербатим-префикс `\\?\` снят — обычная абсолютная
+/// форма приемлема и для UI, и для повторного `canonicalize` в читателе.
+fn canonical_report_path(p: &std::path::Path) -> Option<String> {
+    let canonical = p.canonicalize().ok()?;
+    let s = canonical.as_os_str().to_string_lossy();
+    Some(s.strip_prefix(r"\\?\").unwrap_or(&s).to_string())
+}
+
+/// Список сохранённых сводных отчётов (JSON): custom_runs + batch-отчёты фикстур.
+///
+/// В мету кладётся Канонический абсолютный путь (`canonical_report_path`) —
+/// та же форма, которую принимает `read_test_report`. Файл, чья канонизация
+/// сорвалась, пропускается с `log::warn!` (не молча, не с фолбэком на старую
+/// форму — иначе листинг снова выдаёт нечитаемые пути).
+#[tauri::command]
+pub fn list_test_reports(app: AppHandle) -> Vec<TestReportMeta> {
     let mut reports: Vec<TestReportMeta> = Vec::new();
+    let test_cases = match report_base_dir(&app) {
+        Ok(base) => base,
+        Err(e) => {
+            log::warn!("list_test_reports: корень test_cases недоступен, список отчётов пуст: {}", e);
+            return reports;
+        }
+    };
 
     let scan = |dir: &std::path::Path, pattern: &str, kind: &str, reports: &mut Vec<TestReportMeta>| {
         let Ok(rd) = std::fs::read_dir(dir) else { return };
@@ -513,9 +563,18 @@ pub fn list_test_reports(app: AppHandle) -> Vec<TestReportMeta> {
                 .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
                 .map(|d| d.as_millis() as u64)
                 .unwrap_or(0);
+            let Some(path) = canonical_report_path(&p) else {
+                log::warn!(
+                    "list_test_reports: отчёт {} не канонизируется — пропущен ({}: {})",
+                    p.display(),
+                    kind,
+                    label
+                );
+                continue;
+            };
             reports.push(TestReportMeta {
                 file_name: name.to_string(),
-                path: p.display().to_string(),
+                path,
                 kind: kind.to_string(),
                 label,
                 created_ms,
@@ -535,26 +594,13 @@ pub fn list_test_reports(app: AppHandle) -> Vec<TestReportMeta> {
 
 /// Прочитать сохранённый JSON-отчёт для просмотрщика.
 ///
-/// Гейт источников: путь обязан лежать внутри `<project>/test_cases` (без `..`),
-/// иначе произвольное чтение диска через команду.
+/// Гейт источников — общий хелпер `validated_report_path` (абсолютный, без `..`,
+/// внутри `<project>/test_cases`): произвольное чтение диска через команду
+/// по-прежнему невозможно. Инвариант одного корня — `report_base_dir`.
 #[tauri::command]
 pub fn read_test_report(app: AppHandle, path: String) -> Result<serde_json::Value, String> {
-    let agents_dir = infra::find_agents_dir(&app);
-    let project_root = agents_dir.parent().unwrap_or(&agents_dir).to_path_buf();
-    let base = project_root
-        .join("test_cases")
-        .canonicalize()
-        .map_err(|e| format!("test_cases недоступна: {}", e))?;
-    let p = std::path::PathBuf::from(&path);
-    if !p.is_absolute() || p.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
-        return Err("Недопустимый путь отчёта".to_string());
-    }
-    let canonical = p
-        .canonicalize()
-        .map_err(|e| format!("Файл отчёта недоступен: {}", e))?;
-    if !canonical.starts_with(&base) || !canonical.is_file() {
-        return Err("Отчёт должен лежать внутри test_cases".to_string());
-    }
+    let base = report_base_dir(&app)?;
+    let canonical = validated_report_path(&base, &path)?;
     let content = std::fs::read_to_string(&canonical)
         .map_err(|e| format!("Ошибка чтения {}: {}", canonical.display(), e))?;
     serde_json::from_str(&content).map_err(|e| format!("Отчёт не JSON: {}", e))
@@ -961,12 +1007,47 @@ pub async fn run_custom_prompt_test(
 
     let (ram_peak, vram_peak, vram_delta) = mem_fields(mem_sampler.stop_and_report(), vram_before);
 
+    // Размышления узлов: оркестратор кладёт думу каждого прогона агента в
+    // SubCall.thinking (mod.rs, конец run_agent_node) из ctx.phase1_thinking.
+    // Без этого отчёт теряет тела слотов валидатора — а по ним различаются
+    // «плохое суждение по нормальному разбору» и «мусор в размышлении».
+    let reasoning_by_author: std::collections::HashMap<&str, &str> = all_sub_calls
+        .iter()
+        .filter_map(|s| {
+            s.thinking
+                .as_ref()
+                .filter(|t| !t.trim().is_empty())
+                .map(|t| (s.agent_name.as_str(), t.as_str()))
+        })
+        .collect();
+
     let messages: Vec<domain::pipeline_test::AgentMessage> = current_chat_messages
         .iter()
         .map(|m| domain::pipeline_test::AgentMessage {
             author: m.author.clone().unwrap_or_default(),
             content_preview: m.content.chars().take(300).collect(),
+            content_full: m.content.clone(),
             msg_type: m.msg_type.clone(),
+            // Тела-мысли сами являются reasoning (content == тело) — не дублируем
+            // канал на них; reasoning_full несёт сообщение-результат (анализ ноды).
+            // Приоритет — sub_calls самого сообщения: SubCall хранит display-name
+            // (agent_name), а author сообщения — id агента, сверка по ключам
+            // «Валидатор данных» vs «validator» не сходится (пустой канал 01.11.26).
+            reasoning_full: m
+                .sub_calls
+                .as_ref()
+                .and_then(|scs| {
+                    scs.iter()
+                        .find_map(|s| s.thinking.as_ref().filter(|t| !t.trim().is_empty()))
+                })
+                .map(|t| t.to_string())
+                .or_else(|| {
+                    m.author
+                        .as_deref()
+                        .and_then(|a| reasoning_by_author.get(a))
+                        .map(|t| t.to_string())
+                })
+                .filter(|t| !(m.msg_type == "thought" && t.contains(m.content.trim()))),
         })
         .collect();
 
@@ -1087,6 +1168,20 @@ pub fn write_custom_prompt_report(
             md.push_str("\n**Цепочка переходов:**\n\n```\n");
             md.push_str(&chain_flat_text(&r.messages));
             md.push_str("```\n");
+            // Тела слотов (reasoning-канал движка) — диагностический слой отчёта:
+            // без них «плохое суждение» неотличимо от «мусора в размышлении» (§00.3).
+            for m in &r.messages {
+                if let Some(reasoning) = m
+                    .reasoning_full
+                    .as_ref()
+                    .filter(|t| !t.trim().is_empty())
+                {
+                    md.push_str(&format!(
+                        "\n**Размышления [{}] {}**:\n\n````\n{}\n````\n",
+                        m.msg_type, m.author, reasoning,
+                    ));
+                }
+            }
         }
     }
 
@@ -1124,4 +1219,67 @@ pub fn write_custom_prompt_report(
 pub fn cancel_test_run() -> Result<(), String> {
     tauri_plugin_llama_engine::engine::process_util::kill_active_engines();
     Ok(())
+}
+
+/// Юнит-тесты SSOT-инварианта пути отчёта (`validated_report_path`).
+///
+/// Герметичные фикстуры: собственный корень под `target/` (в системные temp не
+/// лезем, §1.2) — база канонизируется, файлы создаются тестом. Зависимости от
+/// `AppHandle`/`find_agents_dir` нет — функция чистая, база передаётся явно.
+#[cfg(test)]
+mod report_path_tests {
+    use super::*;
+
+    /// Каноническая база под `src-tauri/target/report_path_tests/<tag>`.
+    fn scratch_base(tag: &str) -> std::path::PathBuf {
+        let base = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("report_path_tests")
+            .join(tag);
+        std::fs::create_dir_all(&base).expect("создание тестовой базы");
+        base.canonicalize().expect("канонизация тестовой базы")
+    }
+
+    /// Существующий .json-отчёт внутри базы → Ok.
+    #[test]
+    fn accepted_existing_file_inside_base() {
+        let base = scratch_base("ok");
+        let dir = base.join("custom_runs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("custom_report_x.json");
+        std::fs::write(&file, "{}").unwrap();
+        let got = validated_report_path(&base, file.to_str().unwrap()).expect("должен пройти");
+        assert!(got.is_file());
+        assert!(got.starts_with(&base));
+    }
+
+    /// Относительный путь с `..` → «Недопустимый путь отчёта».
+    #[test]
+    fn rejected_relative_parent_dir() {
+        let base = scratch_base("relative");
+        let err = validated_report_path(&base, "..\\foo.json").unwrap_err();
+        assert!(err.contains("Недопустимый путь отчёта"), "got: {}", err);
+    }
+
+    /// Абсолютный существующий файл вне базы → «Отчёт должен лежать внутри test_cases».
+    #[test]
+    fn rejected_absolute_outside_base() {
+        let base = scratch_base("inside");
+        let other = scratch_base("outside");
+        let dir = other.join("custom_runs");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("custom_report_x.json");
+        std::fs::write(&file, "{}").unwrap();
+        let err = validated_report_path(&base, file.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("внутри test_cases"), "got: {}", err);
+    }
+
+    /// Абсолютный несуществующий файл внутри базы → «Файл отчёта недоступен».
+    #[test]
+    fn rejected_missing_file_inside_base() {
+        let base = scratch_base("missing");
+        let file = base.join("custom_runs").join("custom_report_ghost.json");
+        let err = validated_report_path(&base, file.to_str().unwrap()).unwrap_err();
+        assert!(err.contains("Файл отчёта недоступен"), "got: {}", err);
+    }
 }

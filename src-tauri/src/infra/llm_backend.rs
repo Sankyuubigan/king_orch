@@ -490,6 +490,18 @@ impl LlmEngine {
         }
     }
 
+    /// Активный движковый потолок размышления в токенах (`--reasoning-budget`);
+    /// 0 = размышление отдельно не ограничено. Спрашиваем У ДВИЖКА, а не читаем
+    /// конфиг: фолбэки цикла запуска могут отключить reasoning-флаги, и тогда
+    /// конфигурационный кап недействителен. Облако — 0: `max_tokens` на wire
+    /// не передаётся, мысли облачных thinking-моделей не лимитятся (см. AGENTS.md §1).
+    pub fn reasoning_budget(&self) -> u32 {
+        match &self.backend {
+            LlmBackend::Local(engine) => engine.reasoning_budget(),
+            LlmBackend::Cloud(_) => 0,
+        }
+    }
+
     pub fn is_alive(&self) -> bool {
         match &self.backend {
             LlmBackend::Local(engine) => engine.is_alive(),

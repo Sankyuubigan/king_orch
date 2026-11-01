@@ -872,20 +872,29 @@ mod tests {
 
         for layer in &layers {
             let agent_id = layer.layer.agent.as_str();
-            // Грамматика берётся из контракта: все поля слоя в ней присутствуют.
+            // Грамматика берётся из контракта (Вариант B, 01.11.2026): каждый
+            // элемент обязан присутствовать как вердикт-литерал своего слота —
+            // якорь → think → сразу `"eN": ` → bool.
             for element in &layer.layer.elements {
+                let verdict_literal = format!(r#""\"{}\": " bool"#, element);
                 assert!(
-                    layer.grammar.contains(&format!("\\\"{}\\\"", element)),
-                    "в грамматике слоя {} нет ключа {}",
+                    layer.grammar.contains(&verdict_literal),
+                    "в грамматике слоя {} нет вердикт-литерала слота {}",
                     agent_id,
-                    element
+                    verdict_literal
                 );
             }
             assert!(
-                layer.grammar.contains(&layer.contract.key),
-                "в грамматике слоя {} нет его сигнального ключа {}",
-                agent_id,
-                layer.contract.key
+                layer.grammar.lines().any(|l| l.trim_start().starts_with("bool ::=")),
+                "в грамматике слоя {} нет определения bool",
+                agent_id
+            );
+            // Конверт у e-контрактов устранён: канал «угадать всё в конце»
+            // закрыт грамматически, значение собирается из слотов кодом.
+            assert!(
+                !layer.grammar.contains("arguments-json") && !layer.grammar.contains("emit_signal"),
+                "в грамматике слоя {} остался конверт — вердикты должны жить в слотах",
+                agent_id
             );
             // Промпт собран из боевого .md с развёрнутым INCLUDE: критерии
             // элементов обязаны быть видны модели, иначе слой судит без правил.
@@ -894,12 +903,16 @@ mod tests {
                 "в промпте слоя {} нет критериев элементов",
                 agent_id
             );
-            assert!(
-                layer.system_prompt.contains(&layer.contract.key),
-                "в промпте слоя {} не назван его сигнальный ключ {}",
-                agent_id,
-                layer.contract.key
-            );
+            // Сигнальный ключ в промпте больше не нужен (модель не отправляет
+            // конверт), но раскладка элементов по слотам обязана быть видна.
+            for element in &layer.layer.elements {
+                assert!(
+                    layer.system_prompt.contains(element),
+                    "в промпте слоя {} не назван элемент слота {}",
+                    agent_id,
+                    element
+                );
+            }
         }
     }
 
@@ -1011,21 +1024,57 @@ mod tests {
 /// Свой черновик на каждый элемент: число слотов в грамматике обязано равняться
 /// числу элементов слоя. Рассинхрон означал бы либо отказ модели перейти к
 /// конверту (лишний слот), либо молчаливый пропуск обдумывания (нехватка).
+/// Формат слотов двойной с 01.11.2026 (якорные слоты, решение владельца):
+/// свободный `drafts-block ::= draft{N}` или якорный
+/// `drafts-block ::= draft-1 ... draft-N` — подсчёт обязан работать в обоих.
 #[test]
     fn one_draft_per_declared_element() {
         let layers = layers();
         assert!(!layers.is_empty());
         for layer in &layers {
             let count = layer.layer.elements.len();
-            let expected = format!("drafts-block ::= draft{{{}}}", count);
-            assert!(
-                layer.grammar.contains(&expected),
-                "у слоя {} {} элементов, а грамматика ждёт другое число черновиков: нет '{}'",
-                layer.layer.agent,
-                count,
-                expected
+            let drafts_line = layer
+                .grammar
+                .lines()
+                .find(|line| line.starts_with("drafts-block ::="))
+                .unwrap_or_default();
+            let slots = if let Some((_prefix, digits)) = drafts_line.split_once("draft-") {
+                if drafts_line.starts_with("drafts-block ::= draft-{") || drafts_line.contains("draft{") {
+                    drafts_line
+                        .split_once("draft{")
+                        .and_then(|(_, n)| n.trim_end_matches('}').parse::<usize>().ok())
+                        .unwrap_or(0)
+                } else {
+                    // Якорный режим: слоты поимённо (draft-1 draft-2 ... draft-N).
+                    drafts_line
+                        .split_whitespace()
+                        .filter(|word| word.starts_with("draft-"))
+                        .count()
+                }
+            } else {
+                drafts_line
+                    .split_once("draft{")
+                    .and_then(|(_, n)| n.trim_end_matches('}').parse::<usize>().ok())
+                    .unwrap_or(0)
+            };
+            assert_eq!(
+                slots, count,
+                "у слоя {} {} элементов, а слотов в грамматике другое число ({}): {}",
+                layer.layer.agent, count, drafts_line, layer.grammar
             );
         }
+        // Якорь слота указывает на ЭЛЕМЕНТ, а не на порядковый номер слота:
+        // у surface required = e1,e2,e6,e7 → слот 3 обязан открываться меткой
+        // "Element 6: " (порядок наследуется от контракта, SSOT).
+        let surface = layers
+            .iter()
+            .find(|layer| layer.layer.agent == "validator_surface")
+            .expect("слой surface");
+        assert!(
+            surface.grammar.contains(r#"draft-3 ::= "Element 6: ""#),
+            "метка слота 3 обязана указывать Element 6 (якорь из контракта): {}",
+            surface.grammar
+        );
     }
 
     /// Граница черновика выводится из бюджета генерации, а не берётся из

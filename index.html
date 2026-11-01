@@ -357,6 +357,17 @@
             </select>
           </div>
 
+          <!-- Общий пул моделей (решение владельца 01.11.2026): один каталог,
+               один набор чекбоксов, один счётчик — на все три режима теста.
+               Раньше списки дублировались в каждой панели, и выбор моделей
+               одного режима не был виден другому. -->
+          <div class="group-box">
+            <div class="group-title">Модели LLM <span id="s-{p}-model-counter" class="test-model-counter"></span></div>
+            <div id="s-{p}-test-model-list" class="test-checklist">
+              <span class="test-hint">Загрузка моделей...</span>
+            </div>
+          </div>
+
           <!-- YAML test mode -->
           <div id="s-{p}-yaml-test-panel">
             <div class="cards-grid">
@@ -372,13 +383,6 @@
               <div class="group-title">2. Выберите агентов для тестирования</div>
               <div id="s-{p}-test-agent-list" class="test-checklist">
                 <span class="test-hint">Загрузка агентов...</span>
-              </div>
-            </div>
-
-            <div class="group-box">
-              <div class="group-title">3. Выберите модели LLM</div>
-              <div id="s-{p}-test-model-list" class="test-checklist">
-                <span class="test-hint">Загрузка моделей...</span>
               </div>
             </div>
 
@@ -413,13 +417,6 @@
             </div>
 
             <div class="group-box">
-              <div class="group-title">2. Выберите модель LLM</div>
-              <div id="s-{p}-pipeline-model-list" class="test-checklist">
-                <span class="test-hint">Загрузка моделей...</span>
-              </div>
-            </div>
-
-            <div class="group-box">
               <button id="s-{p}-btn-run-pipeline-test" class="btn-primary" disabled>▶ Запустить тест</button>
               <button id="s-{p}-btn-stop-pipeline-test" class="btn-secondary" style="display:none;">⏹ Остановить</button>
               <div id="s-{p}-pipeline-progress" class="test-progress" style="display:none;">
@@ -449,13 +446,6 @@
               <div class="group-title">2. Выберите агента или пайплайн</div>
               <div id="s-{p}-custom-agent-list" class="test-checklist">
                 <span class="test-hint">Загрузка агентов...</span>
-              </div>
-            </div>
-
-            <div class="group-box">
-              <div class="group-title">3. Выберите модели LLM (можно несколько)</div>
-              <div id="s-{p}-custom-model-list" class="test-checklist">
-                <span class="test-hint">Загрузка моделей...</span>
               </div>
             </div>
 

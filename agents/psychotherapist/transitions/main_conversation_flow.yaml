@@ -21,8 +21,8 @@ nodes:
 - id: user_message
   type: user_message
   ui_pos:
-    x: -2274
     y: 493
+    x: -2274
 
 - id: extract_facts
   type: llm_fact_extractor
@@ -50,8 +50,8 @@ nodes:
   - validator
   - decomposer
   ui_pos:
-    y: -347
     x: 3183
+    y: -347
 
 - id: call_soma_translator
   type: llm_worker
@@ -76,7 +76,7 @@ nodes:
   type: llm_worker
   agent: validator
   inject_response:
-  - decomposer
+  - synthesizer
   - shadow_worker
   - grounder
   - data_collector
@@ -109,8 +109,8 @@ nodes:
   - field: triage_complexity
     equals: cluster
   ui_pos:
-    x: -42
     y: 601
+    x: -42
 
 - id: call_pattern_finder
   type: llm_worker
@@ -156,8 +156,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 3429
     y: 38
+    x: 3429
 
 - id: call_shadow_worker
   type: llm_worker
@@ -184,15 +184,15 @@ nodes:
   type: note
   input: проверка данных. развилка на доработку данных или отправку на лечение
   ui_pos:
-    y: 492
     x: 916
+    y: 492
 
 - id: note_1784427848563
   type: note
   input: вычисление типа
   ui_pos:
-    x: 2085
     y: 41
+    x: 2085
 
 - id: check_critical_elements
   type: condition_router
@@ -227,8 +227,8 @@ nodes:
       equals: false
   logic: any
   ui_pos:
-    y: 218
     x: -802
+    y: 218
 
 - id: check_need_handedness
   type: signal_router
@@ -245,8 +245,8 @@ nodes:
   input: уточнение рукости у юзера
   system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
   ui_pos:
-    x: -57
     y: 10
+    x: -57
 
 - id: note_1785141025138
   type: note
@@ -264,16 +264,16 @@ nodes:
 
     В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
-    x: -1323
     y: 748
+    x: -1323
 
 - id: call_request_helper
   type: llm_worker
   agent: request_helper
   output_type: message
   ui_pos:
-    x: -808
     y: 864
+    x: -808
 
 - id: check_elements1
   type: condition_router
@@ -290,8 +290,8 @@ nodes:
     equals: true
   logic: all
   ui_pos:
-    y: -283
     x: 1967
+    y: -283
 
 - id: check_elements2
   type: condition_router
@@ -304,8 +304,8 @@ nodes:
     equals: false
   logic: all
   ui_pos:
-    y: -302
     x: 2517
+    y: -302
 
 - id: call_synthesizer
   type: llm_worker
