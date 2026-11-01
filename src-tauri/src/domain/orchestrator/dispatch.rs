@@ -22,6 +22,61 @@ fn is_media_tool(tool: &str) -> bool {
     matches!(tool, "generate_image" | "edit_image" | "upscale_image" | "generate_video")
 }
 
+/// Вердикт GUARD «финал без тулов» для текущего ответа агента.
+pub(crate) enum FinalGuardVerdict {
+    /// Ретрай: ответ не принят, хинт «вызови инструмент» уже в истории.
+    Retry,
+    /// Ретраи исчерпаны, контракт оператора требует тул — текст НЕ принимается.
+    /// Несёт готовый честный `AGENT_ERROR_PREFIX`-текст для `final_response`.
+    HonestError(String),
+    /// Нарушения нет (инструменты использовались / тулов нет / контракт не
+    /// объявлен) либо native-fallback после исчерпания — текст принимается.
+    Accept,
+}
+
+/// Вход GUARD — чистые состояния цикла (функция тестируется без RunContext).
+#[derive(Clone)]
+pub(crate) struct FinalGuardInput {
+    pub native_tools_present: bool,
+    pub native_used: bool,
+    pub prompt_tool_used: bool,
+    pub require_tool_call: bool,
+    pub has_tools_for_prompt: bool,
+    pub retries_used: usize,
+    pub agent_id: String,
+    pub agent_tools: String,
+}
+
+/// Решение GUARD «финал без тулов».
+///
+/// Нарушение — «ответ текстом, ни один инструмент не вызван успешно» —
+/// одинаково для двух контрактов: native-агент с тулами на wire и агент
+/// с `require_tool_call: true` (состояние «инструмент вызван» единое —
+/// `native_used || prompt_tool_used`, канал не важен). Ретраи ограничены
+/// `NATIVE_FINAL_RETRIES_MAX`; после исчерпания native принимает текст
+/// (исторический fallback), а require_tool-оператор получает честную
+/// ошибку: у оператора текст без тула означает «артефакт не создан»,
+/// принимать его как успех = тихая подмена.
+pub(crate) fn final_guard_decision(input: FinalGuardInput) -> FinalGuardVerdict {
+    let any_tool_used = input.native_used || input.prompt_tool_used;
+    let native_violation = input.native_tools_present && !any_tool_used;
+    let prompt_violation = input.require_tool_call && input.has_tools_for_prompt && !any_tool_used;
+    if !native_violation && !prompt_violation {
+        return FinalGuardVerdict::Accept;
+    }
+    if input.retries_used < NATIVE_FINAL_RETRIES_MAX {
+        return FinalGuardVerdict::Retry;
+    }
+    if input.require_tool_call {
+        FinalGuardVerdict::HonestError(format!(
+            "{} Агент '{}' не вызвал ни одного инструмента за {} попыток (обязателен вызов тулов: {}). Задача не выполнена.",
+            AGENT_ERROR_PREFIX, input.agent_id, NATIVE_FINAL_RETRIES_MAX, input.agent_tools
+        ))
+    } else {
+        FinalGuardVerdict::Accept
+    }
+}
+
 /// Управляющий сигнал цикла `run_agent_node`: как продолжить после
 /// вызова `execute_tool_call` / `handle_subagent_call`.
 pub(crate) enum DispatchCtl {
@@ -121,6 +176,12 @@ where
     pub(crate) native_tools: Option<Vec<ToolDefinition>>,
     /// Хотя бы один нативный tool-call реально выполнен (для GUARD «финал без тулов»).
     pub(crate) native_used: bool,
+    /// Хотя бы один prompt-based тул (legacy-конверт) реально выполнен успешно —
+    /// симметрично `native_used`, но для агентов без OpenAI tools[] на wire
+    /// (video_maker, image_generator, …). Состояние «инструмент был вызван»,
+    /// которого не существовало: без него «финал текстом без единого тула»
+    /// у тул-оператора не отличался от легитимного текстового ответа.
+    pub(crate) prompt_tool_used: bool,
     /// Сколько раз GUARD уже попросил модель вызвать инструмент вместо финального текста
     /// (макс. 2 — потом финальный текст принимается как есть).
     pub(crate) native_final_retries: usize,
@@ -156,39 +217,50 @@ where
         }
     }
 
-    /// GUARD нативного tool-calling: агент с реальными тулами выдал ФИНАЛЬНЫЙ
-    /// текст, НИ РАЗУ не вызвав инструмент. Возвращает true, пока не исчерпаны
-    /// 2 ретрая — цикл должен повторить вызов с требованием использовать тул.
-    pub(crate) fn guard_native_final_without_tools(&self) -> bool {
-        self.native_tools.as_ref().is_some_and(|t| !t.is_empty())
-            && !self.native_used
-            && self.native_final_retries < NATIVE_FINAL_RETRIES_MAX
-    }
-
-    /// App-level GUARD нативного tool-calling: финальный текст без единого тула.
-    /// Кладёт ответ в историю + хинт «вызови инструмент» и возвращает true, если
-    /// цикл должен повторить вызов (ретраи ограничены NATIVE_FINAL_RETRIES_MAX).
-    /// После исчерпания ретраев вернёт false — финальный текст принимается как есть
-    /// (fallback): агент не выродится в бесконечный цикл жёстких требований.
-    pub(crate) fn retry_native_final_without_tools(&mut self, raw_response: &str) -> bool {
-        if !self.guard_native_final_without_tools() {
-            return false;
-        }
-        self.native_final_retries += 1;
-        self.action_found = true;
-        self.llm_messages.push(LlmMessage {
-            role: "assistant".to_string(),
-            content: raw_response.to_string(),
-            ..Default::default()
+    /// GUARD «финал без тулов»: вердикт для текущего ответа.
+    ///
+    /// Два контракта нарушаются одинаково — «ответ текстом, ни один инструмент
+    /// не вызван»: (а) native-агент с тулами на wire, (б) агент, объявивший
+    /// `require_tool_call: true` (тул-оператор). Единая точка: ретрай с хинтом
+    /// пока не исчерпаны `NATIVE_FINAL_RETRIES_MAX`; после исчерпания native
+    /// принимает текст (исторический fallback), require_tool-оператор получает
+    /// честную `AGENT_ERROR_PREFIX`-ошибку — «тихий успех» без артефакта
+    /// для оператора невозможен.
+    pub(crate) fn final_without_tools_verdict(&mut self, raw_response: &str) -> FinalGuardVerdict {
+        let decision = final_guard_decision(FinalGuardInput {
+            native_tools_present: self.native_tools.as_ref().is_some_and(|t| !t.is_empty()),
+            native_used: self.native_used,
+            prompt_tool_used: self.prompt_tool_used,
+            require_tool_call: self.agent.require_tool_call,
+            has_tools_for_prompt: self.has_tools_for_prompt,
+            retries_used: self.native_final_retries,
+            agent_id: self.agent.id.clone(),
+            agent_tools: self.agent.tools.join(", "),
         });
-        self.continuation_raw.clear();
-        self.continuation_mark = None;
-        self.llm_messages.push(LlmMessage {
-            role: "user".to_string(),
-            content: "⚠️ Ты не использовал НИ ОДИН доступный инструмент, а задача требует их применения. Изучи задачу и вызови ПОДХОДЯЩИЙ ИНСТРУМЕНТ из списка (аргументы — валидный JSON). Сначала фактический результат инструмента, потом итоговый ответ.".to_string(),
-         ..Default::default()});
-        (self.log_cb)(format!("🧤 [{}] GUARD: финал без единого вызова инструмента ({}/{}) — ретрай с требованием вызвать тул", self.agent.name, self.native_final_retries, NATIVE_FINAL_RETRIES_MAX));
-        true
+        match decision {
+            FinalGuardVerdict::Retry => {
+                self.native_final_retries += 1;
+                self.action_found = true;
+                self.llm_messages.push(LlmMessage {
+                    role: "assistant".to_string(),
+                    content: raw_response.to_string(),
+                    ..Default::default()
+                });
+                self.continuation_raw.clear();
+                self.continuation_mark = None;
+                self.llm_messages.push(LlmMessage {
+                    role: "user".to_string(),
+                    content: "⚠️ Ты не использовал НИ ОДИН доступный инструмент, а задача требует их применения. Изучи задачу и вызови ПОДХОДЯЩИЙ ИНСТРУМЕНТ из списка (аргументы — валидный JSON). Сначала фактический результат инструмента, потом итоговый ответ.".to_string(),
+                 ..Default::default()});
+                (self.log_cb)(format!("🧤 [{}] GUARD: финал без единого вызова инструмента ({}/{}) — ретрай с требованием вызвать тул", self.agent.name, self.native_final_retries, NATIVE_FINAL_RETRIES_MAX));
+            }
+            FinalGuardVerdict::HonestError(ref msg) => {
+                (self.log_cb)(format!("🧤 [{}] GUARD: ретраи исчерпаны, инструмент так и не вызван — честная ошибка вместо финала", self.agent.name));
+                log::error!("{}", msg);
+            }
+            FinalGuardVerdict::Accept => {}
+        }
+        decision
     }
 
     /// Блок диспетчеризации инструментов: разбор `parse_tool_call` результата
@@ -349,6 +421,9 @@ where
             return Ok(DispatchCtl::Continue);
         }
         self.consecutive_failed_tools = 0;
+        // Состояние «инструмент был успешно вызван» (prompt-канал) — GUARD
+        // «финал без тулов» смотрит на него так же, как native-ветка на native_used.
+        self.prompt_tool_used = true;
         self.tool_calls.push(ToolCallInfo {
             tool_name: tool_name.to_string(),
             arguments: args_str,
@@ -1345,5 +1420,96 @@ where
             ) , ..Default::default()});
             return Ok(DispatchCtl::Continue);
         }
+    }
+}
+
+#[cfg(test)]
+mod guard_tests {
+    use super::*;
+
+    fn input() -> FinalGuardInput {
+        FinalGuardInput {
+            native_tools_present: false,
+            native_used: false,
+            prompt_tool_used: false,
+            require_tool_call: false,
+            has_tools_for_prompt: false,
+            retries_used: 0,
+            agent_id: "video_maker".to_string(),
+            agent_tools: "generate_video".to_string(),
+        }
+    }
+
+    /// Native-агент без тулов: 2 ретрая → исчерпание → исторический fallback
+    /// (текст принимается) — поведение до PRP не изменено.
+    #[test]
+    fn native_without_tools_retries_then_fallback_accept() {
+        let mut i = input();
+        i.native_tools_present = true;
+        i.has_tools_for_prompt = false;
+
+        assert!(matches!(final_guard_decision(i.clone()), FinalGuardVerdict::Retry));
+        assert!(matches!(final_guard_decision(i.clone()), FinalGuardVerdict::Retry));
+
+        i.retries_used = NATIVE_FINAL_RETRIES_MAX;
+        assert!(
+            matches!(final_guard_decision(i), FinalGuardVerdict::Accept),
+            "после исчерпания ретраев native-fallback обязан сохраниться"
+        );
+    }
+
+    /// Require_tool-оператор: 2 ретрая → исчерпание → ЧЕСТНАЯ ошибка,
+    /// НИКОГДА не «успех» без вызванного тула.
+    #[test]
+    fn require_tool_without_tools_retries_then_honest_error() {
+        let mut i = input();
+        i.require_tool_call = true;
+        i.has_tools_for_prompt = true;
+
+        assert!(matches!(final_guard_decision(i.clone()), FinalGuardVerdict::Retry));
+        assert!(matches!(final_guard_decision(i.clone()), FinalGuardVerdict::Retry));
+
+        i.retries_used = NATIVE_FINAL_RETRIES_MAX;
+        match final_guard_decision(i) {
+            FinalGuardVerdict::HonestError(msg) => {
+                assert!(msg.contains(AGENT_ERROR_PREFIX), "честная ошибка обязана нести префикс: {msg}");
+                assert!(msg.contains("generate_video"), "ошибка обязана перечислять обязательные тулы: {msg}");
+                assert!(msg.contains("Задача не выполнена"), "{msg}");
+            }
+            other => panic!("ожидалась HonestError, получено: {:?}", matches!(other, FinalGuardVerdict::Accept)),
+        }
+    }
+
+    /// Один успешный вызов тула (любой канал) — guard не мешает легитимному
+    /// финалу «после тула», даже если до этого были неудачные попытки.
+    #[test]
+    fn one_successful_tool_disarms_guard() {
+        let mut i = input();
+        i.require_tool_call = true;
+        i.has_tools_for_prompt = true;
+        i.prompt_tool_used = true;
+        assert!(matches!(final_guard_decision(i.clone()), FinalGuardVerdict::Accept));
+
+        i.prompt_tool_used = false;
+        i.native_tools_present = true;
+        i.native_used = true;
+        assert!(matches!(final_guard_decision(i), FinalGuardVerdict::Accept));
+    }
+
+    /// Флаг без тулов (ошибка автора агента) НЕ ставит агента в ловушку:
+    /// требовать вызвать инструмент, которого не существует, — бред.
+    #[test]
+    fn require_tool_without_any_tools_never_traps() {
+        let mut i = input();
+        i.require_tool_call = true;
+        i.has_tools_for_prompt = false;
+        i.retries_used = 0;
+        assert!(matches!(final_guard_decision(i), FinalGuardVerdict::Accept));
+    }
+
+    /// Обычный чат-агент (никаких контрактов) — guard всегда Accept.
+    #[test]
+    fn chat_agent_unaffected() {
+        assert!(matches!(final_guard_decision(input()), FinalGuardVerdict::Accept));
     }
 }

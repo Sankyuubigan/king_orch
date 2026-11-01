@@ -362,6 +362,11 @@ pub async fn chat_request(
                 serde_json::json!({ "sessionId": log_session, "text": "Сбой ответа — повторяю запрос…" }),
             );
         }
+        // Шаг 7 (план 01.11.26, D2): новая итерация агента — сброс стрим-пузыря
+        // (дельты следующего вызова не приклеиваются к тексту предыдущего).
+        if msg.starts_with("🧹 Сброс стрима: новая итерация") {
+            let _ = app_log.emit("stream_reset", serde_json::json!({ "sessionId": log_session }));
+        }
         if let Some((agent_name, thought, time_sec)) = parse_thought_from_log(&msg) {
             let _ = app_log.emit(
                 "agent_thought",
@@ -409,7 +414,7 @@ pub async fn chat_request(
     let stream_meta = Arc::new(Mutex::new(domain::StreamMeta::default()));
     let meta_for_cb = stream_meta.clone();
     let stream_cb = move |chunk: String| {
-        let (kind, author) = {
+        let (kind, author, expect_tool_call) = {
             let mut m = meta_for_cb.lock().expect("stream_meta lock poisoned");
             // Динамическое переключение: пока LLM генерирует  блок,
             // стримим как "thought". Когда  закрылся — переключаем
@@ -424,7 +429,7 @@ pub async fn chat_request(
                     // Всё ещё внутри think блока — стримим как thought
                     let _ = app_stream.emit(
                         "stream_chunk",
-                        serde_json::json!({ "sessionId": stream_session, "kind": "thought", "author": m.author, "text": chunk }),
+                        serde_json::json!({ "sessionId": stream_session, "kind": "thought", "author": m.author, "text": chunk, "expect_tool_call": m.expect_tool_call }),
                     );
                     return;
                 } else if !m.buffer.is_empty() {
@@ -433,14 +438,14 @@ pub async fn chat_request(
                     m.thinking_done = true;
                 }
             }
-            (m.kind.clone(), m.author.clone())
+            (m.kind.clone(), m.author.clone(), m.expect_tool_call)
         };
         if kind.is_empty() {
             return;
         }
         let _ = app_stream.emit(
             "stream_chunk",
-            serde_json::json!({ "sessionId": stream_session, "kind": kind, "author": author, "text": chunk }),
+            serde_json::json!({ "sessionId": stream_session, "kind": kind, "author": author, "text": chunk, "expect_tool_call": expect_tool_call }),
         );
     };
 

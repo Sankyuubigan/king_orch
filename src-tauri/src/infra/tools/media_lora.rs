@@ -100,36 +100,44 @@ fn parse_lora_item(item: &Value) -> Result<LoraItem, ToolError> {
     }
 }
 
-/// Извлечь LoRA-запрос из аргументов тула. `None` = поле не передано
-/// (генерация без LoRA — прежний путь). Правила:
+/// Извлечь LoRA-запрос из аргументов тула. `None` = лор нет (генерация
+/// без LoRA — легальное состояние, прежний путь). Правила:
 /// - `lora` — массив строк ИЛИ объектов `{name, strength}`; микс форм
 ///   в одном массиве допустим; повторы имён (регистронезависимо)
 ///   сворачиваются — первый элемент выигрывает вместе со своей силой;
+/// - `lora: []` — то же, что отсутствие поля (легальное «без лор»):
+///   у валидатора ДОЛЖНО существовать состояние «лор нет», иначе модель,
+///   уже сказавшая «без лор», получает ошибку и инструкцию «передайте
+///   массив имён» — то есть приказ галлюцинировать имена (баг 01.11.26);
 /// - сила элемента переопределяет общий `lora_strength` (0–2, дефолт 1.0);
 ///   нечисловые/вне вилки — Usage ДО обращения к движку;
-/// - `lora_strength` без `lora` — Usage (поле без имён бессмысленно).
+/// - `lora_strength` без `lora` — НЕ ошибка: сила бессмысленна без лор,
+///   параметр игнорируется (debug-лог). Текст «передайте массив имён lora»
+///   вынуждал модель выдумывать несуществующие имена.
 pub fn extract_lora_request(args: &Value) -> Result<Option<LoraRequest>, ToolError> {
     let has_strength = matches!(args.get("lora_strength"), Some(v) if !v.is_null());
     let items: Option<Vec<LoraItem>> = match args.get("lora") {
         None | Some(Value::Null) => None,
         Some(Value::Array(list)) => {
             if list.is_empty() {
-                return Err(ToolError::Usage(
-                    "lora: пустой массив имён — опустите поле вместо этого".to_string(),
-                ));
-            }
-            let mut items: Vec<LoraItem> = Vec::with_capacity(list.len());
-            for item in list {
-                let parsed = parse_lora_item(item)?;
-                if items
-                    .iter()
-                    .any(|known| known.name.eq_ignore_ascii_case(&parsed.name))
-                {
-                    continue;
+                if has_strength {
+                    log::debug!("[IMG-TOOL] lora:[] с lora_strength — сила без лор игнорируется");
                 }
-                items.push(parsed);
+                None
+            } else {
+                let mut items: Vec<LoraItem> = Vec::with_capacity(list.len());
+                for item in list {
+                    let parsed = parse_lora_item(item)?;
+                    if items
+                        .iter()
+                        .any(|known| known.name.eq_ignore_ascii_case(&parsed.name))
+                    {
+                        continue;
+                    }
+                    items.push(parsed);
+                }
+                Some(items)
             }
-            Some(items)
         }
         Some(_) => {
             return Err(ToolError::Usage(
@@ -153,9 +161,10 @@ pub fn extract_lora_request(args: &Value) -> Result<Option<LoraRequest>, ToolErr
         }
     };
     match items {
-        None if has_strength => Err(ToolError::Usage(
-            "lora_strength передан без lora — передайте массив имён lora".to_string(),
-        )),
+        None if has_strength => {
+            log::debug!("[IMG-TOOL] lora_strength без lora — игнорируется (лор нет)");
+            Ok(None)
+        }
         None => Ok(None),
         Some(items) => Ok(Some(LoraRequest { items, strength })),
     }
@@ -166,6 +175,11 @@ pub fn extract_lora_request(args: &Value) -> Result<Option<LoraRequest>, ToolErr
 /// Сила каждого элемента — его `strength`, иначе общий дефолт запроса.
 /// Легаси-плоский каталог (без базы) — используется только тестами; боевая
 /// точка входа — `resolve_specs` (по базе активного бандла).
+///
+/// Классификация: «имя лоры не найдено в каталоге» — ошибка АРГУМЕНТОВ
+/// модели (`Usage`, ретрай с честным списком «Доступны: …»), а НЕ состояние
+/// диска. `NotFound` здесь давал Display «Не найдено: …» → `is_setup_error`
+/// → fail-fast всего workflow за опечатку модели (баг 01.11.26).
 #[cfg(test)]
 pub fn resolve_specs_in(
     dir: &std::path::Path,
@@ -177,7 +191,7 @@ pub fn resolve_specs_in(
         .map(|i| (i.name.clone(), i.strength.unwrap_or(req.strength)))
         .collect();
     tauri_plugin_image_engine::engine::resolve_lora_specs(dir, &wanted)
-        .map_err(ToolError::NotFound)
+        .map_err(lora_resolve_error)
 }
 
 /// То же с указанием базы (F3, 29.10.26): поиск только в подпапке
@@ -194,7 +208,17 @@ pub fn resolve_specs_in_base(
         .map(|i| (i.name.clone(), i.strength.unwrap_or(req.strength)))
         .collect();
     tauri_plugin_image_engine::engine::resolve_lora_specs_for_base(dir, &wanted, base)
-        .map_err(ToolError::NotFound)
+        .map_err(lora_resolve_error)
+}
+
+/// Ошибка резолва лор — всегда ошибка аргументов (`Usage`): модель назвала
+/// имя, которого нет в каталоге, или каталог пуст. Честный текст плагина
+/// («LoRA «X» не найдена в <dir>. Доступны: …») сохраняется как есть — по
+/// нему модель исправляет аргументы на ретрае. Display `Usage`
+/// («Неверные аргументы: …») НЕ содержит маркер «Не найдено: », по которому
+/// `is_setup_error` признаёт ошибку сетапной и убивает workflow.
+fn lora_resolve_error(msg: String) -> ToolError {
+    ToolError::Usage(msg)
 }
 
 /// База LoRA активного бандла (F3): выбор юзера (`selected_bundle` из
@@ -376,6 +400,20 @@ fn parse_lora_sidecar(path: &std::path::Path) -> (String, Vec<String>, Option<f3
 pub fn video_loras_prompt() -> String {
     let dir = tauri_plugin_image_engine::engine::video_lora_dir_early();
     let target = match active_video_lora_base().as_deref() {
+        Some(base) if !base.trim().is_empty() => dir.join(base.trim()),
+        _ => dir,
+    };
+    video_loras_prompt_in(&target)
+}
+
+/// То же для IMAGE-лор (`image_lora_dir`, база активного image-бандла):
+/// image-агенты обязаны видеть каталог, как видео-агенты — иначе модель
+/// выдумывает несуществующие стемы (кейс из лога юзера 01.11.26: модель
+/// назвала лору, которую ей никто не показывал). Скан/формат те же —
+/// `video_loras_prompt_in` фактически директория-сканер, имя историческое.
+pub fn image_loras_prompt() -> String {
+    let dir = tauri_plugin_image_engine::engine::image_lora_dir_early();
+    let target = match active_lora_base().as_deref() {
         Some(base) if !base.trim().is_empty() => dir.join(base.trim()),
         _ => dir,
     };

@@ -57,6 +57,18 @@ pub struct AgentProfile {
     /// Дефолт `false` — поведение всех существующих агентов не меняется.
     #[serde(default)]
     pub disable_reasoning: bool,
+    /// Контракт оператора: агент ОБЯЗАН выполнить задачу через инструменты;
+    /// текстовый финал без единого успешного вызова тула = провал задачи.
+    ///
+    /// Это решение АВТОРА агента (как `vision:`): у chat/репорт-агентов текст —
+    /// легитимный результат, у тул-операторов (`video_maker`, `image_generator`, …)
+    /// текст без вызова тула означает, что артефакт не создан. GUARD оркестратора
+    /// (`dispatch.rs::retry_native_final_without_tools`) по этому флагу не принимает
+    /// «финал-текст» как успех: ретрай с хинтом «вызови инструмент», после исчерпания —
+    /// честная `AGENT_ERROR_PREFIX`-ошибка. Дефолт `false` — поведение всех
+    /// существующих агентов без объявления не меняется.
+    #[serde(default)]
+    pub require_tool_call: bool,
     /// Предлагать ли агента в КАТАЛОГЕ (Настройки → «Агенты в чате» → «Доступные агенты»).
     ///
     /// Это решение АВТОРА агента, а не пользователя: `visible: false` убирает запись из
@@ -265,6 +277,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             let mut vision = false;
             let mut think_budget_chars: Option<usize> = None;
             let mut disable_reasoning = false;
+            let mut require_tool_call = false;
             let mut visible = true;
             let mut mcp_servers = Vec::new();
             let mut tools = Vec::new();
@@ -311,6 +324,12 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                         .parse::<bool>()
                         .unwrap_or(false);
                 }
+                else if line.starts_with("require_tool_call:") {
+                    require_tool_call = line["require_tool_call:".len()..]
+                        .trim()
+                        .parse::<bool>()
+                        .unwrap_or(false);
+                }
                 else if line.starts_with("mcp_servers:") {
                     if let Ok(parsed) = serde_json::from_str::<Vec<String>>(line["mcp_servers:".len()..].trim()) { mcp_servers = parsed; }
                 }
@@ -344,7 +363,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 }
                 i += 1;
             }
-            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date, temperature, vision, think_budget_chars, disable_reasoning, visible }); }
+            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date, temperature, vision, think_budget_chars, disable_reasoning, require_tool_call, visible }); }
         }
     }
     None
@@ -521,6 +540,80 @@ mod tests {
         assert_eq!(zero.think_budget_chars, None);
         let junk = parse("---\nname: Junk\nthink_budget: много\n---\nbody\n");
         assert_eq!(junk.think_budget_chars, None);
+    }
+
+    /// Контракт оператора «обязан вызвать тул» — решение автора агента:
+    /// без объявления поведение историческое (текстовый финал легален).
+    #[test]
+    fn require_tool_call_parsed_and_defaults_to_false() {
+        let default_agent = parse("---\nname: Default Agent\n---\nbody\n");
+        assert!(!default_agent.require_tool_call, "без поля контракт выключен");
+
+        let off = parse("---\nname: Off\nrequire_tool_call: false\n---\nbody\n");
+        assert!(!off.require_tool_call);
+
+        let operator = parse("---\nname: Operator\nrequire_tool_call: true\n---\nbody\n");
+        assert!(operator.require_tool_call, "require_tool_call: true обязан включать контракт");
+
+        // Мусор — как отсутствие поля: контракт не должен включаться от опечатки.
+        let junk = parse("---\nname: Junk\nrequire_tool_call: да\n---\nbody\n");
+        assert!(!junk.require_tool_call);
+    }
+
+    /// Страж контракта тул-операторов: владелец media/excel/diag-тула ОБЯЗАН
+    /// объявлять `require_tool_call: true` — его текстовый финал без вызова
+    /// тула означает «артефакт не создан», и принимать его как успех — тихая
+    /// подмена (баг №3, лог 01.11.26). Краснеет, когда новый оператор получает
+    /// тул без объявления флага — автор обязан осознанно решить.
+    #[test]
+    fn tool_operators_declare_require_tool_call() {
+        const OPERATOR_TOOLS: &[&str] = &[
+            // media (infra/tools: media.rs, video.rs)
+            "generate_image", "edit_image", "upscale_image", "generate_video",
+            // excel (infra/tools/excel)
+            "excel_inspect", "excel_read", "excel_apply", "excel_audit", "excel_render", "excel_convert",
+            // diag (infra/tools/diag)
+            "diag_snapshot", "diag_recorder_start", "diag_recorder_stop",
+        ];
+        let agents_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("корень проекта")
+            .join("agents");
+        let agents = load_agents(&agents_dir).expect("агенты прочитаны");
+        assert!(!agents.is_empty(), "агенты должны загрузиться из agents/");
+
+        for agent in &agents {
+            if let Some(tool) = agent.tools.iter().find(|t| OPERATOR_TOOLS.contains(&t.as_str())) {
+                assert!(
+                    agent.require_tool_call,
+                    "агент '{}' ({}) владеет тулом-оператором '{}' без require_tool_call: true — \
+                     финал текстом без вызова тула принимался бы как успех при несозданном артефакте",
+                    agent.id, agent.name, tool
+                );
+            }
+            // Встречное: флаг без единого тула — неисполнимый контракт (ловушка).
+            if agent.require_tool_call {
+                assert!(
+                    !agent.tools.is_empty(),
+                    "агент '{}' объявил require_tool_call: true без единого тула — контракт неисполним",
+                    agent.id
+                );
+            }
+        }
+
+        // Ключевые операторы существуют и объявили флаг (тест не проходит тихо
+        // при переименовании/удалении любого из них).
+        for id in ["video_maker", "image_generator", "image_editor", "image_upscaler", "excel_operator", "diag_specialist"] {
+            let agent = agents
+                .iter()
+                .find(|a| a.id == id)
+                .unwrap_or_else(|| panic!("оператор '{}' не найден в agents/", id));
+            assert!(
+                agent.require_tool_call,
+                "оператор '{}' обязан объявлять require_tool_call: true",
+                id
+            );
+        }
     }
 
     /// `find_agents_dir` в dev возвращает путь с подъёмами

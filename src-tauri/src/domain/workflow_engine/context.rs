@@ -48,6 +48,9 @@ pub struct WorkflowContext {
     /// описания). Заполняется при создании контекста (orchestrator), резолвится
     /// шаблоном `{{ video_loras }}` — по образцу `{{ image_candidates }}`.
     pub video_loras: String,
+    /// То же для image-агентов (`{{ image_loras }}`): каталог image-лор на базе
+    /// активного image-бандла. Без него модель выдумывает несуществующие стемы.
+    pub image_loras: String,
     /// Каталог таблиц (`{{ spreadsheet_files }}`): вложения .xlsx/.csv/.tsv
     /// текущего запроса и истории с абсолютными путями — источники excel-тулов.
     /// Заполняется при создании контекста (orchestrator) из RequestMedia.
@@ -74,6 +77,7 @@ impl WorkflowContext {
             image_candidates: String::new(),
             video_image_candidates: String::new(),
             video_loras: String::new(),
+            image_loras: String::new(),
             spreadsheet_files: String::new(),
             request_media: Arc::new(RequestMedia::empty()),
         }
@@ -91,6 +95,11 @@ impl WorkflowContext {
 
     pub fn with_video_loras(mut self, block: String) -> Self {
         self.video_loras = block;
+        self
+    }
+
+    pub fn with_image_loras(mut self, block: String) -> Self {
+        self.image_loras = block;
         self
     }
 
@@ -122,6 +131,7 @@ impl WorkflowContext {
         result = result.replace("{{ image_candidates }}", &self.image_candidates);
         result = result.replace("{{ video_image_candidates }}", &self.video_image_candidates);
         result = result.replace("{{ video_loras }}", &self.video_loras);
+        result = result.replace("{{ image_loras }}", &self.image_loras);
         result = result.replace("{{ spreadsheet_files }}", &self.spreadsheet_files);
 
         // {{ signals }} — JSON-объект из signal bus (ключ → значение)
@@ -251,5 +261,21 @@ mod tests {
             "литерал {{{{ signals }}}} обязан резолвиться в весь bus: {}",
             whole
         );
+    }
+
+    /// Каталог image-лор (`{{ image_loras }}`, шаг 6 плана 01.11.26): резолвится
+    /// шаблоном как `{{ video_loras }}` — иначе плейсхолдер уедет в промпт
+    /// литералом и модель снова не увидит доступные стемы (эпистемическая дыра).
+    #[test]
+    fn image_loras_template_resolves() {
+        let mut context = WorkflowContext::new("test".to_string(), vec![], vec![]);
+        context.image_loras = "- alpha — тестовая лора\n".to_string();
+        let resolved = context.resolve_template("Каталог:\n{{ image_loras }}");
+        assert!(
+            resolved.contains("- alpha — тестовая лора"),
+            "{{{{ image_loras }}}} обязан резолвиться: {}",
+            resolved
+        );
+        assert!(!resolved.contains("{{"), "литералов не осталось: {}", resolved);
     }
 }

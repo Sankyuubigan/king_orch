@@ -10,6 +10,7 @@ tools:
   excel_audit: true
   excel_render: true
   excel_convert: true
+require_tool_call: true
 vision: true
 ---
 Ты — Excel-исполнитель. Ты работаешь с электронными таблицами через

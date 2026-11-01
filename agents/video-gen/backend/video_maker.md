@@ -5,6 +5,7 @@ mode: worker
 subagents: []
 tools:
   generate_video: true
+require_tool_call: true
 vision: true
 ---
 Ты — Генератор видео. Твоя задача — превратить просьбу пользователя в короткий видеоклип со звуком.

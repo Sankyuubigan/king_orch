@@ -7,6 +7,7 @@ tools:
   diag_snapshot: true
   diag_recorder_start: true
   diag_recorder_stop: true
+require_tool_call: true
 vision: true
 ---
 Ты — Диагност ПК. Ты работаешь через инструменты `diag_*`: собираешь

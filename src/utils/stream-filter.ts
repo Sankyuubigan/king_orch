@@ -23,6 +23,19 @@ export function stripStreamArtifacts(text: string): string {
     return result;
 }
 
+// Видимый текст стрима тул-агента (Шаг 7 плана 01.11.26, D1).
+// При expect_tool_call=true всё от ПЕРВОЙ ```json-оградки в ЛЮБОМ месте
+// буфера — служебный тул-конверт и не рендерится: оградка может быть
+// разорвана между чанками, поэтому резка каждый раз пересчитывается по
+// ПОЛНОМУ накопленному буферу (idempotent). Префикс («Сейчас сделаю…»)
+// остаётся видимым — это реальный прогресс, не мусор. При false буфер не
+// режется вовсе: легитимные ```json-блоки чат/синтез-агентов не трогаем.
+export function visibleStreamText(buffer: string, expectToolCall: boolean): string {
+    if (!expectToolCall) return buffer;
+    const idx = buffer.indexOf("```json");
+    return idx === -1 ? buffer : buffer.slice(0, idx);
+}
+
 // Возвращает содержимое последнего блока <|channel>thought>...</|channel>,
 // либо null. Используется для вывода рассуждений в блок «Мысли агентов».
 export function extractChannelThought(text: string): string | null {

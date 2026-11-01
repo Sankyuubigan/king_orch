@@ -120,7 +120,8 @@ fn video_schema_declares_lora_stack_and_speech() {
         .pointer("/properties/lora")
         .expect("lora объявлен в схеме");
     assert_eq!(lora.get("type").and_then(|v| v.as_str()), Some("array"));
-    assert_eq!(lora.get("minItems").and_then(|v| v.as_i64()), Some(1));
+    // Шаг 6 (баг 01.11.26): minItems удалён — `lora: []` легален («без лор»).
+    assert_eq!(lora.get("minItems").and_then(|v| v.as_i64()), None);
     let strength = params
         .pointer("/properties/lora_strength")
         .expect("lora_strength объявлен в схеме");
@@ -138,35 +139,28 @@ fn video_schema_declares_lora_stack_and_speech() {
     assert!(prompt_en.contains("No subtitles"), "схема несёт запрет субтитров");
 }
 
-/// lora_strength без lora — Usage ДО всякого обращения к бандлу/движку
-/// (зеркало media; герметично: ошибка на границе extract_lora_request).
+/// lora_strength без lora — НЕ ошибка: параметр игнорируется, тул идёт без лор
+/// (Шаг 6, баг 01.11.26; герметично — контракт extract_lora_request на границе,
+/// общей с media). Прежний Usage с текстом «передайте массив имён lora»
+/// вынуждал модель выдумывать несуществующие имена.
 #[test]
-fn video_lora_strength_without_lora_is_usage() {
-    let ctx = test_ctx(None);
-    let err = execute_video_tool(
-        "generate_video",
+fn video_lora_strength_without_lora_is_ignored() {
+    let extracted = crate::infra::tools::media::media_lora::extract_lora_request(
         &serde_json::json!({"prompt_en": "тест", "lora_strength": 1.5}),
-        &ctx,
-        &[],
     )
-    .expect("generate_video обрабатывается")
-    .unwrap_err();
-    assert!(matches!(err, ToolError::Usage(_)));
+    .expect("сила без lora — легальный вызов");
+    assert!(extracted.is_none(), "лор нет — генерация продолжается без лор");
 }
 
-/// Пустой массив lora — Usage: поле без имён бессмысленно, опустите его.
+/// Пустой массив lora ≡ отсутствие поля — легальное «без лор» (Шаг 6; герметично
+/// на границе extract_lora_request: тул дальше идёт штатным путём без лор).
 #[test]
-fn video_empty_lora_array_is_usage() {
-    let ctx = test_ctx(None);
-    let err = execute_video_tool(
-        "generate_video",
+fn video_empty_lora_array_means_no_lora() {
+    let extracted = crate::infra::tools::media::media_lora::extract_lora_request(
         &serde_json::json!({"prompt_en": "тест", "lora": []}),
-        &ctx,
-        &[],
     )
-    .expect("generate_video обрабатывается")
-    .unwrap_err();
-    assert!(matches!(err, ToolError::Usage(_)));
+    .expect("пустой массив — легальный вызов");
+    assert!(extracted.is_none(), "lora: [] = генерация без лор");
 }
 
 /// Счётные отказы ролей — Usage ДО всякого resolve (без обращения к диску):

@@ -35,9 +35,9 @@ pub use runtime::builtin_tools;
 use crate::domain::agent_manager::{load_agents, AgentProfile};
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
-    has_incomplete_json_action, is_thinking_truncated, looks_like_broken_tool_call,
-    needs_cutoff_continuation, parse_orchestrator_response, parse_tool_call,
-    split_thinking_and_answer,
+    has_incomplete_json_action, has_unclosed_json_fence, is_thinking_truncated,
+    looks_like_broken_tool_call, needs_cutoff_continuation, parse_orchestrator_response,
+    parse_tool_call, split_thinking_and_answer,
 };
 use crate::domain::signals::{
     assemble_slot_signal_value, auto_think_budget_chars,
@@ -635,6 +635,9 @@ where
         // Каталог видео-лор юзера (скан папки + sidecar-описания): дёшево
         // (десятки файлов), резолвится только там, где граф шаблоном просит.
         .with_video_loras(crate::infra::tools::media::media_lora::video_loras_prompt())
+        // Каталог image-лор (`{{ image_loras }}`): зеркало видео-каталога —
+        // image-агенты выбирают лору из того, что реально есть, а не выдумывают.
+        .with_image_loras(crate::infra::tools::media::media_lora::image_loras_prompt())
         // Каталог таблиц (`{{ spreadsheet_files }}`): вложения .xlsx/.csv/.tsv
         // текущего запроса и истории с путями — источники excel-тулов.
         .with_spreadsheet_files(request_media.spreadsheet_files_prompt())
@@ -936,7 +939,7 @@ pub(crate) fn spill_root_dir() -> std::path::PathBuf {
 /// отправлялся `"required"` — локальный движок поле молча игнорировал, а облако
 /// форвардит буквально и получает невалидный запрос (пустой стрим ×3 у
 /// validator). Значение «enforce» контролируется app-level GUARD'ом
-/// `retry_native_final_without_tools`, а не полем wire-запроса.
+/// `final_without_tools_verdict`, а не полем wire-запроса.
 pub(crate) fn resolve_enforce_tool_choice(has_native_tools: bool) -> Option<&'static str> {
     if has_native_tools {
         Some("auto")
@@ -1132,6 +1135,13 @@ where
     }
 
     let has_tools_for_prompt = has_real_tools;
+
+    // Шаг 7 (план 01.11.26): флаг «этот агент может emit'ить тул-конверт» —
+    // часть стрим-стейта. Фронт по нему режет видимый текст на первой
+    // ```json-оградке, не рисуя служебный конверт юзеру.
+    if let Ok(mut m) = stream_meta.lock() {
+        m.expect_tool_call = has_tools_for_prompt;
+    }
 
     // ── Нативный OpenAI tools[] (папки coder/research) vs legacy .md ──
     // coder/research-агенты с реальными тулами переходят на нативный tool-calling:
@@ -1565,6 +1575,7 @@ where
         active_grammar,
         native_tools,
         native_used: false,
+        prompt_tool_used: false,
         native_final_retries: 0,
         hybrid_gbnf,
     };
@@ -1592,6 +1603,16 @@ where
     for iter in 1..=30 {
         if cancel_flag.load(Ordering::SeqCst) {
             return Err("Прервано пользователем".to_string());
+        }
+
+        // Шаг 7 (план 01.11.26, D2): перед КАЖДЫМ новым LLM-вызовом при
+        // активном чат-стриме сбрасываем стрим-пузырь. Между итерациями
+        // (вызов тула → новый вызов LLM) автор стрима не меняется, и фронт
+        // структурно не может отличить новую итерацию от продолжения — буфер
+        // копил текст всех вызовов подряд. Событие принимает chat.rs
+        // (log_cb-маркер → stream_reset) и фронт (onStreamReset).
+        if stream_meta.lock().map(|m| m.kind == "message").unwrap_or(false) {
+            log_cb("🧹 Сброс стрима: новая итерация агента".to_string());
         }
 
         // Восстанавливаем активную грамматику перед каждым generate_chat().
@@ -2066,8 +2087,18 @@ where
             || resp_trim.ends_with('"')
             || resp_trim.ends_with('\'')
             || resp_trim.ends_with('`');
+        // МЕХАНИЧЕСКИЙ признак незавершённости: ```json-конверт открыт и не
+        // закрыт — модель отрезана посреди конверта. Приоритет над пунктуацией:
+        // обрывок конверта заканчивается кавычкой так же, как цитата.
+        let envelope_truncated = has_unclosed_json_fence(&parse_target);
+        if envelope_truncated && is_final_text {
+            log_cb(format!(
+                "⚠️ [{}] обрыв внутри ```json-конверта + невалидный JSON — докачка обязательна (эвристика по последнему символу её пропустила бы)",
+                agent.id
+            ));
+        }
 
-        if stop_reason == "MAX_TOKENS" && !is_valid_json && !is_final_text {
+        if stop_reason == "MAX_TOKENS" && !is_valid_json && (!is_final_text || envelope_truncated) {
             // Обрыв по лимиту: докачиваем с места обрыва вместо перегенерации
             if push_continuation_for_cutoff(
                 &log_cb,
@@ -2184,9 +2215,18 @@ where
             ctx.consecutive_incomplete = 0;
 
             if parsed.target == "reply" || parsed.target == "user" {
-                // GUARD native: JSON-конверт «reply» без единого тула — ретрай с требованием вызвать тул.
-                if ctx.retry_native_final_without_tools(&raw_response) {
-                    continue;
+                // GUARD «финал без тулов»: JSON-конверт «reply» без единого тула —
+                // ретрай с требованием вызвать тул; исчерпание для require_tool —
+                // честная ошибка вместо финала.
+                match ctx.final_without_tools_verdict(&raw_response) {
+                    FinalGuardVerdict::Retry => continue,
+                    FinalGuardVerdict::HonestError(err) => {
+                        ctx.final_response = err;
+                        ctx.continuation_raw.clear();
+                        ctx.continuation_mark = None;
+                        break;
+                    }
+                    FinalGuardVerdict::Accept => {}
                 }
                 if parsed.content.is_empty() {
                     ctx.final_response = if is_continuation {
@@ -2435,10 +2475,18 @@ where
         }
 
         let preview = safe_truncate(&response, 300).replace('\n', " ");
-        // GUARD нативного tool-calling: финал обычным текстом без ЕДИНОГО тула —
-        // ретрай с требованием использовать инструмент (макс. NATIVE_FINAL_RETRIES_MAX).
-        if ctx.retry_native_final_without_tools(&raw_response) {
-            continue;
+        // GUARD «финал без тулов»: финал обычным текстом без ЕДИНОГО тула —
+        // ретрай с требованием использовать инструмент (макс. NATIVE_FINAL_RETRIES_MAX);
+        // исчерпание для require_tool-оператора — честная ошибка вместо финала.
+        match ctx.final_without_tools_verdict(&raw_response) {
+            FinalGuardVerdict::Retry => continue,
+            FinalGuardVerdict::HonestError(err) => {
+                ctx.final_response = err;
+                ctx.continuation_raw.clear();
+                ctx.continuation_mark = None;
+                break;
+            }
+            FinalGuardVerdict::Accept => {}
         }
         log_cb(format!(
             "✅ Агент {} завершил ответом ({} символов): {}",
@@ -2853,6 +2901,7 @@ mod tests {
             vision: false,
             think_budget_chars: None,
             disable_reasoning: false,
+            require_tool_call: false,
             visible: true,
         }
     }

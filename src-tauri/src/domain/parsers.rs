@@ -99,6 +99,23 @@ pub fn is_valid_json_action(text: &str) -> bool {
     }
 }
 
+/// МЕХАНИЧЕСКИЙ признак «обрыв внутри ```json-конверта»: открывающая оградка
+/// ```json присутствует, закрывающей ``` после неё нет — конверт структурно
+/// не завершён (модель отрезана по лимиту токенов посреди конверта).
+///
+/// Приоритет над пунктуационной эвристикой `is_final_text`: обрывок конверта
+/// может заканчиваться кавычкой (`... { "tool": "x", "args": { "`), и тогда
+/// «пунктуационно завершённый» текст ложно признавался финалом, а обрезанный
+/// JSON-конверт уходил пользователю как ответ (баг №3, лог 01.11.26). Здесь
+/// НЕ эвристика по содержимому: оградка — это ФОРМАТ, её незакрытость
+/// детерминирована, догадок не требует.
+pub fn has_unclosed_json_fence(text: &str) -> bool {
+    match text.rfind("```json") {
+        None => false,
+        Some(open) => text[open + "```json".len()..].find("```").is_none(),
+    }
+}
+
 fn is_valid_tool_name(name: &str) -> bool {
     let lower = name.trim().to_lowercase();
     if lower.is_empty() { return false; }
@@ -614,6 +631,27 @@ pub fn needs_cutoff_continuation(raw: &str, stop_reason: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Механический признак «обрыв внутри ```json-конверта» (баг №3, лог 01.11.26):
+    /// пунктуационная эвристика пропускала обрывок конверта, кончающийся кавычкой.
+    #[test]
+    fn unclosed_json_fence_detected_on_log_case() {
+        // Точный кейс из лога: «Конечно! … ```json { "»
+        let from_log = "Конечно! Сейчас сделаю клип.\n\n```json\n{\n  \"tool\": \"generate_video\",\n  \"arguments\": {\n    \"";
+        assert!(has_unclosed_json_fence(from_log), "обрыв внутри открытого конверта обязан детектироваться");
+
+        // Ранняя обрезка: конверт только открылся
+        assert!(has_unclosed_json_fence("текст\n```json\n{ \""));
+        // Пустой конверт без тела
+        assert!(has_unclosed_json_fence("текст ```json"));
+
+        // Закрытый конверт — не обрыв
+        assert!(!has_unclosed_json_fence("текст\n```json\n{\"tool\":\"x\"}\n```\nготово."));
+        // Оградки нет вовсе — не обрыв
+        assert!(!has_unclosed_json_fence("обычный финальный ответ."));
+        // Незакрытая ОБОЗНАЧАЮЩАЯ оградка обычного кода — не json-конверт
+        assert!(!has_unclosed_json_fence("код:\n```rust\nfn main() {}"));
+    }
 
     #[test]
     fn cutoff_continuation_unclosed_think_any_stop() {

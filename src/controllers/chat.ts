@@ -7,7 +7,7 @@ import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks, ProcessingIn
 import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
-import { renderMarkdown, stripStreamArtifacts, extractChannelThought, CLOUD_ROUTER_PREFIXES, isCloudModelPath, fillModelSelect, fillAgentSelect, getAgentDisplayName, getSelectedAgentName, isGraphAgent, hasFusableGroups } from "../utils";
+import { renderMarkdown, stripStreamArtifacts, extractChannelThought, visibleStreamText, CLOUD_ROUTER_PREFIXES, isCloudModelPath, fillModelSelect, fillAgentSelect, getAgentDisplayName, getSelectedAgentName, isGraphAgent, hasFusableGroups } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError, trackEvent } from "../telemetry";
 
@@ -316,10 +316,21 @@ export class ChatController {
     }
 
     // ── СООБЩЕНИЕ: старая логика основного чата ──
+    // Шаг 7 (план 01.11.26, D1): флаг «агент может emit'ить тул-конверт»
+    // приходит из бэкенда (has_tools_for_prompt в payload stream_chunk).
+    const expectTool: boolean = typeof payload === "object" && payload?.expect_tool_call === true;
     this.state.rtStreamBuffer += chunk;
 
+    // Механическая резка конверта: всё от первой ```json-оградки в ЛЮБОМ месте
+    // буфера — служебное, не рендерится; преамбула («Сейчас сделаю…») остаётся.
+    const visibleSource = visibleStreamText(this.state.rtStreamBuffer, expectTool);
+    if (expectTool && visibleSource !== this.state.rtStreamBuffer) {
+      this.state.rtIsJson = true;
+    }
+
     // Если это внутренний JSON (вызов сабагента или тулзы) — скрываем от глаз пользователя!
-    if (this.state.rtStreamBuffer.trimStart().startsWith("{") || this.state.rtStreamBuffer.trimStart().startsWith("```json")) {
+    // (частный случай: конверт с самого начала; для агентов без тулов сохраняется)
+    if (visibleSource.trimStart().startsWith("{") || visibleSource.trimStart().startsWith("```json")) {
       this.state.rtIsJson = true;
       return;
     }
@@ -340,7 +351,7 @@ export class ChatController {
 
     // Обновляем тело сообщения. Скрываем служебные теги LLM (<|channel>...<channel|> и
     // <|turn>) перед подачей в renderMarkdown (теги могут прийти внутри чанка).
-    const visibleText = stripStreamArtifacts(this.state.rtStreamBuffer);
+    const visibleText = stripStreamArtifacts(visibleSource);
     const msgEl = this.el.chatHistory.querySelector(`[data-msg-uid="${this.state.rtStreamUid}"]`);
     if (msgEl) {
       const contentDiv = msgEl.querySelector('div:nth-child(2)');
@@ -352,7 +363,7 @@ export class ChatController {
 
     // Печатаем "Мысли" агента (формат <|channel>thought>...) отдельной строкой
     // перед пузырём стримящегося ответа.
-    const channelThought = extractChannelThought(this.state.rtStreamBuffer);
+    const channelThought = extractChannelThought(visibleSource);
     if (channelThought && msgEl) {
       let row = this.el.chatHistory.querySelector('#rt-channel-thought');
       if (!row) {

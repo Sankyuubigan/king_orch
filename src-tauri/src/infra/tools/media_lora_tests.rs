@@ -93,20 +93,35 @@ fn extract_non_number_strength_is_usage() {
 }
 
 #[test]
-fn extract_strength_without_lora_is_usage() {
-    let args = serde_json::json!({"lora_strength": 1.5});
-    let err = extract_lora_request(&args).expect_err("сила без имён бессмысленна");
+fn extract_strength_without_lora_is_ignored() {
+    // Шаг 6 (баг 01.11.26): сила без лор — НЕ ошибка, параметр игнорируется.
+    // Текст «передайте массив имён lora» вынуждал модель выдумывать имена.
+    let only_strength = serde_json::json!({"lora_strength": 1.5});
     assert!(
-        matches!(err, ToolError::Usage(ref m) if m.contains("без lora")),
-        "сообщение: {err:?}"
+        extract_lora_request(&only_strength)
+            .expect("сила без lora = легальное «без лор»")
+            .is_none()
+    );
+    let empty_with_strength = serde_json::json!({"lora": [], "lora_strength": 1.5});
+    assert!(
+        extract_lora_request(&empty_with_strength)
+            .expect("пустой массив + сила = легальное «без лор»")
+            .is_none()
     );
 }
 
 #[test]
-fn extract_empty_array_is_usage() {
+fn extract_empty_array_means_no_lora() {
+    // Шаг 6 (баг 01.11.26): `lora: []` ≡ отсутствие поля (легальное
+    // «без лор»). Прежняя ошибка с «передайте массив имён» приказывала
+    // модели, уже сказавшей «без лор», галлюцинировать имена.
     let args = serde_json::json!({"lora": []});
-    let err = extract_lora_request(&args).expect_err("пустой массив — Usage");
-    assert!(matches!(err, ToolError::Usage(ref m) if m.contains("пустой")), "{err:?}");
+    assert!(
+        extract_lora_request(&args)
+            .expect("пустой массив = Ok")
+            .is_none(),
+        "lora: [] — легальное состояние «без лор»"
+    );
 }
 
 #[test]
@@ -264,9 +279,12 @@ fn resolve_unknown_name_lists_available() {
         strength: 1.0,
     };
     let err = resolve_specs_in(&dir, &req).expect_err("неизвестное имя — отказ");
+    // Шаг 6: классификация Usage (ошибка аргументов модели, ретрай с честным
+    // списком), НЕ NotFound — тот даёт Display «Не найдено: » → is_setup_error
+    // → fail-fast workflow за опечатку модели (баг 01.11.26).
     let msg = match err {
-        ToolError::NotFound(m) => m,
-        other => panic!("ожидался NotFound, получено: {other:?}"),
+        ToolError::Usage(m) => m,
+        other => panic!("ожидался Usage (аргументы модели), получено: {other:?}"),
     };
     assert!(msg.contains("ghost"), "имя запроса в сообщении: {msg}");
     assert!(msg.contains("Доступны"), "перечень доступных в сообщении: {msg}");
@@ -303,8 +321,8 @@ fn resolve_empty_dir_lists_honest_error() {
     };
     let err = resolve_specs_in(&dir, &req).expect_err("пустая папка — отказ");
     let msg = match err {
-        ToolError::NotFound(m) => m,
-        other => panic!("ожидался NotFound, получено: {other:?}"),
+        ToolError::Usage(m) => m,
+        other => panic!("ожидался Usage (аргументы модели), получено: {other:?}"),
     };
     assert!(msg.contains("папка пуста"), "сообщение: {msg}");
 }
@@ -322,10 +340,10 @@ fn resolve_missing_dir_honest_error() {
     };
     let err = resolve_specs_in(&ghost, &req).expect_err("нет папки — отказ");
     match err {
-        ToolError::NotFound(m) => {
+        ToolError::Usage(m) => {
             assert!(m.contains("не существует"), "сообщение: {m}");
         }
-        other => panic!("ожидался NotFound, получено: {other:?}"),
+        other => panic!("ожидался Usage (аргументы модели), получено: {other:?}"),
     }
 }
 
@@ -406,8 +424,8 @@ fn resolve_base_scopes_folder_cross_base_is_honest_error() {
     };
     let err = resolve_specs_in_base(&dir, &cross, Some("qwen")).expect_err("кросс-база");
     let msg = match err {
-        ToolError::NotFound(m) => m,
-        other => panic!("ожидался NotFound, получено: {other:?}"),
+        ToolError::Usage(m) => m,
+        other => panic!("ожидался Usage (аргументы модели), получено: {other:?}"),
     };
     assert!(msg.contains("krea_only"), "имя запроса в сообщении: {msg}");
     assert!(msg.contains("femaled"), "стемы СВОЕЙ базы в сообщении: {msg}");
@@ -431,8 +449,8 @@ fn resolve_base_missing_folder_honest_error() {
     };
     let err = resolve_specs_in_base(&dir, &req, Some("ghost_base")).expect_err("базы нет");
     let msg = match err {
-        ToolError::NotFound(m) => m,
-        other => panic!("ожидался NotFound, получено: {other:?}"),
+        ToolError::Usage(m) => m,
+        other => panic!("ожидался Usage (аргументы модели), получено: {other:?}"),
     };
     assert!(msg.contains("не существует"), "сообщение: {msg}");
     assert!(msg.contains("ghost_base"), "имя базы в сообщении: {msg}");
@@ -554,7 +572,9 @@ fn generate_schema_declares_optional_mixed_lora() {
     let schema = first_schema("generate_image");
     let lora = schema.pointer("/properties/lora").expect("поле lora есть");
     assert_eq!(lora.get("type").and_then(|v| v.as_str()), Some("array"));
-    assert_eq!(lora.get("minItems").and_then(|v| v.as_i64()), Some(1));
+    // Шаг 6: minItems удалён — `lora: []` легален («без лор»), иначе модель,
+    // сказавшая «без лор», получала отказ схемы и приказ галлюцинировать имена.
+    assert_eq!(lora.get("minItems").and_then(|v| v.as_i64()), None);
     assert_lora_items_mixed_contract(lora);
     let strength = schema
         .pointer("/properties/lora_strength")
