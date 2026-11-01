@@ -1,6 +1,8 @@
 import { store } from "../store";
 import { bus } from "../events";
-import { showToast, confirmDialog } from "../ui";
+import { showToast, confirmDialog, createAttachmentCallbacks, createPreviewAttachmentRow } from "../ui";
+import type { ImageAttachmentCallbacks } from "../ui";
+import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { fetchSessions, deleteSession, renameSession, openSessionFolder, loadSession } from "../services";
 import { copyMarkdownToClipboard, renderMarkdown, stripStreamArtifacts, getAgentDisplayName } from "../utils";
 import { trackError } from "../telemetry";
@@ -73,6 +75,9 @@ export class SessionController {
   private previewSeq = 0;
   private previewDebounce: number | null = null;
   private previewCache = new Map<string, ChatMessage[]>();
+  private imageCallbacks: ImageAttachmentCallbacks;
+  /** Кадры видео (key — file_path): повторный hover не перекачивает клип. */
+  private frameCache = new Map<string, Promise<string | null>>();
   private selectMode = false;
   private selectedIds = new Set<string>();
   private sessionsLoadPromise: Promise<void> | null = null;
@@ -80,6 +85,7 @@ export class SessionController {
 
   constructor(el: SessionElements) {
     this.el = el;
+    this.imageCallbacks = createAttachmentCallbacks();
     this.bindDomEvents();
     this.bindBusEvents();
     this.el.sessionPreviewOpen.addEventListener("click", () => {
@@ -394,9 +400,14 @@ export class SessionController {
       return;
     }
 
+    let rendered = 0;
+    let attachmentsCount = 0;
     for (const msg of messages) {
       const raw = (msg.content ?? "").trim();
-      if (!raw) continue;
+      const atts = msg.attachments ?? [];
+      // Сообщение без текста, но с вложениями рендерится: вложения — тоже
+      // содержание хода (картинка без подписи пропадала из предпросмотра).
+      if (!raw && atts.length === 0) continue;
       const role = messageRole(msg);
       const bubble = document.createElement("div");
       bubble.className = `preview-message preview-message-${role}`;
@@ -406,13 +417,21 @@ export class SessionController {
         name.textContent = msg.author_name ?? getAgentDisplayName(msg.author) ?? "";
         bubble.appendChild(name);
       }
-      const content = document.createElement("div");
-      content.className = "preview-msg-content markdown-body";
-      const text = role === "agent" ? stripStreamArtifacts(raw) : raw;
-      content.innerHTML = renderMarkdown(text);
-      bubble.appendChild(content);
+      if (raw) {
+        const content = document.createElement("div");
+        content.className = "preview-msg-content markdown-body";
+        const text = role === "agent" ? stripStreamArtifacts(raw) : raw;
+        content.innerHTML = renderMarkdown(text);
+        bubble.appendChild(content);
+      }
+      if (atts.length > 0) {
+        attachmentsCount += atts.length;
+        bubble.appendChild(createPreviewAttachmentRow(atts, this.imageCallbacks, this.frameCache));
+      }
       body.appendChild(bubble);
+      rendered++;
     }
+    logFront(`[sessions-preview] render sid=${id} msgs=${rendered}/${messages.length} atts=${attachmentsCount}`);
     body.scrollTop = 0;
   }
 

@@ -11,6 +11,20 @@ export interface MessageMenuCallbacks {
 
 let activeMenu: HTMLDivElement | null = null;
 
+/**
+ * Единый реестр открытого msg-menu-dropdown — и у сообщений (createMessageMenu),
+ * и у строк-действий (createRowMenu в thought-row.ts): открытие нового меню
+ * закрывает прежнее, клик вне меню (слушатель ниже) закрывает активное.
+ * Ранее у меню строк-действий реестра не было вовсе — его меню не закрывалось
+ * по клику вне, а CSS-прозрачность по hover делала вид, что оно закрылось.
+ */
+export function setActiveDropdown(dropdown: HTMLDivElement | null): void {
+  if (activeMenu && activeMenu !== dropdown) {
+    activeMenu.classList.remove("show");
+  }
+  activeMenu = dropdown;
+}
+
 document.addEventListener("click", (e) => {
   if (activeMenu && !activeMenu.parentElement?.contains(e.target as Node)) {
     activeMenu.classList.remove("show");

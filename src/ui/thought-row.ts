@@ -16,6 +16,7 @@
 
 import type { ThoughtMenuCallbacks } from "../types";
 import { confirmDialog } from "./confirm";
+import { setActiveDropdown } from "./message-menu";
 
 export type ThoughtRowKind = "thought" | "tool" | "subcall" | "signal";
 
@@ -144,6 +145,7 @@ function createRowMenu(uid: string, callbacks: ThoughtMenuCallbacks): HTMLDivEle
   deleteItem.addEventListener("click", async (e) => {
     e.stopPropagation();
     dropdown.classList.remove("show");
+    setActiveDropdown(null);
     const confirmed = await confirmDialog(
       "Удаление мысли",
       "Вы уверены, что хотите удалить это действие из сессии?",
@@ -159,6 +161,7 @@ function createRowMenu(uid: string, callbacks: ThoughtMenuCallbacks): HTMLDivEle
   cloneItem.addEventListener("click", (e) => {
     e.stopPropagation();
     dropdown.classList.remove("show");
+    setActiveDropdown(null);
     callbacks.onCloneFromThoughts(uid);
   });
   dropdown.appendChild(deleteItem);
@@ -166,7 +169,9 @@ function createRowMenu(uid: string, callbacks: ThoughtMenuCallbacks): HTMLDivEle
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
     e.preventDefault();
-    dropdown.classList.toggle("show");
+    const willShow = !dropdown.classList.contains("show");
+    dropdown.classList.toggle("show", willShow);
+    setActiveDropdown(willShow ? dropdown : null);
   });
   wrapper.appendChild(btn);
   wrapper.appendChild(dropdown);

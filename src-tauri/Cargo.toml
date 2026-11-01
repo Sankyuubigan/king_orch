@@ -14,7 +14,9 @@ codegen-units = 1
 strip = "debuginfo"
 
 [dependencies]
-tauri = { version = "2.0.0", features = [] }
+# protocol-asset — включает asset-протокол (convertFileSrc) для миниатюр
+# видео в предпросмотре истории сессий (tasks/01.11.26 Превью вложений).
+tauri = { version = "2.0.0", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2.0.0"
 tauri-plugin-shell = "2.0.0"
 tauri-plugin-updater = "2.0.0"
