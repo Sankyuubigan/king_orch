@@ -1,6 +1,7 @@
 import { renderMarkdown } from "../utils";
 import { createMessageMenu } from "./message-menu";
 import type { MessageMenuCallbacks } from "./message-menu";
+import { createThoughtRow, completeToolRow, TOOL_ICONS } from "./thought-row";
 import { createImageAttachmentElement } from "./image-attachment";
 import type { ImageAttachmentCallbacks } from "./image-attachment";
 import { createVideoAttachmentElement } from "./video-attachment";
@@ -79,32 +80,31 @@ export function createMessageElement(
   return msgDiv;
 }
 
+/** Мысль агента как компактная строка-действие (делегация в thought-row.ts —
+ *  SSOT разметки). Полный текст доступен в панели деталей. */
 export function createThoughtElement(agentName: string, thought: string, timeSec?: number): HTMLDivElement {
-  const div = document.createElement("div");
-  div.className = "message message-thought";
-  if (timeSec && timeSec > 0) {
-    div.innerHTML = `🧠 <strong>${agentName}</strong> <span class="thought-time">⏱${timeSec.toFixed(1)}с</span>: <em>${thought}</em>`;
-  } else {
-    div.innerHTML = `🧠 <strong>${agentName}</strong>: <em>${thought}</em>`;
-  }
-  return div;
+  return createThoughtRow({
+    kind: "thought",
+    author: agentName,
+    summary: thought,
+    detail: thought,
+    meta: timeSec && timeSec > 0 ? `⏱${timeSec.toFixed(1)}с` : undefined,
+  });
 }
 
+/** Отчёт сабагента как кликабельная строка-действие (деталей нет — chevron не нужен). */
 export function createSubcallElement(call: any, onSubcallClick: (call: any) => void): HTMLDivElement {
-  const callDiv = document.createElement("div");
-  callDiv.className = "message message-system subcall-msg";
-  
-  const btn = document.createElement("button");
-  btn.className = "btn-subcall";
-  btn.innerText = `📊 Отчет от сабагента: ${call.agent_name} (${call.time_sec.toFixed(1)} сек)`;
-  btn.onclick = () => onSubcallClick(call);
-  
-  callDiv.appendChild(btn);
-  return callDiv;
+  const row = createThoughtRow({
+    kind: "subcall",
+    label: `Отчет от сабагента: ${call.agent_name} (${call.time_sec.toFixed(1)} сек)`,
+  });
+  row.addEventListener("click", () => onSubcallClick(call));
+  return row;
 }
 
-/** Компактный элемент вызова инструмента для блока мыслей (реалтайм и история).
- *  Событие-вызов создаёт элемент со статусом ⏳, событие-результат дополняет его. */
+/** Компактная строка вызова инструмента (реалтайм и история).
+ *  Событие-вызов создаёт строку со статусом ⏳, событие-результат
+ *  дополняет её через completeToolRow. */
 export function createToolThoughtElement(
   author: string,
   tool: string,
@@ -112,33 +112,17 @@ export function createToolThoughtElement(
   result?: string,
   ready = false
 ): HTMLDivElement {
-  const div = document.createElement("div");
-  div.className = "message message-thought tool-thought";
-  div.dataset.toolKey = `${author}:${tool}`;
-
-  const text = document.createElement("span");
-  text.textContent = `🔧 ${author} → ${tool}`;
-  div.appendChild(text);
-
-  if (args !== undefined) {
-    const argsDiv = document.createElement("div");
-    argsDiv.className = "tool-thought-args";
-    argsDiv.textContent = args;
-    div.appendChild(argsDiv);
-  }
-
-  if (result !== undefined) {
-    const resultDiv = document.createElement("div");
-    resultDiv.className = "tool-thought-result";
-    resultDiv.textContent = `→ ${result}`;
-    div.appendChild(resultDiv);
-  } else if (!ready) {
-    const status = document.createElement("span");
-    status.className = "tool-thought-status";
-    status.textContent = " ⏳";
-    div.appendChild(status);
-  }
-  return div;
+  const row = createThoughtRow({
+    kind: "tool",
+    icon: TOOL_ICONS[tool] ?? "🔧",
+    label: `${author} → ${tool}`,
+    summary: args ?? "",
+    detail: args,
+    toolKey: `${author}:${tool}`,
+    pending: result === undefined && !ready,
+  });
+  if (result !== undefined) completeToolRow(row, result);
+  return row;
 }
 
 export function createToolCallElement(toolName: string, args: string, result: string): HTMLDivElement {  const div = document.createElement("div");

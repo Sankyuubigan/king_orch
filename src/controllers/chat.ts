@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog, save as saveDialog } from "@tauri-apps/plugin-dialog";
 import { store } from "../store";
 import { bus } from "../events";
-import { createMessageElement, createSubcallElement, createToolCallElement, createToolThoughtElement, createThoughtElement, createThoughtsBlock, addToThoughtsBlock, openImageViewer, showToast, createProcessingIndicator } from "../ui";
+import { createMessageElement, createSubcallElement, createToolCallElement, createThoughtElement, createThoughtRow, updateThoughtRowSummary, completeToolRow, TOOL_ICONS, openImageViewer, showToast, createProcessingIndicator } from "../ui";
 import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks, ProcessingIndicator } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
@@ -132,8 +132,7 @@ export class ChatTabState {
   uidList: string[] = [];
   uidCounter = 0;
 
-  /** Раскрывающийся блок «Мысли агентов» текущей вкладки. */
-  activeThoughtsBlock: HTMLDivElement | null = null;
+  /** Ключи завершённых realtime-сабколлов (дедуп при перерисовке). */
   realtimeSubcallKeys = new Set<string>();
 
   /** Индикатор обработки в потоке чата (спиннер + статус + таймер).
@@ -196,7 +195,6 @@ export class ChatTabState {
     this.uidList = [];
     this.uidCounter = 0;
     this.realtimeSubcallKeys.clear();
-    this.activeThoughtsBlock = null;
     this.rtStreamUid = null;
     this.rtStreamBuffer = "";
     this.rtIsJson = false;
@@ -307,9 +305,9 @@ export class ChatController {
     const chunk: string = typeof payload === "string" ? payload : (payload.text || "");
     const author: string = (payload && typeof payload.author === "string") ? payload.author : "";
 
-    // ── МЫСЛИ: печатаем в блок «Мысли агентов» в реальном времени ──
+    // ── МЫСЛИ: компактная строка-действие в чате, живой стрим ──
     if (kind === "thought") {
-      // Новый агент → новый пузырь мыслей
+      // Новый агент → новая строка
       if (this.state.rtThoughtUid && this.state.rtThoughtAuthor && author && author !== this.state.rtThoughtAuthor) {
         this.state.rtThoughtUid = null;
         this.state.rtThoughtBuffer = "";
@@ -326,15 +324,17 @@ export class ChatController {
       if (!this.state.rtThoughtUid) {
         this.state.rtThoughtUid = this.state.nextUid();
         this.state.rtThoughtAuthor = label;
-        const item = createThoughtElement(label, this.state.rtThoughtBuffer);
-        item.id = "rt-thought-stream";
-        this.state.activeThoughtsBlock = createThoughtsBlock([item]);
-        this.el.chatHistory.appendChild(this.state.activeThoughtsBlock);
+        const row = createThoughtRow({
+          kind: "thought",
+          author: label,
+          summary: this.state.rtThoughtBuffer,
+          detail: this.state.rtThoughtBuffer,
+        });
+        row.id = "rt-thought-stream";
+        this.el.chatHistory.appendChild(row);
       } else {
-        const item = this.state.activeThoughtsBlock?.querySelector('#rt-thought-stream');
-        if (item) {
-          item.innerHTML = `🧠 <strong>${label}</strong>: <em>${this.state.rtThoughtBuffer}</em>`;
-        }
+        const row = this.el.chatHistory.querySelector('#rt-thought-stream');
+        if (row) updateThoughtRowSummary(row as HTMLDivElement, this.state.rtThoughtBuffer);
       }
       this.scrollToBottomIfNearEnd(this.el.chatHistory);
       return;
@@ -375,23 +375,17 @@ export class ChatController {
       }
     }
 
-    // Печатаем "Мысли" агента (формат <|channel>thought>...) в раскрывающийся блок.
+    // Печатаем "Мысли" агента (формат <|channel>thought>...) отдельной строкой
+    // перед пузырём стримящегося ответа.
     const channelThought = extractChannelThought(this.state.rtStreamBuffer);
-    if (channelThought) {
-      if (!this.state.activeThoughtsBlock && msgEl) {
-        const item = createThoughtElement("Агент", channelThought);
-        item.id = "rt-channel-thought";
-        this.state.activeThoughtsBlock = createThoughtsBlock([item]);
-        this.el.chatHistory.insertBefore(this.state.activeThoughtsBlock, msgEl);
-      } else if (this.state.activeThoughtsBlock) {
-        let item = this.state.activeThoughtsBlock.querySelector('#rt-channel-thought');
-        if (!item) {
-          item = createThoughtElement("Агент", channelThought);
-          item.id = "rt-channel-thought";
-          addToThoughtsBlock(this.state.activeThoughtsBlock, item as HTMLElement);
-        } else {
-          item.innerHTML = `🧠 <strong>Агент</strong>: <em>${channelThought}</em>`;
-        }
+    if (channelThought && msgEl) {
+      let row = this.el.chatHistory.querySelector('#rt-channel-thought');
+      if (!row) {
+        row = createThoughtRow({ kind: "thought", author: "Агент", summary: channelThought, detail: channelThought });
+        row.id = "rt-channel-thought";
+        this.el.chatHistory.insertBefore(row, msgEl);
+      } else {
+        updateThoughtRowSummary(row as HTMLDivElement, channelThought);
       }
     }
   }
@@ -418,9 +412,8 @@ export class ChatController {
 
   onSubcallDone(call: any) {
     this.state.realtimeSubcallKeys.add(`${call.agent_name}:${call.time_sec.toFixed(2)}`);
-    const item = createSubcallElement(call, (c) => this.showSubchat(c));
-    if (this.state.activeThoughtsBlock) { addToThoughtsBlock(this.state.activeThoughtsBlock, item); }
-    else { this.state.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(this.state.activeThoughtsBlock); }
+    const row = createSubcallElement(call, (c) => this.showSubchat(c));
+    this.el.chatHistory.appendChild(row);
     this.scrollToBottomIfNearEnd(this.el.chatHistory);
   }
 
@@ -428,29 +421,42 @@ export class ChatController {
     const dedupKey = `${payload.author}:${payload.thought.substring(0, 200)}`;
     if (this.thoughtDedupSet.has(dedupKey)) return;
     this.thoughtDedupSet.add(dedupKey);
-    const item = createThoughtElement(payload.author, payload.thought, payload.time_sec);
-    if (this.state.activeThoughtsBlock) { addToThoughtsBlock(this.state.activeThoughtsBlock, item); }
-    else { this.state.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(this.state.activeThoughtsBlock); }
+    const row = createThoughtRow({
+      kind: "thought",
+      author: payload.author,
+      summary: payload.thought,
+      detail: payload.thought,
+      meta: payload.time_sec > 0 ? `⏱${payload.time_sec.toFixed(1)}с` : undefined,
+    });
+    this.el.chatHistory.appendChild(row);
     this.scrollToBottomIfNearEnd(this.el.chatHistory);
   }
 
   onAgentToolCall(p: { author: string, tool: string, args?: string, result?: string }) {
     const key = `${p.author}:${p.tool}`;
     if (p.result !== undefined) {
-      const item = this.state.activeThoughtsBlock?.querySelector(`[data-tool-key="${key}"]`);
-      if (item) {
-        item.querySelector(".tool-thought-status")?.remove();
-        const resultDiv = document.createElement("div");
-        resultDiv.className = "tool-thought-result";
-        resultDiv.textContent = `→ ${p.result}`;
-        item.appendChild(resultDiv);
+      const row = this.el.chatHistory.querySelector(`[data-tool-key="${key}"]`);
+      if (row) {
+        completeToolRow(row as HTMLDivElement, p.result);
         this.scrollToBottomIfNearEnd(this.el.chatHistory);
+      } else {
+        // Диагностика рассинхрона realtime-пары «вызов → результат»: строка
+        // с таким data-tool-key не найдена (например, перерисовка чата между
+        // событиями). Молчать нельзя — результат тула теряется без следа.
+        logFront(`[chat] Результат тула "${key}" получен, но строка вызова не найдена в чате (рассинхрон realtime-ключей).`);
       }
       return;
     }
-    const item = createToolThoughtElement(p.author, p.tool, p.args);
-    if (this.state.activeThoughtsBlock) { addToThoughtsBlock(this.state.activeThoughtsBlock, item); }
-    else { this.state.activeThoughtsBlock = createThoughtsBlock([item], undefined, undefined); this.el.chatHistory.appendChild(this.state.activeThoughtsBlock); }
+    const row = createThoughtRow({
+      kind: "tool",
+      icon: TOOL_ICONS[p.tool] ?? "🔧",
+      label: `${p.author} → ${p.tool}`,
+      summary: p.args,
+      detail: p.args,
+      toolKey: key,
+      pending: true,
+    });
+    this.el.chatHistory.appendChild(row);
     this.scrollToBottomIfNearEnd(this.el.chatHistory);
   }
 
@@ -929,13 +935,19 @@ export class ChatController {
     }
     this.renderChatFromHistory();
     await this.persistSession();
-    showToast("Блок мыслей удален.", "success");
+    showToast("Мысль удалена.", "success");
   }
 
-  private async onCloneFromThoughts(assistantUid: string) {
-    const idx = this.state.uidList.indexOf(assistantUid); if (idx === -1) return;
+  /** Клон сессии до указанного хода. uid может быть как uid'ом строки-мысли
+   *  (меню строки), так и — для обратной совместимости — uid'ом ответа
+   *  ассистента (прежде меню висело на блоке мыслей с его uid). Оба случая
+   *  сводятся к одному проходу: подняться до начала серии мыслей/сигналов
+   *  перед ходом ассистента и клонировать всё, что выше неё. */
+  private async onCloneFromThoughts(uid: string) {
+    const idx = this.state.uidList.indexOf(uid); if (idx === -1) return;
+    const isThoughtish = (t?: string) => t === 'thought' || t === 'signal';
     let first = idx; let i = idx - 1;
-    while (i >= 0 && this.state.history[i].type === 'thought') { first = i; i--; }
+    while (i >= 0 && isThoughtish(this.state.history[i].type)) { first = i; i--; }
     const cloneIdx = first - 1; if (cloneIdx < 0) { showToast("Нельзя клонировать.", "error"); return; }
     const clonedHistory = this.state.history.slice(0, cloneIdx + 1);
     const newId = Date.now().toString();
@@ -951,10 +963,10 @@ export class ChatController {
   }
 
   appendMessage(role: Role, content: string, agentName?: string, timeText?: string, subCalls?: any[], skipSubcallRender = false, uid?: string, attachments?: Attachment[]) {
-    this.state.activeThoughtsBlock = null;
     if (subCalls && subCalls.length > 0 && !skipSubcallRender) {
-      const items = subCalls.map(call => createSubcallElement(call, (c) => this.showSubchat(c)));
-      this.el.chatHistory.appendChild(createThoughtsBlock(items, uid, this.thoughtMenuCallbacks, []));
+      for (const call of subCalls) {
+        this.el.chatHistory.appendChild(createSubcallElement(call, (c) => this.showSubchat(c)));
+      }
     }
     const hasMenu = uid !== undefined && (role === 'user' || role === 'agent');
     const msgEl = createMessageElement(role, content, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, attachments, this.translatorMenuLabel(), undefined, this.imageCallbacks);
@@ -1075,22 +1087,39 @@ export class ChatController {
   }
 
   renderChatFromHistory() {
-    this.el.chatHistory.innerHTML = ''; this.state.activeThoughtsBlock = null;
-    let thoughtsItems: HTMLElement[] = []; let thoughtsUids: string[] = []; let lastAssistantUid: string | undefined;
+    this.el.chatHistory.innerHTML = '';
     for (let i = 0; i < this.state.history.length; i++) {
       const msg = this.state.history[i]; const uid = this.state.uidList[i];
       if (msg.type === 'thought' || msg.type === 'signal') {
         const content = msg.content;
         const tool = msg.type === 'thought' ? this.parseToolThought(msg.content) : null;
         if (tool) {
-          thoughtsItems.push(createToolThoughtElement(msg.author || 'Система', tool.tool, tool.args, tool.result, true));
+          const row = createThoughtRow({
+            kind: "tool",
+            icon: TOOL_ICONS[tool.tool] ?? "🔧",
+            label: `${msg.author || 'Система'} → ${tool.tool}`,
+            summary: tool.args,
+            detail: tool.args,
+            uid,
+            menuCallbacks: this.thoughtMenuCallbacks,
+          });
+          completeToolRow(row, tool.result);
+          this.el.chatHistory.appendChild(row);
         } else {
-          thoughtsItems.push(createThoughtElement(msg.author || 'Система', content, msg.time_sec));
+          const row = createThoughtRow({
+            kind: msg.type === 'signal' ? 'signal' : 'thought',
+            author: msg.author || 'Система',
+            summary: content,
+            detail: content,
+            meta: msg.time_sec && msg.time_sec > 0 ? `⏱${msg.time_sec.toFixed(1)}с` : undefined,
+            uid,
+            menuCallbacks: this.thoughtMenuCallbacks,
+          });
+          this.el.chatHistory.appendChild(row);
         }
-        thoughtsUids.push(uid);
 
         if (msg.sub_calls && msg.sub_calls.length > 0) {
-          msg.sub_calls.forEach((call: any) => thoughtsItems.push(createSubcallElement(call, (c) => this.showSubchat(c))));
+          msg.sub_calls.forEach((call: any) => this.el.chatHistory.appendChild(createSubcallElement(call, (c) => this.showSubchat(c))));
         }
         continue;
       }
@@ -1099,13 +1128,7 @@ export class ChatController {
         continue;
       }
       if (msg.author && msg.author !== 'user' && msg.author !== 'system' && msg.sub_calls && msg.sub_calls.length > 0) {
-        lastAssistantUid = uid;
-        thoughtsUids = [];
-        msg.sub_calls.forEach(call => thoughtsItems.push(createSubcallElement(call, (c) => this.showSubchat(c))));
-      }
-      if (thoughtsItems.length > 0) {
-        this.el.chatHistory.appendChild(createThoughtsBlock(thoughtsItems, lastAssistantUid, this.thoughtMenuCallbacks, thoughtsUids));
-        thoughtsItems = []; thoughtsUids = []; lastAssistantUid = undefined;
+        msg.sub_calls.forEach(call => this.el.chatHistory.appendChild(createSubcallElement(call, (c) => this.showSubchat(c))));
       }
       const role = (msg.author && msg.author !== 'user') ? (msg.author === 'system' ? 'system' : 'agent') : 'user' as Role;
       // Имя автора: готовое `author_name` имеет приоритет (машиный ключ
@@ -1119,7 +1142,6 @@ export class ChatController {
       const cleanContent = role === 'agent' ? stripStreamArtifacts(msg.content) : msg.content;
       this.el.chatHistory.appendChild(createMessageElement(role, cleanContent, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, msg.attachments, this.translatorMenuLabel(), msg.model, this.imageCallbacks));
     }
-    if (thoughtsItems.length > 0) this.el.chatHistory.appendChild(createThoughtsBlock(thoughtsItems, lastAssistantUid, this.thoughtMenuCallbacks, thoughtsUids));
     // Полная перерисовка стирает chatHistory — если обработка ещё идёт,
     // возвращаем строку-индикатор в DOM (инвариант: она живёт в чате,
     // пока isProcessing; убрать её может только setProcessingState(false)).
@@ -1203,7 +1225,6 @@ export class ChatController {
         this.state.lastActivityAt = Date.now();
         // Полный сброс стриминговых буферов перед новым прогоном.
         this.state.realtimeSubcallKeys.clear();
-        this.state.activeThoughtsBlock = null;
         this.state.rtStreamUid = null;
         this.state.rtStreamBuffer = "";
         this.state.rtIsJson = false;

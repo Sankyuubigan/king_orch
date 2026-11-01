@@ -4,7 +4,8 @@
 export { createMessageElement, createThoughtElement, createToolThoughtElement, createSubcallElement, createToolCallElement } from './render'
 export type { Role } from './render'
 
-export { createThoughtsBlock, addToThoughtsBlock } from './thoughts-block'
+export { createThoughtRow, updateThoughtRowSummary, completeToolRow, TOOL_ICONS } from './thought-row'
+export type { ThoughtRowKind, ThoughtRowOptions } from './thought-row'
 
 export { createProcessingIndicator } from './processing-indicator'
 export type { ProcessingIndicator } from './processing-indicator'
