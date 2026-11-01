@@ -101,7 +101,51 @@ pub fn bool_fact_ids(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> Ve
         .collect()
 }
 
-pub fn build_facts_grammar(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> String {
+/// Гибридная грамматика факт-экстрактора через ЕДИНУЮ точку сборки
+/// JSON-контрактов (SSOT в плагине, `get_json_contract_grammar`): think-блок
+/// автоматически ограничен бюджетами движка — тот же авто-потолок, что у
+/// signal-агентов и боевого валидатора (пробы через envelope-грамматику).
+/// Ornith-класс, игнорирующий `enable_thinking=false`, больше не может сжечь
+/// весь `n_predict` в незакрытом `<think>` (лог юзера 01.11.26: 2×400 с,
+/// 0 видимых токенов, MAX_TOKENS). Потолок — МАКСИМУМ: короткая дума не
+/// режется, качество мышления на здоровых машинах не страдает (откат G1
+/// от 31.10.26 не нарушаем — здесь формула от бюджетов, а не фиксированные
+/// 300 символов). Реактивная вторая линия — `build_facts_grammar_json_only`
+/// (ретрай в `nodes.rs`).
+pub fn build_facts_grammar(
+    config: &WorkflowConfig,
+    workflow_dir: Option<&Path>,
+    max_gen_tokens: usize,
+    reasoning_budget: usize,
+) -> String {
+    let (bool_keys, string_keys) = facts_json_keys(config, workflow_dir);
+    let base = crate::infra::build_json_object_grammar_with_keys(&bool_keys, &string_keys);
+    crate::infra::get_json_contract_grammar(&base, max_gen_tokens, reasoning_budget, 1)
+}
+
+/// JSON-only грамматика факт-экстрактора: тот же контракт ключей, но БЕЗ
+/// think-блока. Реактивная вторая линия защиты (аналог Phase-2 JSON-only
+/// fallback у signal-агентов, `orchestrator/mod.rs`): если первая попытка
+/// с гибридной грамматикой не дала валидный JSON, повтор идёт с грамматикой,
+/// в которой think структурно невозможен — первый токен обязан быть `{`.
+/// Это закрывает отказ «шаблон модели проигнорировал enable_thinking=false,
+/// весь n_predict сгорел в незакрытом <think>, JSON не родился» (лог юзера
+/// 01.11.26: Ornith, 2×400с, 0 видимых токенов, MAX_TOKENS) — при повторе
+/// канал отказа устранён, а не повторен. Первая попытка остаётся гибридной:
+/// качество мышления на здоровых машинах не режется (откат G1 не нарушаем —
+/// лимитов think здесь нет, есть запрет через полную невозможность).
+pub fn build_facts_grammar_json_only(
+    config: &WorkflowConfig,
+    workflow_dir: Option<&Path>,
+) -> String {
+    let (bool_keys, string_keys) = facts_json_keys(config, workflow_dir);
+    crate::infra::build_json_object_grammar_with_keys(&bool_keys, &string_keys)
+}
+
+/// Ключи JSON-контракта факт-экстрактора: boolean-факты (без values) +
+/// enum-факты/строковые output_fields + фаза. Единый источник для гибридной
+/// и JSON-only грамматик — расхождение ключей между попытками недопустимо.
+fn facts_json_keys(config: &WorkflowConfig, workflow_dir: Option<&Path>) -> (Vec<String>, Vec<String>) {
     let facts = resolve_facts(config, workflow_dir);
     let output_fields = resolve_output_fields(config, workflow_dir);
     let phases = resolve_phases(config, workflow_dir);
@@ -123,8 +167,7 @@ pub fn build_facts_grammar(config: &WorkflowConfig, workflow_dir: Option<&Path>)
     if !phases.is_empty() {
         string_keys.push("phase".to_string());
     }
-    let base = crate::infra::build_json_object_grammar_with_keys(&bool_keys, &string_keys);
-    crate::infra::get_hybrid_grammar(&base)
+    (bool_keys, string_keys)
 }
 
 /// Прочитать внешний контракт фактов (`config.facts_file`) из папки workflow.
@@ -353,6 +396,48 @@ mod tests {
         })
     }
 
+    // Гейты плана 01.11.26: попытка 1 — гибрид с авто-потолком от бюджетов
+    // движка (единый SSOT с signal-агентами и fused-группами), попытка 2 —
+    // JSON-only без think. Канал отказа «бюджет сгорел в незакрытом <think>»
+    // устранён в обеих попытках разными средствами: границей в первой,
+    // структурным запретом во второй. Фиксированных 300 симв. здесь нет
+    // (откат G1): потолок — МАКСИМУМ, вычисленный от бюджетов.
+    #[test]
+    fn extractor_grammars_attempt1_bounded_attempt2_json_only() {
+        let config = WorkflowConfig {
+            facts: vec![
+                FactDef { id: "has_problem".to_string(), ..Default::default() },
+                FactDef {
+                    id: "somatic_presence".to_string(),
+                    values: vec!["emotional".to_string(), "somatic".to_string()],
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        };
+        // Боевые бюджеты (max_gen_tokens=2048, reasoning_budget=1500):
+        // потолок одного черновика — 3000 симв. Ключи в GBNF экранированы
+        // (\"key\"), поэтому ассертим без кавычек.
+        let hybrid = build_facts_grammar(&config, None, 2048, 1500);
+        assert!(hybrid.contains("root ::= think-block json-object"), "{}", hybrid);
+        assert!(hybrid.contains("[^<]{0,3000}"), "нет авто-потолка: {}", hybrid);
+        assert!(hybrid.contains("has_problem"), "{}", hybrid);
+        assert!(hybrid.contains("somatic_presence"), "{}", hybrid);
+
+        // rb=0 — потолок от общего бюджета генерации: (2048-256)*2 = 3584.
+        let no_cap = build_facts_grammar(&config, None, 2048, 0);
+        assert!(no_cap.contains("[^<]{0,3584}"), "{}", no_cap);
+
+        let json_only = build_facts_grammar_json_only(&config, None);
+        assert!(
+            !json_only.contains("<think>"),
+            "в ретрае think должен быть структурно невозможен: {}",
+            json_only
+        );
+        assert!(json_only.contains("has_problem"), "{}", json_only);
+        assert!(json_only.contains("somatic_presence"), "{}", json_only);
+    }
+
     #[test]
     #[ignore]
     fn fact_extractor_hybrid_grammar_disable_reasoning_comparison() {
@@ -370,7 +455,7 @@ mod tests {
         let phases = resolve_phases(&config, Some(&workflow_dir));
         let user_message = "User: в последнее время мне трудно поддерживать порядок в задачах.\nSession signals: []";
         let prompt = build_default_prompt(&facts, &phases, &[], user_message, "[]", "");
-        let grammar = build_facts_grammar(&config, Some(&workflow_dir));
+        let grammar = build_facts_grammar(&config, Some(&workflow_dir), 8192, 1500);
         let engine = LlamaEngine::new(
             &engine_dir_from_app_config(),
             &model_path,

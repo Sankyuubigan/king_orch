@@ -601,22 +601,25 @@ pub fn undeclared_routing_keys_with_facts(
 
 /// GBNF-контракт склеенного вызова: think-block + строгий JSON с точными ключами.
 ///
-/// Гибрид (Method 3) — тот же приём, что у `llm_fact_extractor`: think разрешён
-/// и НЕ ограничен грамматикой. Подавление размышления — подсказка движка
-/// (`disable_reasoning`), бюджет генерации задаёт `max_gen_tokens` из конфига
-/// пользователя (как у слоёв воронки — `signals.rs`). Ограничение think
-/// в грамматике (300 симв.) существовало 31.10.2026 один день и откатлено
-/// решением владельца: перестраховка резала качество мышления на машинах,
-/// где бага нет; остаточные риски закрывают сторож живости stderr (плагин)
-/// и Phase-2 JSON-only fallback (`orchestrator/mod.rs`).
+/// Гибрид (Method 3) через ЕДИНУЮ точку сборки JSON-контрактов (SSOT в
+/// плагине, `get_json_contract_grammar`): think-блок автоматически ограничен
+/// бюджетами движка — тот же авто-потолок, что у signal-агентов, боевого
+/// валидатора и `llm_fact_extractor`. Фиксированные 300 симв. существовали
+/// 31.10.2026 один день и откатлены решением владельца (резали качество
+/// мышления на здоровых машинах); авто-потолок — не перестраховка, а расчёт
+/// от бюджетов самого движка (`--reasoning-budget` и `max_gen_tokens`),
+/// короткая дума не режется. Остаточные риски закрывают сторож живости
+/// stderr (плагин) и Phase-2 JSON-only fallback (`orchestrator/mod.rs`).
 pub fn build_fused_grammar(
     workflow: &WorkflowDef,
     group: &GroupDef,
     workflow_dir: Option<&std::path::Path>,
+    max_gen_tokens: usize,
+    reasoning_budget: usize,
 ) -> String {
     let (bool_keys, string_keys) = output_contract(workflow, group, workflow_dir);
     let base = crate::infra::build_json_object_grammar_with_keys(&bool_keys, &string_keys);
-    crate::infra::get_hybrid_grammar(&base)
+    crate::infra::get_json_contract_grammar(&base, max_gen_tokens, reasoning_budget, 1)
 }
 
 /// Тип ноды, который сам зовёт LLM.
@@ -1579,10 +1582,12 @@ mod tests {
             facts: vec![FactDef { id: "has_problem".to_string(), ..Default::default() }],
             ..Default::default()
         });
-        let grammar = build_fused_grammar(&wf, &wf.groups[0], None);
+        let grammar = build_fused_grammar(&wf, &wf.groups[0], None, 2048, 1500);
         assert!(grammar.contains("has_problem"), "грамматика без ключа факта:\n{}", grammar);
         assert!(grammar.contains(MESSAGE_KEY), "грамматика без ключа message:\n{}", grammar);
         assert!(grammar.contains("root ::="), "это не GBNF:\n{}", grammar);
+        // Единый механизм потолка: авто-расчёт от бюджетов (2048/1500, 1 черновик).
+        assert!(grammar.contains("[^<]{0,3000}"), "нет авто-потолка think:\n{}", grammar);
     }
 
     // ── Этапные канавки авто-склейки ───────────────────────────────────────
@@ -1657,7 +1662,7 @@ mod tests {
             strings
         );
         // Грамматика собирается из того же контракта — этапные ключи в ней.
-        let grammar = build_fused_grammar(&wf, &wf.groups[0], None);
+        let grammar = build_fused_grammar(&wf, &wf.groups[0], None, 2048, 1500);
         assert!(grammar.contains("out_call_decomposer"), "{}", grammar);
         assert!(grammar.contains("out_call_synthesizer"), "{}", grammar);
         assert!(

@@ -95,15 +95,15 @@ pub const DEFAULT_THINK_BUDGET_CHARS: usize = 1400;
 pub fn build_verdict_grammar(rules: &[RuleDef], think_budget: Option<usize>) -> String {
     let bool_keys: Vec<String> = rules.iter().map(|rule| rule.id.clone()).collect();
     let base = crate::infra::build_json_object_grammar_with_keys(&bool_keys, &[]);
-    let Some(budget) = think_budget else {
-        return base;
-    };
-    let renamed = base.replacen("root ::=", "json-object ::=", 1);
-    format!(
-        "root ::= think-block json-object\n\
-         think-block ::= \"<think>\" [^\n<]{{0,{budget}}} \"</think>\" | \"\"\n\n{body}",
-        body = renamed,
-    )
+    match think_budget {
+        // Бюджетная ветка — через единый SSOT плагина (тот же механизм, что у
+        // signal-агентов, экстрактора и fused-групп). Класс `[^<]` разрешает
+        // переносы (решение владельца 31.10.26); прежний локальный `[^\n<]`
+        // ему противоречил.
+        Some(budget) => crate::infra::get_hybrid_grammar_with_think_budget(&base, budget),
+        // Без бюджета — строгий JSON без think-блока (стенды сравнивают с ним).
+        None => base,
+    }
 }
 
 /// Что вернул движок по двум каналам — для диагностики провала разбора.

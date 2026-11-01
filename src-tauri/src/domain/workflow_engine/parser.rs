@@ -1,7 +1,8 @@
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 // ===========================================================================
 // СЕРИАЛИЗАЦИЯ / СОХРАНЕНИЕ WORKFLOW (save_workflow)
@@ -509,6 +510,21 @@ pub struct EdgeDef {
     pub condition: Option<String>,
 }
 
+/// Пути с уже залогированной ошибкой загрузки (за сеанс).
+///
+/// Ресканы каталога (сохранение графа, предпросмотр) не должны дублировать
+/// ERROR: у юзера в установленной копии остаются файлы-призраки (в репо
+/// удалены, Tauri обновляет ресурсы аддитивно), и каждый рескан повторял
+/// один и тот же ERROR (лог юзера 01.11.26). Ключ — (путь, текст ошибки):
+/// та же ошибка подавляется, НОВАЯ ошибка по тому же пути логируется.
+fn should_log_workflow_error(path: &Path, e: &str) -> bool {
+    static SEEN: OnceLock<Mutex<HashSet<(PathBuf, String)>>> = OnceLock::new();
+    SEEN.get_or_init(|| Mutex::new(HashSet::new()))
+        .lock()
+        .expect("workflow error dedup mutex")
+        .insert((path.to_path_buf(), e.to_string()))
+}
+
 pub fn load_workflows(agents_dir: &Path) -> Result<Vec<WorkflowDef>, String> {
     let mut workflows = Vec::new();
     let mut yaml_files = Vec::new();
@@ -520,11 +536,15 @@ pub fn load_workflows(agents_dir: &Path) -> Result<Vec<WorkflowDef>, String> {
             // `load_agents` молча игнорирует `.md` без frontmatter агента.
             Ok(None) => {}
             Ok(Some(wf)) => workflows.push(wf),
-            Err(e) => log::error!(
-                "[workflow_engine] Ошибка загрузки {}: {}",
-                path.display(),
-                e
-            ),
+            Err(e) => {
+                if should_log_workflow_error(&path, &e) {
+                    log::error!(
+                        "[workflow_engine] Ошибка загрузки {}: {} (повторы за сеанс подавлены; если файла уже нет в репо — это файл-призрак в установленной копии, почистите папку agents)",
+                        path.display(),
+                        e
+                    );
+                }
+            }
         }
     }
     Ok(workflows)
@@ -843,6 +863,16 @@ mod tests {
 
     fn wf_from_yaml(yaml: &str) -> WorkflowDef {
         serde_yaml::from_str(yaml).expect("парсинг YAML")
+    }
+
+    // Гейты плана 01.11.26: рескан каталога не дублирует ERROR по тому же
+    // пути и той же ошибке; новая ошибка по тому же пути логируется.
+    #[test]
+    fn workflow_error_dedup_logs_once_per_path_and_error() {
+        let p = Path::new("ghost-призрак-тест.yaml");
+        assert!(should_log_workflow_error(p, "битый YAML"));
+        assert!(!should_log_workflow_error(p, "битый YAML"));
+        assert!(should_log_workflow_error(p, "другая ошибка"));
     }
 
     /// Абсолютный путь боевого графа по относительному сегменту.

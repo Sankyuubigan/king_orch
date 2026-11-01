@@ -287,7 +287,24 @@ where
             );
 
             // Строгая грамматика по контракту facts.yaml: точные ключи, без опций.
-            let grammar = super::fact_extractor::build_facts_grammar(&config, Some(workflow_dir));
+            // Единый механизм потолка think (SSOT в плагине, тот же, что у
+            // signal-агентов и боевого валидатора): потолок — авто-расчёт от
+            // бюджетов движка, Ornith-класс, игнорирующий enable_thinking=false,
+            // больше не может сжечь весь n_predict в незакрытом <think>
+            // (лог юзера 01.11.26: 2×400 с, 0 видимых токенов, MAX_TOKENS).
+            let reasoning_budget = runner.engine.reasoning_budget() as usize;
+            let think_budget =
+                crate::infra::auto_think_budget_chars(runner.max_gen_tokens, reasoning_budget, 1);
+            (runner.log_cb)(format!(
+                "[fact_extractor] граница размышления: {:?} симв (авто-расчёт от бюджетов движка)",
+                think_budget
+            ));
+            let grammar = super::fact_extractor::build_facts_grammar(
+                &config,
+                Some(workflow_dir),
+                runner.max_gen_tokens,
+                reasoning_budget,
+            );
             let expected_keys: Vec<String> =
                 super::fact_extractor::expected_output_keys(&config, Some(workflow_dir))
                     .into_iter()
@@ -305,7 +322,7 @@ where
                 &current_msg,
                 &resolved_params,
                 &format!("graph:{}", node.id),
-                Some(grammar.clone()),
+                Some(grammar),
                 true,
             )?;
 
@@ -341,12 +358,20 @@ where
                     "{}\n\nВАЖНО: Ответь ТОЛЬКО JSON-объектом строго со всеми ключами: {}. Каждый факт — boolean либо строка из допустимых значений.",
                     prompt, expected_str
                 );
+                // Повтор — с JSON-only грамматикой (без think-блока): если первая
+                // попытка сгорела в незакрытом <think> (шаблон модели игнорирует
+                // enable_thinking=false), повтор с той же гибридной грамматикой
+                // сгорит так же (лог юзера 01.11.26: 2×400с, 0 токенов, MAX_TOKENS).
+                // JSON-only делает think структурно невозможным — канал отказа
+                // устранён, а не повторён (аналог Phase-2 fallback у signal-агентов).
+                let retry_grammar =
+                    super::fact_extractor::build_facts_grammar_json_only(&config, Some(workflow_dir));
                 let (retry_text, retry_reasoning) = runner.call_llm_direct(
                     &retry_prompt,
                     &current_msg,
                     &resolved_params,
                     &format!("graph:{}#retry", node.id),
-                    Some(grammar),
+                    Some(retry_grammar),
                     true,
                 )?;
                 parsed = parse_fact_json(&retry_text, &bool_keys);

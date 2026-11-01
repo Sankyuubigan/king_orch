@@ -556,6 +556,8 @@ where
                 workflow,
                 group,
                 Some(std::path::Path::new(&workflow.parent_dir)),
+                runner.max_gen_tokens,
+                runner.engine.reasoning_budget() as usize,
             );
             let llm_nodes = groups::llm_nodes_of_group(workflow, &group.id);
             let exit = groups::exit_node_of_group(workflow, group.id.trim())
