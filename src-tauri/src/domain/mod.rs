@@ -5,6 +5,7 @@
 pub mod orchestrator;
 pub mod parsers;
 pub mod agent_manager;
+pub mod catalog_cache;
 pub mod signals;
 pub mod workflow_engine;
 pub mod coding_bench;
@@ -24,6 +25,7 @@ pub use orchestrator::prompt::build_system_prompt;
 pub use orchestrator::builtin_tools;
 pub use agent_manager::load_agents;
 pub use agent_manager::load_entry_points;
+pub use catalog_cache::{catalog_snapshot, invalidate_catalog_cache};
 pub use workflow_engine::{
     analyze_workflow_fidelity, find_workflow_by_stem, load_workflows, resolve_entry,
     separate_top_level_fields, EdgeDef, FactsFile, GraphDiagnostic, GroupDef, NodeDef,

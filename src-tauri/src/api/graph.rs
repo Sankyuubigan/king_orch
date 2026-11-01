@@ -125,5 +125,9 @@ pub fn save_workflow(
 
     fs::write(&path, &yaml_final)
         .map_err(|e| format!("Ошибка записи файла {}: {}", path, e))?;
+    // Записали workflow в каталог agents/ — кэш каталога (domain::catalog_cache,
+    // читается get_prompt_preview) больше не отражает диск: инвалидируем явно,
+    // не дожидаясь TTL 3 сек (01.11.26).
+    crate::domain::invalidate_catalog_cache();
     Ok(())
 }

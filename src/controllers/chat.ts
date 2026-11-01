@@ -19,6 +19,18 @@ let mermaidInitialized = false;
 const PROCESSING_IDLE_LIMIT_MS = 15 * 60 * 1000; // 15 минут тишины движка
 const PROCESSING_CHECK_MS = 30 * 1000;           // проверка раз в 30 сек
 
+/// Троттлинг стрим-рендера (01.11.26): каждый SSE-чанк копит буфер, а полный
+/// ре-рендер markdown всего накопленного текста выполняется не чаще раза в
+/// этот интервал. Без троттлинга длинный ответ перерисовывался целиком на
+/// КАЖДЫЙ токен — тысячи полных renderMarkdown + forced layout за ход.
+const STREAM_RENDER_INTERVAL_MS = 120;
+
+/// Окно рендера истории чата (01.11.26): в DOM живёт не больше этого числа
+/// сообщений (старшие — по кнопке «Показать ещё»). `state.history` и
+/// persistSession не режутся — ограничивается только DOM, переполнявший
+/// память WebView2-рендерера на длинных сессиях.
+const CHAT_RENDER_WINDOW = 60;
+
 /// Названия целевых языков для переводчика сообщений.
 /// `menu` — текст пункта контекстного меню, `footer` — подпись внутри сообщения.
 const TRANSLATOR_LANGS: Record<string, { menu: string; footer: string }> = {
@@ -141,6 +153,30 @@ export class ChatTabState {
   rtThoughtBuffer: string = "";
   rtThoughtAuthor: string = "";
 
+  /// Флаг «агент может emit'ить тул-конверт» из последнего чанка (нужен
+  /// trailing-рендеру, чтобы пересчитать видимый текст из буфера).
+  rtExpectTool: boolean = false;
+
+  // Троттлинг стрим-рендера (01.11.26): отложенный trailing-рендер по
+  // последнему буферу + момент последнего фактического рендера.
+  streamRenderTimer: number | null = null;
+  streamLastRenderAt = 0;
+  streamTrailingRender: (() => void) | null = null;
+
+  /** Дополнительные старые сообщения, раскрытые кнопкой «Показать ещё»
+   *  (поверх окна CHAT_RENDER_WINDOW). Сбрасывается при новом ходе —
+   *  окно снова следует за концом истории. */
+  renderExpandExtra = 0;
+
+  /** Отменяет отложенный trailing-рендер стрима (сброс таймера и замыкания). */
+  cancelStreamRender() {
+    if (this.streamRenderTimer !== null) {
+      clearTimeout(this.streamRenderTimer);
+      this.streamRenderTimer = null;
+    }
+    this.streamTrailingRender = null;
+  }
+
   isRestoringSession = false;
 
   /**
@@ -180,6 +216,10 @@ export class ChatTabState {
     this.rtThoughtUid = null;
     this.rtThoughtBuffer = "";
     this.rtThoughtAuthor = "";
+    this.rtExpectTool = false;
+    this.cancelStreamRender();
+    this.streamLastRenderAt = 0;
+    this.renderExpandExtra = 0;
     this.isRestoringSession = false;
     this.isProcessing = false;
     // Сброс состояния в обход setProcessingState — индикатор обязан уйти
@@ -307,11 +347,12 @@ export class ChatController {
         });
         row.id = "rt-thought-stream";
         this.el.chatHistory.appendChild(row);
+        this.scrollToBottomIfNearEnd(this.el.chatHistory);
       } else {
-        const row = this.el.chatHistory.querySelector('#rt-thought-stream');
-        if (row) updateThoughtRowSummary(row as HTMLDivElement, this.state.rtThoughtBuffer);
+        // Обновление строки мысли — через троттлинг: каждый чанк дёргал DOM
+        // (updateThoughtRowSummary + forced layout в скролле) (01.11.26).
+        this.scheduleStreamRender(() => this.renderStreamThoughtDom());
       }
-      this.scrollToBottomIfNearEnd(this.el.chatHistory);
       return;
     }
 
@@ -319,6 +360,7 @@ export class ChatController {
     // Шаг 7 (план 01.11.26, D1): флаг «агент может emit'ить тул-конверт»
     // приходит из бэкенда (has_tools_for_prompt в payload stream_chunk).
     const expectTool: boolean = typeof payload === "object" && payload?.expect_tool_call === true;
+    this.state.rtExpectTool = expectTool;
     this.state.rtStreamBuffer += chunk;
 
     // Механическая резка конверта: всё от первой ```json-оградки в ЛЮБОМ месте
@@ -349,15 +391,31 @@ export class ChatController {
       this.appendMessage('agent', '', displayName, undefined, undefined, false, this.state.rtStreamUid);
     }
 
-    // Обновляем тело сообщения. Скрываем служебные теги LLM (<|channel>...<channel|> и
-    // <|turn>) перед подачей в renderMarkdown (теги могут прийти внутри чанка).
+    // Обновляем тело сообщения ЧЕРЕЗ ТРОТЛИНГ (01.11.26): полный renderMarkdown
+    // всего накопленного текста не чаще раза в STREAM_RENDER_INTERVAL_MS,
+    // последний буфер добирается trailing-рендером. Раньше каждый чанк
+    // перерисовывал весь ответ заново + forced layout в скролле.
+    this.scheduleStreamRender(() => this.renderStreamMessageDom());
+  }
+
+  /** Полный DOM-рендер стримящегося сообщения по актуальному буферу
+   *  (вызывается троттлингом: leading либо trailing). */
+  private renderStreamMessageDom() {
+    if (!this.state.rtStreamUid) return;
+    const visibleSource = visibleStreamText(this.state.rtStreamBuffer, this.state.rtExpectTool);
+    // Буфер мог вырасти в служебный JSON уже после leading-рендера —
+    // пересчёт в момент рендера честно скрывает его.
+    if (visibleSource.trimStart().startsWith("{") || visibleSource.trimStart().startsWith("```json")) {
+      return;
+    }
+    // Скрываем служебные теги LLM (<|channel>...<channel|> и <|turn>) перед
+    // подачей в renderMarkdown (теги могут прийти внутри чанка).
     const visibleText = stripStreamArtifacts(visibleSource);
     const msgEl = this.el.chatHistory.querySelector(`[data-msg-uid="${this.state.rtStreamUid}"]`);
     if (msgEl) {
       const contentDiv = msgEl.querySelector('div:nth-child(2)');
       if (contentDiv) {
         contentDiv.innerHTML = renderMarkdown(visibleText);
-        this.scrollToBottomIfNearEnd(this.el.chatHistory);
       }
     }
 
@@ -374,6 +432,41 @@ export class ChatController {
         updateThoughtRowSummary(row as HTMLDivElement, channelThought);
       }
     }
+    this.scrollToBottomIfNearEnd(this.el.chatHistory);
+  }
+
+  /** Обновление строки стримящейся мысли по актуальному буферу (троттлинг). */
+  private renderStreamThoughtDom() {
+    if (!this.state.rtThoughtUid) return;
+    const row = this.el.chatHistory.querySelector('#rt-thought-stream');
+    if (row) updateThoughtRowSummary(row as HTMLDivElement, this.state.rtThoughtBuffer);
+    this.scrollToBottomIfNearEnd(this.el.chatHistory);
+  }
+
+  /** Троттлинг DOM-рендера стрима: полный renderMarkdown не чаще раза в
+   *  STREAM_RENDER_INTERVAL_MS, последний буфер добирается trailing-рендером
+   *  через setTimeout (rAF не годится — не тикает в скрытых окнах). */
+  private scheduleStreamRender(render: () => void) {
+    this.state.streamTrailingRender = render;
+    const now = Date.now();
+    const elapsed = now - this.state.streamLastRenderAt;
+    if (elapsed >= STREAM_RENDER_INTERVAL_MS) {
+      if (this.state.streamRenderTimer !== null) {
+        clearTimeout(this.state.streamRenderTimer);
+        this.state.streamRenderTimer = null;
+      }
+      this.state.streamTrailingRender = null;
+      this.state.streamLastRenderAt = now;
+      render();
+    } else if (this.state.streamRenderTimer === null) {
+      this.state.streamRenderTimer = window.setTimeout(() => {
+        this.state.streamRenderTimer = null;
+        this.state.streamLastRenderAt = Date.now();
+        const fn = this.state.streamTrailingRender;
+        this.state.streamTrailingRender = null;
+        fn?.();
+      }, STREAM_RENDER_INTERVAL_MS - elapsed);
+    }
   }
 
   /**
@@ -387,10 +480,14 @@ export class ChatController {
         .querySelector(`[data-msg-uid="${this.state.rtStreamUid}"]`)
         ?.remove();
     }
+    // Отменяем отложенный trailing-рендер: дельты новой попытки не должны
+    // дорисовать в новый пузырь текст оборванной.
+    this.state.cancelStreamRender();
     this.state.rtStreamUid = null;
     this.state.rtStreamBuffer = "";
     this.state.rtIsJson = false;
     this.state.rtStreamAuthor = "";
+    this.state.rtExpectTool = false;
     this.state.rtThoughtUid = null;
     this.state.rtThoughtBuffer = "";
     this.state.rtThoughtAuthor = "";
@@ -1018,7 +1115,27 @@ export class ChatController {
 
   renderChatFromHistory() {
     this.el.chatHistory.innerHTML = '';
-    for (let i = 0; i < this.state.history.length; i++) {
+    // Окно рендера (01.11.26): в DOM живёт не больше CHAT_RENDER_WINDOW +
+    // renderExpandExtra ПОСЛЕДНИХ сообщений — безлимитная история переполняла
+    // память WebView2-рендерера (краш «На этой странице возникла проблема»).
+    // state.history и persistSession НЕ режутся — ограничивается только DOM.
+    // Правка/регенерация старого сообщения кликом вне окна структурно
+    // невозможна: кнопки меню живут на самих узлах, неокрашенный узел не кликается.
+    const total = this.state.history.length;
+    const windowSize = CHAT_RENDER_WINDOW + this.state.renderExpandExtra;
+    const windowStart = Math.max(0, total - windowSize);
+    if (windowStart > 0) {
+      const btn = document.createElement('button');
+      btn.className = 'chat-load-more';
+      btn.type = 'button';
+      btn.textContent = `Показать ещё ${Math.min(CHAT_RENDER_WINDOW, windowStart)}`;
+      btn.addEventListener('click', () => {
+        this.state.renderExpandExtra += CHAT_RENDER_WINDOW;
+        this.renderChatFromHistory();
+      });
+      this.el.chatHistory.appendChild(btn);
+    }
+    for (let i = windowStart; i < total; i++) {
       const msg = this.state.history[i]; const uid = this.state.uidList[i];
       if (msg.type === 'thought' || msg.type === 'signal') {
         const content = msg.content;
@@ -1159,9 +1276,15 @@ export class ChatController {
         this.state.rtStreamBuffer = "";
         this.state.rtIsJson = false;
         this.state.rtStreamAuthor = "";
+        this.state.rtExpectTool = false;
         this.state.rtThoughtUid = null;
         this.state.rtThoughtBuffer = "";
         this.state.rtThoughtAuthor = "";
+        this.state.cancelStreamRender();
+        this.state.streamLastRenderAt = 0;
+        // Окно рендера снова следует за концом истории: раскрытие «Показать
+        // ещё» было разовым просмотром прошлого контекста.
+        this.state.renderExpandExtra = 0;
         this.armProcessingWatchdog();
         // Индикатор обработки — в поток сообщений: после сообщения юзера,
         // визуально всегда последний (CSS order). Живёт до конца обработки.
@@ -1178,7 +1301,10 @@ export class ChatController {
         // строка-индикатор уходит из чата, таймер гаснет. Это единственная
         // точка освобождения: finally отправки, run-from-message, стоп и
         // сторож сходятся сюда, поэтому «залипшая» строка структурно невозможна.
+        // Троттлинг стрима тоже отменяется: полный рендер истории ниже рисует
+        // финальный текст, trailing по стрим-буферу больше не нужен.
         this.disarmProcessingWatchdog();
+        this.state.cancelStreamRender();
         this.state.processingIndicator?.destroy();
         this.state.processingIndicator = null;
     }

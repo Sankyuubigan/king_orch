@@ -693,7 +693,11 @@ pub fn get_prompt_preview(
     attachments: Vec<ChatAttachment>,
 ) -> Result<String, String> {
     let agents_dir = crate::infra::find_agents_dir(&app);
-    let agents = crate::domain::load_agents(&agents_dir)?;
+    // Каталог через TTL-кэш (domain::catalog_cache, 01.11.26): команда зовётся
+    // на каждую паузу набора текста (debounce 400 мс), а раньше перечитывала
+    // весь каталог (115 .md + 22 .yaml) с диска на КАЖДЫЙ вызов.
+    let catalog = crate::domain::catalog_snapshot(&agents_dir)?;
+    let agents = &catalog.agents;
 
     // Системный промпт: либо конкретного .md-агента, либо — в режиме графа —
     // самого «тяжёлого» агента графа (worst-case для оценки VRAM).
@@ -713,10 +717,9 @@ pub fn get_prompt_preview(
                 (prompt, uses_image_selection)
             }
             None => {
-                let workflows = crate::domain::load_workflows(&agents_dir)?;
-                let wf = crate::domain::find_workflow_by_stem(&workflows, &agent_id)
+                let wf = crate::domain::find_workflow_by_stem(&catalog.workflows, &agent_id)
                     .ok_or("Entry point не найден: нет ни .md агента, ни workflow с таким ID")?;
-                let (prompt, _) = crate::domain::build_worst_agent_prompt(&agents, wf, &history);
+                let (prompt, _) = crate::domain::build_worst_agent_prompt(agents, wf, &history);
                 let uses_image_selection = wf.nodes.iter().any(|node| {
                     node.agent.as_deref().and_then(|agent_id| {
                         agents.iter().find(|agent| agent.id == agent_id)
