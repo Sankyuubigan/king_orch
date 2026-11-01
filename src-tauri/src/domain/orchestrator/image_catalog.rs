@@ -15,6 +15,21 @@ pub fn agent_consumes_image_catalog(agent: &AgentProfile) -> bool {
     })
 }
 
+/// Агент получает маркер активного бандла (`[АКТИВНЫЙ БОНДЛ]`) — гейт
+/// image-тулов, БЕЗ `generate_video`. FLUX (01.11.26): генератор
+/// (`generate_image`) каталог изображений не читает, но с третьей базой
+/// (flux) выбор LoRA-стека обязан опираться на ФАКТ активного бандла, а не
+/// на угадывание по тексту запроса. Каталог-агентам (`edit_image` /
+/// `upscale_image`) маркер идёт как раньше — вместе с каталогом;
+/// generate-only агенту — БЕЗ блока каталога (`media_prompt_block("",
+/// marker)` — тест `media_prompt_block_marker_alone_without_catalog`).
+pub fn agent_receives_bundle_marker(agent: &AgentProfile) -> bool {
+    agent
+        .tools
+        .iter()
+        .any(|tool| tool == "generate_image" || tool == "edit_image" || tool == "upscale_image")
+}
+
 // ─────────────── F5 (29.10.26): маркер активного бандла ───────────────
 // Корень инцидентов F4: агент НЕ ЗНАЕТ, какой бандл активен — знания о базе
 // жили только в хвосте правил, а чек-лист говорил «теги обязательны»
@@ -1174,5 +1189,45 @@ mod tests {
         // И наоборот: ни каталога, ни маркера — пустой блок (не «\n\n» мусор).
         assert_eq!(media_prompt_block("", None), "");
         assert_eq!(media_prompt_block("CAT", None), "CAT");
+    }
+
+    /// Гейт маркера (FLUX 01.11.26): generate_image получает маркер, генератор
+    /// без media-тулов — нет; edit/upscale входят в оба гейта (каталог+маркер),
+    /// generate_video — только в каталог-гейт (маркер видео-агенту не менялся).
+    #[test]
+    fn agent_receives_bundle_marker_gates_by_image_tools() {
+        fn profile(tools: &[&str]) -> AgentProfile {
+            AgentProfile {
+                id: "a".into(),
+                name: "A".into(),
+                description: String::new(),
+                system_prompt: String::new(),
+                mode: "worker".into(),
+                mcp_servers: Vec::new(),
+                subagents: Vec::new(),
+                folder: None,
+                replace_report: false,
+                tools: tools.iter().map(|s| s.to_string()).collect(),
+                current_date: false,
+                temperature: None,
+                vision: false,
+                think_budget_chars: None,
+                disable_reasoning: false,
+                require_tool_call: false,
+                visible: true,
+            }
+        }
+        let generator = profile(&["generate_image"]);
+        let editor = profile(&["edit_image"]);
+        let video = profile(&["generate_video"]);
+        let plain = profile(&[]);
+        assert!(agent_receives_bundle_marker(&generator));
+        assert!(!agent_consumes_image_catalog(&generator));
+        assert!(agent_receives_bundle_marker(&editor));
+        assert!(agent_consumes_image_catalog(&editor));
+        assert!(!agent_receives_bundle_marker(&video));
+        assert!(agent_consumes_image_catalog(&video));
+        assert!(!agent_receives_bundle_marker(&plain));
+        assert!(!agent_consumes_image_catalog(&plain));
     }
 }

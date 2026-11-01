@@ -18,6 +18,7 @@ pub(crate) use consts::*;
 pub(crate) use grammar::*;
 pub use image_catalog::RequestMedia;
 pub use image_catalog::agent_consumes_image_catalog;
+pub use image_catalog::agent_receives_bundle_marker;
 pub use image_catalog::active_image_bundle_marker;
 pub(crate) use invocation::*;
 pub(crate) use prompt_log::*;
@@ -1223,11 +1224,17 @@ where
         is_hybrid,
         is_cloud,
     );
-    if agent_consumes_image_catalog(agent) {
+    if agent_consumes_image_catalog(agent) || image_catalog::agent_receives_bundle_marker(agent)
+    {
         // F5 (29.10.26): маркер активного бандла в системный промпт меди-агента —
         // СРАЗУ ПОСЛЕ каталога изображений, та же точка сборки. Fail-soft: нет
         // конфига/недокачанный бандл — маркера нет (агент живёт как раньше),
         // причина — в логе (виден в last_logs.txt).
+        // FLUX (01.11.26): гейт расширен на generate-only агентов — с третьей
+        // базой (flux) выбор LoRA-стека обязан опираться на ФАКТ активного
+        // бандла. Каталог изображений — только каталог-агентам
+        // (`media_prompt_block` с пустым каталогом возвращает чистый маркер —
+        // тест `media_prompt_block_marker_alone_without_catalog`).
         let facts = image_catalog::active_image_bundle_facts();
         if let Some(item) = facts.as_ref() {
             log::info!(
@@ -1238,8 +1245,13 @@ where
                 item.ref_edit
             );
         }
+        let catalog_part = if agent_consumes_image_catalog(agent) {
+            request_media.candidate_prompt()
+        } else {
+            String::new()
+        };
         let media_block = image_catalog::media_prompt_block(
-            &request_media.candidate_prompt(),
+            &catalog_part,
             facts.as_ref().map(|item| item.marker.as_str()),
         );
         if !media_block.is_empty() {

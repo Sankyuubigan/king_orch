@@ -701,7 +701,7 @@ pub fn get_prompt_preview(
 
     // Системный промпт: либо конкретного .md-агента, либо — в режиме графа —
     // самого «тяжёлого» агента графа (worst-case для оценки VRAM).
-    let (mut system_prompt, uses_image_selection) =
+    let (mut system_prompt, uses_image_selection, receives_bundle_marker) =
         match agents.iter().find(|a| a.id == agent_id) {
             Some(agent) => {
                 let mut tools = crate::domain::builtin_tools();
@@ -714,7 +714,9 @@ pub fn get_prompt_preview(
                     agent, &history, has_tools, &tools, 2048, false, false, false, false,
                 );
                 let uses_image_selection = crate::domain::agent_consumes_image_catalog(agent);
-                (prompt, uses_image_selection)
+                let receives_bundle_marker =
+                    crate::domain::agent_receives_bundle_marker(agent);
+                (prompt, uses_image_selection, receives_bundle_marker)
             }
             None => {
                 let wf = crate::domain::find_workflow_by_stem(&catalog.workflows, &agent_id)
@@ -726,7 +728,13 @@ pub fn get_prompt_preview(
                     })
                     .is_some_and(crate::domain::agent_consumes_image_catalog)
                 });
-                (prompt, uses_image_selection)
+                let receives_bundle_marker = wf.nodes.iter().any(|node| {
+                    node.agent.as_deref().and_then(|agent_id| {
+                        agents.iter().find(|agent| agent.id == agent_id)
+                    })
+                    .is_some_and(crate::domain::agent_receives_bundle_marker)
+                });
+                (prompt, uses_image_selection, receives_bundle_marker)
             }
         };
     let request_media = crate::domain::RequestMedia::build(&attachments, &history);
@@ -736,9 +744,13 @@ pub fn get_prompt_preview(
             system_prompt.push_str("\n\n");
             system_prompt.push_str(&candidates);
         }
-        // F5 (29.10.26): превью обязано показывать ровно тот промпт, который
-        // получит модель, — включая маркер активного бандла (иную базу, чем в
-        // превью, модель никогда не увидит — расхождение здесь = ложь юзеру).
+    }
+    // F5 (29.10.26): превью обязано показывать ровно тот промпт, который
+    // получит модель, — включая маркер активного бандла (иную базу, чем в
+    // превью, модель никогда не увидит — расхождение здесь = ложь юзеру).
+    // FLUX (01.11.26): маркер получают и generate-only агенты (оркестратор
+    // инжектит его им без каталога) — превью повторяет это ровно.
+    if uses_image_selection || receives_bundle_marker {
         if let Some(marker) = crate::domain::active_image_bundle_marker() {
             system_prompt.push_str("\n\n");
             system_prompt.push_str(&marker);
