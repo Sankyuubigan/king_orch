@@ -537,7 +537,7 @@ where
                 time_sec: None,
                 attachments: None,
                 phase: Some(2),
-                author_name: None,
+                author_name: Some(agent.name.clone()),
             };
             let current_sub_calls = msg.sub_calls.clone().unwrap_or_default();
             let attached = crate::infra::attach_saved_images_from_sub_calls(
@@ -573,10 +573,17 @@ where
                     agent_id, excel_attached
                 ));
             }
-            push_report(&mut context.messages, msg, agent.replace_report, Some(2));
-            *runner.msg_counter += 1;
-            // Сигнал сохраняется ПОСЛЕ thought для корректного порядка [thought, signal].
-            if let Some(signal) = pending_signal.take() {
+            // Один прогон сигнального воркера = одна мысль (SSOT — оркестратор).
+            // Тела размышлений уже запушены оркестратором (push_thinking_message,
+            // «размышление, signal-путь»), поэтому отчёт воркера дублировал их
+            // текст 1:1 (сома) либо тащил шум слотового конверта (валидатор:
+            // «Element 1: "e1": true...»). При наличии сигнала отдельный
+            // thought-отчёт не создаётся: подколы и вложения переезжают на
+            // сигнальное сообщение. Порядок [thought, signal] сохраняется —
+            // мысль оркестратора запушена до возврата из call_agent.
+            if let Some(mut signal) = pending_signal.take() {
+                signal.sub_calls = msg.sub_calls.take();
+                signal.attachments = msg.attachments.take();
                 // В signal bus объявляет шаг, пишет планировщик — тот же путь,
                 // что у факт-экстрактора и у склеенной группы.
                 if let Ok(val) = serde_json::from_str::<serde_json::Value>(&signal.content) {
@@ -587,6 +594,9 @@ where
                     }
                 }
                 push_report(&mut context.messages, signal, false, None);
+            } else {
+                push_report(&mut context.messages, msg, agent.replace_report, Some(2));
+                *runner.msg_counter += 1;
             }
             context.output_emitted = node.output_type.as_deref() == Some("message");
 

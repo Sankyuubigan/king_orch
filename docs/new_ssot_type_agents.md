@@ -384,13 +384,15 @@ phases:
       3. Получив описание, переведи паттерн на контекст проблемы пользователя и выдай финальное терапевтическое решение.
     
     detailed_steps:
-      - id: call_pattern_finder
-        agent: pattern_finder_by_elements
+      # (02.11.2026: отдельный pattern_finder_by_elements снят с пайплайна —
+      # номер паттерна считает сам Валидатор финальным слотом `pattern_type`
+      # контракта validator_report.)
       - id: call_healer
         agent: neuro_healer
         task: |
-          Из отчёта pattern_finder_by_elements возьми номер типа паттерна.
-          Выполни ШАГ 2 — прочитай описание инструментом ReadSection.
+          Номер типа паттерна — во вложенном поле сигнала Валидатора
+          ({{ signals.validator_report.pattern_type }}): по нему пайплайн уже
+          прочитал секцию базы (ReadSection).
           Переведи паттерн на контекст проблемы.
         tools: [ReadSection]
 

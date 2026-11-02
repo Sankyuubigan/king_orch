@@ -256,7 +256,7 @@ where
             time_sec: None,
             attachments: None,
             phase: Some(1),
-            author_name: None,
+            author_name: Some(self.agent.name.clone()),
         });
         *self.msg_counter += 1;
         true
@@ -360,6 +360,7 @@ where
                 parse_target,
                 response,
                 false,
+                is_continuation,
             );
         }
 
@@ -409,7 +410,7 @@ where
                 time_sec: None,
                 attachments: None,
                 phase: None,
-                author_name: None,
+                author_name: Some(self.agent.name.clone()),
             });
             *self.msg_counter += 1;
         }
@@ -1041,7 +1042,7 @@ where
                     time_sec: None,
                     attachments: None,
                     phase: None,
-                    author_name: None,
+                    author_name: Some(self.agent.name.clone()),
                 });
                 *self.msg_counter += 1;
             }
@@ -1215,7 +1216,7 @@ where
                     time_sec: None,
                     attachments: None,
                     phase: Some(2),
-                    author_name: None,
+                    author_name: Some(subagent.name.clone()),
                 };
                 push_report(&mut **messages, err_msg, subagent.replace_report, Some(2));
                 **msg_counter += 1;
@@ -1233,7 +1234,7 @@ where
                 time_sec: None,
                 attachments: None,
                 phase: Some(2),
-                author_name: None,
+                author_name: Some(subagent.name.clone()),
             };
             push_report(&mut **messages, msg, subagent.replace_report, Some(2));
             **msg_counter += 1;
@@ -1337,6 +1338,7 @@ where
         parse_target: &str,
         _response: &str,
         json_only_rescue: bool,
+        is_continuation: bool,
     ) -> Result<DispatchCtl, String> {
         let mut key_val = arguments.get("key");
         let mut val_val = arguments.get("value");
@@ -1355,12 +1357,72 @@ where
                 if let Err(e) = validate_signal_value(contract, value) {
                     self.consecutive_failed_tools += 1;
                     (self.log_cb)(format!("⚠️ emit_signal: '{}' валидация: {}", key, e));
+                    if self.consecutive_failed_tools >= 3 {
+                        // §00.2: бесконечный цикл перегенераций структурно
+                        // исключён — жёсткий кап, как у обычных тулов (3
+                        // неудачи подряд → честный стоп). Инцидент 03.11.2026:
+                        // ветка инкрементировала счётчик, но нигде не
+                        // проверяла — валидатор молотил 16+ попыток по ~26 с.
+                        self.final_response = format!(
+                            "{} Лимит неудачных попыток сигнала ({}). Агент: '{}'. Сигнал: '{}'. Невозможно продолжить.",
+                            AGENT_ERROR_PREFIX, self.consecutive_failed_tools, self.agent.id, key
+                        );
+                        return Ok(DispatchCtl::Break);
+                    }
+                    // Ошибка обязана дойти до эмиттера: без фидбека ретрай
+                    // слепой (модель не видит причину и перегенерирует то же
+                    // самое — вторая половина инцидента 03.11.2026).
+                    self.tool_calls.push(ToolCallInfo {
+                        tool_name: "emit_signal".to_string(),
+                        arguments: arguments.to_string(),
+                        result: e.clone(),
+                    });
+                    self.llm_messages.push(LlmMessage {
+                        role: "assistant".to_string(),
+                        content: if is_continuation {
+                            combined.to_string()
+                        } else {
+                            raw_response.to_string()
+                        },
+                        ..Default::default()
+                    });
+                    self.continuation_raw.clear();
+                    self.continuation_mark = None;
+                    self.llm_messages.push(LlmMessage {
+                        role: "user".to_string(),
+                        content: format!(
+                            "[РЕЗУЛЬТАТ ИНСТРУМЕНТА emit_signal]:\n{}\n\n⚠️ Сигнал не сохранён. Исправь value и вызови emit_signal СНОВА со всеми обязательными полями контракта.",
+                            e
+                        ),
+                        ..Default::default()
+                    });
                     return Ok(DispatchCtl::Continue);
                 }
             }
             self.consecutive_failed_tools = 0;
             self.signal_saved = true;
-            let signal_content = serde_json::json!({key: value}).to_string();
+            // ── Механическая финализация значения (SSOT: signals::finalize_*).
+            // pattern_type валидатора моделью не выдаётся: код вычисляет его из
+            // классификации этажей при подтверждённом ядре; не сошлось — явное
+            // "none" (презумпция дефицита: нет типа лучше неверного), причина
+            // видна в логе. Поле тотально: маршрутизация графа читает "none"
+            // как обычное значение (добор), детектор отсутствия не нужен.
+            let mut owned_value = value.clone();
+            match crate::domain::signals::finalize_validator_signal(&mut owned_value) {
+                Ok(pattern) => {
+                    (self.log_cb)(format!(
+                        "🧮 pattern_type вычислен кодом: {} (SAFETY-сцепка этажей сходится)",
+                        pattern
+                    ));
+                }
+                Err(reason) => {
+                    (self.log_cb)(format!(
+                        "⚠️ pattern_type не выдан: {}. Сигнал сохранён с pattern_type=\"none\" (тип не определён).",
+                        reason
+                    ));
+                }
+            }
+            let signal_content = serde_json::json!({key: owned_value}).to_string();
             let signal_msg = ChatMessage {
                 id: Some(format!("msg_{}", self.msg_counter)),
                 msg_type: "signal".to_string(),
@@ -1371,7 +1433,7 @@ where
                 time_sec: None,
                 attachments: None,
                 phase: Some(2),
-                author_name: None,
+                author_name: Some(self.agent.name.clone()),
             };
             self.pending_signal = Some(signal_msg);
             *self.msg_counter += 1;

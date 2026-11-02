@@ -1140,11 +1140,15 @@ export class ChatController {
       if (msg.type === 'thought' || msg.type === 'signal') {
         const content = msg.content;
         const tool = msg.type === 'thought' ? this.parseToolThought(msg.content) : null;
+        // Имя автора: как у message-ветки ниже — готовое author_name имеет
+        // приоритет над сырым машинным id (мысли-дубля в soma_агента из-за этого
+        // и выглядели как «мысли другого агента»).
+        const thoughtAuthor = (msg.author_name ?? getAgentDisplayName(msg.author)) || 'Система';
         if (tool) {
           const row = createThoughtRow({
             kind: "tool",
             icon: TOOL_ICONS[tool.tool] ?? "🔧",
-            label: `${msg.author || 'Система'} → ${tool.tool}`,
+            label: `${thoughtAuthor} → ${tool.tool}`,
             summary: tool.args,
             detail: tool.args,
             uid,
@@ -1155,7 +1159,7 @@ export class ChatController {
         } else {
           const row = createThoughtRow({
             kind: msg.type === 'signal' ? 'signal' : 'thought',
-            author: msg.author || 'Система',
+            author: thoughtAuthor,
             summary: content,
             detail: content,
             meta: msg.time_sec && msg.time_sec > 0 ? `⏱${msg.time_sec.toFixed(1)}с` : undefined,

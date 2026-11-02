@@ -119,7 +119,7 @@ impl WorkflowContext {
     }
 
     /// Разрешает шаблонные переменные вида `{{ nodes.X.output.Y }}`,
-    /// `{{ signals.<key> }}` и `{{ user_message }}`
+    /// `{{ signals.<key> }}`, `{{ signals.<key>.<sub> }}` и `{{ user_message }}`
     pub fn resolve_template(&self, template: &str) -> String {
         let mut result = template.to_string();
 
@@ -153,6 +153,24 @@ impl WorkflowContext {
                 _ => serde_json::to_string(value).unwrap_or_default(),
             };
             result = result.replace(&placeholder, &val_str);
+        }
+
+        // {{ signals.<key>.<sub> }} — вложенное поле сигнала-объекта (один
+        // уровень вложенности, симметрично nodes.X.output.Y и dot-path условий
+        // match_signal_path): напр. `## {{ signals.validator_report.pattern_type }}`.
+        // Строка — как есть, не-строка — JSON-сериализация. Отсутствующее поле
+        // остаётся литералом — потребитель честно откажет на невалидном значении.
+        for (key, value) in &self.signals {
+            if let Some(obj) = value.as_object() {
+                for (sub, val) in obj {
+                    let placeholder = format!("{{{{ signals.{}.{} }}}}", key, sub);
+                    let val_str = match val {
+                        serde_json::Value::String(s) => s.clone(),
+                        _ => serde_json::to_string(val).unwrap_or_default(),
+                    };
+                    result = result.replace(&placeholder, &val_str);
+                }
+            }
         }
 
         // {{ messages }} — история сессии для LLM: только не-thought и не-signal сообщения
@@ -261,6 +279,46 @@ mod tests {
             "литерал {{{{ signals }}}} обязан резолвиться в весь bus: {}",
             whole
         );
+    }
+
+    /// `{{ signals.<key>.<sub> }}` — вложенное поле сигнала-объекта (один
+    /// уровень, симметрично nodes.X.output.Y): строка как есть, отсутствующее
+    /// поле остаётся литералом; top-level форма не задевает вложенную
+    /// (литералы различаются хвостом после ключа).
+    #[test]
+    fn signals_nested_field_template_resolves() {
+        let mut context = WorkflowContext::new("test".to_string(), vec![], vec![]);
+        context.insert_signal(
+            "validator_report".to_string(),
+            serde_json::json!({"e3": true, "pattern_type": "2"}),
+        );
+
+        assert_eq!(
+            context.resolve_template("## {{ signals.validator_report.pattern_type }}"),
+            "## 2",
+            "вложенное строковое поле подставляется как есть"
+        );
+
+        // Не-строка сериализуется в JSON (симметрично nodes.X.output.Y).
+        assert_eq!(
+            context.resolve_template("{{ signals.validator_report.e3 }}"),
+            "true"
+        );
+
+        // Отсутствующее поле — литерал (честный отказ downstream).
+        assert_eq!(
+            context.resolve_template("{{ signals.validator_report.absent }}"),
+            "{{ signals.validator_report.absent }}"
+        );
+
+        // Top-level форма (весь объект) не матчится внутри вложенной.
+        let both = context.resolve_template("{{ signals.validator_report }} | ## {{ signals.validator_report.pattern_type }}");
+        assert!(
+            both.starts_with(r#"{"e3":true,"pattern_type":"2"}"#),
+            "top-level форма резолвится в весь объект: {}",
+            both
+        );
+        assert!(both.ends_with("| ## 2"), "вложенная форма резолвится: {}", both);
     }
 
     /// Каталог image-лор (`{{ image_loras }}`, шаг 6 плана 01.11.26): резолвится

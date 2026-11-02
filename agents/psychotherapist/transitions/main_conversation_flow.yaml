@@ -13,23 +13,23 @@ groups:
 - id: group_1
   title: Новая группа
   ui_pos:
-    x: -105
     y: 719
+    x: -105
 
 nodes:
 
 - id: user_message
   type: user_message
   ui_pos:
-    x: -2274
     y: 493
+    x: -2274
 
 - id: extract_facts
   type: llm_fact_extractor
   input: '{{ nodes.user_message.output.text }}'
   ui_pos:
-    y: 493
     x: -1990
+    y: 493
   llm_params: strict
 
 - id: check_has_problem
@@ -50,16 +50,16 @@ nodes:
   - validator
   - decomposer
   ui_pos:
-    x: 2517
     y: -259
+    x: 2517
 
 - id: call_soma_translator
   type: llm_worker
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    y: 210
     x: -561
+    y: 210
   llm_params: strict
 
 - id: call_decomposer
@@ -81,8 +81,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    y: 152
     x: 1345
+    y: 152
   llm_params: strict
 
 - id: check_triage_complexity
@@ -95,8 +95,8 @@ nodes:
   - field: triage_complexity
     equals: cluster
   ui_pos:
-    y: 601
     x: -42
+    y: 601
 
 - id: read_pattern_section
   type: custom_tool_call
@@ -105,21 +105,21 @@ nodes:
     y: 114
   tool_file: ../../_shared/tools/read_md_section.ts
   args:
-    heading: '## {{ signals.pattern_type }}'
     file: psychotherapist/database/inner_contour_9_patterns.md
+    heading: '## {{ signals.validator_report.pattern_type }}'
 
 - id: call_healer
   type: llm_worker
   agent: neuro_healer
   task: |
     Данные переданы готовыми — вызывать инструменты не требуется.
-    Ниже описание лечебного паттерна из базы знаний (пайплайн прочитал секцию по номеру от pattern_finder_by_elements) и разбор аналитика.
+    Ниже описание лечебного паттерна из базы знаний (пайплайн прочитал секцию по номеру pattern_type, вычисленному кодом из классификации этажей Валидатора) и профиль валидации элементов.
 
     === ОПИСАНИЕ ПАТТЕРНА ИЗ БАЗЫ ===
     {{ nodes.read_pattern_section.output.content }}
 
-    === РАЗБОР ОТ АНАЛИТИКА ===
-    {{ nodes.call_pattern_finder.output.result }}
+    === ПРОФИЛЬ ВАЛИДАЦИИ ЭЛЕМЕНТОВ (вердикты Валидатора) ===
+    {{ signals.validator_report }}
 
     Переведи описание паттерна на контекст проблемы пользователя, следуя ИНСТРУКЦИИ и формату вывода из системного промпта.
   output_type: message
@@ -174,6 +174,8 @@ nodes:
     equals: false
   - field: validator_report.e9
     equals: false
+  - field: validator_report.pattern_type
+    equals: "none"
   logic: any
   ui_pos:
     x: 1655
@@ -194,8 +196,8 @@ nodes:
       equals: false
   logic: any
   ui_pos:
-    x: -802
     y: 218
+    x: -802
 
 - id: check_need_handedness
   type: signal_router
@@ -239,8 +241,8 @@ nodes:
   agent: request_helper
   output_type: message
   ui_pos:
-    y: 864
     x: -808
+    y: 864
 
 - id: check_elements1
   type: condition_router
@@ -268,8 +270,8 @@ nodes:
   inject_response:
   - decomposer
   ui_pos:
-    y: 382
     x: 526
+    y: 382
 
 edges:
 

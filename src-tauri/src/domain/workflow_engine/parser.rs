@@ -1054,13 +1054,14 @@ edges: []
         );
 
         // llm_worker: нодовые поля удалены, фрейм наследуется из дефолта.
+        // (call_grounder и call_pattern_finder сняты с графа 02.11.2026:
+        // pattern_type вычисляет код из floor0_type/floor1_type — финальных
+        // слотов контракта; модель этажи только классифицирует.)
         for node_id in [
             "call_validator",
             "call_collector",
             "call_soma_translator",
             "call_decomposer",
-            "call_grounder",
-            "call_pattern_finder",
             "call_healer",
             "call_shadow_worker",
             "call_request_helper",

@@ -1254,33 +1254,20 @@ mod tests {
                 ("O4_mixed_specificity_floor", 0.3284),
                 ("O5_metaphor_accuracy_vs_baseline", 0.4444),
                 ("R1_overall_no_regression", 0.7847),
-                ("Q1_ungrounded_verdicts", 0.0),
             ],
-            "пороги приёмки разошлись с tasks/11.10.26 …md §9 и tasks/01.11.26 quote-first"
+            "пороги приёмки разошлись с tasks/11.10.26 …md §9 (Q1 снят владельцем 02.11.2026 — _removed_gates в acceptance_gates.json, не возвращать)"
         );
         // Все пороги — минимумы: «не хуже базовой Система-1 и не хуже своего
-        // прошлого прогона». Единственное исключение — Q1: структурный страж
-        // заземления (пустое тело-доказательство или незаземлённый true — дефект
-        // генерации, а не «хуже базы»), поэтому направление «не больше 0»
-        // обосновано в tasks/01.11.26.
-        let at_most = |gate: &super::super::probe_acceptance::Gate| {
-            gate.bound == super::super::probe_acceptance::Bound::AtMost
-        };
-        let q1 = acceptance
-            .gates
-            .iter()
-            .find(|gate| gate.id == "Q1_ungrounded_verdicts")
-            .expect("гейт заземления объявлен в книге");
-        assert!(
-            at_most(q1) && q1.threshold == 0.0 && q1.metric == "quote_gate_fail",
-            "Q1 обязан быть at_most 0 по quote_gate_fail"
-        );
+        // прошлого прогона». Q1_ungrounded_verdicts снят владельцем 02.11.2026
+        // (`_removed_gates` в acceptance_gates.json: дословная цитата —
+        // хардкод-проверка, вердикт оценивает только эталон). quote_gate_fail
+        // остаётся в артефактах как диагностика, гейтом больше не является.
         assert!(
             acceptance
                 .gates
                 .iter()
-                .all(|gate| gate.bound == super::super::probe_acceptance::Bound::AtLeast || gate.id == "Q1_ungrounded_verdicts"),
-            "в приёмке воронки появился ещё один гейт «не больше» — его надо обосновать"
+                .all(|gate| gate.bound == super::super::probe_acceptance::Bound::AtLeast),
+            "в приёмке воронки появился гейт «не больше» — его надо обосновать"
         );
         // Гейт по метафорам обязан требовать измерения: иначе «потеряно 0» и
         // «метафоры не мерили» дают одно и то же число.

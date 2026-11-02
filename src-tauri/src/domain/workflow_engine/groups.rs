@@ -1587,7 +1587,7 @@ mod tests {
         assert!(grammar.contains(MESSAGE_KEY), "грамматика без ключа message:\n{}", grammar);
         assert!(grammar.contains("root ::="), "это не GBNF:\n{}", grammar);
         // Единый механизм потолка: авто-расчёт от бюджетов (2048/1500, 1 черновик).
-        assert!(grammar.contains("[^<]{0,3000}"), "нет авто-потолка think:\n{}", grammar);
+        assert!(grammar.contains("think-char{0,3000}"), "нет авто-потолка think:\n{}", grammar);
     }
 
     // ── Этапные канавки авто-склейки ───────────────────────────────────────

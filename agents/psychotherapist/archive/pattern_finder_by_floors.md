@@ -6,7 +6,7 @@ visible: true
 
 Вам доступны описания всех 9 типов по следующему пути: 
 (Рассмотри этот файл как свою главную методичку):
-<<INCLUDE: ../database/external_contour_9_patterns.md>>
+<<INCLUDE: ../database/patterns_9_types_detailed.md>>
 
 Вам доступны переходы типов по следующему пути: 
 <<INCLUDE: ../database/conversions_patterns.md>>

@@ -420,13 +420,13 @@ mod tests {
         // (\"key\"), поэтому ассертим без кавычек.
         let hybrid = build_facts_grammar(&config, None, 2048, 1500);
         assert!(hybrid.contains("root ::= think-block json-object"), "{}", hybrid);
-        assert!(hybrid.contains("[^<]{0,3000}"), "нет авто-потолка: {}", hybrid);
+        assert!(hybrid.contains("think-char{0,3000}"), "нет авто-потолка: {}", hybrid);
         assert!(hybrid.contains("has_problem"), "{}", hybrid);
         assert!(hybrid.contains("somatic_presence"), "{}", hybrid);
 
         // rb=0 — потолок от общего бюджета генерации: (2048-256)*2 = 3584.
         let no_cap = build_facts_grammar(&config, None, 2048, 0);
-        assert!(no_cap.contains("[^<]{0,3584}"), "{}", no_cap);
+        assert!(no_cap.contains("think-char{0,3584}"), "{}", no_cap);
 
         let json_only = build_facts_grammar_json_only(&config, None);
         assert!(

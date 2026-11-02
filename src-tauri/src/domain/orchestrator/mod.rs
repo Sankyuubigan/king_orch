@@ -46,7 +46,7 @@ use crate::domain::signals::{
     assemble_slot_signal_value, auto_think_budget_chars,
     build_signal_envelope_grammar_with_think_budget, build_signal_envelope_json_only_grammar,
     draft_count_for_contract, slot_anchor_labels, extract_signal_value_from_text,
-    load_signal_contract, SignalContract,
+    load_signal_contract, think_slot_count, SignalContract,
 };
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, NodeType, WorkflowContext, WorkflowDef, WorkflowRunner,
@@ -821,7 +821,7 @@ where
             time_sec: None,
             attachments: None,
             phase: Some(2),
-            author_name: None,
+            author_name: Some(primary_agent.name.clone()),
         };
         let current_sub_calls = final_message.sub_calls.clone().unwrap_or_default();
         let attached = crate::infra::attach_saved_images_from_sub_calls(
@@ -1445,7 +1445,7 @@ where
             auto_think_budget_chars(
                 max_gen_tokens,
                 engine.reasoning_budget() as usize,
-                draft_count_for_contract(&contract.value_schema),
+                think_slot_count(&contract.value_schema),
             )
         })
     }).flatten();
@@ -1489,9 +1489,22 @@ where
             json_schema: None,
         }));
         if engine.supports_grammar() {
-            let slot_count = draft_count_for_contract(&contract.value_schema);
-            let anchored = slot_anchor_labels(&contract.value_schema, slot_count).is_some();
-            log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены), граница размышления: {:?} симв ({}), слотов отчёта: {} ({})", agent.id, signal_think_budget, if agent.think_budget_chars.is_some() { "frontmatter" } else { "авто-расчёт от бюджетов движка" }, slot_count, if anchored { "якорные слоты — метка Element N в каждом" } else { "свободные" }));
+            // Слоты отчёта = think-слоты + финальные строковые слоты без
+            // дум-тела (напр. floor0_type/floor1_type у валидатора): в логе
+            // числа разделяются, чтобы «слотов: 11» не читалось как «дум: 11».
+            let total_slots = draft_count_for_contract(&contract.value_schema);
+            let think_slots = think_slot_count(&contract.value_schema);
+            let anchored = slot_anchor_labels(&contract.value_schema, total_slots).is_some();
+            let slots_note = if total_slots > think_slots {
+                format!(
+                    "{} дум-слотов + {} финальных без дум-тела",
+                    think_slots,
+                    total_slots - think_slots
+                )
+            } else {
+                format!("{} дум-слотов", think_slots)
+            };
+            log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены), граница размышления: {:?} симв ({}), слотов отчёта: {} ({}, {}) ", agent.id, signal_think_budget, if agent.think_budget_chars.is_some() { "frontmatter" } else { "авто-расчёт от бюджетов движка" }, total_slots, slots_note, if anchored { "якорные think-слоты — метка Element N в каждом" } else { "свободные" }));
         } else {
             // set_grammar для такого движка — no-op (см. LlmEngine::supports_grammar).
             // Контракт сигнала держится на системном промпте + native tools, и все
@@ -1911,7 +1924,7 @@ where
             "<<< [{}] LLM за {:.1}с, ответ {} символов",
             agent.name,
             gen_start.elapsed().as_secs_f32(),
-            raw_response.len()
+            raw_response.chars().count()
         ));
 
         // ── Режим продолжения: парсим весь накопленный текст, а не последний кусок
@@ -2185,6 +2198,7 @@ where
                 &parse_target,
                 &response,
                 false,
+                is_continuation,
             )? {
                 DispatchCtl::Continue => continue,
                 DispatchCtl::Break => break,
@@ -2677,6 +2691,7 @@ where
                             &phase2_response,
                             &phase2_response,
                             true,
+                            false,
                         );
                     }
                 }
@@ -2716,8 +2731,21 @@ where
                 .join("\n");
             let extract_input = format!("{}\n{}", user_text, ctx.final_response);
             if let Some(value) = extract_signal_value_from_text(contract, &extract_input) {
+                // Тот же choke point, что у боевого emit_signal (dispatch.rs):
+                // pattern_type валидатора считает код, а не модель.
+                let mut owned_value = value.clone();
+                match crate::domain::signals::finalize_validator_signal(&mut owned_value) {
+                    Ok(pattern) => log_cb(format!(
+                        "🧮 pattern_type вычислен кодом: {} (SAFETY-сцепка этажей сходится)",
+                        pattern
+                    )),
+                    Err(reason) => log_cb(format!(
+                        "⚠️ pattern_type не выдан: {}. Сигнал сохранён с pattern_type=\"none\" (тип не определён).",
+                        reason
+                    )),
+                }
                 let mut map = serde_json::Map::new();
-                map.insert(contract.key.clone(), value.clone());
+                map.insert(contract.key.clone(), owned_value.clone());
                 let signal_msg = ChatMessage {
                     id: Some(format!("msg_{}", ctx.msg_counter)),
                     msg_type: "signal".to_string(),
@@ -2728,7 +2756,7 @@ where
                     time_sec: None,
                     attachments: None,
                     phase: Some(2),
-                    author_name: None,
+                    author_name: Some(agent.name.clone()),
                 };
                 // Сигнал отдаём через pending_signal — единый канал доставки в
                 // signal bus + messages[] (nodes.rs:518 для воркера, dispatch.rs:887

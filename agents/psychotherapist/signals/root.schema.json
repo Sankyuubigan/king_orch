@@ -17,9 +17,12 @@
           "e6": { "type": "boolean" },
           "e7": { "type": "boolean" },
           "e8": { "type": "boolean" },
-          "e9": { "type": "boolean" }
+          "e9": { "type": "boolean" },
+          "floor0_type": { "type": "string", "enum": ["1", "2", "3", "4", "5", "6", "7", "8", "9"] },
+          "floor1_type": { "type": "string", "enum": ["1", "2", "3", "4", "5", "6", "7", "8", "9"] },
+          "pattern_type": { "type": "string", "enum": ["none", "1", "2", "3", "4", "5", "6", "7", "8", "9"], "description": "Моделью НЕ выдаётся: код финализирует сигнал — цифра 1..9 при подтверждённом ядре e3 и сходящейся SAFETY-сцепке, иначе явное \"none\" (тип не определён → пайплайн добирает данные, лечения нет)." }
         },
-        "required": ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9"]
+        "required": ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "floor0_type", "floor1_type"]
       }
     },
     "validator_flat": {
@@ -92,13 +95,6 @@
       "value": {
         "type": "string",
         "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"]
-      }
-    },
-    "pattern_finder_by_elements": {
-      "key": "pattern_type",
-      "value": {
-        "type": "string",
-        "enum": ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
       }
     },
     "destructor_detector": {

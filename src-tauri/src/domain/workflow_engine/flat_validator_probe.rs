@@ -73,10 +73,12 @@ use super::WorkflowRunner;
 use crate::domain::agent_manager::load_agents;
 use crate::domain::orchestrator::prompt::{build_system_prompt, finalize_system_prompt};
 use crate::domain::orchestrator::RequestMedia;
+use crate::domain::parsers::extract_think_content;
 use crate::domain::signals::{
-    build_signal_envelope_grammar_with_think_budget, load_all_signal_contracts, per_draft_budget_chars,
+    assemble_slot_signal_value, auto_think_budget_chars, build_signal_envelope_grammar_with_think_budget,
+    finalize_validator_signal, load_all_signal_contracts, per_draft_budget_chars,
     slot_min_chars,
-    required_field_count, SignalContract,
+    required_field_count, think_slot_count, SignalContract,
 };
 use crate::infra::config::load_config_early;
 use crate::infra::{
@@ -637,6 +639,248 @@ fn flat_validator_probe() {
     }
 }
 
+/// Same-case LLM-проба (02.11.2026): боевой валидатор на жалобе реальной сессии
+/// 1793638300847, где старая грамматика (`[^<]` — тотальный запрет «<» в дум-теле)
+/// резала слоты на капе 332 символа посреди слов, верификаций не оставалось вовсе,
+/// а `pattern_type` выходил без вывода. Проба воспроизводит боевой вызов: агент
+/// `validator` (INCLUDE резолвятся при загрузке), контракт `validator_report`
+/// (модель классифицирует `floor0_type`/`floor1_type`, код вычисляет
+/// `pattern_type` — `finalize_validator_signal`),
+/// грамматика через `build_signal_envelope_grammar_with_think_budget` с авто-бюджетом
+/// из конфига пользователя, жалоба — текст пользователя. Первая реплика сессии:
+/// нода call_validator инжектит synthesizer/shadow_worker/grounder/data_collector,
+/// отчётов которых на первом ходе ещё нет, — «системный промпт + жалоба» ей и равен.
+///
+/// Запуск (по явной просьбе владельца): `TEST_MODEL_PATH=<gguf> test.bat
+/// real_validator_session_case_probe -- --ignored --nocapture`.
+#[test]
+#[ignore]
+fn real_validator_session_case_probe() {
+    let model_path =
+        std::env::var("TEST_MODEL_PATH").expect("Set TEST_MODEL_PATH to a GGUF file path");
+    let root = probe_cases::project_root();
+    let agents_dir = root.join("agents");
+    let team_dir = agents_dir.join("psychotherapist");
+
+    // Боевые бюджеты — из конфига пользователя (тот же источник, что у движка).
+    let app_config = load_config_early();
+    let max_gen_tokens = app_config.max_gen_tokens as usize;
+    let reasoning_budget = app_config.reasoning_budget as usize;
+
+    // Контракт и агент — как в бою (workflow-нода call_validator).
+    let contract = load_all_signal_contracts(&team_dir.join("signals"))
+        .get("validator")
+        .cloned()
+        .expect("контракт валидатора читается из signals/root.schema.json");
+    let agents = load_agents(&agents_dir).expect("агенты читаются");
+    let agent = agents
+        .iter()
+        .find(|agent| agent.id == "validator")
+        .cloned()
+        .expect("агент 'validator' найден в agents/");
+
+    // Грамматика — ровно боевой путь: авто-потолок от think_slot_count (9 дум-слотов).
+    let slots = think_slot_count(&contract.value_schema);
+    let think_budget = auto_think_budget_chars(max_gen_tokens, reasoning_budget, slots)
+        .expect("авто-бюджет think считается из конфига");
+    let grammar = build_signal_envelope_grammar_with_think_budget(&contract, Some(think_budget));
+
+    // Жалоба — точный текст msg_0 сессии 1793638300847 (UTF-8 копия в test/).
+    let complaint = std::fs::read_to_string(
+        probe_cases::results_dir()
+            .parent()
+            .expect("test/laya_probe")
+            .join("real_session_complaint.txt"),
+    )
+    .expect("жалоба сессии читается");
+    assert!(!complaint.trim().is_empty(), "жалоба пуста");
+
+    // Системный промпт — тот же путь сборки, что у боевой ноды и слоёв воронки.
+    let system_prompt = finalize_system_prompt(
+        &build_system_prompt(
+            &agent,
+            &[],
+            false,
+            &[],
+            max_gen_tokens,
+            true,
+            false,
+            false,
+            false,
+        ),
+        "validator",
+        "",
+    );
+
+    // disable_reasoning = true: signal-агент на локальном движке
+    // (resolve_disable_reasoning: uses_method_3_signal_contract && !engine_is_cloud).
+    let engine = LlmEngine::local(
+        crate::infra::llm::LlamaEngine::new(
+            &probe_cases::resolve_engine_dir(),
+            &model_path,
+            app_config.context_size,
+            false,
+            false,
+            0,
+            &|message| eprintln!("[engine] {}", message),
+            |_| {},
+        )
+        .map_err(|error| format!("движок не запустился: {}", error))
+        .expect("движок"),
+    );
+    let model_params = app_config
+        .model_params
+        .get(&model_path)
+        .cloned()
+        .unwrap_or_default();
+    let mut all_sub_calls: Vec<SubCall> = Vec::new();
+    let mut msg_counter: u32 = 0;
+    let runner = WorkflowRunner {
+        engine: &engine,
+        agents: &[],
+        workflows: &[],
+        log_cb: |message: String| eprintln!("[probe] {}", message),
+        status_cb: |_: String, _: u8| {},
+        subcall_cb: |_: &SubCall| {},
+        max_gen_tokens,
+        model_params: &model_params,
+        format_type: "Auto",
+        cancel_flag: Arc::new(AtomicBool::new(false)),
+        mcp_servers_dir: &root.join("src-tauri").join("mcp_servers"),
+        bins_dir: &root.join("src-tauri").join("bin"),
+        grammars_dir: &agents_dir,
+        agents_dir: &agents_dir,
+        all_sub_calls: &mut all_sub_calls,
+        msg_counter: &mut msg_counter,
+        stream_meta: Arc::new(std::sync::Mutex::new(Default::default())),
+        sampling_presets: &load_sampling_presets(&root),
+        prompt_log: None,
+        session_id: "real_validator_session_case".to_string(),
+        workspace_root: root.clone(),
+        write_root: root.join(".agents_workspace"),
+        request_media: Arc::new(RequestMedia::empty()),
+        image_artifacts: Arc::new(ImageArtifactRegistry::new()),
+        write_outside: WriteOutside::Deny,
+    };
+    let params = runner.resolve_llm_params(&Some("strict".to_string()), &None, None);
+    let (text, reasoning) = runner
+        .call_llm_direct(
+            &system_prompt,
+            &complaint,
+            &params,
+            "probe:real_validator",
+            Some(grammar.clone()),
+            true,
+        )
+        .expect("LLM отработала");
+
+    // Разбор: дум-тела слотов, конверт, собранный сигнал.
+    let bodies = extract_think_content(&text);
+    println!(
+        "\n########## same-case валидатор: think-бюджет {} симв. на {} дум-слотов, модель {} ##########",
+        think_budget, slots, model_path
+    );
+    println!("reasoning-канал: {} символов", reasoning.chars().count());
+    for (index, body) in bodies.iter().enumerate() {
+        println!("--- слот {}: {} симв. ---\n{}\n", index + 1, body.chars().count(), body);
+    }
+    println!("--- конверт ({} симв.) ---\n{}\n", text.chars().count(), text);
+
+    let assembled = assemble_slot_signal_value(&contract.value_schema, &text);
+    println!("--- собранный сигнал ---\n{:?}", assembled);
+    assert!(
+        assembled.is_some(),
+        "сигнал не собрался из слотов — конверт недостижим (деградация старого типа)"
+    );
+
+    let value = assembled.expect("checked above");
+    assert_eq!(
+        bodies.len(),
+        slots,
+        "дум-тел должно быть ровно {} (по одному на e-слот)",
+        slots
+    );
+    // Вердикты e1..e9 живут ТОЛЬКО в конверте (грамматика форсирует каждый
+    // булев после think-блока) — вердикт-токены в дум-теле не гейтятся: их
+    // туда велел писать только удалённый промптовый костыль «вердикт первой
+    // строкой». Гейт тел — количество, а не содержимое.
+    // Гейт механики 02.11.2026 (зафиксирован ДО прогона): модель
+    // классифицирует этажи (`floor0_type`/`floor1_type`), pattern_type
+    // вычисляет код. e3 == true — правильный ответ владельца по этому кейсу.
+    // Сцепка этажей — эпистемика модели, её качество проба НЕ гейтит (как и
+    // нестабильность типа 5/4/4/8 в фазе B — вопрос бюджета/модели, выбор
+    // владельца). Гейтится ДВУСТОРОННИЙ контракт механики финализации:
+    // сцепка сошлась (SAFETY[T0] == T-1; множества {1,4,7}/{2,5,8}/{3,6,9} в
+    // SSOT — элементы этажей, не типы, см. док SAFETY_TRANSITIONS) → тип выдан
+    // и вставлен; не сошлась → отказ с причиной и явное pattern_type="none"
+    // (поле тотально, презумпция дефицита: нет типа лучше неверного).
+    let e3 = value.get("e3").and_then(Value::as_bool);
+    assert_eq!(
+        e3,
+        Some(true),
+        "e3 на этом кейсе обязан быть true (ядро подтверждено владельцем): e3={:?}",
+        e3
+    );
+    let floor0 = value.get("floor0_type").and_then(Value::as_str);
+    let floor1 = value.get("floor1_type").and_then(Value::as_str);
+    assert!(
+        matches!(floor0, Some("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"))
+            && matches!(floor1, Some("1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9")),
+        "этажи не классифицированы: floor0={:?}, floor1={:?}",
+        floor0,
+        floor1
+    );
+    let verdicts: Vec<String> = (1..=slots)
+        .map(|n| {
+            let key = format!("e{}", n);
+            format!(
+                "e{}={}",
+                n,
+                value.get(&key).and_then(Value::as_bool).unwrap_or(false)
+            )
+        })
+        .collect();
+    let mut finalized = value.clone();
+    match finalize_validator_signal(&mut finalized) {
+        Ok(pattern) => {
+            assert!(
+                matches!(pattern.as_str(), "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"),
+                "pattern_type вне 1..9: {:?}",
+                pattern
+            );
+            assert_eq!(
+                finalized.get("pattern_type").and_then(Value::as_str),
+                Some(pattern.as_str()),
+                "pattern_type вставлен в сигнал финализацией"
+            );
+            println!(
+                "\n=== ИТОГ: {}, floor0 = {}, floor1 = {}, pattern_type = {} (вычислен кодом) ===",
+                verdicts.join(", "),
+                floor0.expect("checked above"),
+                floor1.expect("checked above"),
+                pattern
+            );
+        }
+        Err(reason) => {
+            // Механика обязана ОТБРАКОВАТЬ несцеплённую классификацию: тихий
+            // неверный тип недопустим. Поле тотально: явное "none" — штатный
+            // исход презумпции дефицита (маршрутизация графа ведёт его на добор).
+            assert_eq!(
+                finalized.get("pattern_type").and_then(Value::as_str),
+                Some("none"),
+                "при отказе финализации pattern_type обязан быть \"none\""
+            );
+            println!(
+                "\n=== ИТОГ: {}, floor0 = {}, floor1 = {} — механика отбраковала сцепку: {} (pattern_type=\"none\", добор данных) ===",
+                verdicts.join(", "),
+                floor0.expect("checked above"),
+                floor1.expect("checked above"),
+                reason
+            );
+        }
+    }
+}
+
 fn write_report(
     path: &Path,
     model_path: &str,
@@ -813,12 +1057,16 @@ fn prompt_draft_order_matches_contract() {
 
     /// Плоская форма и слои воронки обязаны читать один файл критериев. Иначе
     /// сравниваются не две архитектуры, а два разных определения элемента.
+    ///
+    /// `load_agents` резолвит `<<INCLUDE>>` ещё при чтении (agent_manager::
+    /// process_includes), поэтому сырого плейсхолдера в промпте уже нет —
+    /// проверяем маркер разрешённого файла из `process_includes`.
     #[test]
     fn flat_and_funnel_share_the_criteria_file() {
         let root = agents_dir();
         let team = root.join("psychotherapist");
         let agents = load_agents(&root).expect("агенты прочитаны");
-        let include = "<<INCLUDE: ../database/element_validation_rules.yaml>>";
+        let include = r#"<file path="../database/element_validation_rules.yaml">"#;
         for id in ["validator_flat", "validator_surface", "validator_facade", "validator_core"] {
             let agent = agents
                 .iter()
@@ -902,7 +1150,7 @@ fn prompt_draft_order_matches_contract() {
                 .find(|line| line.starts_with("draft-1 ::="))
                 .expect("якорный слот 1 обязан быть в грамматике движка");
             assert!(
-                draft_line.contains(&format!("[^<]{{{}}} [^<]{{0,{}}}", min, budget - min)),
+                draft_line.contains(&format!("think-char{{{}}} think-char{{0,{}}}", min, budget - min)),
                 "в грамматике нет минимума {} и ужатого потолка {} — граница не дошла до движка: {}",
                 min,
                 budget - min,
