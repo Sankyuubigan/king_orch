@@ -13,8 +13,8 @@ groups:
 - id: group_1
   title: Новая группа
   ui_pos:
-    y: 719
     x: -105
+    y: 719
 
 nodes:
 
@@ -50,16 +50,16 @@ nodes:
   - validator
   - decomposer
   ui_pos:
-    y: -347
-    x: 3183
+    x: 2517
+    y: -259
 
 - id: call_soma_translator
   type: llm_worker
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
-    x: -561
     y: 210
+    x: -561
   llm_params: strict
 
 - id: call_decomposer
@@ -81,23 +81,9 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 1345
     y: 152
+    x: 1345
   llm_params: strict
-
-- id: call_grounder
-  type: llm_worker
-  agent: grounder
-  task: Проанализируй отчёты коллег и жалобу пользователя. Выдай несколько конкретных, приземлённых бытовых сценариев возможных МЕНТАЛЬНЫХ причин проблемы (6-й элемент невроза, а не соматика). Если данных не хватает — задай пользователю уточняющие вопросы.
-  output_type: message
-  inject_response:
-  - validator
-  - decomposer
-  - data_collector
-  - soma_translator
-  ui_pos:
-    x: 2841
-    y: -451
 
 - id: check_triage_complexity
   type: condition_router
@@ -109,18 +95,18 @@ nodes:
   - field: triage_complexity
     equals: cluster
   ui_pos:
-    x: -42
     y: 601
+    x: -42
 
 - id: read_pattern_section
   type: custom_tool_call
   ui_pos:
-    y: 114
     x: 2224
+    y: 114
   tool_file: ../../_shared/tools/read_md_section.ts
   args:
-    file: psychotherapist/database/inner_contour_9_patterns.md
     heading: '## {{ signals.pattern_type }}'
+    file: psychotherapist/database/inner_contour_9_patterns.md
 
 - id: call_healer
   type: llm_worker
@@ -144,8 +130,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    y: 97
     x: 2704
+    y: 97
 
 - id: call_shadow_worker
   type: llm_worker
@@ -158,15 +144,15 @@ nodes:
   - grounder
   - soma_translator
   ui_pos:
-    x: 2259
     y: -456
+    x: 2259
 
 - id: note_1782221436115
   type: note
   input: пересчитываем данные с учетом новых данных от юзера
   ui_pos:
-    x: -1215
     y: 255
+    x: -1215
 
 - id: note_1782220193985
   type: note
@@ -245,21 +231,21 @@ nodes:
 
     В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
-    y: 748
     x: -1323
+    y: 748
 
 - id: call_request_helper
   type: llm_worker
   agent: request_helper
   output_type: message
   ui_pos:
-    x: -808
     y: 864
+    x: -808
 
 - id: check_elements1
   type: condition_router
   true_to: call_shadow_worker
-  false_to: check_elements2
+  false_to: call_collector
   conditions:
   - field: validator_report.e1
     equals: true
@@ -274,20 +260,6 @@ nodes:
     x: 1967
     y: -283
 
-- id: check_elements2
-  type: condition_router
-  true_to: call_grounder
-  false_to: call_collector
-  conditions:
-  - field: reports.soma_translator
-    equals: true
-  - field: validator_report.e6
-    equals: false
-  logic: all
-  ui_pos:
-    x: 2517
-    y: -302
-
 - id: call_synthesizer
   type: llm_worker
   group: group_1
@@ -296,8 +268,8 @@ nodes:
   inject_response:
   - decomposer
   ui_pos:
-    x: 526
     y: 382
+    x: 526
 
 edges:
 
