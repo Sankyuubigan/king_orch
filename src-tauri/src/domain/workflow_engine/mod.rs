@@ -43,9 +43,21 @@ pub mod step_output;
 //   `gold_rescore`     — пересчёт ВСЕХ систем на одном золоте без вызова модели
 //
 // Стенды ОТКЛОНЁННЫХ методов (Лайя 3 слоя, Лайя-консолидатор, старый плоский
-// Орнит, гейт фактов) вынесены в `test/laya_probe/experiments/`: их вердикты
-// зафиксированы в `docs/LAYA_MODEL.md` и `tasks/`, а сами прогоны больше не
-// нужны — `gold_rescore` пересчитывает их результаты прямо из артефактов.
+// Орнит) вынесены в `test/laya_probe/experiments/`: их вердикты зафиксированы
+// в `docs/LAYA_MODEL.md` и `tasks/`, а сами прогоны больше не нужны —
+// `gold_rescore` пересчитывает их результаты прямо из артефактов.
+//
+// ИСКЛЮЧЕНИЕ — стенд гейта фактов: его артефакт
+// `test/laya_probe/results/fact_extractor_mental_<model>.json` — живой вход
+// `mental_gate`, по которому стенды flat/layered берут маршрут кейса. 02.11.26
+// генератор был вынесен наружу вместе с отклонёнными стендами, артефакт
+// устарел (замер 09.10, 63 кейса), и оба стенда упали на новом кейсе
+// владельца ещё до вызова модели («кейса … нет в замере гейта»). Генератор
+// возвращён в крейс через `#[path]`, чтобы обновление артефакта оставалось
+// одной командой и новые кейсы больше не ломали стенды.
+#[cfg(test)]
+#[path = "../../../../test/laya_probe/experiments/fact_extractor_probe.rs"]
+mod fact_extractor_probe;
 #[cfg(test)]
 mod flat_validator_probe;
 #[cfg(test)]
@@ -62,6 +74,8 @@ mod probe_call;
 mod probe_cases;
 #[cfg(test)]
 mod probe_report;
+#[cfg(test)]
+mod quote_gate;
 #[cfg(test)]
 mod validator_layers;
 #[cfg(test)]

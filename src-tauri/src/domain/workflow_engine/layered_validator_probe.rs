@@ -312,6 +312,7 @@ impl FunnelHarness {
         let mut verdicts: BTreeMap<String, bool> = BTreeMap::new();
         let mut messages: Vec<ChatMessage> = Vec::new();
         let mut steps: Vec<Value> = Vec::new();
+        let mut quote_fails: Vec<Value> = Vec::new();
 
         let mental = self
             .gate
@@ -332,6 +333,7 @@ impl FunnelHarness {
                 steps,
                 route: Route::ShortCircuit,
                 mental_presence: mental,
+                quote_fails: Vec::new(),
             });
         }
 
@@ -401,6 +403,19 @@ impl FunnelHarness {
                         verdicts.insert(element.clone(), *flag);
                     }
                     step["signal"] = json!(signal_value);
+                    // Quote-first гейт: каждый вердикт слоя обязан иметь непустое
+                    // тело-доказательство; true — дополнительно дословную цитату
+                    // жалобы в теле своего слота.
+                    let bodies = super::quote_gate::slot_bodies(&text, &reasoning);
+                    let fails = super::quote_gate::check_grounding(&signal_value, &bodies, &case.text);
+                    if !fails.is_empty() {
+                        let detailed: Vec<Value> = fails
+                            .iter()
+                            .map(|fail| fail.to_json(&layer.agent))
+                            .collect();
+                        step["quote_gate_fail"] = json!(detailed);
+                        quote_fails.extend(detailed);
+                    }
                     // Сигнальное сообщение — ровно то, что кладёт в `messages[]`
                     // оркестратор (`dispatch.rs::handle_emit_signal`).
                     let content = serde_json::json!({ layer.contract.key.clone(): signal_value });
@@ -438,6 +453,7 @@ impl FunnelHarness {
             steps,
             route: Route::Funnel,
             mental_presence: mental,
+            quote_fails,
         })
     }
 
@@ -504,6 +520,8 @@ struct FunnelRun {
     route: Route,
     /// Значение факта `mental_presence`, которым выбран маршрут.
     mental_presence: String,
+    /// Незаземлённые true-вердикты (quote-first гейт, `quote_gate.rs`).
+    quote_fails: Vec<Value>,
 }
 
 /// Всё, что нужно слою для одного вызова: копия данных слоя, снятая до цикла
@@ -577,6 +595,10 @@ fn layered_validator_probe() {
                 row["unparsed_layers"] = json!(0);
                 row["route"] = json!(run.route.as_str());
                 row["mental_presence"] = json!(run.mental_presence);
+                row["quote_gate_fail"] = json!(run.quote_fails.len());
+                if !run.quote_fails.is_empty() {
+                    row["quote_gate_detail"] = json!(run.quote_fails);
+                }
                 match super::verdict_contract::score_fields(
                     case.expected.as_ref(),
                     &run.verdicts,
@@ -1232,17 +1254,33 @@ mod tests {
                 ("O4_mixed_specificity_floor", 0.3284),
                 ("O5_metaphor_accuracy_vs_baseline", 0.4444),
                 ("R1_overall_no_regression", 0.7847),
+                ("Q1_ungrounded_verdicts", 0.0),
             ],
-            "пороги приёмки разошлись с tasks/11.10.26 …md §9"
+            "пороги приёмки разошлись с tasks/11.10.26 …md §9 и tasks/01.11.26 quote-first"
         );
         // Все пороги — минимумы: «не хуже базовой Система-1 и не хуже своего
-        // прошлого прогона». Обратного направления в объявлении быть не может.
+        // прошлого прогона». Единственное исключение — Q1: структурный страж
+        // заземления (пустое тело-доказательство или незаземлённый true — дефект
+        // генерации, а не «хуже базы»), поэтому направление «не больше 0»
+        // обосновано в tasks/01.11.26.
+        let at_most = |gate: &super::super::probe_acceptance::Gate| {
+            gate.bound == super::super::probe_acceptance::Bound::AtMost
+        };
+        let q1 = acceptance
+            .gates
+            .iter()
+            .find(|gate| gate.id == "Q1_ungrounded_verdicts")
+            .expect("гейт заземления объявлен в книге");
+        assert!(
+            at_most(q1) && q1.threshold == 0.0 && q1.metric == "quote_gate_fail",
+            "Q1 обязан быть at_most 0 по quote_gate_fail"
+        );
         assert!(
             acceptance
                 .gates
                 .iter()
-                .all(|gate| gate.bound == super::super::probe_acceptance::Bound::AtLeast),
-            "в приёмке воронки появился гейт «не больше» — его надо обосновать"
+                .all(|gate| gate.bound == super::super::probe_acceptance::Bound::AtLeast || gate.id == "Q1_ungrounded_verdicts"),
+            "в приёмке воронки появился ещё один гейт «не больше» — его надо обосновать"
         );
         // Гейт по метафорам обязан требовать измерения: иначе «потеряно 0» и
         // «метафоры не мерили» дают одно и то же число.

@@ -44,6 +44,7 @@ pub fn summarize(rows: &[Value]) -> Value {
     let (mut total_fields, mut total_correct) = (0usize, 0usize);
     let mut unparsed_total = 0usize;
     let mut metaphors_lost = 0usize;
+    let mut total_quote_fails = 0usize;
     for dataset in probe_cases::REPORT_ORDER {
         let subset: Vec<&Value> = rows
             .iter()
@@ -57,8 +58,15 @@ pub fn summarize(rows: &[Value]) -> Value {
         let (mut tp, mut tn, mut fp, mut fn_) = (0usize, 0usize, 0usize, 0usize);
         let mut errors: Vec<Value> = Vec::new();
         let mut lost: Vec<Value> = Vec::new();
+        let mut quote_gate_fails = 0usize;
         for row in &subset {
             let id = row.get("id").cloned().unwrap_or(Value::Null);
+            // Незаземлённые true-вердикты (quote-first гейт). Отсутствие поля
+            // (старые строки, error-кейсы) — 0: поле считает только гейт.
+            quote_gate_fails += row
+                .get("quote_gate_fail")
+                .and_then(Value::as_u64)
+                .unwrap_or(0) as usize;
             if let Some(error) = row.get("error").and_then(Value::as_str) {
                 errors.push(Value::Object(vec![
                     ("id".to_string(), id.clone()),
@@ -87,6 +95,9 @@ pub fn summarize(rows: &[Value]) -> Value {
             }
         }
         unparsed_total += errors.len();
+        // Незаземлённые true-вердикты считаются по всем наборам, включая метафоры:
+        // это абсолютный счётчик дефектов, а не точность.
+        total_quote_fails += quote_gate_fails;
         if *dataset == "body_metaphor" {
             metaphors_lost = lost.len();
         } else {
@@ -95,6 +106,7 @@ pub fn summarize(rows: &[Value]) -> Value {
         }
         let mut entry = Map::new();
         entry.insert("cases".to_string(), Value::from(subset.len()));
+        entry.insert("quote_gate_fail".to_string(), Value::from(quote_gate_fails));
         entry.insert("fields".to_string(), Value::from(fields));
         entry.insert("correct".to_string(), Value::from(correct));
         entry.insert("tp".to_string(), Value::from(tp));
@@ -130,6 +142,7 @@ pub fn summarize(rows: &[Value]) -> Value {
     overall.insert("correct".to_string(), Value::from(total_correct));
     overall.insert("accuracy".to_string(), ratio(total_correct, total_fields));
     overall.insert("unparsed_cases".to_string(), Value::from(unparsed_total));
+    overall.insert("quote_gate_fail".to_string(), Value::from(total_quote_fails));
     overall.insert(
         "body_metaphor_lost".to_string(),
         Value::from(metaphors_lost),
@@ -302,6 +315,36 @@ mod tests {
         let flat = routing_stats(&rows, "flat");
         assert_eq!(flat["by_dataset"]["somatic_only"]["flat"], json!(1));
         assert_eq!(flat["short_circuited_cases"], json!(1));
+    }
+
+    /// Незаземлённые true-вердикты агрегируются по наборам и в overall; строки
+    /// без поля (старые отчёты, error-кейсы) считаются нулём, а не пропуском.
+    #[test]
+    fn quote_gate_fails_aggregate_into_summary() {
+        let rows = vec![
+            json!({
+                "dataset": "owner_verified", "id": "v1",
+                "correct": 9, "fields": 9, "tp": 2, "tn": 7, "fp": 0, "fn": 0,
+                "quote_gate_fail": 3, "error": Value::Null,
+            }),
+            json!({
+                "dataset": "owner_verified", "id": "v2",
+                "correct": 7, "fields": 9, "tp": 0, "tn": 7, "fp": 2, "fn": 0,
+                "error": Value::Null,
+            }),
+        ];
+        let summary = summarize(&rows);
+        assert_eq!(summary["owner_verified"]["quote_gate_fail"].as_u64(), Some(3));
+        assert_eq!(summary["overall"]["quote_gate_fail"].as_u64(), Some(3));
+        // metric_of читает счётчик для книги приёмки (гейт Q1, at_most 0).
+        assert_eq!(metric_of(&summary, "overall", "quote_gate_fail"), Some(3.0));
+        // Метафоры тоже входят в overall: счётчик дефектов, не точность.
+        let mut with_metaphor = rows;
+        with_metaphor.push(json!({
+            "dataset": "body_metaphor", "id": "m1", "quote_gate_fail": 2,
+        }));
+        let summary = summarize(&with_metaphor);
+        assert_eq!(summary["overall"]["quote_gate_fail"].as_u64(), Some(5));
     }
 
     /// Кейс без поля `route` считается сработавшим, а не шорт-циркутом:

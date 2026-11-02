@@ -354,6 +354,7 @@ impl FlatHarness {
                 step: Value::Null,
                 route: "short_circuit",
                 mental_presence: mental,
+                quote_fails: Vec::new(),
             });
         }
 
@@ -378,11 +379,21 @@ impl FlatHarness {
         match read_verdicts(&runtime.contract, &text, &reasoning) {
             Ok(signal_value) => {
                 step["signal"] = json!(signal_value);
+                // Quote-first гейт: каждый вердикт обязан иметь непустое
+                // тело-доказательство; true — дополнительно дословную цитату
+                // жалобы в теле своего слота (`quote_gate.rs`).
+                let bodies = super::quote_gate::slot_bodies(&text, &reasoning);
+                let fails = super::quote_gate::check_grounding(&signal_value, &bodies, &case.text);
+                let quote_fails: Vec<Value> = fails.iter().map(|fail| fail.to_json(FLAT_AGENT)).collect();
+                if !quote_fails.is_empty() {
+                    step["quote_gate_fail"] = json!(quote_fails);
+                }
                 Ok(FlatRun {
                     verdicts: signal_value,
                     step,
                     route: "flat",
                     mental_presence: mental,
+                    quote_fails,
                 })
             }
             Err(error) => {
@@ -450,6 +461,8 @@ struct FlatRun {
     step: Value,
     route: &'static str,
     mental_presence: String,
+    /// Незаземлённые true-вердикты (quote-first гейт, `quote_gate.rs`).
+    quote_fails: Vec<Value>,
 }
 
 #[test]
@@ -542,6 +555,10 @@ fn flat_validator_probe() {
                     row["steps"] = json!([run.step]);                    row["unparsed_calls"] = json!(0);
                     row["route"] = json!(run.route);
                     row["mental_presence"] = json!(run.mental_presence);
+                    row["quote_gate_fail"] = json!(run.quote_fails.len());
+                    if !run.quote_fails.is_empty() {
+                        row["quote_gate_detail"] = json!(run.quote_fails);
+                    }
                     match score_fields(case.expected.as_ref(), &run.verdicts) {
                         Some((correct, fields, tp, tn, fp, fn_)) => {
                             row["verdicts"] = json!(run.verdicts);

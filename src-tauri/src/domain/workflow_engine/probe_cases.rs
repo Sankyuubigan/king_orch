@@ -17,6 +17,8 @@ pub const CASE_SET_FILES: &[(&str, &str)] = &[
     ("somatic_only", "cases_somatic.yaml"),
     ("neurosis_base", "cases.yaml"),
     ("mixed_body_mental", "cases_mixed.yaml"),
+    // Владелец разметил вручную 31.10.2026 (см. хедер файла) — приёмочный кейс.
+    ("owner_verified", "cases_verified_2026-10-31.yaml"),
 ];
 
 /// Предложения-метафоры: разметка 9 элементов обязательна (см. `load_metaphor_cases`).
@@ -27,6 +29,7 @@ pub const REPORT_ORDER: &[&str] = &[
     "somatic_only",
     "neurosis_base",
     "mixed_body_mental",
+    "owner_verified",
     "body_metaphor",
 ];
 
@@ -177,7 +180,7 @@ fn read_expected(
     Ok(expected)
 }
 
-/// Все 63 кейса в порядке отчёта.
+/// Все кейсы в порядке отчёта (знаменатель = сумма кейсов всех наборов + метафоры).
 pub fn load_all_cases() -> Result<Vec<ProbeCase>, String> {
     let mut cases = load_marked_cases()?;
     cases.extend(load_metaphor_cases()?);
