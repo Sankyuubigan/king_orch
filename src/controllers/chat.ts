@@ -339,13 +339,18 @@ export class ChatController {
       if (!this.state.rtThoughtUid) {
         this.state.rtThoughtUid = this.state.nextUid();
         this.state.rtThoughtAuthor = label;
+        // Таргетинг строки — только по уникальному data-msg-uid (как у стрима
+        // сообщений). Фиксированный id ("rt-thought-stream") при нескольких
+        // агентах графа дублировался, querySelector брал ПЕРВУЮ строку в DOM
+        // (психосоматолог — первый думающий агент), и чужие мысли рисовались
+        // в его пузыре (кейс валидатора 03.11.2026).
         const row = createThoughtRow({
           kind: "thought",
           author: label,
           summary: this.state.rtThoughtBuffer,
           detail: this.state.rtThoughtBuffer,
+          uid: this.state.rtThoughtUid,
         });
-        row.id = "rt-thought-stream";
         this.el.chatHistory.appendChild(row);
         this.scrollToBottomIfNearEnd(this.el.chatHistory);
       } else {
@@ -420,13 +425,15 @@ export class ChatController {
     }
 
     // Печатаем "Мысли" агента (формат <|channel>thought>...) отдельной строкой
-    // перед пузырём стримящегося ответа.
+    // перед пузырём стримящегося ответа. Уникальный uid на сообщение стрима:
+    // фиксированный id дублировался между агентами и обновления уходили в
+    // первую строку DOM (кейс психосоматолога 03.11.2026).
     const channelThought = extractChannelThought(visibleSource);
     if (channelThought && msgEl) {
-      let row = this.el.chatHistory.querySelector('#rt-channel-thought');
+      const channelUid = `channel-thought-${this.state.rtStreamUid}`;
+      let row = this.el.chatHistory.querySelector(`[data-msg-uid="${channelUid}"]`);
       if (!row) {
-        row = createThoughtRow({ kind: "thought", author: "Агент", summary: channelThought, detail: channelThought });
-        row.id = "rt-channel-thought";
+        row = createThoughtRow({ kind: "thought", author: "Агент", summary: channelThought, detail: channelThought, uid: channelUid });
         this.el.chatHistory.insertBefore(row, msgEl);
       } else {
         updateThoughtRowSummary(row as HTMLDivElement, channelThought);
@@ -438,7 +445,9 @@ export class ChatController {
   /** Обновление строки стримящейся мысли по актуальному буферу (троттлинг). */
   private renderStreamThoughtDom() {
     if (!this.state.rtThoughtUid) return;
-    const row = this.el.chatHistory.querySelector('#rt-thought-stream');
+    // Только по уникальному uid своей строки: фиксированный id при нескольких
+    // агентах дублировался, и обновления рисовались в строке ПЕРВОГО агента.
+    const row = this.el.chatHistory.querySelector(`[data-msg-uid="${this.state.rtThoughtUid}"]`);
     if (row) updateThoughtRowSummary(row as HTMLDivElement, this.state.rtThoughtBuffer);
     this.scrollToBottomIfNearEnd(this.el.chatHistory);
   }
