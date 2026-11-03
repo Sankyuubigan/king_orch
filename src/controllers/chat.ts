@@ -1267,7 +1267,9 @@ export class ChatController {
   private refreshSendAvailability() {
     const readiness = this.sendReadiness();
     this.el.btnSend.disabled = !readiness.ready;
-    this.el.btnSend.title = readiness.reason;
+    // Неготовность — тултип объясняет причину; готовность — подсказка хоткеев
+    // (отправить / добавить в чат без запуска LLM).
+    this.el.btnSend.title = readiness.reason || "Отправить (Ctrl+Enter)\nДобавить (Alt+Enter)";
   }
 
   private setSessionRestoreState(restoring: boolean) {
@@ -1448,8 +1450,9 @@ export class ChatController {
 
   /**
    * Фиксирует сообщение пользователя: DOM, очистка поля ввода, создание ID сессии
-   * и запись в историю. Вызывается ТОЛЬКО внутри `try` в handleSend — отказ
-   * персистентности не должен пройти мимо `finally` и оставить UI в «Обработке».
+   * и запись в историю. Вызывается внутри `try` в handleSend и из handleAppend
+   * («добавить в чат» без запуска LLM) — отказ персистентности не должен пройти
+   * мимо обработки ошибки и оставить рассинхрон DOM/истории.
    */
   private commitUserMessage(text: string): Attachment[] {
     const userUid = this.state.nextUid(); this.state.uidList.push(userUid);
@@ -1603,6 +1606,43 @@ export class ChatController {
       this.setProcessingState(false);
       this.triggerTokenCount();
     }
+  }
+
+  /**
+   * «Добавить в чат» (Alt+Enter): фиксирует сообщение пользователя в истории
+   * сессии БЕЗ вызова chat_request — LLM не запускается, вкладка не уходит в
+   * «Обработку». Дописанные сообщения едут в history следующего реального хода:
+   * run_chat берёт текст хода из параметра message, а вся история инжектится
+   * агентам автоматически.
+   *
+   * Гард isProcessing обязателен: ответ бэкенда заменяет history целиком
+   * (handleSend), добавленное во время обработки сообщение было бы затёрто.
+   * Готовность модели/агента не требуется — LLM здесь не участвует.
+   */
+  private async handleAppend() {
+    const text = this.el.chatInput.value.trim();
+    if (!text && this.attachments.length === 0) return;
+    if (this.state.isProcessing || this.state.isRestoringSession) return;
+    try {
+      this.commitUserMessage(text);
+      bus.emit("session:changed");
+      await this.persistSession("");
+      this.triggerTokenCount();
+    } catch (error) {
+      logFront(`[chat] не удалось дописать сообщение в чат: ${error}`);
+      void trackError("chat.append", error);
+      showToast(`Ошибка: ${error}`, "error");
+    }
+  }
+
+  /// Подпись зелёной кнопки отражает действие при зажатом Alt (keydown/keyup
+  /// на chatInput): «Отправить / Ctrl+Enter» ↔ «Добавить в чат / Alt+Enter».
+  /// Обе подписи всегда в DOM (.btn-send-labels, неактивная скрыта visibility) —
+  /// ширина кнопки постоянна, переключение не двигает layout.
+  private setAppendButtonMode(on: boolean) {
+    if (!this.el.btnSendLabelSend || !this.el.btnSendLabelAppend) return;
+    this.el.btnSendLabelSend.classList.toggle("is-hidden", on);
+    this.el.btnSendLabelAppend.classList.toggle("is-hidden", !on);
   }
 
   private triggerDraftSave() {
@@ -1797,8 +1837,15 @@ export class ChatController {
   }
 
   private bindDomEvents() {
-    this.el.btnSend?.addEventListener("click", () => this.handleSend());
-    this.el.chatInput?.addEventListener("keydown", (e) => { if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); this.handleSend(); } });
+    this.el.btnSend?.addEventListener("click", (e) => { if (e.altKey) { void this.handleAppend(); return; } this.handleSend(); });
+    this.el.chatInput?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && e.ctrlKey) { e.preventDefault(); this.handleSend(); }
+      // Alt+Enter: добавить в чат без запуска LLM (preventDefault — без переноса строки).
+      else if (e.key === "Enter" && e.altKey) { e.preventDefault(); void this.handleAppend(); }
+      // Зажатый Alt — подпись кнопки показывает действие «Добавить в чат».
+      else if (e.key === "Alt") this.setAppendButtonMode(true);
+    });
+    this.el.chatInput?.addEventListener("keyup", (e) => { if (e.key === "Alt") this.setAppendButtonMode(false); });
     this.el.btnStop?.addEventListener("click", async () => { if (this.el.btnStop.disabled) return; this.el.btnStop.disabled = true; this.el.btnStop.innerText = "Стоп..."; this.appendMessage('system', 'Остановка...'); // Стоп только своего хода: бэкенд отменяет ход ЭТОЙ сессии (в т.ч. выводит из очереди движка мгновенно), соседние вкладки не трогает.
       await invoke("stop_processing", { sessionId: this.state.sessionId ?? "" }); this.el.btnStop.innerText = "⏹ Стоп"; });
     this.el.btnBackChat?.addEventListener("click", () => { this.el.viewSubchat.classList.remove('active'); this.el.viewChat.classList.add('active'); });
@@ -1808,7 +1855,7 @@ export class ChatController {
         this.triggerDraftSave();
         this.triggerTokenCount();
     });
-    this.el.chatInput.addEventListener("blur", () => { if (this.state.hasSession()) { clearTimeout(this.state.draftTimeout); this.persistSession(); } });
+    this.el.chatInput.addEventListener("blur", () => { this.setAppendButtonMode(false); if (this.state.hasSession()) { clearTimeout(this.state.draftTimeout); this.persistSession(); } });
     this.el.btnAttach?.addEventListener("click", async () => {
       if (this.el.btnAttach.disabled) return;
       try {

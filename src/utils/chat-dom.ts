@@ -28,6 +28,8 @@ export interface ChatPageElements extends SharedChatControls {
   chatHistory: HTMLDivElement;
   chatInput: HTMLTextAreaElement;
   btnSend: HTMLButtonElement;
+  btnSendLabelSend: HTMLSpanElement;
+  btnSendLabelAppend: HTMLSpanElement;
   btnStop: HTMLButtonElement;
   agentSelect: HTMLSelectElement;
   btnAgentSettings: HTMLButtonElement;
@@ -101,7 +103,7 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
   const inputArea = py("div", "chat-input-area group-box");
   const chatInput = document.createElement("textarea");
   chatInput.className = "chat-input";
-  chatInput.placeholder = "Спросите что угодно (Enter — перенос строки, Ctrl+Enter — отправить)...";
+  chatInput.placeholder = "Спросите что угодно (Enter — перенос строки, Ctrl+Enter — отправить, Alt+Enter — добавить в чат)...";
   inputArea.appendChild(chatInput);
 
   const filePreview = py("div", "file-preview-row") as HTMLDivElement;
@@ -179,7 +181,17 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
   btnSend.style.flexDirection = "column";
   btnSend.style.lineHeight = "1.2";
   btnSend.style.whiteSpace = "normal";
-  btnSend.innerHTML = "Отправить<br><small>Ctrl+Enter</small>";
+  btnSend.title = "Отправить (Ctrl+Enter)\nДобавить (Alt+Enter)";
+  // Обе подписи живут в одной grid-ячейке (.btn-send-labels в styles.css):
+  // ширина кнопки всегда по самой длинной («Добавить в чат»), переключение
+  // Alt-режима меняет только видимость — layout не двигается.
+  const btnSendLabels = py("div", "btn-send-labels");
+  const btnSendLabelSend = py("span", "btn-send-label-send");
+  btnSendLabelSend.innerHTML = "Отправить<br><small>Ctrl+Enter</small>";
+  const btnSendLabelAppend = py("span", "btn-send-label-append is-hidden");
+  btnSendLabelAppend.innerHTML = "Добавить в чат<br><small>Alt+Enter</small>";
+  btnSendLabels.append(btnSendLabelSend, btnSendLabelAppend);
+  btnSend.appendChild(btnSendLabels);
   right.appendChild(btnStop);
   right.appendChild(btnSend);
 
@@ -213,6 +225,8 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
     chatHistory,
     chatInput,
     btnSend,
+    btnSendLabelSend,
+    btnSendLabelAppend,
     btnStop,
     agentSelect,
     btnAgentSettings,

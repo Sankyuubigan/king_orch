@@ -609,6 +609,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-secondary:hover { background-color: var(--border); }
 .btn-primary { background-color: var(--primary); color: white; }
 .btn-primary:hover:not(:disabled) { background-color: var(--primary-hover); }
+/* Кнопка отправки чата: обе подписи (Отправить / Добавить в чат) лежат в одной
+   grid-ячейке — ширина кнопки всегда по самой длинной, переключение Alt-режима
+   меняет только видимость и не двигает layout. */
+.btn-send-labels { display: grid; }
+.btn-send-labels > span { grid-area: 1 / 1; }
+.btn-send-labels > .is-hidden { visibility: hidden; }
 .btn-danger { background-color: var(--danger); color: white; }
 .btn-danger:hover:not(:disabled) { background-color: var(--danger-hover); }
 
