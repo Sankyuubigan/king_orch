@@ -198,7 +198,9 @@ fn run_recorder_stop(args: &Value, ctx: &ToolCtx) -> Result<String, ToolError> {
             summary.ticks,
             summary.path.display()
         );
-        return Ok(format_stop_summary(&summary, "=== РЕКОРДЕР ОСТАНОВЛЕН ==="));
+        let mut text = format_stop_summary(&summary, "=== РЕКОРДЕР ОСТАНОВЛЕН ===");
+        text.push_str(&format!("\n{DIAG_SAVED_MARKER}{}]", summary.path.display()));
+        return Ok(text);
     }
 
     // Режим B: реестр пуст — ищем лог прошлой жизни (зависание + перезапуск).
@@ -222,7 +224,9 @@ fn run_recorder_stop(args: &Value, ctx: &ToolCtx) -> Result<String, ToolError> {
                     lines.push(format!("  {line}"));
                 }
             }
-            Ok(lines.join("\n"))
+            let mut text = lines.join("\n");
+            text.push_str(&format!("\n{DIAG_SAVED_MARKER}{}]", path.display()));
+            Ok(text)
         }
         None => {
             log::warn!("[DIAG] recorder stop без рекордера и без логов (agent {})", ctx.agent_id);
@@ -250,13 +254,110 @@ pub fn execute_diag_tool(
     Some(outcome)
 }
 
+// ─────────────────── Пост-проход attach (файл лога в чат) ───────────────────
+
+/// Маркер в tool-результате diag_recorder_stop: путь к полному логу.
+/// По образцу [EXCEL_SAVED id=N] (excel/mod.rs): пост-проход оркестратора
+/// сканирует sub_calls и цепляет файл к сообщению агента карточкой
+/// (📂 «Показать в проводнике» — src/ui/file-attachment.ts).
+const DIAG_SAVED_MARKER: &str = "[DIAG_SAVED path=";
+
+/// Извлечь путь из маркера `[DIAG_SAVED path=...]`.
+pub fn extract_saved_diag_path(tool_output: &str) -> Option<String> {
+    let start = tool_output.find(DIAG_SAVED_MARKER)? + DIAG_SAVED_MARKER.len();
+    let end = tool_output[start..].find(']')?;
+    let path = &tool_output[start..start + end];
+    if path.is_empty() { None } else { Some(path.to_string()) }
+}
+
+/// Гейт вложения: путь обязан лежать внутри `<exe>/diag_outputs/` — чужие
+/// файлы диска карточкой не прицепляются (принцип excel-гейта источников:
+/// diag пишет только в собственный каталог сессии).
+fn is_inside_diag_outputs(path: &str) -> bool {
+    if !Path::new(path).is_absolute() {
+        return false;
+    }
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let root = exe_dir.join("diag_outputs");
+    // Файла или корня нет → вложения не будет (файл проверяется ниже);
+    // canonicalize на Windows даёт единый вид \\?\C:\... для обеих сторон.
+    match (std::fs::canonicalize(path), std::fs::canonicalize(&root)) {
+        (Ok(p), Ok(r)) => p.starts_with(&r),
+        _ => false,
+    }
+}
+
+/// Путь → ChatAttachment (только путь, без base64 — по образцу
+/// `excel_path_to_attachment`).
+fn diag_path_to_attachment(path: &str) -> Result<crate::infra::ChatAttachment, String> {
+    let meta = std::fs::metadata(path).map_err(|e| format!("файл лога не читается: {e}"))?;
+    if meta.len() == 0 {
+        return Err("файл лога пустой".to_string());
+    }
+    let file_name = Path::new(path)
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| "diag_recorder.log".to_string());
+    Ok(crate::infra::ChatAttachment {
+        file_name,
+        mime_type: "text/plain".to_string(),
+        data_base64: String::new(),
+        file_path: Some(path.to_string()),
+        is_dir: Some(false),
+    })
+}
+
+/// Пост-проход run_chat: маркер `[DIAG_SAVED path=...]` в результатах
+/// diag-тулов → цепляет файл лога к финальному сообщению агента (карточка
+/// с кнопкой проводника). Возвращает число прицепленных файлов; отказ
+/// одного файла не валит остальные (§2.2: каждый отказ — в лог).
+pub fn attach_saved_diag_from_sub_calls(
+    message: &mut crate::infra::ChatMessage,
+    sub_calls: &[crate::infra::SubCall],
+) -> Result<usize, String> {
+    let mut found: Vec<String> = Vec::new();
+    for sub_call in sub_calls {
+        for tool_call in &sub_call.tool_calls {
+            if !is_diag_tool(&tool_call.tool_name) {
+                continue;
+            }
+            if let Some(path) = extract_saved_diag_path(&tool_call.result) {
+                if !found.contains(&path) {
+                    found.push(path);
+                }
+            }
+        }
+    }
+    let mut attached = 0;
+    for path in found {
+        if !is_inside_diag_outputs(&path) {
+            log::error!("[DIAG] путь {} вне diag_outputs — вложение отклонено", path);
+            continue;
+        }
+        match diag_path_to_attachment(&path) {
+            Ok(attachment) => {
+                match &mut message.attachments {
+                    Some(attachments) => attachments.push(attachment),
+                    None => message.attachments = Some(vec![attachment]),
+                }
+                attached += 1;
+            }
+            Err(error) => log::error!("[DIAG] лог {} не приложен: {}", path, error),
+        }
+    }
+    Ok(attached)
+}
+
 // ─────────────────── Tool-обёртки (схемы для промптов) ───────────────────
 
 pub struct DiagSnapshot;
 impl Tool for DiagSnapshot {
     fn name(&self) -> &str { "diag_snapshot" }
     fn description(&self) -> &str {
-        "Полный аудит системы ПРЯМО СЕЙЧАС + криминалистика прошлых сбоев: ОС/аптайм, ЦП (с замечанием по Intel 13/14), ОЗУ и файл подкачки, видеокарта/драйверы, изоляция ядра (HVCI), TDR-тайминги, живые дампы ядра и дампы BSOD за 5 дней, журнал Windows за 72 ч (WHEA/Kernel-Power/недостаток памяти/видеодрайвер/диски), краши приложений, топ-10 процессов по CPU/RAM, свежие логи «чёрного ящика». Статусы секций: OK / НАЙДЕНО / НЕ УДАЛОСЬ (с причиной) — секции с «НЕ УДАЛОСЬ» нельзя использовать для выводов."
+        "Полный аудит системы ПРЯМО СЕЙЧАС + криминалистика прошлых сбоев: ОС/аптайм, ЦП (с замечанием по Intel 13/14), ОЗУ и файл подкачки, видеокарта/драйверы, сторонние Ring 0 драйверы, изоляция ядра (HVCI), TDR-тайминги, живые дампы ядра и дампы BSOD за 5 дней, журнал Windows за 72 ч (WHEA/Kernel-Power/недостаток памяти/видеодрайвер/диски), краши приложений, топ-10 процессов по CPU/RAM, свежие логи «чёрного ящика». Статусы секций: OK / НАЙДЕНО / НЕ УДАЛОСЬ (с причиной) — секции с «НЕ УДАЛОСЬ» нельзя использовать для выводов."
     }
     fn parameters(&self) -> Value {
         serde_json::json!({ "type": "object", "properties": {}, "required": [] })
@@ -477,5 +578,122 @@ mod tests {
         assert!(dir.to_string_lossy().contains("diag_outputs\\sess-1"), "{dir:?}");
         let other = diag_session_outputs_dir("sess-2");
         assert_ne!(dir, other, "сессии не пересекаются");
+    }
+
+    #[test]
+    fn diag_marker_extraction_and_attach_gate() {
+        // Маркер извлекается из результата тула; чужие тулы игнорируются;
+        // гейт: только файлы внутри <exe>/diag_outputs/ цепляются карточкой.
+        let session_dir = diag_session_outputs_dir("attach_gate_test");
+        let _ = std::fs::remove_dir_all(&session_dir);
+        std::fs::create_dir_all(&session_dir).unwrap();
+        let log = session_dir.join("diag_recorder_1.log");
+        std::fs::write(&log, "[12:00:00.000] ЦП 10% | ОЗУ ...\n").unwrap();
+        let path_str = log.to_string_lossy().to_string();
+
+        let mut message = crate::infra::ChatMessage {
+            id: Some("msg_1".into()),
+            msg_type: "message".into(),
+            content: "готово".into(),
+            sub_calls: None,
+            author: None,
+            model: None,
+            time_sec: None,
+            attachments: None,
+            phase: None,
+            author_name: None,
+        };
+        let sub_calls = vec![crate::infra::SubCall {
+            agent_name: "diag_specialist".to_string(),
+            prompt: String::new(),
+            response: String::new(),
+            time_sec: 0.0,
+            tool_calls: vec![crate::infra::ToolCallInfo {
+                tool_name: "diag_recorder_stop".to_string(),
+                arguments: "{}".to_string(),
+                result: format!("=== РЕКОРДЕР ОСТАНОВЛЕН ===\n{DIAG_SAVED_MARKER}{path_str}]"),
+            }],
+            thinking: None,
+        }];
+        let attached = attach_saved_diag_from_sub_calls(&mut message, &sub_calls).unwrap();
+        assert_eq!(attached, 1, "файл внутри diag_outputs прицеплен");
+        let attachment = &message.attachments.as_ref().unwrap()[0];
+        assert_eq!(attachment.file_name, "diag_recorder_1.log");
+        assert_eq!(attachment.file_path.as_deref(), Some(path_str.as_str()));
+        assert!(attachment.data_base64.is_empty(), "лог не энкодится в base64");
+
+        // Чужой тул с тем же маркером не цепляется.
+        let foreign = vec![crate::infra::SubCall {
+            agent_name: "x".to_string(),
+            prompt: String::new(),
+            response: String::new(),
+            time_sec: 0.0,
+            tool_calls: vec![crate::infra::ToolCallInfo {
+                tool_name: "generate_image".to_string(),
+                arguments: "{}".to_string(),
+                result: format!("[DIAG_SAVED path={path_str}]"),
+            }],
+            thinking: None,
+        }];
+        let mut foreign_message = crate::infra::ChatMessage {
+            id: None,
+            msg_type: "message".into(),
+            content: String::new(),
+            sub_calls: None,
+            author: None,
+            model: None,
+            time_sec: None,
+            attachments: None,
+            phase: None,
+            author_name: None,
+        };
+        assert_eq!(
+            attach_saved_diag_from_sub_calls(&mut foreign_message, &foreign).unwrap(),
+            0,
+            "маркер в чужом туле игнорируется"
+        );
+
+        // Файл вне diag_outputs — гейт отклоняет (чужие пути не прицепляются).
+        let outside = std::env::temp_dir().join("diag_attach_outside_test.log");
+        std::fs::write(&outside, "tick\n").unwrap();
+        let outside_sub = vec![crate::infra::SubCall {
+            agent_name: "diag_specialist".to_string(),
+            prompt: String::new(),
+            response: String::new(),
+            time_sec: 0.0,
+            tool_calls: vec![crate::infra::ToolCallInfo {
+                tool_name: "diag_recorder_stop".to_string(),
+                arguments: "{}".to_string(),
+                result: format!("[DIAG_SAVED path={}]", outside.display()),
+            }],
+            thinking: None,
+        }];
+        let mut outside_message = crate::infra::ChatMessage {
+            id: None,
+            msg_type: "message".into(),
+            content: String::new(),
+            sub_calls: None,
+            author: None,
+            model: None,
+            time_sec: None,
+            attachments: None,
+            phase: None,
+            author_name: None,
+        };
+        assert_eq!(
+            attach_saved_diag_from_sub_calls(&mut outside_message, &outside_sub).unwrap(),
+            0,
+            "путь вне diag_outputs отклонён гейтом"
+        );
+
+        // Извлечение маркера: happy path и отсутствие маркера.
+        assert_eq!(
+            extract_saved_diag_path(&format!("{DIAG_SAVED_MARKER}C:\\x\\l.log] хвост")),
+            Some("C:\\x\\l.log".to_string())
+        );
+        assert_eq!(extract_saved_diag_path("без маркера"), None);
+
+        let _ = std::fs::remove_file(&outside);
+        let _ = std::fs::remove_dir_all(&session_dir);
     }
 }

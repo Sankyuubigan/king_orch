@@ -13,8 +13,8 @@ groups:
 - id: group_1
   title: Новая группа
   ui_pos:
-    y: 719
     x: -105
+    y: 719
 
 nodes:
 
@@ -28,8 +28,8 @@ nodes:
   type: llm_fact_extractor
   input: '{{ nodes.user_message.output.text }}'
   ui_pos:
-    x: -1990
     y: 493
+    x: -1990
   llm_params: strict
 
 - id: check_has_problem
@@ -39,8 +39,8 @@ nodes:
   true_to: note_1782221436115
   false_to: note_1785141025138
   ui_pos:
-    y: 495
     x: -1700
+    y: 495
 
 - id: call_collector
   type: llm_worker
@@ -50,8 +50,8 @@ nodes:
   - validator
   - decomposer
   ui_pos:
-    y: -259
-    x: 2517
+    x: 3244
+    y: -230
 
 - id: call_soma_translator
   type: llm_worker
@@ -59,8 +59,8 @@ nodes:
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   output_type: message
   ui_pos:
-    x: -561
     y: 210
+    x: -561
   llm_params: strict
 
 - id: call_decomposer
@@ -70,8 +70,8 @@ nodes:
   inject_response:
   - soma_translator
   ui_pos:
-    x: 240
     y: 486
+    x: 240
 
 - id: call_validator
   type: llm_worker
@@ -82,8 +82,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 1345
     y: 152
+    x: 1345
   llm_params: strict
 
 - id: check_triage_complexity
@@ -102,8 +102,8 @@ nodes:
 - id: read_pattern_section
   type: custom_tool_call
   ui_pos:
-    x: 2224
-    y: 114
+    x: 2809
+    y: 78
   tool_file: ../../_shared/tools/read_md_section.ts
   args:
     file: psychotherapist/database/inner_contour_9_patterns.md
@@ -134,8 +134,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 2704
-    y: 97
+    x: 3101
+    y: 74
 
 - id: call_shadow_worker
   type: llm_worker
@@ -148,22 +148,22 @@ nodes:
   - grounder
   - soma_translator
   ui_pos:
-    y: -456
-    x: 2259
+    y: -427
+    x: 2986
 
 - id: note_1782221436115
   type: note
   input: пересчитываем данные с учетом новых данных от юзера
   ui_pos:
-    y: 255
     x: -1215
+    y: 255
 
 - id: note_1782220193985
   type: note
   input: проверка данных. развилка на доработку данных или отправку на лечение
   ui_pos:
-    y: 492
     x: 916
+    y: 492
 
 - id: check_critical_elements
   type: condition_router
@@ -180,17 +180,17 @@ nodes:
     equals: false
   logic: any
   ui_pos:
-    x: 1655
-    y: 81
+    y: -207
+    x: 1616
 
 - id: compute_pattern
   type: custom_tool_call
-  tool_file: ../tools/compute_pattern_type.ts
-  args:
-    report: '{{ signals.validator_report }}'
   ui_pos:
     x: 1900
     y: 81
+  tool_file: ../tools/compute_pattern_type.ts
+  args:
+    report: '{{ signals.validator_report }}'
 
 - id: check_pattern
   type: condition_router
@@ -200,11 +200,11 @@ nodes:
   false_to: read_pattern_section
   conditions:
   - field: pattern_type
-    equals: "none"
+    equals: none
   logic: any
   ui_pos:
-    x: 2130
-    y: -60
+    y: 35
+    x: 2288
 
 - id: check_somatic
   type: condition_router
@@ -262,16 +262,16 @@ nodes:
 
     В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
-    x: -1323
     y: 748
+    x: -1323
 
 - id: call_request_helper
   type: llm_worker
   agent: request_helper
   output_type: message
   ui_pos:
-    x: -808
     y: 864
+    x: -808
 
 - id: check_elements1
   type: condition_router
@@ -288,8 +288,8 @@ nodes:
     equals: true
   logic: all
   ui_pos:
-    x: 1967
-    y: -283
+    x: 2655
+    y: -325
 
 - id: call_synthesizer
   type: llm_worker

@@ -839,6 +839,10 @@ where
             &current_sub_calls,
             &image_artifacts,
         ).map_err(|e| log::error!("[EXCEL] Файлы не приложены: {}", e)).unwrap_or(0);
+        let diag_attached = crate::infra::attach_saved_diag_from_sub_calls(
+            &mut final_message,
+            &current_sub_calls,
+        ).map_err(|e| log::error!("[DIAG] Файл лога не приложен: {}", e)).unwrap_or(0);
         if attached > 0 {
             log_cb(format!("🖼 Прикреплено изображений к ответу: {}", attached));
         }
@@ -847,6 +851,9 @@ where
         }
         if excel_attached > 0 {
             log_cb(format!("📊 Прикреплено файлов Excel к ответу: {}", excel_attached));
+        }
+        if diag_attached > 0 {
+            log_cb(format!("🩺 Прикреплён файл диагностики к ответу: {}", diag_attached));
         }
         messages_store.push(final_message);
         // Сигнал агента — ПОСЛЕ его ответа (как в nodes.rs:517-528).
