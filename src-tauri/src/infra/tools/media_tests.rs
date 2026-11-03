@@ -349,6 +349,67 @@ fn attach_saved_images_uses_only_current_subcalls() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Тест-страж паттерна excel/diag: сохранённые изображения прикладываются
+/// ТОЛЬКО путём на диск, байты не энкодятся в base64 (иначе JSON сессии
+/// раздувается на размер каждой картинки, инцидент 03.11.2026).
+#[test]
+fn saved_image_attachments_are_path_only() {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!(
+        "king_orch_media_test_{}_{stamp}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("out.png");
+    std::fs::write(&path, b"png-bytes").unwrap();
+    let registry = ImageArtifactRegistry::new();
+    let id = registry
+        .register(path.to_string_lossy().to_string(), "edit_image")
+        .unwrap();
+    let sub_call = crate::infra::SubCall {
+        agent_name: "image_editor".to_string(),
+        prompt: String::new(),
+        response: String::new(),
+        time_sec: 0.0,
+        tool_calls: vec![crate::infra::ToolCallInfo {
+            tool_name: "edit_image".to_string(),
+            arguments: "{}".to_string(),
+            result: format!("[IMAGE_SAVED id={id}]"),
+        }],
+        thinking: None,
+    };
+    let mut message = crate::infra::ChatMessage {
+        id: Some("msg_1".to_string()),
+        msg_type: "message".to_string(),
+        content: String::new(),
+        sub_calls: Some(vec![sub_call]),
+        author: Some("image_editor".to_string()),
+        model: None,
+        time_sec: None,
+        attachments: None,
+        phase: Some(2),
+        author_name: None,
+    };
+    let current_sub_calls = message.sub_calls.clone().unwrap_or_default();
+    let attached = attach_saved_images_from_sub_calls(
+        &mut message,
+        &current_sub_calls,
+        &registry,
+    )
+    .unwrap();
+    assert_eq!(attached, 1);
+    let att = &message.attachments.as_ref().unwrap()[0];
+    assert_eq!(
+        att.file_path.as_deref(),
+        Some(path.to_string_lossy().as_ref())
+    );
+    assert!(att.data_base64.is_empty(), "PNG не энкодится в base64");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
 /// Форма flux3-klein-adq4k из каталога: native ref-edit, файлов роли mmproj
 /// НЕТ (note каталога: «mmproj НЕ нужен», референсы адресуются по порядку
 /// словами). Боевой баг 03.11.26: снятый прокси-гейт «refs → нужен mmproj»

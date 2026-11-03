@@ -35,6 +35,8 @@ nodes:
         to: enhance_prompt_edit
       - key: needs_image_upscale
         to: upscale_image
+      - key: needs_image_compose
+        to: enhance_prompt_compose
       - key: needs_image_generate
         to: enhance_prompt_gen
     default: no_image_task
@@ -130,6 +132,44 @@ nodes:
       x: 360
       y: 160
 
+  # ── Промпт-энхансер: новая композиция (PRP 03.11.26) ──
+
+  - id: enhance_prompt_compose
+    type: llm_worker
+    agent: image_prompt_enhancer
+    task: |
+      Режим: НОВАЯ КОМПОЗИЦИЯ (вложение — источник внешности/объекта, не холст;
+      сцену описывай полностью по идее пользователя).
+
+      Исходная идея пользователя: {{ nodes.user_message.output.text }}
+    ui_pos:
+      x: 250
+      y: 200
+
+  # ── Ветка новой композиции (терминальная) ──
+
+  - id: compose_image
+    type: llm_worker
+    agent: image_editor
+    task: |
+      РЕЖИМ НОВАЯ КОМПОЗИЦИЯ: пользователь описал новую сцену, а вложение —
+      только источник внешности/объекта. Холст — описанная сцена, НЕ само
+      вложение. Действуй по разделу «Режим НОВАЯ КОМПОЗИЦИЯ» своего агента;
+      адресация референсов — по правилам активной базы.
+
+      Новая сцена: {{ nodes.user_message.output.text }}
+
+      Улучшенный промпт (заготовка от Улучшителя — используй как основу для
+      своего промпта): {{ nodes.enhance_prompt_compose.output.result }}
+
+      Доступные LoRA пользователя (стемы для аргумента `lora`; выбор — по
+      правилам твоего агента, обычной композиции LoRA не нужны):
+      {{ image_loras }}
+    output_type: message
+    ui_pos:
+      x: 360
+      y: 240
+
   # ── Не image-запрос: помощник (объясняет возможности, уточняет задачу) ──
 
   - id: no_image_task
@@ -156,6 +196,9 @@ edges:
 
   - from: enhance_prompt_edit
     to: edit_image
+
+  - from: enhance_prompt_compose
+    to: compose_image
 
   - from: enhance_prompt_gen
     to: generate_image

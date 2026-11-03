@@ -326,6 +326,11 @@ pub struct ChatMessage {
 - **Каталог таблиц**: `RequestMedia::spreadsheet_files_prompt()` → `{{ spreadsheet_files }}` в контексте графа (xlsx/csv/tsv с путями; xls/xlsm/ods — блок «НЕ ПОДДЕРЖИВАЕТСЯ»). Конфиг-ключ `libreoffice_path` (§0.5): None = авто-детект soffice; без LibreOffice recalc/PDF недоступны — агент обязан честно сказать, что пересчёта значений не было.
 - **Граф**: `agents/excel/transitions/excel-flow.yaml` (entry `user_message` → факт `needs_table_file` → `excel_operator` / `excel_helper`, оба терминальные). Зарегистрирован в `parser.rs` PRODUCTION_GRAPHS + stems-тест. Формулы — только совместимый набор (VLOOKUP/INDEX+MATCH/SUMIF(S)/SUMPRODUCT); динамические функции Excel 365 (XLOOKUP, LET, LAMBDA…) запрещены QA-гейтом ядра.
 
+### Нативные media-тулы (🖼 Capability image, тот же паттерн медиа-тулов)
+
+- Тулы `generate_image`/`edit_image`/`upscale_image` — `infra/tools/media.rs` (схемы `image_tool_schemas`, диспетчеризация `execute_image_tool`), движок — плагин `tauri-plugin-image-engine` (sd.cpp). Артефакты: маркер `[IMAGE_SAVED id=N]` → `attach_saved_images_from_sub_calls` → `ChatAttachment{file_path}` **без base64** (SSOT: файл в `<exe>/image_outputs/<session_id>/`; фронт рендерит лениво через `get_image_data_url`). Тест-страж: `saved_image_attachments_are_path_only` (`media_tests.rs`). Вложения старых сессий с `data_base64` остаются читаемыми.
+- Граф `agents/image-gen/transitions/image-gen-flow.yaml`: факты `needs_image_edit` / `needs_image_upscale` / `needs_image_compose` / `needs_image_generate` (приоритет edit → upscale → compose → generate, см. `facts.yaml`). Ветка `needs_image_compose` («НОВАЯ КОМПОЗИЦИЯ») — вложение только источник внешности/объекта/стилистики, холст описывается промптом; правила режима — в `agents/image-gen/backend/image_editor.md`.
+
 ## 5. Код-стайл
 
 ### TypeScript (frontend)

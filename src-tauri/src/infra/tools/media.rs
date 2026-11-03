@@ -435,29 +435,30 @@ pub fn attach_saved_images_from_sub_calls(
     Ok(attached)
 }
 
-/// Прочитать PNG с диска как ChatAttachment (для показа в чате).
-/// file_path обязателен: файл лежит на диске, и кнопка «Показать в
-/// проводнике» в чате открывает его по этому пути.
+/// Приложить сохранённый media-артефакт к сообщению ТОЛЬКО путём на диск.
+/// Байты не читаются и не энкодятся в base64: файл в `image_outputs/<sid>/` —
+/// единственный источник данных (SSOT), иначе JSON сессии раздувается на
+/// размер каждой картинки (инцидент 03.11.2026). Фронт рендерит лениво через
+/// `get_image_data_url`, тулы берут путь из `file_path`. Тест-страж:
+/// `saved_image_attachments_are_path_only` (media_tests.rs). Вложения старых
+/// сессий с `data_base64` остаются читаемыми (фронт/бэк предпочитают base64,
+/// если он есть).
 pub fn image_path_to_attachment(
     path: &str,
 ) -> Result<crate::infra::ChatAttachment, String> {
-    let bytes = std::fs::read(path).map_err(|error| {
-        log::error!("Не удалось прочитать media-артефакт {:?}: {}", path, error);
-        "Не удалось прочитать созданное изображение".to_string()
-    })?;
-    if bytes.is_empty() {
-        log::error!("Media-артефакт пуст: {:?}", path);
-        return Err("Созданное изображение пустое".to_string());
+    if !std::path::Path::new(path).is_file() {
+        log::error!("Media-артефакт не найден на диске: {:?}", path);
+        return Err("Созданное изображение недоступно на диске".to_string());
     }
-    use base64::Engine;
     let file_name = std::path::Path::new(path)
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "image.png".to_string());
+    log::info!("Медиа-вложение path-only: {:?}", path);
     Ok(crate::infra::ChatAttachment {
         file_name,
         mime_type: "image/png".to_string(),
-        data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+        data_base64: String::new(),
         file_path: Some(path.to_string()),
         is_dir: Some(false),
     })
