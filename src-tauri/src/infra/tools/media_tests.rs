@@ -348,3 +348,51 @@ fn attach_saved_images_uses_only_current_subcalls() {
     assert_eq!(old_sub_calls.len(), 1);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Форма flux3-klein-adq4k из каталога: native ref-edit, файлов роли mmproj
+/// НЕТ (note каталога: «mmproj НЕ нужен», референсы адресуются по порядку
+/// словами). Боевой баг 03.11.26: снятый прокси-гейт «refs → нужен mmproj»
+/// отказывал этому бандлу 100% валидных edit-вызовов (`ToolError::Usage`),
+/// и оркестратор сжигал три генерации (~51–59 с каждая) до «Лимит неудачных
+/// вызовов инструмента (3)».
+fn flux3_style_entry() -> tauri_plugin_image_engine::engine::ImageBundleEntry {
+    serde_json::from_value(serde_json::json!({
+        "name": "flux3-klein-adq4k",
+        "ref_edit_mode": "native",
+        "lora_base": "flux",
+        "files": [
+            {"role": "diffusion", "filename": "FLUX-3-Image-Klein-AD-Q4_K.gguf", "download_url": "hf://test"},
+            {"role": "llm", "filename": "Qwen3VL-4B-Instruct-Q4_K_M.gguf", "download_url": "hf://test"},
+            {"role": "vae", "filename": "flux3_klein_ae.safetensors", "download_url": "hf://test"}
+        ]
+    }))
+    .expect("форма flux3-бандла обязана парситься каталогом")
+}
+
+#[test]
+fn native_ref_edit_without_mmproj_is_not_refused() {
+    let entry = flux3_style_entry();
+    let planned = plan_ref_edit_strict(&entry, std::path::Path::new("."), Vec::new())
+        .expect("native-контракт без mmproj обязан планироваться (refs по порядку словами)");
+    assert!(planned.0.is_empty());
+    assert!(planned.1.is_none(), "native: ref_image_args сервер сам");
+}
+
+#[test]
+fn ref_edit_without_contract_is_setup_class_not_usage() {
+    let mut entry = flux3_style_entry();
+    entry.ref_edit_mode = None;
+    match plan_ref_edit_strict(&entry, std::path::Path::new("."), Vec::new()) {
+        Err(ToolError::NotFound(reason)) => {
+            assert!(
+                reason.contains("ref_edit-контракта"),
+                "текст отказа обязан называть отсутствие контракта: {}",
+                reason
+            );
+        }
+        other => panic!(
+            "бандл без ref_edit-контракта — сетап-класс (NotFound, честный стоп без ретраев), получено: {:?}",
+            other
+        ),
+    }
+}

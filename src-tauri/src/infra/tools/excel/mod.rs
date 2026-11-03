@@ -502,7 +502,7 @@ impl Tool for ExcelApply {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Опционально: абсолютный путь .xlsx-исходника для редактирования (новая книга, если не задан)."},
-                "ops": {"type": "array", "items": {"type": "object"}, "description": "Список операций. Доступные op: add_sheet{name}; delete_sheet{name} (не последний); rename_sheet{from,to}; set_cell{sheet,addr,value|formula,style?,number_format?} — формула БЕЗ ведущего '=' (\"=B2*2\" неверно, \"B2*2\" верно), value сохраняет JSON-тип (число — числом, строка — текстом); set_column_width{sheet,col,width}; autofit_columns{sheet?,min?,max?}; merge_cells{sheet,range}; auto_filter{sheet,range}; freeze_panes{sheet,cell}; add_chart{sheet,chart_type:bar|column|line|pie|area|scatter,anchor,series:[\"Лист!$B$2:$B$10\"],categories_range?,title?,width_cells?,height_cells?}. Неизвестная op — отказ."},
+                "ops": {"type": "array", "items": {"type": "object"}, "description": "Список операций. Доступные op: add_sheet{name}; delete_sheet{name} (не последний); rename_sheet{from,to}; set_cell{sheet,addr,value|formula,style?,number_format?} — формула БЕЗ ведущего '=' (\"=B2*2\" неверно, \"B2*2\" верно), value сохраняет JSON-тип (число — числом, строка — текстом); set_rows{sheet,addr,rows} — БЛОК строк одной операцией (rows: массив строк-массивов от addr; ячейка — значение, null (пропуск) или {value?,formula?,number_format?,style?}) — данные таблиц ПИШИ ИМ, а не десятками set_cell; format_range{sheet,range,number_format?,style?} — формат/стиль на весь диапазон; add_table{sheet,range,name?} — умная таблица Excel (первая строка диапазона — заголовки); set_column_width{sheet,col,width}; autofit_columns{sheet?,min?,max?}; merge_cells{sheet,range}; auto_filter{sheet,range}; freeze_panes{sheet,cell}; add_chart{sheet,chart_type:bar|column|line|pie|area|scatter,anchor,series:[\"Лист!$B$2:$B$10\"],categories_range?,title?,width_cells?,height_cells?}. Неизвестная op — отказ."},
                 "output_stem": {"type": "string", "description": "Имя файла результата без расширения (опционально). Без него — автоген: <имя исходника>_изменённый / новая_таблица."},
                 "allow_issues": {"type": "boolean", "description": "true — сохранить файл несмотря на найденные проблемы (только когда они унаследованы от данных пользователя и осознаны). По умолчанию false."}
             },
@@ -676,6 +676,15 @@ mod tests {
         // Схема apply требует ops; формула описана без ведущего '='.
         let apply = all.iter().find(|(_, n, _)| n == "excel_apply").unwrap();
         assert_eq!(apply.2["inputSchema"]["required"], serde_json::json!(["ops"]));
+        // Блок-операции обязательны в контракте для модели (SSOT с op-словарём
+        // ядра): без них модель пишет данные по set_cell и обрывается по лимиту
+        // токенов (кейс 03.11.2026).
+        let ops_desc = apply.2["inputSchema"]["properties"]["ops"]["description"]
+            .as_str()
+            .expect("описание ops в схеме");
+        for op in ["set_rows", "format_range", "add_table"] {
+            assert!(ops_desc.contains(op), "в схеме ops нет '{op}'");
+        }
     }
 
     #[test]

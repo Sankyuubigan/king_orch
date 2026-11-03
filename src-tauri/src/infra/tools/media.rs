@@ -223,6 +223,45 @@ fn resolve_bundle_for_tools() -> Result<tauri_plugin_image_engine::engine::Image
     Ok(entry)
 }
 
+/// Планировщик ref-edit с классификацией отказа (03.11.26).
+///
+/// SSOT ref-edit-способности — ref_edit-контракт каталога (`plan_ref_edit`,
+/// fail-closed). Прежний прокси-гейт «в бандле есть файл-роли mmproj» снят:
+/// для flux3-стека native ref-edit работает без vision-энкодера (note
+/// каталога flux3-klein-adq4k: референсы адресуются по порядку словами), а
+/// недокачанные файлы ловит префлайт `resolve_bundle_for_tools` (NotFound).
+///
+/// Классификация (vram.rs): capability-отказ не чинится повтором вызова —
+/// это состояние каталога/диска, поэтому `ToolError::NotFound` (сетап-класс:
+/// честный стоп после первого отказа), а НЕ `Usage` (аргумент-отказ, который
+/// лечится другими аргументами; Usage здесь доводил до трёх пустых генераций
+/// и «Лимит неудачных вызовов инструмента»).
+fn plan_ref_edit_strict(
+    entry: &tauri_plugin_image_engine::engine::ImageBundleEntry,
+    lora_dir: &std::path::Path,
+    loras: Vec<LoraSpec>,
+) -> Result<(Vec<LoraSpec>, Option<String>), ToolError> {
+    match tauri_plugin_image_engine::engine::plan_ref_edit(entry, lora_dir, loras) {
+        Ok(tauri_plugin_image_engine::engine::RefEditPlan::Unsupported { reason }) => {
+            log::warn!("[IMG-TOOL] ref-edit отказ (fail-closed): бандл «{}»", entry.name);
+            Err(ToolError::NotFound(reason))
+        }
+        Ok(tauri_plugin_image_engine::engine::RefEditPlan::Ready { loras: plan_loras, ref_image_args }) => {
+            let stack: Vec<String> = plan_loras
+                .iter()
+                .map(|l| format!("{}×{:.2}", l.path, l.multiplier))
+                .collect();
+            log::info!(
+                "[IMG-TOOL] ref-edit plan: loras=[{}], ref_image_args={}",
+                stack.join(" + "),
+                ref_image_args.clone().unwrap_or_else(|| "(native — сервер сам)".to_string())
+            );
+            Ok((plan_loras, ref_image_args))
+        }
+        Err(e) => Err(ToolError::NotFound(e)),
+    }
+}
+
 fn run_generate(
     prompt_en: &str,
     ref_paths: &[String],
@@ -230,12 +269,6 @@ fn run_generate(
     loras: &[LoraSpec],
 ) -> Result<ImageRunOutput, ToolError> {
     let entry = resolve_bundle_for_tools()?;
-    if !ref_paths.is_empty() && !entry.files.iter().any(|f| f.role == "mmproj") {
-        return Err(ToolError::Usage(format!(
-            "edit_image требует бандл с mmproj (vision-энкодер), а активный бандл «{}» его не содержит. Выберите полный набор в Настройки → «Движок изображений».",
-            entry.name
-        )));
-    }
     // F4 (29.10.26): SSOT-планировщик ref-edit — гейт ДО планирования
     // (fail-closed). Krea2 без обученной edit-лоры под вшитый сервером
     // ref-конвейер — ровно боевой баг «серые квадраты» (ostris issue #1);
@@ -244,29 +277,11 @@ fn run_generate(
     let (loras, ref_image_args) = if ref_paths.is_empty() {
         (loras.to_vec(), None)
     } else {
-        match tauri_plugin_image_engine::engine::plan_ref_edit(
+        plan_ref_edit_strict(
             &entry,
             &tauri_plugin_image_engine::engine::image_lora_dir_early(),
             loras.to_vec(),
-        ) {
-            Ok(tauri_plugin_image_engine::engine::RefEditPlan::Unsupported { reason }) => {
-                log::warn!("[IMG-TOOL] ref-edit отказ (fail-closed): бандл «{}»", entry.name);
-                return Err(ToolError::Usage(reason));
-            }
-            Ok(tauri_plugin_image_engine::engine::RefEditPlan::Ready { loras: plan_loras, ref_image_args }) => {
-                let stack: Vec<String> = plan_loras
-                    .iter()
-                    .map(|l| format!("{}×{:.2}", l.path, l.multiplier))
-                    .collect();
-                log::info!(
-                    "[IMG-TOOL] ref-edit plan: loras=[{}], ref_image_args={}",
-                    stack.join(" + "),
-                    ref_image_args.clone().unwrap_or_else(|| "(native — сервер сам)".to_string())
-                );
-                (plan_loras, ref_image_args)
-            }
-            Err(e) => return Err(ToolError::Usage(e)),
-        }
+        )?
     };
     let cfg = tauri_plugin_image_engine::engine::load_image_config_early();
     let engine_dir = tauri_plugin_image_engine::engine::engine_dir_early();
