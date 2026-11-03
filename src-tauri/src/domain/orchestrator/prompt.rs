@@ -1,4 +1,5 @@
 use crate::domain::agent_manager::AgentProfile;
+use crate::domain::signals::{build_cloud_signal_prompt_block, SignalContract};
 use crate::infra::ChatMessage;
 use chrono::Datelike;
 
@@ -52,7 +53,7 @@ pub fn build_system_prompt(
     has_tools: bool,
     all_tools: &[(String, String, serde_json::Value)],
     max_gen_tokens: usize,
-    uses_method_3: bool,
+    signal_contract: Option<&SignalContract>,
     is_native: bool,
     is_hybrid: bool,
     is_cloud: bool,
@@ -81,18 +82,26 @@ pub fn build_system_prompt(
         }
     }
 
-    // Для Method 3-агентов грамматика сама принуждает JSON через emit_signal,
-    // поэтому секции [ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ] и [ДОСТУПНЫЕ ИНСТРУМЕНТЫ]
-    // не добавляются — они противоречат грамматике и тратят когнитивную энергию модели.
-    if uses_method_3 && is_cloud {
-        sp.push_str("\n\n[ТРЕБОВАНИЕ СИГНАЛА (CLOUD MODEL)]\nТы — сигнальный агент. Поскольку облачные модели не поддерживают локальные грамматики, в конце своего ответа ты ОБЯЗАН вернуть результат в виде точного JSON-вызова инструмента emit_signal:\n```json\n{\n  \"tool\": \"emit_signal\",\n  \"arguments\": {\n    \"key\": \"<сигнальный_ключ>\",\n    \"value\": { ... }\n  }\n}\n```\nБез этого сигнала работа графа будет остановлена с ошибкой.");
+    // Для Method 3-агентов грамматика сама принуждает JSON через emit_signal
+    // (локальный движок), поэтому секции [ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ] и
+    // [ДОСТУПНЫЕ ИНСТРУМЕНТЫ] не добавляются — они противоречат грамматике
+    // и тратят когнитивную энергию модели. Облачным моделям грамматика
+    // недоступна — форму сигнала задаёт промпт-блок, собранный ИЗ КОНТРАКТА
+    // (root.schema.json): .md агента механику вызова не дублирует
+    // (правило развода — docs/AGENT_CREATION_GUIDE.md).
+    if let Some(contract) = signal_contract {
+        if is_cloud {
+            let block = build_cloud_signal_prompt_block(contract);
+            sp.push_str("\n\n");
+            sp.push_str(&block);
+        }
     }
 
-    if has_tools && !uses_method_3 && !is_native {
+    if has_tools && signal_contract.is_none() && !is_native {
         sp.push_str("\n\n[ПРАВИЛА ВЫЗОВА ИНСТРУМЕНТОВ]\nЕсли нужен инструмент — верни ОДИН JSON-блок (```json ... ```).\nВ JSON обязательно поле \"thought\".\n\n⚠️ ВАЖНО: Если задача ВЫПОЛНЕНА — пиши ОБЫЧНЫЙ ТЕКСТ без JSON!\n");
     }
 
-    if has_tools && !uses_method_3 && !is_native {
+    if has_tools && signal_contract.is_none() && !is_native {
         let mut td = String::new();
         for (_, name, tool) in all_tools {
             let desc = tool
@@ -279,5 +288,117 @@ mod tests {
     fn finalize_without_inject_has_no_empty_section() {
         let prompt = finalize_system_prompt("БАЗА", "agent_x", "");
         assert!(!prompt.contains("\n\n\n"), "пустой инжект оставил пустой раздел");
+    }
+
+    // ── Контракт-рендеринг облачного блока сигнала (SSOT root.schema.json) ──
+
+    fn make_agent(system: &str) -> AgentProfile {
+        AgentProfile {
+            id: "test_agent".to_string(),
+            name: "Тест".to_string(),
+            description: String::new(),
+            system_prompt: system.to_string(),
+            mode: "worker".to_string(),
+            mcp_servers: Vec::new(),
+            subagents: Vec::new(),
+            folder: None,
+            replace_report: false,
+            tools: Vec::new(),
+            current_date: false,
+            temperature: None,
+            vision: false,
+            think_budget_chars: None,
+            disable_reasoning: false,
+            require_tool_call: false,
+            visible: true,
+        }
+    }
+
+    /// Облачный блок для обычного контракта рендерит key и enum значений
+    /// из root.schema.json — .md агента механику вызова не дублирует.
+    #[test]
+    fn cloud_signal_block_renders_contract_key_and_enum() {
+        let agent = make_agent("переводчик симптомов");
+        let contract = SignalContract {
+            key: "soma_translator".to_string(),
+            value_schema: serde_json::json!({
+                "type": "string",
+                "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"]
+            }),
+        };
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048, Some(&contract), false, false, true);
+        assert!(
+            sp.contains("[ТРЕБОВАНИЕ СИГНАЛА (CLOUD MODEL)]"),
+            "облачному контракт-агенту блок сигнала обязан приходить"
+        );
+        assert!(
+            sp.contains("\"key\": \"soma_translator\""),
+            "ключ контракта попадает в блок из root.schema.json"
+        );
+        assert!(
+            sp.contains("НУЖНА РУКОСТЬ") && sp.contains("РУКОСТЬ ИЗВЕСТНА"),
+            "enum значения из схемы попадают в блок"
+        );
+        assert!(
+            !sp.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"),
+            "сигнальному агенту legacy-секции тулов не выдаются"
+        );
+    }
+
+    /// Облачный блок для слотового контракта описывает слотовый формат
+    /// (конверт emit_signal слотовому контракту не показывается) — тот же
+    /// формат, что собирает assemble_slot_signal_value.
+    #[test]
+    fn cloud_slot_contract_instructs_slots_not_envelope() {
+        let agent = make_agent("валидатор");
+        let contract = SignalContract {
+            key: "validator_report".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "e1": { "type": "boolean" },
+                    "pattern_type": { "type": "string", "enum": ["1", "2"] }
+                },
+                "required": ["e1", "pattern_type"]
+            }),
+        };
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048, Some(&contract), false, false, true);
+        assert!(sp.contains("[ТРЕБОВАНИЕ СИГНАЛА (CLOUD MODEL)]"));
+        assert!(
+            sp.contains("`Element 1: `"),
+            "якорь слота из плана попадает в облачный блок"
+        );
+        assert!(
+            sp.contains("\"e1\": true"),
+            "формат вердикта слота описан в блоке"
+        );
+        assert!(
+            sp.contains("pattern_type") && sp.contains("\"1\""),
+            "enum финального слота попадает в блок"
+        );
+        assert!(
+            !sp.contains("\"tool\": \"emit_signal\""),
+            "слотовому контракту конверт emit_signal не показывается"
+        );
+    }
+
+    /// На локальном движке блок сигнала не добавляется: форму держит
+    /// грамматика (build_signal_envelope_grammar*), промпт остаётся прежним.
+    #[test]
+    fn local_contract_agent_has_no_cloud_block() {
+        let agent = make_agent("валидатор");
+        let contract = SignalContract {
+            key: "validator_report".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "e1": { "type": "boolean" } },
+                "required": ["e1"]
+            }),
+        };
+        let sp = build_system_prompt(&agent, &[], false, &[], 2048, Some(&contract), false, false, false);
+        assert!(
+            !sp.contains("[ТРЕБОВАНИЕ СИГНАЛА"),
+            "на локальном движке облачный блок сигнала не добавляется"
+        );
     }
 }

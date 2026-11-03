@@ -714,4 +714,73 @@ mod tests {
             );
         }
     }
+
+    /// Страж развода бизнес-логики и тул-механики (03.11.26): `.md` агента —
+    /// это роль/политика/формат ответа. МЕХАНИКА вызова тулов живёт в схемах
+    /// тулов (движок рендерит их в [ДОСТУПНЫЕ ИНСТРУМЕНТЫ] / [ПРАВИЛА ВЫЗОВА
+    /// ИНСТРУМЕНТОВ] / [NATIVE TOOL CALLING]) и в signal-контрактах
+    /// (`agents/<команда>/signals/root.schema.json` — движок рендерит их в
+    /// [ТРЕБОВАНИЕ СИГНАЛА] для облака, локально принуждает грамматикой).
+    /// Форматы `{"thought" ...}`/`{"tool" ...}` в промптах — легаси-конверты,
+    /// противоречащие нативному tool calling'у движка.
+    #[test]
+    fn agent_md_files_have_no_tool_mechanics() {
+        let agents_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("корень проекта")
+            .join("agents");
+        // Каталоги со справочниками/отчётами — не бизнес-логика агентов.
+        let skip_dirs = ["archive", "database", "experiments", "source"];
+        let mut checked = 0usize;
+        let mut files: Vec<PathBuf> = Vec::new();
+        let mut dirs: Vec<PathBuf> = vec![agents_dir.clone()];
+        while let Some(d) = dirs.pop() {
+            let entries = match fs::read_dir(&d) {
+                Ok(e) => e,
+                Err(_) => continue,
+            };
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    let name = p.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if skip_dirs.contains(&name) {
+                        continue;
+                    }
+                    dirs.push(p);
+                } else if p.extension().and_then(|e| e.to_str()) == Some("md") {
+                    files.push(p);
+                }
+            }
+        }
+        assert!(files.len() > 50, "каталог агентов прочитан ({} .md)", files.len());
+        for f in &files {
+            let text = fs::read_to_string(f).unwrap_or_default();
+            // Тело без frontmatter: механика в YAML-шапке (`tools: ["emit_signal"]`)
+            // — декларация capability, а не инструкция в промпте.
+            let body = match text.find("\n---\n") {
+                Some(i) if text.starts_with("---\n") => &text[i + 5..],
+                _ => text.as_str(),
+            };
+            for (ln, line) in body.lines().enumerate() {
+                // «конвертирует/сконвертировать» — легитимные слова; «конверт»
+                // (конверта/конвертом/конверте/конвертов) — легаси-конверты.
+                let konvert = line.contains("конверт") && !line.contains("конверти");
+                let hit = line.contains("{\"thought\"")
+                    || line.contains("{\"tool\"")
+                    || line.contains("JSON-конверт")
+                    || line.contains("СОХРАНЕНИЕ СИГНАЛ")
+                    || konvert;
+                assert!(
+                    !hit,
+                    "тул-механика в бизнес-логике {}:{} (строка {ln}): {} — формат вызова \
+                     живёт в схеме тула/signal-контракте, движок прикрепляет его сам",
+                    f.display(),
+                    ln + 1,
+                    line.trim()
+                );
+            }
+            checked += 1;
+        }
+        assert!(checked > 50, "проверено файлов: {checked}");
+    }
 }

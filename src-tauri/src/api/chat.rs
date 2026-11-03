@@ -711,7 +711,7 @@ pub fn get_prompt_preview(
                 tools.extend(crate::infra::diag_tool_schemas(&agent.tools));
                 let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
                 let prompt = crate::domain::build_system_prompt(
-                    agent, &history, has_tools, &tools, 2048, false, false, false, false,
+                    agent, &history, has_tools, &tools, 2048, None, false, false, false,
                 );
                 let uses_image_selection = crate::domain::agent_consumes_image_catalog(agent);
                 let receives_bundle_marker =

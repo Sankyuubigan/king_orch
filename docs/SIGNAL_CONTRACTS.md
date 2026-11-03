@@ -69,6 +69,14 @@ and Structured Output», и устоявшаяся практика constrained 
 - `domain/orchestrator/dispatch.rs` (`execute_tool_call`, ветка `emit_signal`):
   - если `value` не прошёл `validate_signal_value()` — возвращается явная ошибка модели
     на retry (честно, не тихо).
+- `domain/signals.rs` (`build_cloud_signal_prompt_block`, 03.11.26):
+  - рендерит контракт в текстовый блок `[ТРЕБОВАНИЕ СИГНАЛА (CLOUD MODEL)]` для облачных
+    движков: слотовый контракт → слотовая инструкция (якоря `Element N: `, вердикты
+    `"eN": true|false`, trailing-слоты); обычный → конверт с реальным key и описанием
+    value-схемы (`describe_value_schema`, включая `description` значений). Вставку в
+    системный промпт делает `prompt.rs` (6-й параметр `build_system_prompt` —
+    `signal_contract: Option<&SignalContract>`). Локально механику принуждает грамматика —
+    промптовый дубль в .md агентов не нужен.
 
 ## Разбор бага (кейс: модель исказила имя поля сигнала)
 

@@ -222,7 +222,7 @@ fn prepare_layers(
             false,
             &[],
             max_gen_tokens,
-            true,
+            Some(&contract),
             false,
             false,
             false,

@@ -469,6 +469,144 @@ pub fn is_slot_verdict_contract(schema: &serde_json::Value) -> bool {
     slot_verdict_plan(schema).is_some()
 }
 
+/// Облачный промпт-блок сигнала — SSOT root.schema.json.
+///
+/// Облачные модели не поддерживают локальные грамматики, поэтому форма сигнала
+/// задаётся промпт-блоком, собранным ИЗ КОНТРАКТА (`root.schema.json`), а не из
+/// `.md` агента: обычный контракт — конверт `emit_signal` с ключом и value-схемой
+/// (enum-строки, поля объекта); слотовый контракт (Вариант B) — слотовые
+/// вердикты, которые собирает [`assemble_slot_signal_value`]. Механику вызова
+/// `.md` агента не дублирует (правило развода — `docs/AGENT_CREATION_GUIDE.md`).
+pub fn build_cloud_signal_prompt_block(contract: &SignalContract) -> String {
+    let schema = &contract.value_schema;
+
+    if let Some(plan) = slot_verdict_plan(schema) {
+        // ── Слотовый контракт (Вариант B): вердикты в слотах, конверта нет ──
+        let mut block = String::from(
+            "[ТРЕБОВАНИЕ СИГНАЛА (CLOUD MODEL)]\n\
+             Ты — сигнальный агент. Облачные модели не поддерживают локальные грамматики, \
+             поэтому твой ответ обязан закончиться слотовыми вердиктами в строгом формате — \
+             сигнал соберётся из слотов автоматически, инструмент emit_signal вызывать НЕ нужно:\n",
+        );
+        for (label, key) in &plan.e_pairs {
+            block.push_str(&format!(
+                "- строка-якорь `{label}`, затем размышление, затем вердикт `\"{key}\": true` или `\"{key}\": false`.\n"
+            ));
+        }
+        for (label, key) in &plan.trailing {
+            let enum_note = schema
+                .get("properties")
+                .and_then(|p| p.get(key.as_str()))
+                .and_then(|ps| ps.get("enum"))
+                .and_then(Value::as_array)
+                .map(|vals| {
+                    let list = vals
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(|v| format!("\"{v}\""))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(" (одно из: {list})")
+                })
+                .unwrap_or_default();
+            block.push_str(&format!(
+                "- финальный слот БЕЗ размышления: `{label}` сразу `\"{key}\": \"…\"{enum_note}.\n"
+            ));
+        }
+        block.push_str(
+            "Без слотовых вердиктов сигнал не соберётся, и работа графа будет остановлена с ошибкой.",
+        );
+        return block;
+    }
+
+    // ── Обычный контракт: конверт emit_signal ──
+    let mut block = String::from(
+        "[ТРЕБОВАНИЕ СИГНАЛА (CLOUD MODEL)]\n\
+         Ты — сигнальный агент. Поскольку облачные модели не поддерживают локальные грамматики, \
+         в конце своего ответа (после всего разбора) ты ОБЯЗАН вернуть точный JSON-вызов \
+         инструмента emit_signal:\n```json\n",
+    );
+    block.push_str("{\n  \"tool\": \"emit_signal\",\n  \"arguments\": {\n    \"key\": \"");
+    block.push_str(&contract.key);
+    block.push_str(
+        "\",\n    \"value\": <значение по схеме ниже>\n  }\n}\n```\n",
+    );
+    block.push_str(&describe_value_schema(schema));
+    block.push_str("\nБез этого сигнала работа графа будет остановлена с ошибкой.");
+    block
+}
+
+/// Человекочитаемое описание value-схемы контракта для облачного блока:
+/// string-enum — список допустимых строк + `description` из схемы; object —
+/// поля с типами/enum/description и отметкой обязательности. SSOT —
+/// root.schema.json (смысл значений живёт в схеме, не в .md агента).
+fn describe_value_schema(schema: &Value) -> String {
+    let desc_note = |ps: &Value| -> String {
+        ps.get("description")
+            .and_then(Value::as_str)
+            .map(|d| format!(" — {d}"))
+            .unwrap_or_default()
+    };
+    match (
+        schema.get("type").and_then(Value::as_str),
+        schema.get("enum").and_then(Value::as_array),
+    ) {
+        (Some("string"), Some(vals)) => {
+            let list = vals
+                .iter()
+                .filter_map(Value::as_str)
+                .map(|v| format!("\"{v}\""))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "Поле `value` — СТРОГО одна из строк: {list}.{}",
+                desc_note(schema)
+            )
+        }
+        (Some("object"), _) => {
+            let mut s = String::from("Поле `value` — JSON-объект с полями:");
+            let required: Vec<&str> = schema
+                .get("required")
+                .and_then(Value::as_array)
+                .map(|arr| arr.iter().filter_map(Value::as_str).collect())
+                .unwrap_or_default();
+            if let Some(props) = schema.get("properties").and_then(Value::as_object) {
+                for (name, ps) in props {
+                    let ptype = ps.get("type").and_then(Value::as_str).unwrap_or("any");
+                    let enum_note = ps
+                        .get("enum")
+                        .and_then(Value::as_array)
+                        .map(|vals| {
+                            let list = vals
+                                .iter()
+                                .filter_map(Value::as_str)
+                                .map(|v| format!("\"{v}\""))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            format!("; одно из: {list}")
+                        })
+                        .unwrap_or_default();
+                    let req = if required.contains(&name.as_str()) {
+                        " [ОБЯЗАТЕЛЬНО]"
+                    } else {
+                        ""
+                    };
+                    s.push_str(&format!(
+                        "\n  - \"{name}\" ({ptype}{enum_note}){req}{}",
+                        desc_note(ps)
+                    ));
+                }
+            }
+            s
+        }
+        (Some("string"), None) => format!("Поле `value` — строка.{}", desc_note(schema)),
+        _ => format!(
+            "Поле `value` — по JSON-схеме: {}",
+            serde_json::to_string(schema).unwrap_or_default()
+        ),
+    }
+}
+
 /// Минимум содержимого ОДНОГО слота отчёта в символах (решение владельца
 /// 01.11.2026 — Вариант A): слот «метка + мгновенный конверт» (батч 04-23-37,
 /// дум-слои пустые у ВСЕХ моделей, вердикт фактически угадывался из

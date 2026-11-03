@@ -1244,7 +1244,6 @@ where
                 **msg_counter += 1;
             }
 
-            let uses_method_3 = self.signal_contract.is_some();
             let is_cloud = self.engine.is_cloud();
             let mut new_sys = build_system_prompt(
                 *agent,
@@ -1252,7 +1251,7 @@ where
                 *has_tools_for_prompt,
                 all_tools,
                 max_gen_tokens,
-                uses_method_3,
+                self.signal_contract.as_ref(),
                 self.native_tools.is_some(),
                 self.hybrid_gbnf.is_some(),
                 is_cloud,
