@@ -139,13 +139,26 @@ pub fn build_signal_envelope_grammar(contract: &SignalContract) -> String {
 /// выбор замера: 1400 символов в заголовках агентов брались из свипа на
 /// gemma-4-12B для ОДНОГО черновика (`tasks/02.10.26 …md`, строка 237) и к
 /// этой конфигурации отношения не имели.
-/// Строковые правила JSON-грамматики — общие для конвертного пути и для
-/// финальных слотов Варианта B без enum (SSOT: одна копия правил в файле).
-const STRING_RULES: &str = concat!(
-    "json-string ::= \"\\\"\" string-char* \"\\\"\"\n",
-    "string-char ::= [^\"\\\\] | escape\n",
-    "escape ::= \"\\\\\" (\"\\\\\" | \"\\\"\" | \"n\" | \"t\" | \"r\" | \"b\" | \"f\" | \"u\" [0-9a-f] [0-9a-f] [0-9a-f] [0-9a-f])\n",
-);
+/// Базовые JSON-правила сигнальных грамматик — общие для конвертного пути и
+/// Phase-2 JSON-only. Строковые правила (json-string/string-char/escape) —
+/// канонический блок ПЛАГИНА ([`crate::infra::strict_json_string_rules`]):
+/// raw «<» в строковых значениях запрещён — think-модель может открыть
+/// `<think>` внутри значения, сервер держит дельты до его закрытия
+/// (llama.cpp#15000) — «0 токенов, MAX_TOKENS» (лог юзера 01.11.26);
+/// легитимный «<» — как escape `\u003c`. Копий строковых правил в хосте нет
+/// (SSOT в плагине); число-правила и `bool` (алиас json-bool, на который
+/// ссылаются value-грамматики) — локальный поднабор, единственный в файле.
+fn json_value_rules() -> String {
+    format!(
+        "{}{}",
+        crate::infra::strict_json_string_rules(),
+        concat!(
+            "json-number ::= \"-\"? (\"0\" | [1-9] [0-9]*) (\".\" [0-9]+)? ([eE] [-+]? [0-9]+)?\n",
+            "json-bool ::= \"true\" | \"false\"\n",
+            "bool ::= \"true\" | \"false\"\n",
+        )
+    )
+}
 
 pub fn build_signal_envelope_grammar_with_think_budget(
     contract: &SignalContract,
@@ -156,17 +169,9 @@ pub fn build_signal_envelope_grammar_with_think_budget(
     // Правило пробелов (ограниченное, как в официальном конвертере llama.cpp)
     let sp = "sp ::= \" \" | \"\\n\" [ \\t]{0,4}";
 
-    // Базовые JSON-правила (строковые — из общего STRING_RULES; их же
+    // Базовые JSON-правила (строковые — канонический блок плагина; их же
     // добирает Вариант B для финальных слотов без enum)
-    let json_rules = format!(
-        "{}{}",
-        STRING_RULES,
-        concat!(
-            "json-number ::= \"-\"? (\"0\" | [1-9] [0-9]*) (\".\" [0-9]+)? ([eE] [-+]? [0-9]+)?\n",
-            "json-bool ::= \"true\" | \"false\"\n",
-            "bool ::= \"true\" | \"false\"\n",
-        )
-    );
+    let json_rules = json_value_rules();
 
     // Генерируем value-грамматику в зависимости от типа контракта
     let value_grammar = build_value_grammar(schema);
@@ -266,7 +271,7 @@ pub fn build_signal_envelope_grammar_with_think_budget(
         ));
         if needs_string_rules {
             rule.push('\n');
-            rule.push_str(STRING_RULES);
+            rule.push_str(&crate::infra::strict_json_string_rules());
         }
         return rule;
     }
@@ -608,14 +613,7 @@ pub fn build_signal_envelope_json_only_grammar(contract: &SignalContract) -> Str
 
     let sp = "sp ::= \" \" | \"\\n\" [ \\t]{0,4}";
 
-    let json_rules = concat!(
-        "json-string ::= \"\\\"\" string-char* \"\\\"\"\n",
-        "string-char ::= [^\"\\\\] | escape\n",
-        "escape ::= \"\\\\\" (\"\\\\\" | \"\\\"\" | \"n\" | \"t\" | \"r\" | \"b\" | \"f\" | \"u\" [0-9a-f] [0-9a-f] [0-9a-f] [0-9a-f])\n",
-        "json-number ::= \"-\"? (\"0\" | [1-9] [0-9]*) (\".\" [0-9]+)? ([eE] [-+]? [0-9]+)?\n",
-        "json-bool ::= \"true\" | \"false\"\n",
-        "bool ::= \"true\" | \"false\"\n",
-    );
+    let json_rules = json_value_rules();
 
     let value_grammar = build_value_grammar(schema);
 
@@ -1438,6 +1436,14 @@ mod tests {
             "у enum-контракта обязан быть ровно один слот отчёта, grammar:\n{}",
             grammar
         );
+        // Строковые правила — канонический блок плагина (strict_json_string_rules):
+        // raw «<» в значениях запрещён — think-smuggle в значении невозможен
+        // (llama.cpp#15000, лог юзера 01.11.26).
+        assert!(
+            grammar.contains("string-char ::= [^\"\\\\<] | escape"),
+            "конвертная грамматика несёт свободный строковый класс: {}",
+            grammar
+        );
     }
 
     /// Object-контракты сохраняют прежнее поведение: один черновик на каждое
@@ -1553,6 +1559,14 @@ mod tests {
         assert!(
             !grammar.contains("drafts-block"),
             "Phase-2 билдер не должен нести слот отчёта: {}",
+            grammar
+        );
+        // Phase-2/ретрай — прямой наследник канала smuggle: без think-блока
+        // свободный «<» в значении позволял открыть <think> и сжечь бюджет
+        // (лог юзера 01.11.26). Класс — канонический блок плагина.
+        assert!(
+            grammar.contains("string-char ::= [^\"\\\\<] | escape"),
+            "Phase-2 грамматика несёт свободный строковый класс: {}",
             grammar
         );
     }

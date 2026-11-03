@@ -1,5 +1,5 @@
 ---
-name: Валидатор данных и Искатель паттерна ядра
+name: Валидатор данных
 replace_report: true
 tools: ["emit_signal"]
 ---

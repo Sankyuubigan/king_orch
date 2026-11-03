@@ -423,6 +423,15 @@ mod tests {
         assert!(hybrid.contains("think-char{0,3000}"), "нет авто-потолка: {}", hybrid);
         assert!(hybrid.contains("has_problem"), "{}", hybrid);
         assert!(hybrid.contains("somatic_presence"), "{}", hybrid);
+        // Строгий строковый класс в обеих попытках: raw «<» в значениях
+        // запрещён — Ornith не может открыть <think> внутри значения факта
+        // (llama.cpp#15000: сервер держит дельты до закрытия think →
+        // «0 токенов, MAX_TOKENS», лог юзера 01.11.26).
+        assert!(
+            hybrid.contains("string-char ::= [^\"\\\\<] | escape"),
+            "гибрид пропускает think-smuggle в значениях: {}",
+            hybrid
+        );
 
         // rb=0 — потолок от общего бюджета генерации: (2048-256)*2 = 3584.
         let no_cap = build_facts_grammar(&config, None, 2048, 0);
@@ -432,6 +441,13 @@ mod tests {
         assert!(
             !json_only.contains("<think>"),
             "в ретрае think должен быть структурно невозможен: {}",
+            json_only
+        );
+        // Канал smuggle в ретрае тоже закрыт: без запрета «<» ретрай умирал
+        // так же, как гибрид (модель открывала <think> в значении).
+        assert!(
+            json_only.contains("string-char ::= [^\"\\\\<] | escape"),
+            "ретрай пропускает think-smuggle в значениях: {}",
             json_only
         );
         assert!(json_only.contains("has_problem"), "{}", json_only);
