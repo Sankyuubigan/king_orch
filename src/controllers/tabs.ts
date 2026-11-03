@@ -11,6 +11,7 @@ import { deleteSession, renameSession, openSessionFolder, fetchSessions } from "
 import { trackError } from "../telemetry";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { computeTargetIndex, computeShifts } from "../utils/drag";
+import { refreshCardLayout } from "./card-layout";
 import type { AgentStudioTab } from "./studio-page";
 
 /**
@@ -730,6 +731,13 @@ export class TabController {
         active.studio.activate();
       } else if (active.type === "section" && active.section) {
         this.materializeSectionContent(active.section);
+        // Раскладчик карточек сам не узнаёт о материализации: у «Движков» сетка
+        // кладётся ВНУТРЬ [data-lazy-content] (обёртка — родитель сетки, не ребёнок),
+        // поэтому MutationObserver card-layout это событие не видит, и первое
+        // открытие раздела оставало сетку в запасном рядовом режиме с дырами под
+        // короткими карточками — до случайного RO-события чужой сетки. Явный
+        // sync+pack при каждой активации делает раскладку детерминированной.
+        refreshCardLayout();
       } else {
         this.activateSession(active);
       }
