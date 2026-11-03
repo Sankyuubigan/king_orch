@@ -3,10 +3,11 @@
 //! # Зачем стенду этот модуль
 //!
 //! Граф психолога не вызывает валидатор, когда факт-экстрактор вернул
-//! `mental_presence == none`: `check_mental_presence` (историческое имя узла
-//! в `experiments/psychotherapist.yaml`, ныне — `check_has_problem` в
-//! `main_conversation_flow.yaml`) уводит поток в `check_critical_elements`,
-//! минуя воронку валидатора.
+//! `mental_presence == none`: `check_has_problem` (историческое имя узла —
+//! `check_mental_presence` в `experiments/psychotherapist.yaml`) в
+//! `main_conversation_flow.yaml` уводит поток в ветку добора корректного
+//! запроса (`note_1785141025138` → `call_request_helper`), минуя воронку
+//! валидатора.
 //! Стенд без этого правила мерил бы систему, которой в бою нет: он звал бы слои
 //! даже там, где бой их не зовёт.
 //!

@@ -40,7 +40,7 @@ use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
     has_incomplete_json_action, has_unclosed_json_fence, is_thinking_truncated,
     looks_like_broken_tool_call, needs_cutoff_continuation, parse_orchestrator_response,
-    parse_tool_call, split_thinking_and_answer,
+    parse_tool_call, parse_tool_call_detailed, split_thinking_and_answer, ToolCallParse,
 };
 use crate::domain::signals::{
     assemble_slot_signal_value, auto_think_budget_chars,
@@ -176,7 +176,10 @@ fn push_continuation_for_cutoff(
                 COMPACT_MAX_TOKENS,
                 model_params,
                 format_type,
-                false,
+                // Думатель запрещён: утилитарный вызов с потолком 300 ток.
+                // Без флага Gemma4 тратила 296/300 на думатель и возвращала
+                // 0 тезисов (лог 04.11.26 01:02), пустота затирала историю.
+                true,
                 cancel_flag.clone(),
                 &format!("{}#compact", ctx_label),
                 None,
@@ -190,15 +193,23 @@ fn push_continuation_for_cutoff(
             match summary {
                 Ok(g) => {
                     let summary_text = tail_chars(&clean_thought_tags(&g.text), 2500);
-                    llm_messages.truncate(mark);
-                    llm_messages.push(LlmMessage {
-                        role: "assistant".to_string(),
-                        content: summary_text,
-                        ..Default::default()
-                    });
-                    *continuation_mark = Some(llm_messages.len());
-                    continuation_raw.clear();
-                    log_cb("🧠 Размышления сжаты в тезисы, продолжаем с места обрыва.".to_string());
+                    // Пустой результат компакции НЕ затирает историю: truncate
+                    // при пустом summary молча удалял накопленные размышления
+                    // (кейс 04.11.26: 0 тезисов → пустой assistant в истории →
+                    // модель объявила «технический сбой» и перезапустилась).
+                    if summary_text.trim().is_empty() {
+                        log_cb("⚠️ Сжатие вернуло пустой результат — продолжаю БЕЗ сжатия, история размышлений сохранена.".to_string());
+                    } else {
+                        llm_messages.truncate(mark);
+                        llm_messages.push(LlmMessage {
+                            role: "assistant".to_string(),
+                            content: summary_text,
+                            ..Default::default()
+                        });
+                        *continuation_mark = Some(llm_messages.len());
+                        continuation_raw.clear();
+                        log_cb("🧠 Размышления сжаты в тезисы, продолжаем с места обрыва.".to_string());
+                    }
                 }
                 Err(e) => log_cb(format!(
                     "⚠️ Не удалось сжать размышления ({}), продолжаю без сжатия.",
@@ -211,7 +222,7 @@ fn push_continuation_for_cutoff(
     // Точная точка обрыва: передаём модели последний сырой кусок + указание закончить
     let in_json = parse_target.contains("{") || parse_target.contains("    \"target\"");
     let hint = if in_json {
-        "❌ Твой ответ оборвался в ПОЛОВИНЕ JSON-объекта из-за лимита токенов. Продолжи РОВНО с места обрыва и ЗАКРОЙ начатый JSON (все кавычки и скобки). НЕ повторяй уже написанное и не начинай заново."
+        "❌ Твой ответ оборвался в ПОЛОВИНЕ JSON-объекта из-за лимита токенов. Продолжи РОВНО с места обрыва и ЗАКРОЙ начатый JSON (все кавычки и скобки). НЕ повторяй уже написанное и не начинай заново. Пиши ТОЛЬКО реальные данные: запрещены комментарии (//), строки-заглушки («пример расчета», «и так далее») и пересказ плана."
     } else if is_thinking_truncated(combined) {
         "❌ Твои размышления оборваны лимитом токенов. Продолжи РОВНО с места обрыва, без повторений: кратко заверши мысль и СРАЗУ напиши финальный ответ простым текстом (без JSON)."
     } else {
@@ -232,6 +243,22 @@ fn push_continuation_for_cutoff(
         agent_id, continuation_count
     ));
     Ok(false)
+}
+
+/// Докачка оборванного ВИДИМОГО ответа по лимиту токенов — SSOT-предикат условия входа.
+/// MAX_TOKENS + невалидный JSON + механический признак незавершённости:
+/// либо последний символ не финальная пунктуация, либо открыт ```json-конверт.
+/// Сопряжённое правило: докачка этого типа идёт с выключенным думателем
+/// (force_no_thinking в run_agent_node) — think к этому моменту уже завершён,
+/// решение лежит в истории, повторная генерация мыслей жгла большую часть
+/// бюджета каждой докачки (кейс excel_operator 03.11.26).
+fn cutoff_continuation_conditions(
+    stop_reason: &str,
+    is_valid_json: bool,
+    is_final_text: bool,
+    envelope_truncated: bool,
+) -> bool {
+    stop_reason == "MAX_TOKENS" && !is_valid_json && (!is_final_text || envelope_truncated)
 }
 
 /// Режим графа: системный промпт самого «тяжёлого» агента графа (worst-case).
@@ -2132,8 +2159,18 @@ where
             ));
         }
 
-        if stop_reason == "MAX_TOKENS" && !is_valid_json && (!is_final_text || envelope_truncated) {
-            // Обрыв по лимиту: докачиваем с места обрыва вместо перегенерации
+        if cutoff_continuation_conditions(&stop_reason, is_valid_json, is_final_text, envelope_truncated) {
+            // Обрыв по лимиту: докачиваем с места обрыва вместо перегенерации.
+            // Думатель в этом вызове УЖЕ отработал (обрыв — в видимом ответе;
+            // обрыв в мыслях уходит в ветку выше, в докачку размышлений), решение
+            // лежит в истории. Оставленный включённым think платил ~3/4 бюджета
+            // КАЖДОЙ докачки за повторное обдумывание (кейс excel_operator
+            // 03.11.26: think ~1495 ток + ответ ~545 ток из max_gen=2048, три
+            // раза подряд — «не смог завершить ответ после 3 докачек»).
+            // Отключаем: все n_predict уходят в дописывание данных. Механика —
+            // та же, что у «думателя без ответа» выше; флаг живёт до конца
+            // прогона агента.
+            force_no_thinking.set(true);
             if push_continuation_for_cutoff(
                 &log_cb,
                 &agent.id,
@@ -2157,23 +2194,91 @@ where
             continue;
         }
 
-        if let Some((tool_name, arguments, thought)) = parse_tool_call(&parse_target) {
-            match ctx.execute_tool_call(
-                &tool_name,
-                &arguments,
-                &thought,
-                gen_start,
-                &raw_response,
-                &combined,
-                is_continuation,
-                &parse_target,
-                &response,
-            )? {
-                DispatchCtl::Continue => continue,
-                DispatchCtl::Break => break,
-                DispatchCtl::Return(v) => return Ok(v),
+        match parse_tool_call_detailed(&parse_target) {
+            ToolCallParse::Call {
+                tool: tool_name,
+                arguments,
+                thought,
+            } => {
+                match ctx.execute_tool_call(
+                    &tool_name,
+                    &arguments,
+                    &thought,
+                    gen_start,
+                    &raw_response,
+                    &combined,
+                    is_continuation,
+                    &parse_target,
+                    &response,
+                )? {
+                    DispatchCtl::Continue => continue,
+                    DispatchCtl::Break => break,
+                    DispatchCtl::Return(v) => return Ok(v),
+                }
             }
-        } else if let Some(value) = signal_contract
+            ToolCallParse::ArgsLost {
+                tool: lost_tool,
+                thought: lost_thought,
+                diagnostic,
+            } => {
+                // Правдивое состояние вместо тихой диспетчеризации Value::Null:
+                // раньше тул получал null и отвечал «ops обязателен», хотя модель
+                // arguments ПИСАЛА — она чинила не то и цикл вечно повторялся
+                // (прогон 04.11.2026 01:33–01:40). Теперь: тул не зовётся, модель
+                // получает причину (обрыв / невалидный JSON с позицией).
+                log_agent_thought(
+                    &log_cb,
+                    agent,
+                    "битые arguments",
+                    &lost_tool,
+                    &lost_thought,
+                    gen_start.elapsed().as_secs_f32(),
+                    ctx.depth,
+                );
+                // N0 — наблюдаемость: сырой конверт в лог, причина не пост-хок.
+                let raw_chars: Vec<char> = parse_target.chars().collect();
+                let head: String = raw_chars.iter().take(400).collect();
+                let tail: String = raw_chars.iter().rev().take(400).collect();
+                (log_cb)(format!(
+                    "🧩 [{}] tool-call '{}' распознан, но arguments не читаются: {}. Сырой конверт ({}): {} …|… {}",
+                    agent.id,
+                    lost_tool,
+                    diagnostic,
+                    raw_chars.len(),
+                    head,
+                    tail
+                ));
+                ctx.action_found = true;
+                ctx.consecutive_incomplete += 1;
+                if ctx.consecutive_incomplete >= 3 {
+                    ctx.final_response = format!(
+                        "{} Агент '{}' трижды прислал tool-call '{}' с нечитаемыми arguments ({}). Невозможно продолжить.",
+                        AGENT_ERROR_PREFIX, agent.id, lost_tool, diagnostic
+                    );
+                    break;
+                }
+                ctx.llm_messages.push(LlmMessage {
+                    role: "assistant".to_string(),
+                    content: raw_response.clone(),
+                    ..Default::default()
+                });
+                ctx.continuation_raw.clear();
+                ctx.continuation_mark = None;
+                ctx.llm_messages.push(LlmMessage {
+                    role: "user".to_string(),
+                    content: format!(
+                        "⚠️ Твой tool-call распознан (инструмент `{}`), но его поле `arguments` прочитать не удалось: {}. \
+Перепиши `arguments` строго валидным JSON: без комментариев (//), без строк-заглушек («пример расчета», «и так далее»), без пересказа плана. \
+Большие данные дроби на НЕСКОЛЬКО вызовов инструмента — порции поменьше, каждый следующий вызов продолжает предыдущий.",
+                        lost_tool, diagnostic
+                    ),
+                    ..Default::default()
+                });
+                continue;
+            }
+            ToolCallParse::None => {}
+        }
+        if let Some(value) = signal_contract
             .as_ref()
             .and_then(|c| assemble_slot_signal_value(&c.value_schema, &parse_target))
         {
@@ -2907,6 +3012,29 @@ mod tests {
         assert!(resolve_disable_reasoning(true, false, false, true, true));
         // Ничего не запрошено — think разрешён (обычные текстовые агенты).
         assert!(!resolve_disable_reasoning(false, false, false, false, false));
+    }
+
+    /// Докачка оборванного видимого ответа по MAX_TOKENS — таблица истинности
+    /// предиката входа (SSOT). Сопряжённый побочный эффект ветки —
+    /// force_no_thinking на докачку: think к этому моменту завершён, повторная
+    /// генерация мыслей сжигала ~3/4 бюджета каждой докачки (excel_operator,
+    /// лог 03.11.26: 3×(think ~1495 + ответ ~545) из max_gen=2048 — отказ).
+    #[test]
+    fn cutoff_continuation_conditions_truth_table() {
+        // Классический обрыв в данных: последний символ не финальный.
+        assert!(cutoff_continuation_conditions("MAX_TOKENS", false, false, false));
+        // Обрыв внутри ```json-конверта: пунктуация «финальная» (кавычка),
+        // но конверт открыт — докачка обязательна.
+        assert!(cutoff_continuation_conditions("MAX_TOKENS", false, true, true));
+        // Не финальная пунктуация при открытом конверте — тоже докачка.
+        assert!(cutoff_continuation_conditions("MAX_TOKENS", false, false, true));
+        // Валидный JSON — ответ завершён, докачки нет.
+        assert!(!cutoff_continuation_conditions("MAX_TOKENS", true, false, false));
+        // Причина не лимит токенов (стоп-слово/EOS) — другой механизм.
+        assert!(!cutoff_continuation_conditions("STOP_WORD", false, false, false));
+        assert!(!cutoff_continuation_conditions("EOS", false, true, false));
+        // Финальная пунктуация без открытого конверта — ответ выглядит законченным.
+        assert!(!cutoff_continuation_conditions("MAX_TOKENS", false, true, false));
     }
 
     #[test]

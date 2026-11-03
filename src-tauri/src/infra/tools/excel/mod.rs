@@ -162,6 +162,39 @@ fn run_read(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, T
     ko_excel_tools::inspect::read_range(&path, sheet, range).map_err(tool_error).map(|v| v.to_string())
 }
 
+/// Механический потолок payload'а set_rows в одном excel_apply (в ячейках).
+/// Инвариант: один вызов агента должен влезать в бюджет генерации
+/// (max_gen_tokens=2048, поднимать запрещено — AGENTS.md §0.5):
+/// ~6-8 ток/ячейка + резерв на конверт ~350 ток → (2048-350)/8 ≈ 212 → 200.
+/// Превышение — мгновенная структурированная ошибка с инструкцией, а не
+/// тихая смерть в MAX_TOKENS и докачках (кейс excel_operator 03-04.11.26:
+/// 3 докачки подряд → отказ workflow).
+const MAX_SET_ROWS_CELLS_PER_APPLY: usize = 200;
+
+fn gate_set_rows_payload(ops: &Value) -> Result<(), ToolError> {
+    let mut total_cells = 0usize;
+    if let Some(arr) = ops.as_array() {
+        for op in arr {
+            if op.get("op").and_then(|v| v.as_str()) != Some("set_rows") {
+                continue;
+            }
+            if let Some(rows) = op.get("rows").and_then(|v| v.as_array()) {
+                for row in rows {
+                    let cells = row.as_array().map(|r| r.len()).unwrap_or(1);
+                    total_cells = total_cells.saturating_add(cells);
+                }
+            }
+        }
+    }
+    if total_cells > MAX_SET_ROWS_CELLS_PER_APPLY {
+        return Err(ToolError::Usage(format!(
+            "Блок данных слишком велик: {} ячеек в set_rows при потолке {} на один excel_apply (бюджет генерации модели). Дроби запись: несколько excel_apply с set_rows по ≤15 строк; каждый следующий вызов — с path из output_path предыдущего результата.",
+            total_cells, MAX_SET_ROWS_CELLS_PER_APPLY
+        )));
+    }
+    Ok(())
+}
+
 fn run_apply(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, ToolError> {
     let ops = args
         .get("ops")
@@ -171,6 +204,9 @@ fn run_apply(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, 
             "ops должен быть массивом операций (см. схему тулa)".to_string(),
         ));
     }
+    // Гейт ДО пайплайна: большой блок всё равно не влезает в бюджет генерации
+    // — отклоняем сразу с инструкцией по дроблению.
+    gate_set_rows_payload(ops)?;
     let source = match args.get("path").and_then(|v| v.as_str()) {
         Some(p) if !p.trim().is_empty() => Some(ensure_allowed_source(p, ctx, allowed)?),
         _ => None,
@@ -502,7 +538,7 @@ impl Tool for ExcelApply {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Опционально: абсолютный путь .xlsx-исходника для редактирования (новая книга, если не задан)."},
-                "ops": {"type": "array", "items": {"type": "object"}, "description": "Список операций. Доступные op: add_sheet{name}; delete_sheet{name} (не последний); rename_sheet{from,to}; set_cell{sheet,addr,value|formula,style?,number_format?} — формула БЕЗ ведущего '=' (\"=B2*2\" неверно, \"B2*2\" верно), value сохраняет JSON-тип (число — числом, строка — текстом); set_rows{sheet,addr,rows} — БЛОК строк одной операцией (rows: массив строк-массивов от addr; ячейка — значение, null (пропуск) или {value?,formula?,number_format?,style?}) — данные таблиц ПИШИ ИМ, а не десятками set_cell; format_range{sheet,range,number_format?,style?} — формат/стиль на весь диапазон; add_table{sheet,range,name?} — умная таблица Excel (первая строка диапазона — заголовки); set_column_width{sheet,col,width}; autofit_columns{sheet?,min?,max?}; merge_cells{sheet,range}; auto_filter{sheet,range}; freeze_panes{sheet,cell}; add_chart{sheet,chart_type:bar|column|line|pie|area|scatter,anchor,series:[\"Лист!$B$2:$B$10\"],categories_range?,title?,width_cells?,height_cells?}. Неизвестная op — отказ."},
+                "ops": {"type": "array", "items": {"type": "object"}, "description": "Список операций. Доступные op: add_sheet{name}; delete_sheet{name} (не последний); rename_sheet{from,to}; set_cell{sheet,addr,value|formula,style?,number_format?} — формула БЕЗ ведущего '=' (\"=B2*2\" неверно, \"B2*2\" верно), value сохраняет JSON-тип (число — числом, строка — текстом); set_rows{sheet,addr,rows} — БЛОК строк одной операцией (rows: массив строк-массивов от addr; ячейка — значение, null (пропуск) или {value?,formula?,number_format?,style?}) — данные таблиц ПИШИ ИМ, а не десятками set_cell; ≤15 строк за вызов (блоки больше тул отклонит — дроби на несколько excel_apply); format_range{sheet,range,number_format?,style?} — формат/стиль на весь диапазон; add_table{sheet,range,name?} — умная таблица Excel (первая строка диапазона — заголовки); set_column_width{sheet,col,width}; autofit_columns{sheet?,min?,max?}; merge_cells{sheet,range}; auto_filter{sheet,range}; freeze_panes{sheet,cell}; add_chart{sheet,chart_type:bar|column|line|pie|area|scatter,anchor,series:[\"Лист!$B$2:$B$10\"],categories_range?,title?,width_cells?,height_cells?}. Неизвестная op — отказ."},
                 "output_stem": {"type": "string", "description": "Имя файла результата без расширения (опционально). Без него — автоген: <имя исходника>_изменённый / новая_таблица."},
                 "allow_issues": {"type": "boolean", "description": "true — сохранить файл несмотря на найденные проблемы (только когда они унаследованы от данных пользователя и осознаны). По умолчанию false."}
             },
@@ -755,6 +791,35 @@ mod tests {
             .expect("чтение созданной книги");
         assert!(read.to_string().contains("B2*2"), "формула живая в файле: {read}");
         let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[test]
+    fn apply_rejects_oversized_set_rows_block_before_pipeline() {
+        // Механический потолок payload'а (инвариант бюджета генерации):
+        // слишком большой блок отклоняется мгновенно, без запуска пайплайна —
+        // иначе тихий MAX_TOKENS и смерть в докачках (кейс 03-04.11.26).
+        let (ctx, _registry) = ctx_with_registry("apply_gate");
+        // 26 строк × 8 ячеек = 208 ячеек > потолка 200.
+        let big_rows = vec![vec![serde_json::Value::from(0); 8]; 26];
+        let args = serde_json::json!({"ops": [
+            {"op": "set_rows", "sheet": "Sheet1", "addr": "A1", "rows": big_rows}
+        ]});
+        let err = execute_excel_tool("excel_apply", &args, &ctx, &[])
+            .unwrap()
+            .unwrap_err();
+        assert!(err.to_string().contains("слишком велик"), "{err}");
+        // Пограничный блок ровно в потолок (200 ячеек = 25×8) гейт проходит;
+        // дальше возможна только валидация самой книги — важно, что это НЕ
+        // отказ гейта.
+        let ok_rows = vec![vec![serde_json::Value::from(0); 8]; 25];
+        let args_ok = serde_json::json!({"ops": [
+            {"op": "set_rows", "sheet": "Sheet1", "addr": "A1", "rows": ok_rows}
+        ]});
+        match execute_excel_tool("excel_apply", &args_ok, &ctx, &[]) {
+            None => panic!("excel_apply должен диспетчеризоваться"),
+            Some(Ok(text)) => assert!(!text.contains("слишком велик"), "{text}"),
+            Some(Err(e)) => assert!(!e.to_string().contains("слишком велик"), "{e}"),
+        }
     }
 
     #[test]

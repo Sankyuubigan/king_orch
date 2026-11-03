@@ -11,15 +11,20 @@
  *   {"report": "<JSON-строка сигнала validator_report или сам объект>"}
  *
  * Выход: ТОЛЬКО JSON в stdout:
- *   {"pattern_type": "1".."9" | "none", "reason": "<объяснение>"}
+ *   {"pattern_type": "1".."9" | "none", "pattern_found": boolean, "reason": "<объяснение>"}
  *
- * Функция ТОТАЛЬНА по полю: успех — цифра 1..9; любой отказ (ядро не
- * подтверждено, этажи не классифицированы, сцепка не сошлась, сигнал не объект)
- * — явное `pattern_type = "none"` (презумпция дефицита: нет типа лучше
- * неверного). Маршрутизация графа (check_pattern) читает "none" как добор
- * данных — детектор отсутствия поля не нужен (§00.2: добавь состояние).
- * Exit(1) — только за сломанную инвокацию (не-JSON вход, нет поля report):
- * это ошибка узла движка, а не доменный отказ.
+ * Функция ТОТАЛЬНА по полю: успех — цифра 1..9; любой отказ (критический
+ * элемент e3/e6/e8/e9 не подтверждён, этажи не классифицированы, сцепка не
+ * сошлась, сигнал не объект) — явное `pattern_type = "none"` (презумпция
+ * дефицита: нет типа лучше неверного). Гейт критических элементов {e3,e6,e8,e9}
+ * живёт ЗДЕСЬ (04.11.2026: нода check_critical_elements удалена из графа — её
+ * проверка e3 дублировала тул, остаток переехал следом; §00.2 — механический
+ * гейт в тотальной функции, а не отдельной нодой). Маршрутизация графа
+ * (check_pattern, type condition_check) читает производный булев
+ * `pattern_found` — состояние, которое роутер способен прочитать: у
+ * condition_check нет доступа к шине, а condition_router не читает output
+ * тула (мёртвое условие 03.11.2026). Exit(1) — только за сломанную инвокацию
+ * (не-JSON вход, нет поля report): это ошибка узла движка, а не доменный отказ.
  *
  * Разделение труда (§00.2): классификация «какой тип проявляется на этаже» —
  * эпистемия, её делает модель по эталонам базы; переход по таблице — табличная
@@ -46,14 +51,23 @@ const SAFETY_TRANSITIONS: readonly number[] = [0, 7, 4, 6, 1, 8, 9, 5, 2, 3];
 export interface PatternVerdict {
   /** Цифра типа 1..9 либо явное "none" (тип не определён → добор данных). */
   pattern_type: string;
+  /** Производный булев (pattern_type != "none"): читаемое роутером состояние.
+   * check_pattern (condition_check) не имеет доступа к шине и не умеет
+   * сравнивать строки — только boolean (nodes.rs: condition_check as_bool). */
+  pattern_found: boolean;
   /** Честное объяснение исхода (для логов и диагностики пайплайна). */
   reason: string;
 }
 
 const NONE = "none";
 
+/** Критические элементы контура: тип Триады Травмы не объявляется, пока не
+ * подтверждены все (SSOT — бывшая нода check_critical_elements, 04.11.2026
+ * перенесена сюда). e3 проверяется отдельной причиной (ядро). */
+const CRITICAL_ELEMENTS: readonly string[] = ["e6", "e8", "e9"];
+
 function refusal(reason: string): PatternVerdict {
-  return { pattern_type: NONE, reason };
+  return { pattern_type: NONE, pattern_found: false, reason };
 }
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -75,10 +89,10 @@ function parseTypeDigit(raw: unknown): number | undefined {
 
 /** Механическая проверка сцепки этажей и вычисление типа ядра Триады Травмы
  * (`pattern_type`, Этаж -2). Принимает сигнал validator_report (объект либо
- * JSON-строка). Условия выдачи: ядро подтверждено (`e3 == true`), этажи
- * классифицированы и SAFETY-сцепка сходится (`SAFETY[T0] == T-1`). Тип 1..9
- * может проявиться на любом этаже (см. док SAFETY_TRANSITIONS), принадлежность
- * «множеству этажа» не проверяется. */
+ * JSON-строка). Условия выдачи: критические элементы подтверждены
+ * (`e3`, `e6`, `e8`, `e9 == true`), этажи классифицированы и SAFETY-сцепка
+ * сходится (`SAFETY[T0] == T-1`). Тип 1..9 может проявиться на любом этаже
+ * (см. док SAFETY_TRANSITIONS), принадлежность «множеству этажа» не проверяется. */
 export function computePatternType(report: unknown): PatternVerdict {
   let value: unknown = report;
   if (typeof value === "string") {
@@ -100,6 +114,13 @@ export function computePatternType(report: unknown): PatternVerdict {
   if (obj["e3"] !== true) {
     return refusal("ядро не подтверждено (e3 != true) — тип Триады Травмы не объявляется");
   }
+  for (const element of CRITICAL_ELEMENTS) {
+    if (obj[element] !== true) {
+      return refusal(
+        `критический элемент ${element} не подтверждён — тип Триады Травмы не объявляется`,
+      );
+    }
+  }
   const t0 = parseTypeDigit(floor0);
   if (t0 === undefined) {
     return refusal(`мусор вместо цифры Этажа 0: ${floor0}`);
@@ -115,6 +136,7 @@ export function computePatternType(report: unknown): PatternVerdict {
   }
   return {
     pattern_type: String(SAFETY_TRANSITIONS[t1]),
+    pattern_found: true,
     reason: "SAFETY-сцепка этажей сходится",
   };
 }

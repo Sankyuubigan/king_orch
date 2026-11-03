@@ -13,8 +13,8 @@ groups:
 - id: group_1
   title: Новая группа
   ui_pos:
-    x: -105
     y: 719
+    x: -105
 
 nodes:
 
@@ -28,8 +28,8 @@ nodes:
   type: llm_fact_extractor
   input: '{{ nodes.user_message.output.text }}'
   ui_pos:
-    y: 493
     x: -1990
+    y: 493
   llm_params: strict
 
 - id: check_has_problem
@@ -50,8 +50,8 @@ nodes:
   - validator
   - decomposer
   ui_pos:
-    x: 3244
     y: -230
+    x: 3244
 
 - id: call_soma_translator
   type: llm_worker
@@ -59,8 +59,8 @@ nodes:
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   output_type: message
   ui_pos:
-    y: 210
-    x: -561
+    x: -426
+    y: 219
   llm_params: strict
 
 - id: call_decomposer
@@ -70,8 +70,8 @@ nodes:
   inject_response:
   - soma_translator
   ui_pos:
-    y: 486
     x: 240
+    y: 486
 
 - id: call_validator
   type: llm_worker
@@ -82,8 +82,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    y: 152
     x: 1345
+    y: 152
   llm_params: strict
 
 - id: check_triage_complexity
@@ -96,8 +96,8 @@ nodes:
   - field: triage_complexity
     equals: cluster
   ui_pos:
-    x: -42
     y: 601
+    x: -42
 
 - id: read_pattern_section
   type: custom_tool_call
@@ -134,8 +134,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 3101
     y: 74
+    x: 3101
 
 - id: call_shadow_worker
   type: llm_worker
@@ -165,51 +165,29 @@ nodes:
     x: 916
     y: 492
 
-- id: check_critical_elements
-  type: condition_router
-  true_to: check_elements1
-  false_to: compute_pattern
-  conditions:
-  - field: validator_report.e3
-    equals: false
-  - field: validator_report.e6
-    equals: false
-  - field: validator_report.e8
-    equals: false
-  - field: validator_report.e9
-    equals: false
-  logic: any
-  ui_pos:
-    y: -207
-    x: 1616
-
 - id: compute_pattern
   type: custom_tool_call
   ui_pos:
-    x: 1900
     y: 81
+    x: 1900
   tool_file: ../tools/compute_pattern_type.ts
   args:
     report: '{{ signals.validator_report }}'
 
 - id: check_pattern
-  type: condition_router
+  type: condition_check
   input_object: '{{ nodes.compute_pattern.output }}'
-  field: pattern_type
-  true_to: check_elements1
-  false_to: read_pattern_section
-  conditions:
-  - field: pattern_type
-    equals: none
-  logic: any
+  field: pattern_found
+  true_to: read_pattern_section
+  false_to: check_elements1
   ui_pos:
-    y: 35
     x: 2288
+    y: 35
 
 - id: check_somatic
   type: condition_router
   sequential_to: check_triage_complexity
-  true_to: check_need_handedness
+  true_to: call_soma_translator
   conditions:
   - field: somatic_presence
     equals: new
@@ -229,22 +207,21 @@ nodes:
   input_object: '{{ nodes.extract_facts.output }}'
   field: handedness
   true_to: note_1785123862689
-  false_to: call_soma_translator
   conditions:
   - field: handedness
     equals: unknown
   logic: any
   ui_pos:
-    x: -332
-    y: 117
+    y: 50
+    x: -96
 
 - id: note_1785123862689
   type: note
   input: уточнение рукости у юзера
   system_message: "Психосоматологу не хватает данных о Вашей биологической рукости. \nДавайте проведём \"Тест с аплодисментами (хлопками)\":\nЕстественно и не задумываясь похлопайте в ладоши, как если бы Вы аплодировали в театре. \n* Та рука, которая оказывается **сверху** (является ведущей, активной, более подвижной и ударяет по другой руке) — указывает на биологическую рукость.\n* Если сверху правая рука — человек **биологический правша**.\n* Если сверху левая рука — человек **биологический левша**.\nВ Вашем следующем сообщении добавьте дополнительно информацию о Вашей биологической рукости."
   ui_pos:
-    x: -57
-    y: 10
+    y: -20
+    x: 231
 
 - id: note_1785141025138
   type: note
@@ -262,8 +239,8 @@ nodes:
 
     В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
-    y: 748
     x: -1323
+    y: 748
 
 - id: call_request_helper
   type: llm_worker
@@ -288,8 +265,8 @@ nodes:
     equals: true
   logic: all
   ui_pos:
-    x: 2655
     y: -325
+    x: 2655
 
 - id: call_synthesizer
   type: llm_worker
@@ -317,13 +294,16 @@ edges:
   to: call_healer
 
 - from: call_validator
-  to: check_critical_elements
+  to: compute_pattern
 
 - from: compute_pattern
   to: check_pattern
 
 - from: note_1782221436115
   to: check_somatic
+
+- from: call_soma_translator
+  to: check_need_handedness
 
 - from: note_1785141025138
   to: call_request_helper

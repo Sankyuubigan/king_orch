@@ -263,13 +263,32 @@ fn parse_json_tolerant_block(json_str: &str) -> Option<serde_json::Value> {
     None
 }
 
-/// Извлекает сбалансированный JSON-объект `arguments` из не-Fenced текста
-/// (fallback для сломанного serde-парса всего конверта): depth-aware сканнер
-/// со string/escape-состоянием, НЕ не-жадный regex `\{.*?\}` (который резал
-/// объект на первой `}` внутри content). Возвращает смапленный JSON-объект.
-fn extract_arguments_from_loose_text(text: &str) -> Option<serde_json::Value> {
+/// Результат сканирования текста в поисках объекта `arguments` (fallback-путь
+/// парсинга конверта, когда tolerant-парсер не справился с целым конвертом).
+/// Различает три исхода потери — раньше все они схлопывались в `None`, и тул
+/// тихо получал `Value::Null`, а модель получала ЛОЖНЫЙ сигнал «аргументы не
+/// переданы», чиня не то (прогон 04.11.2026 01:33–01:40, excel_apply ×2).
+pub(crate) enum ArgsScan {
+    /// Сбалансированный валидный JSON-объект найден и распарсен.
+    Found(serde_json::Value),
+    /// Есть начатый `{`, но сбалансированного конца нет — обрыв (обычно лимит токенов).
+    Truncated,
+    /// Сбалансированный объект найден, но serde его не взял — невалидное содержимое.
+    Invalid {
+        /// Абсолютная позиция ошибки (serde column относительно начала текста).
+        offset: usize,
+    },
+    /// Ни одного `{`-кандидата в тексте нет.
+    NotFound,
+}
+
+/// Сканнер сбалансированного JSON-объекта `arguments` из не-Fenced текста:
+/// depth-aware, со string/escape-состоянием, НЕ не-жадный regex `\{.*?\}`
+/// (который резал объект на первой `}` внутри content).
+fn scan_arguments_object(text: &str) -> ArgsScan {
     let bytes = text.as_bytes();
     let mut search = 0usize;
+    let mut last_invalid: Option<usize> = None;
     while let Some(rel) = bytes[search..].iter().position(|&b| b == b'{') {
         let start = search + rel;
         let mut depth = 0u32;
@@ -305,20 +324,69 @@ fn extract_arguments_from_loose_text(text: &str) -> Option<serde_json::Value> {
         }
         match closed_at {
             Some(end) => {
-                // От объекта arguments ожидаем наличие ключей path/… — простой
-                // пробой serde-парса, иначе (мусор из прозы) идём дальше.
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text[start..=end]) {
-                    return Some(v);
+                // От объекта arguments ожидаем валидный JSON — простой пробой
+                // serde-парса, иначе (мусор из прозы) идём дальше.
+                match serde_json::from_str::<serde_json::Value>(&text[start..=end]) {
+                    Ok(v) => return ArgsScan::Found(v),
+                    Err(e) => {
+                        // serde даёт колонку ошибки внутри среза — переводим в
+                        // абсолютную позицию для диагностики модели.
+                        last_invalid = Some(start + e.column());
+                        search = end + 1;
+                    }
                 }
-                search = end + 1;
             }
-            None => break,
+            // Обрыв: дальше по тексту закрытого объекта появиться не может.
+            None => return ArgsScan::Truncated,
         }
     }
-    None
+    match last_invalid {
+        Some(offset) => ArgsScan::Invalid { offset },
+        None => ArgsScan::NotFound,
+    }
 }
 
-fn parse_tool_call_from_json(json_str: &str) -> Option<(String, serde_json::Value, String)> {
+/// Фрагмент текста вокруг позиции ошибки, вычищенный от переносов — для
+/// вставки в однострочное диагностическое сообщение.
+fn fragment_around(text: &str, offset: usize) -> String {
+    let start = offset.saturating_sub(80);
+    let end = (offset + 160).min(text.len());
+    // Ограничение по границе символа (offset из e.column() — байтовая колонка).
+    let mut end = end;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    let mut start = start;
+    while !text.is_char_boundary(start) {
+        start -= 1;
+    }
+    text[start..end]
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .collect()
+}
+
+/// Результат разбора tool-конверта. `ArgsLost` — явное состояние «тул опознан,
+/// но arguments прочитать не удалось»: НЕ диспетчеризуется в тул (ложный сигнал
+/// «ops обязателен» исчезает как класс), а возвращается модели правдивая
+/// диагностика (§00.2: отказ устранён добавлением отсутствующего состояния).
+#[derive(Debug)]
+pub enum ToolCallParse {
+    None,
+    Call {
+        tool: String,
+        arguments: serde_json::Value,
+        thought: String,
+    },
+    ArgsLost {
+        tool: String,
+        thought: String,
+        /// Человекочитаемая причина потери (обрыв / невалидный JSON с позицией / нет поля).
+        diagnostic: String,
+    },
+}
+
+fn parse_tool_call_from_json(json_str: &str) -> ToolCallParse {
     let parsed = parse_json_tolerant_block(json_str);
     if let Some(val) = parsed {
         let has_legacy_tool_key = val.get("tool").is_some();
@@ -327,13 +395,15 @@ fn parse_tool_call_from_json(json_str: &str) -> Option<(String, serde_json::Valu
             .or_else(|| val.get("name"))
             .and_then(|v| v.as_str())
         {
-            if !is_valid_tool_name(tool) { return None; }
+            if !is_valid_tool_name(tool) {
+                return ToolCallParse::None;
+            }
             let explicit_args = val.get("arguments").cloned().or_else(|| val.get("arg").cloned());
             // Нативный OpenAI-конверт {"name": ..., "arguments": ...} обязан нести
             // arguments/arg — иначе это не tool call, а посторонний JSON с ключом
             // "name" (ложное срабатывание, например финальный отчёт агента).
             if !has_legacy_tool_key && explicit_args.is_none() {
-                return None;
+                return ToolCallParse::None;
             }
             let args = explicit_args.unwrap_or_else(|| {
                 if let Some(obj) = val.as_object() {
@@ -350,45 +420,114 @@ fn parse_tool_call_from_json(json_str: &str) -> Option<(String, serde_json::Valu
                 }
             });
             let thought = val.get("thought").and_then(|v| v.as_str()).unwrap_or("").to_string();
-            return Some((tool.to_string(), args, thought));
+            return ToolCallParse::Call {
+                tool: tool.to_string(),
+                arguments: args,
+                thought,
+            };
         }
     } else {
         // Fallback для сломанного serde-парса всего конверта: имя берём regex'ом,
         // а arguments — depth-aware сканнером (не-жадный `\{.*?\}` резал объект на
-        // первой `}` внутри content, см. extract_arguments_from_loose_text).
-        let tool_re = regex::Regex::new(r#"(?is)"(?:tool|name)"\s*:\s*"([^"]+)""#).ok()?;
-        if let Some(tool_cap) = tool_re.captures(json_str) {
-            let tool = tool_cap.get(1)?.as_str().to_string();
-            if !is_valid_tool_name(&tool) { return None; }
-            let args = extract_arguments_from_loose_text(json_str);
-            // Нативный OpenAI-конверт с "name" без распознанных arguments — не tool call.
-            let has_name = regex::Regex::new(r#"(?i)"name"\s*:"#).ok()?.is_match(json_str);
-            let has_tool_key = regex::Regex::new(r#"(?i)"tool"\s*:"#).ok()?.is_match(json_str);
-            if has_name && !has_tool_key && args.is_none() {
-                return None;
+        // первой `}` внутри content, см. scan_arguments_object).
+        let tool_re = regex::Regex::new(r#"(?is)"(?:tool|name)"\s*:\s*"([^"]+)""#).ok();
+        if let Some(tool_cap) = tool_re.as_ref().and_then(|re| re.captures(json_str)) {
+            let tool = match tool_cap.get(1) {
+                Some(m) => m.as_str().to_string(),
+                None => return ToolCallParse::None,
+            };
+            if !is_valid_tool_name(&tool) {
+                return ToolCallParse::None;
             }
-            let args = args.unwrap_or(serde_json::Value::Null);
-            let thought_re = regex::Regex::new(r#"(?is)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok()?;
-            let thought_raw = thought_re.captures(json_str).and_then(|c| c.get(1)).map(|m| m.as_str().to_string()).unwrap_or_default();
-            return Some((tool, args, decode_json_escapes(&thought_raw)));
+            let scan = scan_arguments_object(json_str);
+            // Нативный OpenAI-конверт с "name" без распознанных arguments — не tool call.
+            let has_name = regex::Regex::new(r#"(?i)"name"\s*:"#)
+                .ok()
+                .map(|re| re.is_match(json_str))
+                .unwrap_or(false);
+            let has_tool_key = regex::Regex::new(r#"(?i)"tool"\s*:"#)
+                .ok()
+                .map(|re| re.is_match(json_str))
+                .unwrap_or(false);
+            match scan {
+                ArgsScan::Found(args) => {
+                    let thought_re = regex::Regex::new(r#"(?is)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok();
+                    let thought_raw = thought_re
+                        .as_ref()
+                        .and_then(|re| re.captures(json_str))
+                        .and_then(|c| c.get(1))
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_default();
+                    return ToolCallParse::Call {
+                        tool,
+                        arguments: args,
+                        thought: decode_json_escapes(&thought_raw),
+                    };
+                }
+                _ if has_name && !has_tool_key => return ToolCallParse::None,
+                _ => {
+                    // Тул опознан, но arguments потеряны — правдивое состояние
+                    // вместо тихой диспетчеризации Value::Null.
+                    let diagnostic = match scan {
+                        ArgsScan::Truncated => format!(
+                            "поле `arguments` оборвано: объект {{...}} не закрыт до конца ответа (обрыв по лимиту токенов, текст конверта ~{} символов)",
+                            json_str.chars().count()
+                        ),
+                        ArgsScan::Invalid { offset } => format!(
+                            "поле `arguments` — невалидный JSON около позиции {}: \"{}\"",
+                            offset,
+                            fragment_around(json_str, offset)
+                        ),
+                        _ => "в конверте не найдено поле `arguments` с объектом {...}".to_string(),
+                    };
+                    let thought_re = regex::Regex::new(r#"(?is)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok();
+                    let thought_raw = thought_re
+                        .as_ref()
+                        .and_then(|re| re.captures(json_str))
+                        .and_then(|c| c.get(1))
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_default();
+                    return ToolCallParse::ArgsLost {
+                        tool,
+                        thought: decode_json_escapes(&thought_raw),
+                        diagnostic,
+                    };
+                }
+            }
         }
     }
-    None
+    ToolCallParse::None
 }
 
-pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)> {
+pub fn parse_tool_call_detailed(text: &str) -> ToolCallParse {
     if let Some(json_str) = extract_json_block(text) {
         return parse_tool_call_from_json(&json_str);
     }
-    None
+    ToolCallParse::None
+}
+
+pub fn parse_tool_call(text: &str) -> Option<(String, serde_json::Value, String)> {
+    match parse_tool_call_detailed(text) {
+        ToolCallParse::Call {
+            tool,
+            arguments,
+            thought,
+        } => Some((tool, arguments, thought)),
+        _ => None,
+    }
 }
 
 pub fn strip_tool_call(text: &str) -> (String, Option<(String, serde_json::Value, String)>) {
     if let Some(json_str) = extract_json_block(text) {
-        if let Some(tool_info) = parse_tool_call_from_json(&json_str) {
+        if let ToolCallParse::Call {
+            tool,
+            arguments,
+            thought,
+        } = parse_tool_call_from_json(&json_str)
+        {
             let cleaned = remove_fenced_json_blocks(text);
             // Если весь вывод модели — JSON-конверт инструмента (без окружающего
-            // свободного текста), анализом считаем пустоту. Свободный текст агента в
+            // свободного текста), анализом считаем пустость. Свободный текст агента в
             // этом случае живёт в поле `thought` конверта, и оркестратор (dispatch.rs)
             // корректно подхватит его как `final_response`. Это чинит баг, когда
             // сигнальный агент под грамматикой контракта отдавал голый конверт вместо
@@ -400,7 +539,7 @@ pub fn strip_tool_call(text: &str) -> (String, Option<(String, serde_json::Value
             } else {
                 cleaned
             };
-            return (analysis, Some(tool_info));
+            return (analysis, Some((tool, arguments, thought)));
         }
     }
     (text.to_string(), None)
@@ -631,6 +770,63 @@ pub fn needs_cutoff_continuation(raw: &str, stop_reason: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// План v3 (слой 3): тул опознан, но arguments не читаются — состояние
+    /// ArgsLost возвращается с диагностикой, тул НЕ вызывается с Value::Null.
+    /// Регресс прогона 04.11.2026 01:33–01:40 (excel_apply ×2 с args=null).
+    #[test]
+    fn args_lost_yields_diagnostic_not_null_call() {
+        // Невалидный JSON внутри arguments (комментарий — как в реальном прогоне).
+        let broken = "Продолжаю заполнение данных.\n\n```json\n{\n  \"thought\": \"Завершаю таблицу\",\n  \"tool\": \"excel_apply\",\n  \"arguments\": {\n    \"ops\": [\n      {\"type\": \"set_rows\", \"sheet\": \"Продажи\", \"rows\": [[1, 2]]} // пример расчета\n    ]\n  }\n}\n```";
+        match parse_tool_call_detailed(broken) {
+            ToolCallParse::ArgsLost { tool, diagnostic, .. } => {
+                assert_eq!(tool, "excel_apply");
+                assert!(
+                    diagnostic.contains("невалидный JSON") && diagnostic.contains("позиции"),
+                    "диагностика обязана называть позицию ошибки, получили: {diagnostic}"
+                );
+            }
+            other => panic!("ожидался ArgsLost, получен: {other:?}"),
+        }
+        // Обёртка (старый контракт) возвращает None — тул с null не вызовется.
+        assert!(parse_tool_call(broken).is_none(), "ArgsLost не должен проходить как Call(null)");
+    }
+
+    #[test]
+    fn args_truncated_reported_as_truncated() {
+        // Обрыв внутри arguments (MAX_TOKENS): объект не закрыт.
+        let truncated = "```json\n{\n  \"tool\": \"excel_apply\",\n  \"arguments\": {\n    \"ops\": [\n      {\"type\": \"set_rows\", \"rows\": [[1, 2],";
+        match parse_tool_call_detailed(truncated) {
+            ToolCallParse::ArgsLost { tool, diagnostic, .. } => {
+                assert_eq!(tool, "excel_apply");
+                assert!(diagnostic.contains("оборвано"), "ожидали диагноз обрыва, получили: {diagnostic}");
+            }
+            other => panic!("ожидался ArgsLost (Truncated), получен: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn valid_legacy_envelope_still_parses_as_call() {
+        let ok = "{\"thought\": \"делаю\", \"tool\": \"excel_apply\", \"arguments\": {\"ops\": [{\"type\": \"set_rows\"}]}}";
+        match parse_tool_call_detailed(ok) {
+            ToolCallParse::Call { tool, arguments, .. } => {
+                assert_eq!(tool, "excel_apply");
+                assert!(arguments["ops"].is_array());
+            }
+            other => panic!("валидный конверт обязан парситься как Call, получен: {other:?}"),
+        }
+        // Целый блок невалиден (мусор-объект из прозы перед конвертом — tolerant
+        // падает), но depth-сканнер находит сбалансированный валидный конверт
+        // вторым кандидатом и спасает tool+arguments.
+        let rescued = "```json\n{пример из прозы} {\"thought\": \"делаю\", \"tool\": \"excel_apply\", \"arguments\": {\"ops\": [{\"type\": \"set_rows\", \"rows\": [[\"а\", \"б\"]]}]}}\n```";
+        match parse_tool_call_detailed(rescued) {
+            ToolCallParse::Call { tool, arguments, .. } => {
+                assert_eq!(tool, "excel_apply");
+                assert_eq!(arguments["ops"][0]["type"], "set_rows");
+            }
+            other => panic!("depth-сканнер обязан спасти arguments, получен: {other:?}"),
+        }
+    }
 
     /// Механический признак «обрыв внутри ```json-конверта» (баг №3, лог 01.11.26):
     /// пунктуационная эвристика пропускала обрывок конверта, кончающийся кавычкой.

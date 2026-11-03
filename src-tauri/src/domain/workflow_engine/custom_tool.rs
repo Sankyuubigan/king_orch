@@ -1008,8 +1008,10 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
 
     /// gate_tool_contract (реальный Deno): тул вычисления pattern_type
     /// (вынос финализации из движка, 03.11.2026) — SAFETY-сцепка выдаёт
-    /// цифру Этажа -2; доменный отказ — ТОТАЛЬНОЕ явное "none" с причиной
-    /// (не ошибка узла), только сломанная инвокация даёт exit≠0.
+    /// цифру Этажа -2; гейт критических элементов {e3,e6,e8,e9} живёт в туле
+    /// с 04.11.2026 (нода check_critical_elements удалена из графа); доменный
+    /// отказ — ТОТАЛЬНОЕ явное "none" + pattern_found=false с причиной (не
+    /// ошибка узла), только сломанная инвокация даёт exit≠0.
     #[test]
     #[ignore]
     fn real_deno_compute_pattern_tool_contract() {
@@ -1035,21 +1037,47 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         // Валидные цепи: (1,7) -> 5; (3,6) -> 9 (тип 3 на Этаже 0 валиден —
         // множества {1,4,7}/{3,6,9} в SSOT — элементы этажей, не типы).
         for (report, expected) in [
-            (r#"{"e3":true,"floor0_type":"1","floor1_type":"7"}"#, "5"),
-            (r#"{"e3":true,"floor0_type":"3","floor1_type":"6"}"#, "9"),
+            (
+                r#"{"e3":true,"e6":true,"e8":true,"e9":true,"floor0_type":"1","floor1_type":"7"}"#,
+                "5",
+            ),
+            (
+                r#"{"e3":true,"e6":true,"e8":true,"e9":true,"floor0_type":"3","floor1_type":"6"}"#,
+                "9",
+            ),
         ] {
             let (stdout, stderr, status) = run(report);
             assert!(status.success(), "exit: {}, stderr: {}", status, String::from_utf8_lossy(&stderr));
             let output: serde_json::Value =
                 serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
             assert_eq!(output["pattern_type"], expected, "цепь {}", report);
+            assert_eq!(output["pattern_found"], true, "цепь {}", report);
             assert_eq!(output["reason"], "SAFETY-сцепка этажей сходится");
         }
 
-        // Доменные отказы — тотальные: явное "none" + причина, exit 0.
+        // Доменные отказы — тотальные: явное "none" + pattern_found=false + причина, exit 0.
         for (report, reason_part) in [
-            (r#"{"e3":false,"floor0_type":"1","floor1_type":"7"}"#, "ядро не подтверждено"),
-            (r#"{"e3":true,"floor0_type":"1","floor1_type":"8"}"#, "не сходится"),
+            (
+                r#"{"e3":false,"e6":true,"e8":true,"e9":true,"floor0_type":"1","floor1_type":"7"}"#,
+                "ядро не подтверждено",
+            ),
+            // Гейт бывшей ноды check_critical_elements (04.11.2026 — в туле).
+            (
+                r#"{"e3":true,"e6":false,"e8":true,"e9":true,"floor0_type":"1","floor1_type":"7"}"#,
+                "критический элемент e6 не подтверждён",
+            ),
+            (
+                r#"{"e3":true,"e6":true,"e8":false,"e9":true,"floor0_type":"1","floor1_type":"7"}"#,
+                "критический элемент e8 не подтверждён",
+            ),
+            (
+                r#"{"e3":true,"e6":true,"e8":true,"e9":false,"floor0_type":"1","floor1_type":"7"}"#,
+                "критический элемент e9 не подтверждён",
+            ),
+            (
+                r#"{"e3":true,"e6":true,"e8":true,"e9":true,"floor0_type":"1","floor1_type":"8"}"#,
+                "не сходится",
+            ),
             (r#"{"e3":true}"#, "этажи не классифицированы"),
         ] {
             let (stdout, stderr, status) = run(report);
@@ -1062,6 +1090,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             let output: serde_json::Value =
                 serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
             assert_eq!(output["pattern_type"], "none", "цепь {}", report);
+            assert_eq!(output["pattern_found"], false, "цепь {}", report);
             assert!(
                 output["reason"].as_str().unwrap_or("").contains(reason_part),
                 "reason объясняет отказ ({}): {}",
