@@ -332,7 +332,7 @@ pub struct ChatMessage {
 > ⚠️ **ЗАПРЕЩЁН прямой вызов `cargo build` / `cargo test` / `cargo check` / `npx tauri build` / `npx tauri dev`**
 > (см. `global_ai_docs/desktop_rust_tauri/rules.md:29`, `global_ai_docs/desktop_rust_tauri/rules.md:34`)
 > Только через `build.bat`, `test.bat` или `generate_installer.bat` — они сами находят VS (vswhere), вызывают `vcvarsall.bat` (инициализируют MSVC) и сбрасывают sccache-обёртки.
-> Запуск `npx tauri build` напрямую без .bat = sccache не найдёт cl.exe и сборка упадёт.
+> Запуск `npx tauri build` напрямую без .bat = неинициализированное MSVC-окружение (cl.exe не в PATH) — сборка упадёт.
 
 > 🐞 **ИЗВЕСТНЫЙ ДЕФЕКТ ЭТОЙ МАШИНЫ (не решён, см. `global_ai_docs/desktop_rust_tauri/rules.md` §10):**
 > сборка C-зависимостей (`bzip2-sys`, `ring`, `libz-sys`, `onig_sys`, `zstd-sys`, `lzma-sys`) может
@@ -342,10 +342,7 @@ pub struct ChatMessage {
 > Не искать причину в `Cargo.toml`/скриптах и не выдавать за неё «сломанный MSVC» или «длинные пути» —
 > это проверено и опровергнуто (§10.2/§10.3).
 
-**Перед любой Rust-командой — убедиться, что sccache-сервер запущен:**
-```powershell
-sccache --start-server        # если ещё не запущен
-```
+**Sccache включён глобально** (03.11.2026, `~/.cargo/config.toml` → `rustc-wrapper = "sccache"`, только rustc; C-компилятор не оборачивается — причина старой поломки `CC="sccache cl"`). Сервер стартует клиентом автоматически; при странностях: `sccache --start-server`, диагностика: `sccache --show-stats`.
 
 ### Rust-сборка (только так!)
 ```powershell

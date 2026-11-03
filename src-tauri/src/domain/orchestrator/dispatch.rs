@@ -1401,28 +1401,11 @@ where
             }
             self.consecutive_failed_tools = 0;
             self.signal_saved = true;
-            // ── Механическая финализация значения (SSOT: signals::finalize_*).
-            // pattern_type валидатора моделью не выдаётся: код вычисляет его из
-            // классификации этажей при подтверждённом ядре; не сошлось — явное
-            // "none" (презумпция дефицита: нет типа лучше неверного), причина
-            // видна в логе. Поле тотально: маршрутизация графа читает "none"
-            // как обычное значение (добор), детектор отсутствия не нужен.
-            let mut owned_value = value.clone();
-            match crate::domain::signals::finalize_validator_signal(&mut owned_value) {
-                Ok(pattern) => {
-                    (self.log_cb)(format!(
-                        "🧮 pattern_type вычислен кодом: {} (SAFETY-сцепка этажей сходится)",
-                        pattern
-                    ));
-                }
-                Err(reason) => {
-                    (self.log_cb)(format!(
-                        "⚠️ pattern_type не выдан: {}. Сигнал сохранён с pattern_type=\"none\" (тип не определён).",
-                        reason
-                    ));
-                }
-            }
-            let signal_content = serde_json::json!({key: owned_value}).to_string();
+            // Сигнал сохраняется КАК ВЫДАН: никакой агент-специфичной механики в
+            // общем emit-пути нет (движок агент-агностичен). Доменные вычисления
+            // над сигналом (напр. pattern_type валидатора) — ноды custom_tool_call
+            // в графе команды (compute_pattern → ../tools/compute_pattern_type.ts).
+            let signal_content = serde_json::json!({key: value}).to_string();
             let signal_msg = ChatMessage {
                 id: Some(format!("msg_{}", self.msg_counter)),
                 msg_type: "signal".to_string(),

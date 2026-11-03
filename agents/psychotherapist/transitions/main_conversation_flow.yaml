@@ -57,6 +57,7 @@ nodes:
   type: llm_worker
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
+  output_type: message
   ui_pos:
     x: -561
     y: 210
@@ -106,14 +107,17 @@ nodes:
   tool_file: ../../_shared/tools/read_md_section.ts
   args:
     file: psychotherapist/database/inner_contour_9_patterns.md
-    heading: '## {{ signals.validator_report.pattern_type }}'
+    heading: '## {{ nodes.compute_pattern.output.pattern_type }}'
 
 - id: call_healer
   type: llm_worker
   agent: neuro_healer
   task: |
     Данные переданы готовыми — вызывать инструменты не требуется.
-    Ниже описание лечебного паттерна из базы знаний (пайплайн прочитал секцию по номеру pattern_type, вычисленному кодом из классификации этажей Валидатора) и профиль валидации элементов.
+    Ниже описание лечебного паттерна из базы знаний (пайплайн прочитал секцию по номеру pattern_type, вычисленному нодой compute_pattern из классификации этажей Валидатора) и профиль валидации элементов.
+
+    === НОМЕР ПАТТЕРНА ===
+    {{ nodes.compute_pattern.output.pattern_type }}
 
     === ОПИСАНИЕ ПАТТЕРНА ИЗ БАЗЫ ===
     {{ nodes.read_pattern_section.output.content }}
@@ -164,7 +168,7 @@ nodes:
 - id: check_critical_elements
   type: condition_router
   true_to: check_elements1
-  false_to: read_pattern_section
+  false_to: compute_pattern
   conditions:
   - field: validator_report.e3
     equals: false
@@ -174,17 +178,38 @@ nodes:
     equals: false
   - field: validator_report.e9
     equals: false
-  - field: validator_report.pattern_type
-    equals: "none"
   logic: any
   ui_pos:
     x: 1655
     y: 81
 
+- id: compute_pattern
+  type: custom_tool_call
+  tool_file: ../tools/compute_pattern_type.ts
+  args:
+    report: '{{ signals.validator_report }}'
+  ui_pos:
+    x: 1900
+    y: 81
+
+- id: check_pattern
+  type: condition_router
+  input_object: '{{ nodes.compute_pattern.output }}'
+  field: pattern_type
+  true_to: check_elements1
+  false_to: read_pattern_section
+  conditions:
+  - field: pattern_type
+    equals: "none"
+  logic: any
+  ui_pos:
+    x: 2130
+    y: -60
+
 - id: check_somatic
   type: condition_router
   sequential_to: check_triage_complexity
-  true_to: call_soma_translator
+  true_to: check_need_handedness
   conditions:
   - field: somatic_presence
     equals: new
@@ -200,11 +225,15 @@ nodes:
     x: -802
 
 - id: check_need_handedness
-  type: signal_router
-  signal_name: soma_translator
-  cases_priority:
-  - key: НУЖНА РУКОСТЬ
-    to: note_1785123862689
+  type: condition_router
+  input_object: '{{ nodes.extract_facts.output }}'
+  field: handedness
+  true_to: note_1785123862689
+  false_to: call_soma_translator
+  conditions:
+  - field: handedness
+    equals: unknown
+  logic: any
   ui_pos:
     x: -332
     y: 117
@@ -290,11 +319,11 @@ edges:
 - from: call_validator
   to: check_critical_elements
 
+- from: compute_pattern
+  to: check_pattern
+
 - from: note_1782221436115
   to: check_somatic
-
-- from: call_soma_translator
-  to: check_need_handedness
 
 - from: note_1785141025138
   to: call_request_helper

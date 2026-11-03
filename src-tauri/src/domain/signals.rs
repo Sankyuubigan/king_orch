@@ -340,8 +340,8 @@ pub fn required_field_count(schema: &serde_json::Value) -> usize {
 /// Число черновиков (слотов отчёта) для контракта.
 ///
 /// Инвариант ≥ 1: слот отчёта обязан существовать у ЛЮБОГО контракта.
-/// Enum/строковые/pattern-схемы (`soma_translator`, `focus_keeper`,
-/// `destructor_detector`) не имеют массива `required` — раньше это давало
+/// Enum/строковые/pattern-схемы (`focus_keeper`, `destructor_detector`)
+/// не имеют массива `required` — раньше это давало
 /// `draft{0}`: грамматика не оставляла выхода для анализа, модель шла сразу
 /// в конверт, отчёт агента был пуст (регрессия 93e30c7, 13.10.26).
 /// Object-контракты с N обязательными полями сохраняют N черновиков —
@@ -735,14 +735,14 @@ fn build_value_grammar(schema: &serde_json::Value) -> String {
 /// маршрутизации, когда `signal_router` не находит поле и граф завершается,
 /// не дойдя до `message`-узла (см. docs/SIGNAL_CONTRACTS.md).
 ///
-/// Проверяется именно `required`, а НЕ все `properties`: properties описывают
-/// полную форму значения ПОСЛЕ механической финализации — поля, вычисляемые
-/// кодом (`pattern_type` валидатора в `finalize_validator_signal`), легально
-/// отсутствуют в момент эмита. Требовать их от эмиттера — структурно
-/// неразрешимый отказ: грамматика контракта такие поля выпустить запрещает
-/// (инцидент 03.11.2026: валидатор перегенерировался 16+ раз по ~26 с, потому
-/// что требовал поле, которое сам выдать не может). Отсутствие кодо-вычислимых
-/// полей маршрутизируется графом как дефицит данных (check_pattern_ready).
+/// Проверяется именно `required`, а НЕ все `properties`: properties могут
+/// описывать поля, которых у эмиттера нет по архитектуре (03.11.2026:
+/// pattern_type валидатора вычисляется нодой compute_pattern графа — тул
+/// `tools/compute_pattern_type.ts`; в схеме его больше нет). Требовать от
+/// эмиттера поле, которое грамматика контракта выпустить запрещает, —
+/// структурно неразрешимый отказ (инцидент 03.11.2026: валидатор
+/// перегенерировался 16+ раз по ~26 с). Отсутствие кодо-вычислимых полей
+/// маршрутизируется графом как дефицит данных (check_pattern → добор).
 /// Если у контракта `required` не объявлен — консервативный фолбэк: проверяем
 /// все properties (форма не сужается незаметно для автора схемы).
 pub fn validate_signal_value(contract: &SignalContract, value: &Value) -> Result<(), String> {
@@ -882,106 +882,6 @@ pub fn assemble_slot_signal_value(schema: &Value, text: &str) -> Option<Value> {
     Some(Value::Object(obj))
 }
 
-/// SAFETY-переходы этажей (SSOT: `conversions_patterns.md`, таблица
-/// «переходы типов»). Индекс = тип источника, значение = тип на один
-/// шаг Безопасности вниз (Спуск причины: T0 → Безопасность → T-1 → T-2).
-/// Нулевая ячейка служебная (типы 1..9).
-///
-/// Внимание (разбор 02.11.2026): множества `{1,4,7}/{2,5,8}/{3,6,9}` в SSOT —
-/// это множества НОМЕРОВ ЭЛЕМЕНТОВ по этажам (1,4,7 — соматика/Я-концепция/
-/// страсть; 3,6,9 — Дыра/Триггер/Идол), а НЕ множества типов: у каждого типа
-/// в `patterns_9_types_detailed.md` есть секции всех трёх этажей, тип 1..9
-/// может проявиться на любом этаже. Проверка принадлежности типа «множеству
-/// этажа» невозможна ни для одного реального сигнала (циклы SAFETY (1 7 5 8 2 4)
-/// и (3 6 9) не пересекаются) — она бы отбраковала всё и заставляла модель
-/// галлюцинировать сходимость (кейс «1 → Безопасность → 8»). Поэтому
-/// механически проверяется только сходимость цепи.
-const SAFETY_TRANSITIONS: [u8; 10] = [0, 7, 4, 6, 1, 8, 9, 5, 2, 3];
-
-/// Механическая проверка сцепки этажей и вычисление типа ядра Триады Травмы
-/// (`pattern_type`, Этаж -2).
-///
-/// Разделение труда (§00.2: отказ устраняется конструктивно, а не порогом):
-/// классификация «какой тип проявляется на этаже» — эпистемия, её делает
-/// модель по эталонам базы; переход по таблице — табличная операция, её
-/// делает код. Прогоны 02.11.2026 показали, что модельному переходу доверять
-/// нельзя («Тип 1 → Безопасность → Тип 8» при SAFETY[1] = 7). Возвращает
-/// `Some(T-2)` только при согласованности `SAFETY[T0] == T-1`.
-pub fn compute_pattern_type(floor0_type: &str, floor1_type: &str) -> Option<String> {
-    let t0: usize = floor0_type.trim().parse().ok()?;
-    let t1: usize = floor1_type.trim().parse().ok()?;
-    if !(1..=9).contains(&t0) || !(1..=9).contains(&t1) {
-        return None;
-    }
-    if SAFETY_TRANSITIONS[t0] != t1 as u8 {
-        return None;
-    }
-    Some(SAFETY_TRANSITIONS[t1].to_string())
-}
-
-/// Явное состояние «тип Триады Травмы не определён» в сигнале валидатора.
-/// Вместо невидимого отсутствия поля — тотальное значение: маршрутизация
-/// графа (`check_critical_elements`: `pattern_type == "none"` → добор),
-/// панели сигналов и логи читают его как обычное значение; детектор
-/// отсутствия поля не нужен (§00.2: добавь состояние, а не детектор).
-pub const PATTERN_TYPE_NONE: &str = "none";
-
-/// Боевая финализация сигнала валидатора: `pattern_type` в контракт модели
-/// не входит — код вычисляет его из классификации этажей. Условия выдачи:
-/// ядро подтверждено (`e3 == true`) и SAFETY-сцепка сходится
-/// (`SAFETY[T0] == T-1`). Тип 1..9 может проявиться на любом этаже
-/// (см. док `SAFETY_TRANSITIONS`), принадлежность «множеству этажа»
-/// не проверяется. Функция ТОТАЛЬНА по полю: успех — цифра 1..9, любой
-/// отказ — явное `pattern_type = "none"` (презумпция дефицита: нет типа
-/// лучше неверного). `Err(причина)` объясняет отказ для честного лога.
-pub fn finalize_validator_signal(value: &mut Value) -> Result<String, String> {
-    let result = finalize_validator_signal_core(value);
-    let pattern = match &result {
-        Ok(pattern) => pattern.clone(),
-        Err(_) => PATTERN_TYPE_NONE.to_string(),
-    };
-    if let Some(obj) = value.as_object_mut() {
-        obj.insert("pattern_type".to_string(), Value::String(pattern));
-    }
-    result
-}
-
-fn finalize_validator_signal_core(value: &mut Value) -> Result<String, String> {
-    let Some(obj) = value.as_object() else {
-        return Err("значение сигнала не объект".to_string());
-    };
-    let e3 = obj.get("e3").and_then(Value::as_bool);
-    let floor0 = obj
-        .get("floor0_type")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .map(str::to_string);
-    let floor1 = obj
-        .get("floor1_type")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .map(str::to_string);
-    let (Some(f0), Some(f1)) = (floor0, floor1) else {
-        return Err("этажи не классифицированы (floor0_type/floor1_type отсутствуют)".to_string());
-    };
-    if e3 != Some(true) {
-        return Err(
-            "ядро не подтверждено (e3 != true) — тип Триады Травмы не объявляется".to_string(),
-        );
-    }
-    let t0: u8 = f0.parse().map_err(|_| format!("мусор вместо цифры Этажа 0: {f0}"))?;
-    let t1: u8 = f1.parse().map_err(|_| format!("мусор вместо цифры Этажа -1: {f1}"))?;
-    if !(1..=9).contains(&t0) {
-        return Err(format!("Тип {t0} вне диапазона 1..9"));
-    }
-    if !(1..=9).contains(&t1) {
-        return Err(format!("Тип {t1} вне диапазона 1..9"));
-    }
-    let pattern = compute_pattern_type(&f0, &f1)
-        .ok_or_else(|| format!("SAFETY-сцепка этажей не сходится: Тип {f0} -> Безопасность -> не Тип {f1}"))?;
-    Ok(pattern)
-}
-
 /// Первое `"ключ": true|false` в тексте после указанной позиции ключа.
 /// Сканирует все вхождения литерала `"ключ"`, за каждым — двоеточие и
 /// литерал буля; вхождения без буля после двоеточия пропускаются (модельный
@@ -1080,7 +980,8 @@ mod tests {
         let text = std::fs::read_to_string(schema_path()).expect("root.schema.json прочитать");
         let root: Value = serde_json::from_str(&text).expect("root.schema.json — валидный JSON");
         let agents = root.get("agents").expect("ключ agents");
-        for id in ["validator", "focus_keeper", "soma_translator"] {
+        // soma_translator исключён 03.11.2026: пользовательский агент без контракта.
+        for id in ["validator", "focus_keeper"] {
             let a = agents.get(id).unwrap_or_else(|| panic!("агент {id} в контракте"));
             assert!(a.get("key").is_some(), "{id}: key");
             assert!(a.get("value").is_some(), "{id}: value");
@@ -1094,11 +995,15 @@ mod tests {
         let c = load_signal_contract(dir, "validator").expect("контракт валидатора");
         assert_eq!(c.key, "validator_report");
         assert_eq!(c.value_schema["properties"]["e1"]["type"].as_str(), Some("boolean"));
-        // 9 булевых e-полей + классификация двух этажей (02.11.2026, редизайн:
-        // pattern_type модель не выдаёт — его вычисляет код, см.
-        // finalize_validator_signal; в properties поле осталось как описание
-        // формы сохранённого сигнала, в required его нет).
+        // 9 булевых e-полей + классификация двух этажей (03.11.2026: pattern_type
+        // из схемы УДАЛЁН — модель его не выдаёт, SAFETY-механика вычисления
+        // живёт в туле команды `agents/psychotherapist/tools/compute_pattern_type.ts`
+        // (нода compute_pattern графа); движок агент-агностичен).
         assert_eq!(c.value_schema["required"].as_array().map(|e| e.len()), Some(11));
+        assert!(
+            c.value_schema["properties"].get("pattern_type").is_none(),
+            "pattern_type больше не свойство контракта: его вычисляет нода compute_pattern"
+        );
         for field in ["floor0_type", "floor1_type"] {
             assert_eq!(
                 c.value_schema["properties"][field]["enum"].as_array().map(|e| e.len()),
@@ -1112,89 +1017,24 @@ mod tests {
                 .expect("required массив")
                 .iter()
                 .any(|v| v.as_str() == Some("pattern_type")),
-            "pattern_type не в required: модель его не выдаёт, код вычисляет"
+            "pattern_type не в required: модель его не выдаёт, механику считает нода compute_pattern"
         );
     }
 
-    /// SAFETY-таблица дословно из SSOT (`conversions_patterns.md`) плюс
-    /// замкнутость спуска: для каждого типа цепь T0 → T-1 → T-2 валидна и
-    /// детерминирована.
+    /// Регрессия: soma_translator — ПОЛЬЗОВАТЕЛЬСКИЙ агент без сигнального
+    /// контракта (03.11.2026): контракт GBNF-конвертом съедал пользовательскую
+    /// расшифровку (ответ агента целиком становился думой+JSON-конвертом),
+    /// рукость теперь определяется фактом `handedness` (facts.yaml), а не
+    /// сигналом. Записи в схеме быть не должно.
     #[test]
-    fn safety_transitions_table_matches_ssot() {
-        let expected = [(1u8, 7u8), (2, 4), (3, 6), (4, 1), (5, 8), (6, 9), (7, 5), (8, 2), (9, 3)];
-        for (from, to) in expected {
-            assert_eq!(SAFETY_TRANSITIONS[from as usize], to, "Тип {from} -> Безопасность -> Тип {to}");
-        }
-        for t in 1..=9u8 {
-            let t1 = SAFETY_TRANSITIONS[t as usize];
-            let t2 = SAFETY_TRANSITIONS[t1 as usize];
-            assert_eq!(
-                compute_pattern_type(&t.to_string(), &t1.to_string()).as_deref(),
-                Some(t2.to_string().as_str()),
-                "спуск {t} -> {t1} -> {t2} детерминирован"
-            );
-        }
-    }
-
-    /// Прогон 02.11.2026 (галлюцинация модели): «Тип 1 → Безопасность → Тип 8»
-    /// при SAFETY[1] = 7. Механика несогласованную сцепку не пропускает.
-    #[test]
-    fn compute_pattern_type_rejects_inconsistent_chain() {
-        assert_eq!(compute_pattern_type("1", "8"), None, "галлюцинация прогона 02.11");
-        assert_eq!(compute_pattern_type("0", "4"), None, "типа 0 не существует");
-        assert_eq!(compute_pattern_type("10", "7"), None, "типа 10 не существует");
-        assert_eq!(compute_pattern_type("5", "x"), None, "мусор вместо цифры");
-        assert_eq!(compute_pattern_type("1", "7").as_deref(), Some("5"), "валидная цепь 1 -> 7 -> 5");
-    }
-
-    /// Финализация боевого сигнала: тип вставляется только при подтверждённом
-    /// ядре и сходящейся сцепке; при отказе поле ТОТАЛЬНО — явное "none"
-    /// (презумпция дефицита: нет типа лучше неверного).
-    #[test]
-    fn finalize_validator_signal_injects_and_guards() {
-        // Полный успех: ядро подтверждено, цепь сходится -> pattern_type вставлен.
-        let mut v = serde_json::json!({"e1": true, "e3": true, "e9": true, "floor0_type": "1", "floor1_type": "7"});
-        assert_eq!(finalize_validator_signal(&mut v).ok().as_deref(), Some("5"));
-        assert_eq!(v["pattern_type"], serde_json::json!("5"));
-        // Ядро не подтверждено — отказ, поле тотально: явное "none"
-        // (маршрутизация графа читает "none" как добор данных).
-        let mut v = serde_json::json!({"e3": false, "floor0_type": "1", "floor1_type": "7"});
-        assert!(finalize_validator_signal(&mut v).is_err());
-        assert_eq!(v["pattern_type"], serde_json::json!("none"));
-        // Сцепка не сходится — "none".
-        let mut v = serde_json::json!({"e3": true, "floor0_type": "1", "floor1_type": "8"});
-        assert!(finalize_validator_signal(&mut v).is_err());
-        assert_eq!(v["pattern_type"], serde_json::json!("none"));
-        // Сцепка не сходится (проба 02.11: модель дала (3,8); SAFETY[3]=6 != 8).
-        let mut v = serde_json::json!({"e3": true, "floor0_type": "3", "floor1_type": "8"});
-        let reason = finalize_validator_signal(&mut v).unwrap_err();
-        assert!(reason.contains("не сходится"), "неожиданная причина: {reason}");
-        assert_eq!(v["pattern_type"], serde_json::json!("none"));
-        // Тип 3 на Этаже 0 возможен (множества {1,4,7} и т.п. в SSOT — это
-        // элементы этажа, не типы): цепь 3 -> 6 -> 9 выдаёт тип.
-        let mut v = serde_json::json!({"e3": true, "floor0_type": "3", "floor1_type": "6"});
-        assert_eq!(finalize_validator_signal(&mut v).ok().as_deref(), Some("9"));
-        // Валидная цепь 5 -> 8 -> 2: тип выдан.
-        let mut v = serde_json::json!({"e3": true, "floor0_type": "5", "floor1_type": "8"});
-        assert_eq!(finalize_validator_signal(&mut v).ok().as_deref(), Some("2"));
-        // Этажи не объявлены — "none".
-        let mut v = serde_json::json!({"e3": true});
-        assert!(finalize_validator_signal(&mut v).is_err());
-        assert_eq!(v["pattern_type"], serde_json::json!("none"));
-    }
-
-    /// Регрессия: soma_translator обязан уметь сообщить, что рукость
-    /// ИЗВЕСТНА — иначе вопрос пользователю задаётся даже при наличии данных
-    /// (контракт с единственным значением «НУЖНА РУКОСТЬ» = принудительный вопрос).
-    #[test]
-    fn soma_translator_contract_allows_known_handedness() {
-        let path = schema_path();
-        let dir = path.parent().expect("папка signals");
-        let c = load_signal_contract(dir, "soma_translator").expect("контракт soma_translator");
-        assert_eq!(c.key, "soma_translator");
-        let enum_vals = c.value_schema["enum"].as_array().expect("enum в контракте soma");
-        assert!(enum_vals.iter().any(|v| v.as_str() == Some("НУЖНА РУКОСТЬ")));
-        assert!(enum_vals.iter().any(|v| v.as_str() == Some("РУКОСТЬ ИЗВЕСТНА")));
+    fn soma_translator_is_not_a_signal_emitter() {
+        let text = std::fs::read_to_string(schema_path()).expect("root.schema.json прочитать");
+        let root: Value = serde_json::from_str(&text).expect("root.schema.json — валидный JSON");
+        let agents = root.get("agents").expect("ключ agents");
+        assert!(
+            agents.get("soma_translator").is_none(),
+            "soma_translator не сигнал-эмиттер: расшифровка идёт в чат, рукость — факт handedness"
+        );
     }
 
     #[test]
@@ -1417,13 +1257,13 @@ mod tests {
     }
 
     /// Слот отчёта обязан существовать у ЛЮБОГО контракта (инвариант ≥ 1).
-    /// Enum-схемы (soma_translator, focus_keeper) не имеют `required` — прежнее
+    /// Enum-схемы (focus_keeper) не имеют `required` — прежнее
     /// `draft{0}` убивало отчёт: грамматика не оставляла выхода для анализа,
     /// модель шла сразу в конверт (регрессия 93e30c7; tasks/27.10.26 draft0.md).
     #[test]
     fn enum_contract_gets_one_draft_slot() {
         let contract = SignalContract {
-            key: "soma_translator".to_string(),
+            key: "focus_keeper".to_string(),
             value_schema: serde_json::json!({
                 "type": "string",
                 "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"]
@@ -1521,7 +1361,9 @@ mod tests {
                 id
             );
         }
-        for id in ["soma_translator", "focus_keeper"] {
+        // soma_translator исключён из контрактов 03.11.2026 (пользовательский
+        // агент): enum-пример — focus_keeper.
+        for id in ["focus_keeper"] {
             let contract = map.get(id).unwrap_or_else(|| panic!("контракт {} не найден", id));
             assert_eq!(
                 drafts_count_of(&build_signal_envelope_grammar(contract)),
@@ -1549,7 +1391,7 @@ mod tests {
     #[test]
     fn json_only_grammar_has_no_drafts_block() {
         let contract = SignalContract {
-            key: "soma_translator".to_string(),
+            key: "focus_keeper".to_string(),
             value_schema: serde_json::json!({
                 "type": "string",
                 "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"]
@@ -1610,7 +1452,8 @@ mod tests {
             }
         }
         // Конвертная ветка жива для не-e контрактов — там прежний литерал `"\"value\""`.
-        let enum_contract = load_signal_contract(&dir, "soma_translator").expect("контракт прочитан");
+        // (soma_translator исключён из контрактов 03.11.2026; enum-пример — focus_keeper.)
+        let enum_contract = load_signal_contract(&dir, "focus_keeper").expect("контракт прочитан");
         let enum_grammar = build_signal_envelope_grammar(&enum_contract);
         assert!(
             enum_grammar.contains(
@@ -1692,7 +1535,8 @@ mod tests {
             "validator_facade",
             "validator_core",
             "focus_keeper",
-            "soma_translator",
+            // soma_translator исключён 03.11.2026: пользовательский агент
+            // (расшифровка в чат), рукость — факт handedness, не сигнал.
             "destructor_detector",
         ] {
             assert!(
@@ -1707,7 +1551,7 @@ mod tests {
     #[test]
     fn extract_signal_value_from_text_enum() {
         let c = SignalContract {
-            key: "soma_translator".to_string(),
+            key: "focus_keeper".to_string(),
             value_schema: serde_json::json!({ "type": "string", "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"] }),
         };
         // Точное совпадение enum-значения в тексте → извлекается.
@@ -2210,7 +2054,7 @@ mod tests {
 
         // Не-e контракт (enum) по-прежнему идёт через полный конверт.
         let enum_contract = SignalContract {
-            key: "soma_translator".to_string(),
+            key: "focus_keeper".to_string(),
             value_schema: serde_json::json!({
                 "type": "string",
                 "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"]
@@ -2224,11 +2068,11 @@ mod tests {
         );
     }
 
-    /// Гипотеза 4: Enum-контракт (soma_translator) — должен содержать альтернативы строк
+    /// Гипотеза 4: Enum-контракт — должен содержать альтернативы строк
     #[test]
     fn hypothesis_enum_contract_variants() {
         let c = SignalContract {
-            key: "soma_translator".to_string(),
+            key: "focus_keeper".to_string(),
             value_schema: serde_json::json!({
                 "type": "string",
                 "enum": ["НУЖНА РУКОСТЬ", "РУКОСТЬ ИЗВЕСТНА"]

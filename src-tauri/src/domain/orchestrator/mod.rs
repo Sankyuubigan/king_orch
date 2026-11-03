@@ -2731,21 +2731,11 @@ where
                 .join("\n");
             let extract_input = format!("{}\n{}", user_text, ctx.final_response);
             if let Some(value) = extract_signal_value_from_text(contract, &extract_input) {
-                // Тот же choke point, что у боевого emit_signal (dispatch.rs):
-                // pattern_type валидатора считает код, а не модель.
-                let mut owned_value = value.clone();
-                match crate::domain::signals::finalize_validator_signal(&mut owned_value) {
-                    Ok(pattern) => log_cb(format!(
-                        "🧮 pattern_type вычислен кодом: {} (SAFETY-сцепка этажей сходится)",
-                        pattern
-                    )),
-                    Err(reason) => log_cb(format!(
-                        "⚠️ pattern_type не выдан: {}. Сигнал сохранён с pattern_type=\"none\" (тип не определён).",
-                        reason
-                    )),
-                }
+                // Сигнал сохраняется КАК ИЗВЛЕЧЁН: агент-специфичной механики в
+                // движке нет — доменные вычисления (напр. pattern_type валидатора)
+                // делают ноды custom_tool_call графа команды.
                 let mut map = serde_json::Map::new();
-                map.insert(contract.key.clone(), owned_value.clone());
+                map.insert(contract.key.clone(), value.clone());
                 let signal_msg = ChatMessage {
                     id: Some(format!("msg_{}", ctx.msg_counter)),
                     msg_type: "signal".to_string(),

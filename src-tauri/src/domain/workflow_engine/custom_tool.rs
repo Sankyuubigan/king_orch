@@ -981,8 +981,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
     /// Честный отказ: путь вне agents/ → exit≠0 (containment как у движка).
     #[test]
     #[ignore]
-    fn real_deno_read_md_section_rejects_path_escape() {
-        let log = |msg: String| println!("[log] {}", msg);
+    fn real_deno_read_md_section_rejects_path_escape() {        let log = |msg: String| println!("[log] {}", msg);
         let bins_dir = std::env::temp_dir().join("king_orch_bins");
         std::fs::create_dir_all(&bins_dir).expect("создано");
         let deno = resolve_deno(&bins_dir, &log).expect("deno доступен");
@@ -1005,6 +1004,71 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             "stderr объясняет отказ: {}",
             stderr_text
         );
+    }
+
+    /// gate_tool_contract (реальный Deno): тул вычисления pattern_type
+    /// (вынос финализации из движка, 03.11.2026) — SAFETY-сцепка выдаёт
+    /// цифру Этажа -2; доменный отказ — ТОТАЛЬНОЕ явное "none" с причиной
+    /// (не ошибка узла), только сломанная инвокация даёт exit≠0.
+    #[test]
+    #[ignore]
+    fn real_deno_compute_pattern_tool_contract() {
+        let log = |msg: String| println!("[log] {}", msg);
+        let bins_dir = std::env::temp_dir().join("king_orch_bins");
+        std::fs::create_dir_all(&bins_dir).expect("создано");
+        let deno = resolve_deno(&bins_dir, &log).expect("deno доступен");
+        let (_, transitions, team) = psycho_dirs();
+        let tools = team.join("tools");
+        let run = |report: &str| -> (Vec<u8>, Vec<u8>, std::process::ExitStatus) {
+            let args = serde_json::json!({ "report": report }).to_string();
+            run_deno(
+                &deno,
+                &tools,
+                &transitions,
+                &tools.join("compute_pattern_type.ts"),
+                &args,
+                &[],
+            )
+            .expect("тул выполнен")
+        };
+
+        // Валидные цепи: (1,7) -> 5; (3,6) -> 9 (тип 3 на Этаже 0 валиден —
+        // множества {1,4,7}/{3,6,9} в SSOT — элементы этажей, не типы).
+        for (report, expected) in [
+            (r#"{"e3":true,"floor0_type":"1","floor1_type":"7"}"#, "5"),
+            (r#"{"e3":true,"floor0_type":"3","floor1_type":"6"}"#, "9"),
+        ] {
+            let (stdout, stderr, status) = run(report);
+            assert!(status.success(), "exit: {}, stderr: {}", status, String::from_utf8_lossy(&stderr));
+            let output: serde_json::Value =
+                serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
+            assert_eq!(output["pattern_type"], expected, "цепь {}", report);
+            assert_eq!(output["reason"], "SAFETY-сцепка этажей сходится");
+        }
+
+        // Доменные отказы — тотальные: явное "none" + причина, exit 0.
+        for (report, reason_part) in [
+            (r#"{"e3":false,"floor0_type":"1","floor1_type":"7"}"#, "ядро не подтверждено"),
+            (r#"{"e3":true,"floor0_type":"1","floor1_type":"8"}"#, "не сходится"),
+            (r#"{"e3":true}"#, "этажи не классифицированы"),
+        ] {
+            let (stdout, stderr, status) = run(report);
+            assert!(
+                status.success(),
+                "доменный отказ — не ошибка узла: exit {}, stderr: {}",
+                status,
+                String::from_utf8_lossy(&stderr)
+            );
+            let output: serde_json::Value =
+                serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
+            assert_eq!(output["pattern_type"], "none", "цепь {}", report);
+            assert!(
+                output["reason"].as_str().unwrap_or("").contains(reason_part),
+                "reason объясняет отказ ({}): {}",
+                reason_part,
+                output["reason"]
+            );
+        }
     }
 
     /// allow-read: папки тула/графа/команды + прикреплённые файлы юзера

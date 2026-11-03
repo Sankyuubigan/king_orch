@@ -76,7 +76,7 @@ use crate::domain::orchestrator::RequestMedia;
 use crate::domain::parsers::extract_think_content;
 use crate::domain::signals::{
     assemble_slot_signal_value, auto_think_budget_chars, build_signal_envelope_grammar_with_think_budget,
-    finalize_validator_signal, load_all_signal_contracts, per_draft_budget_chars,
+    load_all_signal_contracts, per_draft_budget_chars,
     slot_min_chars,
     required_field_count, think_slot_count, SignalContract,
 };
@@ -641,11 +641,12 @@ fn flat_validator_probe() {
 
 /// Same-case LLM-проба (02.11.2026): боевой валидатор на жалобе реальной сессии
 /// 1793638300847, где старая грамматика (`[^<]` — тотальный запрет «<» в дум-теле)
-/// резала слоты на капе 332 символа посреди слов, верификаций не оставалось вовсе,
+/// резала слоты на капе 332 симв посреди слов, верификаций не оставалось вовсе,
 /// а `pattern_type` выходил без вывода. Проба воспроизводит боевой вызов: агент
 /// `validator` (INCLUDE резолвятся при загрузке), контракт `validator_report`
-/// (модель классифицирует `floor0_type`/`floor1_type`, код вычисляет
-/// `pattern_type` — `finalize_validator_signal`),
+/// (модель классифицирует `floor0_type`/`floor1_type`; `pattern_type` моделью
+/// не выдаётся — его вычисляет нода `compute_pattern` графа из тула команды
+/// `agents/psychotherapist/tools/compute_pattern_type.ts`),
 /// грамматика через `build_signal_envelope_grammar_with_think_budget` с авто-бюджетом
 /// из конфига пользователя, жалоба — текст пользователя. Первая реплика сессии:
 /// нода call_validator инжектит synthesizer/shadow_worker/grounder/data_collector,
@@ -805,15 +806,15 @@ fn real_validator_session_case_probe() {
     // туда велел писать только удалённый промптовый костыль «вердикт первой
     // строкой». Гейт тел — количество, а не содержимое.
     // Гейт механики 02.11.2026 (зафиксирован ДО прогона): модель
-    // классифицирует этажи (`floor0_type`/`floor1_type`), pattern_type
-    // вычисляет код. e3 == true — правильный ответ владельца по этому кейсу.
-    // Сцепка этажей — эпистемика модели, её качество проба НЕ гейтит (как и
-    // нестабильность типа 5/4/4/8 в фазе B — вопрос бюджета/модели, выбор
-    // владельца). Гейтится ДВУСТОРОННИЙ контракт механики финализации:
-    // сцепка сошлась (SAFETY[T0] == T-1; множества {1,4,7}/{2,5,8}/{3,6,9} в
-    // SSOT — элементы этажей, не типы, см. док SAFETY_TRANSITIONS) → тип выдан
-    // и вставлен; не сошлась → отказ с причиной и явное pattern_type="none"
-    // (поле тотально, презумпция дефицита: нет типа лучше неверного).
+    // классифицирует этажи (`floor0_type`/`floor1_type`); `pattern_type`
+    // моделью НЕ выдаётся и в сигнале не появляется — его вычисляет нода
+    // `compute_pattern` графа (тул команды compute_pattern_type.ts, покрыт
+    // vitest-гейтом test/compute-pattern-type-tool.test.ts и Deno-гейтом
+    // custom_tool::real_deno_compute_pattern_tool_contract). e3 == true —
+    // правильный ответ владельца по этому кейсу. Сцепка этажей — эпистемика
+    // модели, её качество проба НЕ гейтит (как и нестабильность типа 5/4/4/8
+    // в фазе B — вопрос бюджета/модели, выбор владельца). Сигнал сохраняется
+    // КАК ВЫДАН — никаких кодовых вставок в движке.
     let e3 = value.get("e3").and_then(Value::as_bool);
     assert_eq!(
         e3,
@@ -830,6 +831,10 @@ fn real_validator_session_case_probe() {
         floor0,
         floor1
     );
+    assert!(
+        value.get("pattern_type").is_none(),
+        "pattern_type не должен появляться в сигнале: его вычисляет нода compute_pattern графа"
+    );
     let verdicts: Vec<String> = (1..=slots)
         .map(|n| {
             let key = format!("e{}", n);
@@ -840,45 +845,12 @@ fn real_validator_session_case_probe() {
             )
         })
         .collect();
-    let mut finalized = value.clone();
-    match finalize_validator_signal(&mut finalized) {
-        Ok(pattern) => {
-            assert!(
-                matches!(pattern.as_str(), "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9"),
-                "pattern_type вне 1..9: {:?}",
-                pattern
-            );
-            assert_eq!(
-                finalized.get("pattern_type").and_then(Value::as_str),
-                Some(pattern.as_str()),
-                "pattern_type вставлен в сигнал финализацией"
-            );
-            println!(
-                "\n=== ИТОГ: {}, floor0 = {}, floor1 = {}, pattern_type = {} (вычислен кодом) ===",
-                verdicts.join(", "),
-                floor0.expect("checked above"),
-                floor1.expect("checked above"),
-                pattern
-            );
-        }
-        Err(reason) => {
-            // Механика обязана ОТБРАКОВАТЬ несцеплённую классификацию: тихий
-            // неверный тип недопустим. Поле тотально: явное "none" — штатный
-            // исход презумпции дефицита (маршрутизация графа ведёт его на добор).
-            assert_eq!(
-                finalized.get("pattern_type").and_then(Value::as_str),
-                Some("none"),
-                "при отказе финализации pattern_type обязан быть \"none\""
-            );
-            println!(
-                "\n=== ИТОГ: {}, floor0 = {}, floor1 = {} — механика отбраковала сцепку: {} (pattern_type=\"none\", добор данных) ===",
-                verdicts.join(", "),
-                floor0.expect("checked above"),
-                floor1.expect("checked above"),
-                reason
-            );
-        }
-    }
+    println!(
+        "\n=== ИТОГ: {}, floor0 = {}, floor1 = {} (pattern_type моделью не выдаётся — его вычисляет нода compute_pattern из SAFETY-сцепки) ===",
+        verdicts.join(", "),
+        floor0.expect("checked above"),
+        floor1.expect("checked above")
+    );
 }
 
 fn write_report(
