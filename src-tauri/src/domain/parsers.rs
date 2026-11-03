@@ -18,6 +18,17 @@ fn extract_json_block(text: &str) -> Option<String> {
             }
             search_pos = abs_start + end + 3;
         } else {
+            // Незакрытый ```json-фенс: конверт оборван (обычно лимитом токенов).
+            // Содержимое до конца текста всё равно отдаём парсеру: ArgsLost
+            // (Truncated) разберёт состояние правдиво. Раньше обрыв схлопывался
+            // в None — тул-ветка не видела даже факта tool-call.
+            let partial = text[abs_start..].trim();
+            if partial.contains("\"target\"") || partial.contains("\"tool\"") {
+                return Some(partial.to_string());
+            }
+            if first_fenced.is_none() && !partial.is_empty() {
+                first_fenced = Some(partial.to_string());
+            }
             break;
         }
     }
@@ -451,6 +462,19 @@ fn parse_tool_call_from_json(json_str: &str) -> ToolCallParse {
                 .unwrap_or(false);
             match scan {
                 ArgsScan::Found(args) => {
+                    // Сканнер возвращает ПЕРВЫЙ сбалансированный объект: в
+                    // rescued-кейсе (мусор-объект перед конвертом ломает
+                    // tolerant-парс целого блока) найденным оказывается сам
+                    // конверт — тогда значением arguments обязано быть его
+                    // поле `arguments`/`arg`, а не конверт целиком.
+                    let args = match args.get("arguments").or_else(|| args.get("arg")) {
+                        Some(inner)
+                            if args.get("tool").is_some() || args.get("name").is_some() =>
+                        {
+                            inner.clone()
+                        }
+                        _ => args,
+                    };
                     let thought_re = regex::Regex::new(r#"(?is)"thought"\s*:\s*"(.*?)"\s*(?:,|\})"#).ok();
                     let thought_raw = thought_re
                         .as_ref()

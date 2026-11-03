@@ -39,8 +39,8 @@ nodes:
   true_to: note_1782221436115
   false_to: note_1785141025138
   ui_pos:
-    x: -1700
     y: 495
+    x: -1700
 
 - id: call_collector
   type: llm_worker
@@ -50,8 +50,8 @@ nodes:
   - validator
   - decomposer
   ui_pos:
-    y: -230
-    x: 3244
+    x: 2744
+    y: 781
 
 - id: call_soma_translator
   type: llm_worker
@@ -70,8 +70,8 @@ nodes:
   inject_response:
   - soma_translator
   ui_pos:
-    x: 240
     y: 486
+    x: 240
 
 - id: call_validator
   type: llm_worker
@@ -82,8 +82,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    x: 1345
-    y: 152
+    y: 410
+    x: 1349
   llm_params: strict
 
 - id: check_triage_complexity
@@ -102,12 +102,12 @@ nodes:
 - id: read_pattern_section
   type: custom_tool_call
   ui_pos:
-    x: 2809
-    y: 78
+    x: 2355
+    y: 297
   tool_file: ../../_shared/tools/read_md_section.ts
   args:
-    file: psychotherapist/database/inner_contour_9_patterns.md
     heading: '## {{ nodes.compute_pattern.output.pattern_type }}'
+    file: psychotherapist/database/inner_contour_9_patterns.md
 
 - id: call_healer
   type: llm_worker
@@ -134,8 +134,8 @@ nodes:
   - grounder
   - data_collector
   ui_pos:
-    y: 74
-    x: 3101
+    x: 2647
+    y: 293
 
 - id: call_shadow_worker
   type: llm_worker
@@ -148,15 +148,15 @@ nodes:
   - grounder
   - soma_translator
   ui_pos:
-    y: -427
-    x: 2986
+    x: 2684
+    y: 536
 
 - id: note_1782221436115
   type: note
   input: пересчитываем данные с учетом новых данных от юзера
   ui_pos:
-    x: -1215
     y: 255
+    x: -1215
 
 - id: note_1782220193985
   type: note
@@ -168,8 +168,8 @@ nodes:
 - id: compute_pattern
   type: custom_tool_call
   ui_pos:
-    y: 81
-    x: 1900
+    x: 1668
+    y: 555
   tool_file: ../tools/compute_pattern_type.ts
   args:
     report: '{{ signals.validator_report }}'
@@ -181,8 +181,8 @@ nodes:
   true_to: read_pattern_section
   false_to: check_elements1
   ui_pos:
-    x: 2288
-    y: 35
+    y: 523
+    x: 1988
 
 - id: check_somatic
   type: condition_router
@@ -212,8 +212,8 @@ nodes:
     equals: unknown
   logic: any
   ui_pos:
-    y: 50
     x: -96
+    y: 50
 
 - id: note_1785123862689
   type: note
@@ -239,8 +239,8 @@ nodes:
 
     В принципе, как альтернативный вариант Вы можете пользоваться данным агентом  ИИ как доктором которому вы описываете за сегодняшний день своё самочувствие, все свои симптомы и недуги. При таком сценарии этот Агент ИИ сначала попытается найти в вашем подсознании перекосы психического характера, потому что лечение происходит именно через них.
   ui_pos:
-    x: -1323
     y: 748
+    x: -1323
 
 - id: call_request_helper
   type: llm_worker
@@ -265,8 +265,8 @@ nodes:
     equals: true
   logic: all
   ui_pos:
-    y: -325
-    x: 2655
+    x: 2353
+    y: 638
 
 - id: call_synthesizer
   type: llm_worker

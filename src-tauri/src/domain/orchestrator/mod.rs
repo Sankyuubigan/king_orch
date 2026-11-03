@@ -261,6 +261,20 @@ fn cutoff_continuation_conditions(
     stop_reason == "MAX_TOKENS" && !is_valid_json && (!is_final_text || envelope_truncated)
 }
 
+/// SSOT-предикат резолва mmproj оркестратором (PRP 04.11.26, Шаг 3):
+/// проектор нужен, когда в графе есть vision-агент, картинки реально в
+/// контексте (текущий запрос или история), движок локальный и mmproj ещё не
+/// поднят api-фолбэком. Без картинок в контексте проектор не поднимаем
+/// (~2.4 ГБ VRAM впустую), в облаке mmproj-механика не существует.
+fn mmproj_resolve_needed(
+    any_vision_agent: bool,
+    mmproj_resolved: bool,
+    images_in_context: bool,
+    is_cloud: bool,
+) -> bool {
+    !is_cloud && any_vision_agent && !mmproj_resolved && images_in_context
+}
+
 /// Режим графа: системный промпт самого «тяжёлого» агента графа (worst-case).
 /// Пиковая VRAM определяется одним LLM-вызовом (движок работает последовательно),
 /// поэтому берём агента с самым длинным системным промптом. Sub-workflow узлы
@@ -349,6 +363,11 @@ pub fn run_chat<L, S, C, ST, RT>(
     model_params: ModelParams,
     format_type: String,
     mmproj_path: Option<String>,
+    // Резолвер mmproj «по потребности» (PRP 04.11.26, Шаг 3): домен решает
+    // КОГДА (vision-агент + картинки в контексте, включая исторические),
+    // api поставляет КАК (AppHandle + каталог + докачка). None = облако
+    // (mmproj-механики нет) или вызовы вне chat_request (тесты).
+    mmproj_resolver: Option<Box<dyn Fn(&str) -> Option<String> + Send + Sync>>,
     cancel_flag: Arc<AtomicBool>,
     stream_meta: Arc<Mutex<StreamMeta>>,
     prompt_log: Option<std::path::PathBuf>,
@@ -531,6 +550,37 @@ where
         if worst_has_tools { " с инструментами" } else { "" },
         history_chars, image_catalog_chars, image_tokens, TOKEN_ESTIMATE_RESERVE, tool_budget, max_gen_tokens
     ));
+
+    // ── Резолв mmproj по потребности графа (PRP 04.11.26, Шаг 3) ──
+    // Сигнал «нужен проектор» = vision-агент в графе И картинки в контексте
+    // (текущий запрос ИЛИ история: `candidate_prompt()` непуст ⟺ непусты
+    // candidates, собранные из вложений запроса и истории). Резолв только по
+    // флагу «есть вложения текущего запроса» (api/chat.rs) оставлял дыру —
+    // кейс 1793324737511: картинка ехала из истории (origin=история чата),
+    // запрос шёл с attachments=[] → ensure-ветка не выполнялась → движок без
+    // mmproj → vision-агент слеп. api-фолбэк остаётся: он резолвит до run_chat
+    // по текущим вложениям, здесь добиваем исторический случай.
+    let mut mmproj_path = mmproj_path;
+    if mmproj_resolve_needed(
+        any_vision_agent,
+        mmproj_path.is_some(),
+        !image_catalog_text.is_empty(),
+        cloud_endpoint.is_some(),
+    ) {
+        match mmproj_resolver.as_ref().and_then(|resolve| resolve(&model_path)) {
+            Some(projector) => {
+                log_cb(
+                    "📸 mmproj поднят оркестратором: vision-агент при картинках в контексте (текущий запрос или история)."
+                        .to_string(),
+                );
+                mmproj_path = Some(projector);
+            }
+            None => log_cb(format!(
+                "⚠️ Зрение недоступно: mmproj не найден для модели {} — картинки в контексте пойдут агентам только метаданными, содержимое недоступно.",
+                model_path
+            )),
+        }
+    }
 
     let engine = if let Some(endpoint) = cloud_endpoint {
         let model = if model_path.starts_with("9router:") {
@@ -2956,6 +3006,20 @@ mod tests {
     use std::fs;
     use std::path::{Path, PathBuf};
 
+    #[test]
+    fn mmproj_resolve_needed_requires_vision_images_local_unresolved() {
+        // PRP 04.11.26 Шаг 3: SSOT-предикат резолва mmproj оркестратором.
+        assert!(mmproj_resolve_needed(true, false, true, false));
+        // Нет vision-агента в графе — проектор не поднимаем (VRAM впустую).
+        assert!(!mmproj_resolve_needed(false, false, true, false));
+        // Нет картинок в контексте (ни текущих, ни исторических) — не нужен.
+        assert!(!mmproj_resolve_needed(true, false, false, false));
+        // Уже поднят api-фолбэком (вложения текущего запроса) — повтор не нужен.
+        assert!(!mmproj_resolve_needed(true, true, true, false));
+        // Облако: mmproj-механика не существует.
+        assert!(!mmproj_resolve_needed(true, false, true, true));
+    }
+
     fn make_agent(id: &str, system_prompt: &str) -> AgentProfile {
         AgentProfile {
             id: id.to_string(),
@@ -4066,6 +4130,7 @@ mod tests {
             1500,
             ModelParams::default(),
             "Auto".to_string(),
+            None,
             None,
             cancel,
             Arc::new(Mutex::new(StreamMeta::default())),

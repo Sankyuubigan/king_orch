@@ -340,6 +340,27 @@ pub async fn chat_request(
         None => None,
     };
 
+    // ── Резолвер mmproj для оркестратора (PRP 04.11.26, Шаг 3) ──
+    // Домен решает КОГДА нужен проектор (vision-агент в графе + картинки в
+    // контексте, включая исторические — там AppHandle недоступен), api
+    // поставляет возможность (каталог + докачка). block_on безопасен:
+    // run_chat живёт в spawn_blocking (поток блокирующего пула, не внутри
+    // async-poll).
+    let mmproj_resolver: Option<Box<dyn Fn(&str) -> Option<String> + Send + Sync>> = if is_cloud {
+        None
+    } else {
+        let app_for_mmproj = app.clone();
+        Some(Box::new(move |model_path: &str| {
+            match tauri::async_runtime::block_on(infra::ensure_mmproj_for_model(
+                &app_for_mmproj,
+                model_path,
+            )) {
+                Ok(Some(projector)) => Some(projector),
+                _ => None,
+            }
+        }))
+    };
+
     let agents_dir = infra::find_agents_dir(&app);
     let mcp_servers_dir = infra::find_mcp_servers_dir(&app);
 
@@ -549,6 +570,7 @@ pub async fn chat_request(
             model_params,
             format_type,
             mmproj_path,
+            mmproj_resolver,
             cancel_flag,
             stream_meta,
             prompt_log,
