@@ -6,7 +6,5 @@ pub(crate) const COMPACT_MAX_TOKENS: usize = 300;
 pub(crate) const THOUGHT_STORE_MAX_CHARS: usize = 2100; // в сессию сохраняем мысль срезом (приоритет ответу)
 pub(crate) const MAX_STALLED_CONTINUATIONS: usize = 3; // докачек подряд без прогресса
 pub(crate) const MIN_THINKING_GROWTH_CHARS: isize = 128; // порог «размышления растут» за одну докачку
-pub(crate) const TOKEN_ESTIMATE_RESERVE: u32 = 512;
-pub(crate) const TOOL_WORKING_BUDGET: u32 = 1024;
 pub(crate) const SPILL_THRESHOLD: usize = 8000;
 pub(crate) const NATIVE_FINAL_RETRIES_MAX: usize = 2; // GUARD «финал без тулов»: макс. ретраев native-агента

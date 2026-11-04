@@ -200,6 +200,14 @@ fn truncate_range(messages: &mut Vec<LlmMessage>, end: usize, report: &mut Compa
 
 /// Усечь самое крупное не-system сообщение (head/tail), чтобы влезть в лимит при
 /// переполнении одним гигантом. Возвращает true, если что-то усечено.
+///
+/// ЗАДАНИЕ НЕПРИКОСНОВЕННО (PRP 04.11.26): последнее user-сообщение — это task
+/// текущего прогона (в графе task пушится последним, в legacy — текущий
+/// user_text). Свёртка задания в плейсхолдер = «агент данных не видел» (кейс
+/// астролога 1793228120713: task 24K симв с картой был свёрнут в
+/// `[свёрнуто 23258 симв]`, модель честно ответила «данных нет»). Поэтому
+/// task исключён из кандидатов: если резать, кроме него, нечего — false, и
+/// вызывающий отдаёт честную ошибку вместо тихой потери смысла.
 pub(crate) fn truncate_largest<L, F>(
     messages: &mut Vec<LlmMessage>,
     budget_tokens: usize,
@@ -210,9 +218,13 @@ where
     L: Fn(String),
     F: Fn(&[LlmMessage]) -> usize,
 {
+    let task_idx = messages.iter().rposition(|m| m.role == "user");
     let mut best: Option<usize> = None;
     let mut best_len = 0usize;
     for (i, m) in messages.iter().enumerate().skip(1) {
+        if Some(i) == task_idx {
+            continue;
+        }
         if m.content.chars().count() > best_len {
             best_len = m.content.chars().count();
             best = Some(i);
@@ -237,7 +249,7 @@ where
         messages[idx].content = format!("{} …[свёрнуто {} симв]… {}", h2, d2, t2);
     }
     log_cb(format!(
-        "🗜️ Переполнение: усечено самое крупное сообщение на {} симв.",
+        "🗜️ Переполнение: усечено самое крупное сообщение (кроме защищённого задания) на {} симв.",
         dropped
     ));
     true
@@ -630,5 +642,72 @@ mod tests {
         assert!(!is_server_unavailable(
             "/v1/chat/completions: HTTP 400 Bad Request"
         ));
+    }
+
+    fn msg(role: &str, content: &str) -> LlmMessage {
+        LlmMessage {
+            role: role.to_string(),
+            content: content.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn huge(chars: usize) -> String {
+        "д".repeat(chars)
+    }
+
+    /// Т1 (PRP 04.11.26): при переполнении усекается ИСТОРИЯ, задание цело —
+    /// кейс астролога: task с данными карты не сворачивается в плейсхолдер.
+    #[test]
+    fn truncate_largest_never_touches_last_user_task() {
+        let mut msgs = vec![msg("system", &huge(200)), msg("assistant", &huge(3000))];
+        msgs.push(msg("user", &format!("Вопрос пользователя {}", huge(24000))));
+        let before_task = msgs[2].content.clone();
+        let cut = truncate_largest(&mut msgs, 100, char_tokens, |_| {});
+        assert!(cut, "история должна быть усечена");
+        assert_eq!(msgs[2].content, before_task, "задание (последний user) неприкосновенно");
+        assert!(msgs[1].content.contains("свёрнуто"), "усечено крупнейшее не-task сообщение");
+    }
+
+    /// Т2: кроме system и задания резать нечего → false (честный отказ
+    /// вместо тихой свёртки смысла).
+    #[test]
+    fn truncate_largest_returns_false_when_only_task_remains() {
+        let mut msgs = vec![msg("system", &huge(14000))];
+        msgs.push(msg("user", &format!("Задание {}", huge(24000))));
+        let before = msgs[1].content.clone();
+        let cut = truncate_largest(&mut msgs, 100, char_tokens, |_| {});
+        assert!(!cut, "резать нечего: только system и задание");
+        assert_eq!(msgs[1].content, before, "задание не тронуто");
+    }
+
+    /// Т3: рекурсивное углубление усечения тоже не выбирает задание.
+    #[test]
+    fn truncate_largest_deep_cut_still_skips_task() {
+        let mut msgs = vec![msg("system", &huge(200)), msg("user", &huge(2000))];
+        msgs.push(msg("assistant", &huge(1800)));
+        msgs.push(msg("user", &format!("Задание {}", huge(24000))));
+        let cut = truncate_largest(&mut msgs, 1, char_tokens, |_| {});
+        assert!(cut);
+        assert!(msgs[3].content.contains("Задание"), "задание цело после углубления");
+        assert!(msgs[1].content.contains("свёрнуто"), "углубление применилось к крупнейшему не-task");
+    }
+
+    /// Т4: слой 4 (жёсткий drop старейших) не дропает задание — последний
+    /// элемент массива и последний user выживают всегда.
+    #[test]
+    fn layer4_hard_drop_keeps_task() {
+        let mut msgs = vec![
+            msg("system", "sys"),
+            msg("user", "старейшее 1"),
+            msg("assistant", "старейшее 2"),
+            msg("user", "старейшее 3"),
+            msg("assistant", "старейшее 4"),
+            msg("user", &format!("Задание {}", huge(600))),
+        ];
+        let rep = compact_llm_messages(&mut msgs, 30, 4, char_tokens, |_| None, |_| {});
+        assert!(rep.old_messages_dropped > 0, "слой 4 сработал");
+        let last = msgs.last().expect("массив не пуст");
+        assert!(last.content.contains("Задание"), "задание не дропнуто слоем 4");
     }
 }

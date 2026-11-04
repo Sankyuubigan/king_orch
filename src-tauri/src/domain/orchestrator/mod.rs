@@ -316,30 +316,6 @@ pub fn build_worst_agent_prompt(
     worst.unwrap_or_else(|| (String::new(), false))
 }
 
-fn estimate_chars_per_token(
-    worst_system_prompt: &str,
-    history_text: &str,
-    user_text: &str,
-) -> usize {
-    let total = worst_system_prompt.chars().count()
-        + history_text.chars().count()
-        + user_text.chars().count();
-    if total == 0 {
-        return 3;
-    }
-    let cyrillic = worst_system_prompt
-        .chars()
-        .chain(history_text.chars())
-        .chain(user_text.chars())
-        .filter(|c| ('\u{0400}'..='\u{04FF}').contains(c))
-        .count();
-    if cyrillic * 10 >= total * 3 {
-        2
-    } else {
-        3
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn run_chat<L, S, C, ST, RT>(
     log_cb: L,
@@ -434,43 +410,6 @@ where
         request_media.candidate_ids()
     ));
 
-    // ── Worst-case оценка стартового контекста движка ──
-    // Токенизатор живёт ВНУТРИ движка (llama-server) и недоступен до его старта,
-    // а --ctx-size фиксируется при старте процесса. Оцениваем токены эвристикой
-    // (делитель зависит от языка промпта: ~3 симв/токен для латиницы, ~2 для
-    // кириллицы) + запас на спецтокены/JSON и токены изображений. Точная подгонка
-    // остаётся за циклом обрезки истории в run_agent_node (по точным /tokenize).
-    let (worst_system_prompt, worst_has_tools) = match &workflow_match {
-        Some(wf) => build_worst_agent_prompt(&agents, wf, &history),
-        None => agents
-            .iter()
-            .find(|a| a.id == agent_id)
-            .map(|agent| {
-                 let mut tools = runtime::builtin_tools();
-                 tools.extend(runtime::agent_code_tool_schemas(agent));
-                 tools.extend(crate::infra::image_tool_schemas(&agent.tools));
-                 tools.extend(crate::infra::video_tool_schemas(&agent.tools));
-                 tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
-                 tools.extend(crate::infra::refmod_tool_schemas(&agent.tools));
-                 tools.extend(crate::infra::diag_tool_schemas(&agent.tools));
-                 let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
-                (
-                    build_system_prompt(
-                        agent,
-                        &history,
-                        has_tools,
-                        &tools,
-                        max_gen_usize,
-                        None,
-                        false,
-                        false,
-                        false,
-                    ),
-                    has_tools,
-                )
-            })
-            .unwrap_or_else(|| (String::new(), false)),
-    };
     let uses_image_selection = if let Some(workflow) = workflow_match.as_ref() {
         workflow.nodes.iter().any(|node| {
             node.node_type == NodeType::LlmWorker
@@ -492,21 +431,6 @@ where
     } else {
         String::new()
     };
-    let history_text: String = llm_history(&history)
-        .iter()
-        .map(|m| m.content.as_str())
-        .collect();
-    let history_chars = history_text.chars().count();
-    let image_catalog_chars = image_catalog_text.chars().count();
-    let total_chars = worst_system_prompt.chars().count()
-        + history_chars
-        + image_catalog_chars
-        + user_text.chars().count();
-    // Токены изображений входят в бюджет контекста ТОЛЬКО если вложения реально
-    // поедут в LLM — то есть если какой-то агент графа объявил `vision: true`.
-    // Иначе (все агенты без зрения) движок стартует без mmproj и картинки в
-    // контексте не существует. Раньше здесь всегда считалось 2048/фото, из-за
-    // чего --ctx-size раздувался впустую.
     let any_vision_agent = match &workflow_match {
         Some(wf) => wf
             .nodes
@@ -523,34 +447,18 @@ where
             .find(|a| a.id == agent_id)
             .is_some_and(|agent| agent.vision),
     };
-    let image_tokens = if any_vision_agent {
-        request_media.current_attachments().len() as u32 * 2048
-    } else {
-        0
-    };
-    let token_estimate_history = format!("{history_text}{image_catalog_text}");
-    let chars_per_token = estimate_chars_per_token(
-        &worst_system_prompt,
-        &token_estimate_history,
-        &user_text,
-    );
-    let tool_budget = if worst_has_tools {
-        TOOL_WORKING_BUDGET
-    } else {
-        0
-    };
-    let estimated_tokens = (total_chars / chars_per_token) as u32
-        + image_tokens
-        + TOKEN_ESTIMATE_RESERVE
-        + tool_budget;
-    let engine_ctx_limit = (estimated_tokens + max_gen_tokens + 128)
-        .min(context_size)
-        .max(2048);
+    // Слот движка = окно модели из GGUF-метаданных (SSOT: extract_context_length).
+    // Задание агента материализуется ПОЗЖЕ (run_agent_node собирает его из выходов
+    // тулов), поэтому стартовая оценка промпта занижает слот — на ней слот больше
+    // не строится. Ограничитель запроса — физическое окно модели; нехватку железа
+    // режет RAM-гейт движка ДО спавна (его урезание согласовано с бюджетом хоста
+    // через global_ctx_limit и видно юзеру плашкой vram_notice).
+    let model_window = crate::infra::extract_context_length(&model_path);
+    let engine_ctx_limit = model_window.unwrap_or(context_size).max(2048);
     log_cb(format!(
-        "📐 Стартовый контекст движка: {} токенов (worst-case промпт ~{} символов{}, история ~{} симв., каталог изображений ~{} симв., изображения ~{} токенов, резерв JSON {}, бюджет инструментов {}, max_gen {})",
-        engine_ctx_limit, worst_system_prompt.chars().count(),
-        if worst_has_tools { " с инструментами" } else { "" },
-        history_chars, image_catalog_chars, image_tokens, TOKEN_ESTIMATE_RESERVE, tool_budget, max_gen_tokens
+        "📐 Слот движка: {} токенов (окно модели из GGUF{}); RAM-гейт урежет запрос при нехватке памяти, бюджет компакции считается от фактического слота",
+        engine_ctx_limit,
+        if model_window.is_some() { "" } else { " недоступно — fallback на config.context_size" }
     ));
 
     // ── Резолв mmproj по потребности графа (PRP 04.11.26, Шаг 3) ──
@@ -1506,6 +1414,16 @@ where
             agent.id, compaction.tool_results_pruned, compaction.history_summarized, compaction.history_compressed, compaction.history_truncated, compaction.old_messages_dropped
         ));
     }
+    // Гейт ДО генерации (Шаг 3): даже после компакции промпт больше бюджета —
+    // предупреждаем заранее. Task не сворачивается ничем (Шаг 1), отказ придёт
+    // с генерации одной точкой — честный Err по overflow (Шаг 2).
+    let total_after_compaction = token_count(&llm_messages);
+    if total_after_compaction > budget_tokens {
+        log_cb(format!(
+            "⚠️ Компакция не уложила контекст агента '{}' в бюджет: ~{} ток при бюджете {} — генерация вернёт честный отказ, данные задания не сворачиваются.",
+            agent.id, total_after_compaction, budget_tokens
+        ));
+    }
 
     // Invocation-дамп для subcall: только то, что различается между вызовами
     // (task + отчёты коллег). Полный системный промпт агента живёт в .md файле
@@ -1989,6 +1907,23 @@ where
                         if truncate_largest(&mut ctx.llm_messages, budget, tc, |m| log_cb(m)) {
                             continue;
                         }
+                        // Задание неприкосновенно (Шаг 1): усечь нечего — резать task
+                        // запрещено. Честный отказ вместо свёртки данных запроса
+                        // (модель с «данных нет» из-за невидимой свёртки — главный
+                        // симптом кейса 1793228120713).
+                        let total_tokens = tc(&ctx.llm_messages);
+                        log::error!(
+                            "[{}] Промпт не помещается в контекст: ~{} ток при доступных {} (лимит слота {} − max_gen {}).",
+                            ctx_label,
+                            total_tokens,
+                            budget,
+                            engine.global_ctx_limit(),
+                            max_gen_tokens
+                        );
+                        return Err(format!(
+                            "Запрос для агента '{}' (~{} токенов) не помещается в контекст модели (доступно ~{} токенов после резерва генерации). Данные задания не сворачиваются. Выберите модель с большим контекстом, уменьшите объём данных в запросе или укоротите историю диалога.",
+                            ctx_label, total_tokens, budget
+                        ));
                     }
                     // Таймаут обмена с движком: текст НЕ виноват, поэтому
                     // усечение не помогает — уменьшать контекст бессмысленно.
@@ -3129,15 +3064,6 @@ mod tests {
     }
 
     #[test]
-    fn estimate_chars_per_token_picks_by_cyrillic_share() {
-        assert_eq!(estimate_chars_per_token("привет мир", "", ""), 2);
-        assert_eq!(estimate_chars_per_token("hello world", "", ""), 3);
-        assert_eq!(estimate_chars_per_token("hello world", "привет", ""), 2);
-        assert_eq!(estimate_chars_per_token("hello world", "abcdef", "й"), 3);
-        assert_eq!(estimate_chars_per_token("", "", ""), 3);
-    }
-
-    #[test]
     fn spill_if_large_keeps_small_output_unchanged() {
         let small = "короткий результат инструмента";
         let (out, spilled) = spill_if_large(small, "agent1", 0);
@@ -3468,7 +3394,7 @@ mod tests {
         );
 
         let (prompt, has_tools) = build_worst_agent_prompt(&[agent], &wf, &[]);
-        assert!(has_tools, "агент с mcp_servers даёт has_tools=true → run_chat добавит TOOL_WORKING_BUDGET к оценке контекста");
+        assert!(has_tools, "агент с mcp_servers даёт has_tools=true");
         assert!(prompt.contains("[ДОСТУПНЫЕ ИНСТРУМЕНТЫ]"));
         assert!(prompt.contains("emit_signal"));
     }
@@ -4078,29 +4004,21 @@ mod tests {
             author_name: None,
         }];
         let user_text = synthetic_text(1177);
-        let (with_history, has_tools) = build_worst_agent_prompt(&agents, workflow, &history);
+        let (with_history, _has_tools) = build_worst_agent_prompt(&agents, workflow, &history);
         let (without_history, _) = build_worst_agent_prompt(&agents, workflow, &[]);
         let history_chars: usize = llm_history(&history)
             .iter()
             .map(|message| message.content.chars().count())
             .sum();
-        let total_chars = with_history.chars().count() + history_chars + user_text.chars().count();
-        let chars_per_token = estimate_chars_per_token(&with_history, &history[0].content, &user_text);
-        let tool_budget = if has_tools { TOOL_WORKING_BUDGET } else { 0 };
-        let estimated_tokens = (total_chars / chars_per_token) as u32
-            + TOKEN_ESTIMATE_RESERVE
-            + tool_budget;
-        let expected_context = (estimated_tokens + 5632 + 128).min(28672).max(2048);
+        // Слот = окно модели из GGUF (fallback 28672 для битого gguf) — стартовая
+        // оценка промпта в формуле слота больше не участвует.
+        let expected_context = crate::infra::extract_context_length(&model_path).unwrap_or(28672);
         println!(
-            "CALC worst_with_history={} worst_without_history={} history_chars={} user_chars={} chars_per_token={} reserve={} tool_budget={} estimated_prompt={} expected_context={}",
+            "CALC worst_with_history={} worst_without_history={} history_chars={} user_chars={} model_window={}",
             with_history.chars().count(),
             without_history.chars().count(),
             history_chars,
             user_text.chars().count(),
-            chars_per_token,
-            TOKEN_ESTIMATE_RESERVE,
-            tool_budget,
-            estimated_tokens,
             expected_context
         );
 
@@ -4110,7 +4028,7 @@ mod tests {
         let cancel_for_log = cancel.clone();
         let log_cb = move |message: String| {
             println!("CONTEXT_RUN: {}", message);
-            if message.contains("Стартовый контекст движка") {
+            if message.contains("Слот движка") {
                 cancel_for_log.store(true, Ordering::SeqCst);
             }
             if let Ok(mut sink) = log_sink.lock() {
@@ -4131,7 +4049,7 @@ mod tests {
                     .llamacpp_dir
                     .expect("llamacpp_dir"),
             ),
-            model_path,
+            model_path.clone(),
             "main_conversation_flow".to_string(),
             user_text,
             history,
@@ -4159,14 +4077,141 @@ mod tests {
             .lock()
             .expect("logs lock")
             .iter()
-            .find(|line| line.contains("Стартовый контекст движка"))
+            .find(|line| line.contains("Слот движка"))
             .cloned()
-            .expect("context log");
+            .expect("slot log");
         println!("CONTEXT_CAPTURED: {}", context_line);
-        println!(
-            "MATCH_EXPECTED_23513={} EXPECTED_FROM_FORMULA={}",
-            context_line.contains("Стартовый контекст движка: 23513"),
-            expected_context
+        // Слот = окно модели из GGUF (вариант B); при недоступном окне — явный fallback в логе.
+        match crate::infra::extract_context_length(&model_path) {
+            Some(window) => assert!(
+                context_line.contains(&format!("Слот движка: {} токенов", window)),
+                "слот должен равняться окну модели из GGUF: {context_line}"
+            ),
+            None => assert!(
+                context_line.contains("fallback на config.context_size"),
+                "окно модели недоступно — лог обязан показать fallback: {context_line}"
+            ),
+        }
+    }
+
+    /// Репродукция кейса астролога 1793228120713 на том же промпте-объёме:
+    /// история ~14080 симв (сводка + база знаний) + задание ~24058 симв
+    /// (JSON карты от тулов) ≈ 14014 ток. Гейты (зафиксированы ДО прогона):
+    ///   G1 — слот в логе равен окну модели из GGUF (Шаг A, вариант B);
+    ///   G2 — при окне ≥ 16300 ток ни компакция, ни truncate_largest не трогают
+    ///        задание (нет «🗜️», нет «не уложила», нет «не помещается»);
+    ///   G3 — при малом окне (< 16300) прогон обязан честно заявить отказ
+    ///        («не уложила»/«не помещается») вместо тихой свёртки задания.
+    /// Отмена — по началу генерации («LLM вызов #1»): промпт и компакция к
+    /// этому моменту уже собраны, минуты на реальную генерацию не тратим.
+    #[test]
+    #[ignore]
+    fn astro_case_full_prompt_slot_and_no_collapse() {
+        let model_path =
+            std::env::var("TEST_MODEL_PATH").expect("Set TEST_MODEL_PATH to a GGUF file path");
+        let project_dir = workspace_root();
+        let agents_dir = project_dir.join("agents");
+        load_agents(&agents_dir).expect("agents load");
+        let history = vec![ChatMessage {
+            id: Some("msg_0".to_string()),
+            msg_type: "message".to_string(),
+            content: synthetic_text(14080),
+            sub_calls: None,
+            author: Some("user".to_string()),
+            model: None,
+            time_sec: None,
+            attachments: None,
+            phase: None,
+            author_name: None,
+        }];
+        let user_text = synthetic_text(24058);
+        let cancel = Arc::new(AtomicBool::new(false));
+        let logs = Arc::new(Mutex::new(Vec::<String>::new()));
+        let log_sink = logs.clone();
+        let cancel_for_log = cancel.clone();
+        let log_cb = move |message: String| {
+            println!("ASTRO_RUN: {}", message);
+            if message.contains("LLM вызов #1") {
+                cancel_for_log.store(true, Ordering::SeqCst);
+            }
+            if let Ok(mut sink) = log_sink.lock() {
+                sink.push(message);
+            }
+        };
+        let result = run_chat(
+            log_cb,
+            |_, _| {},
+            |_| {},
+            |_| {},
+            |_| {},
+            agents_dir,
+            project_dir.join("src-tauri/mcp_servers"),
+            project_dir.join("src-tauri/bin"),
+            PathBuf::from(
+                crate::infra::load_config_early()
+                    .llamacpp_dir
+                    .expect("llamacpp_dir"),
+            ),
+            model_path.clone(),
+            "main_conversation_flow".to_string(),
+            user_text,
+            history,
+            Vec::new(),
+            28672,
+            5632,
+            false,
+            false,
+            1500,
+            ModelParams::default(),
+            "Auto".to_string(),
+            None,
+            None,
+            cancel,
+            Arc::new(Mutex::new(StreamMeta::default())),
+            None,
+            "test-astro-1793228120713".to_string(),
+            None,
+            std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            Some(project_dir.join("test").to_string_lossy().to_string()),
+            None,
         );
+        println!("ASTRO_RUN_RESULT: {:?}", result);
+        let all_logs = logs.lock().expect("logs lock").clone();
+        let slot_line = all_logs
+            .iter()
+            .find(|line| line.contains("Слот движка"))
+            .cloned()
+            .expect("slot log");
+        println!("ASTRO_SLOT: {}", slot_line);
+        // G1: слот = окно модели из GGUF (вариант B), не стартовая оценка.
+        match crate::infra::extract_context_length(&model_path) {
+            Some(window) => assert!(
+                slot_line.contains(&format!("Слот движка: {} токенов", window)),
+                "слот должен равняться окну модели из GGUF: {slot_line}"
+            ),
+            None => assert!(
+                slot_line.contains("fallback на config.context_size"),
+                "окно модели недоступно — лог обязан показать fallback: {slot_line}"
+            ),
+        }
+        let window = crate::infra::extract_context_length(&model_path).unwrap_or(28672);
+        let any_line_contains = |needles: &[&str]| {
+            needles
+                .iter()
+                .any(|needle| all_logs.iter().any(|line| line.contains(needle)))
+        };
+        if window >= 16300 {
+            // G2: большой слот — ни одна свёртка не имеет права тронуть задание.
+            assert!(
+                !any_line_contains(&["🗜️", "Компакция не уложила", "не помещается"]),
+                "при окне {window} ток промпт ~14-15К обязан пройти без свёрток и отказов"
+            );
+        } else {
+            // G3: малое окно — отказ обязан быть ЧЕСТНЫМ (Шаг 2/3), не «данных нет».
+            assert!(
+                any_line_contains(&["Компакция не уложила", "не помещается"]),
+                "при окне {window} ток обязан появиться честный отказ (Шаг 2/3)"
+            );
+        }
     }
 }

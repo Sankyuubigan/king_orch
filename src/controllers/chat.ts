@@ -6,7 +6,7 @@ import { createMessageElement, createSubcallElement, createToolCallElement, crea
 import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks, ProcessingIndicator } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
-import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
+import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, getModelContextSize, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
 import { renderMarkdown, stripStreamArtifacts, extractChannelThought, visibleStreamText, CLOUD_ROUTER_PREFIXES, isCloudModelPath, fillModelSelect, fillAgentSelect, getAgentDisplayName, getSelectedAgentName, isGraphAgent, hasFusableGroups } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError, trackEvent } from "../telemetry";
@@ -248,9 +248,34 @@ export class ChatController {
   private processingWatchdog: number | null = null;
   /// Кэш каталога моделей плагина (для tokenizer_id в счётчике токенов).
   private catalogCache: CatalogEntry[] | null = null;
+  /// Кэш окна модели из GGUF (04.11.26, вариант B): лимит счётчика чата — окно
+  /// модели, а не невидимый config.context_size. Ключ — путь модели.
+  private modelWindowCache = new Map<string, number>();
   private thoughtDedupSet = new Set<string>();
   private pendingSessionModel: string | null = null;
   private pendingSessionAgent: string | null = null;
+
+  /**
+   * Лимит для счётчика чата: окно модели из GGUF (extract_context_length),
+   * кэш по пути модели; fallback — прежний store.contextSize (битый gguf,
+   * облачная модель, ошибка чтения). Фактический слот после RAM-гейта
+   * доносится юзеру плашкой vram_notice (Шаг B), здесь — потолок модели.
+   */
+  private async resolveContextLimit(modelPath: string | undefined): Promise<number> {
+    if (!modelPath || isCloudModelPath(modelPath)) return store.contextSize;
+    const cached = this.modelWindowCache.get(modelPath);
+    if (cached !== undefined) return cached;
+    try {
+      const window = await getModelContextSize(modelPath);
+      if (window > 0) {
+        this.modelWindowCache.set(modelPath, window);
+        return window;
+      }
+    } catch (e) {
+      logFront(`[chat] окно модели недоступно (${modelPath}): ${e}`);
+    }
+    return store.contextSize;
+  }
 
   /// Публичные ссылки на страницы (для чужих контроллеров: вкладки, сессии).
   get mainView(): HTMLDivElement { return this.el.viewChat; }
@@ -618,7 +643,7 @@ export class ChatController {
     const modelPath = this.el.modelSelect?.value;
     const agentId = this.el.agentSelect?.value;
     const text = this.el.chatInput?.value || "";
-    const contextSize = store.contextSize;
+    const contextSize = await this.resolveContextLimit(modelPath);
     const isCloud = !!modelPath && isCloudModelPath(modelPath);
 
     if (!modelPath || !agentId) {
@@ -626,7 +651,7 @@ export class ChatController {
       counter.title = "Выберите модель и агента, чтобы увидеть заполнение контекста";
       return;
     }
-    // Локальная ветка: лимит контекста приходит из конфига (contextSize).
+    // Локальная ветка: лимит — окно модели из GGUF (fallback config.contextSize).
     if (!isCloud && contextSize <= 0) {
       counter.innerText = "— / …";
       counter.title = "Ожидание загрузки конфигурации (лимит контекста)";
