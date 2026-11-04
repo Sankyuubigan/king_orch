@@ -299,6 +299,16 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .msg-attachment-img { max-width: 240px; max-height: 180px; border-radius: 6px; border: 1px solid var(--border); object-fit: cover; display: block; }
 .msg-attachment-action { position: absolute; top: 6px; right: 6px; width: 30px; height: 30px; padding: 0; border: 1px solid rgba(255,255,255,0.7); border-radius: 50%; background: rgba(0,0,0,0.68); color: #fff; font-size: 18px; line-height: 1; cursor: pointer; display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 6px rgba(0,0,0,0.3); }
 .msg-attachment-action:hover { background: rgba(0,0,0,0.86); transform: translateY(-1px); }
+/* Видео-карточка: компактный ряд [▶ файл][📂], облегает содержимое — как у картинок/файлов.
+   Раньше обёртка была блоком во всю ширину пузыря, и абсолютная 📂 (top:6 right:6)
+   вставала ровно в угол пузыря — под кнопку ⋮ (top:4 right:4). Теперь 📂 в потоке ряда
+   и не может пересечься с ⋮ ни при какой ширине. */
+.msg-attachment-video-wrap { display: flex; align-items: center; gap: 6px; width: fit-content; max-width: calc(100% - 30px); }
+/* 📂 видео — статичный элемент ряда (паттерн .msg-attachment-file-wrap), не оверлей. */
+.msg-attachment-video-wrap .msg-attachment-action { position: static; width: 26px; height: 26px; font-size: 15px; flex: none; }
+.msg-attachment-video-play { padding: 5px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-bg); color: var(--text); cursor: pointer; font-size: 13px; line-height: 1.4; max-width: 100%; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-attachment-video-play:hover { background: var(--session-hover); }
+.msg-attachment-video-play:disabled { opacity: 0.6; cursor: default; }
 .msg-attachment-file { font-size: 12px; color: var(--text); background: var(--bg-color); border: 1px solid var(--border); border-radius: 4px; padding: 4px 8px; max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .msg-attachment-file:hover { background: var(--session-hover); }
 .msg-attachment-file-wrap { position: relative; display: inline-flex; align-items: center; gap: 4px; }

@@ -52,8 +52,12 @@ export function createVideoAttachmentElement(
     }
   });
 
+  wrapper.appendChild(video);
+  wrapper.appendChild(play);
+
   // Клип всегда лежит на диске (base64 не хранится) — кнопка открывает
-  // папку с выделенным файлом, повторное сохранение не нужно.
+  // папку с выделенным файлом, повторное сохранение не нужно. Живёт В РЯДУ
+  // после ▶ (не оверлей в углу обёртки — раньше вставала под кнопку ⋮ сообщения).
   if (callbacks?.onOpenPath && attachment.file_path) {
     const reveal = document.createElement("button");
     reveal.type = "button";
@@ -68,7 +72,5 @@ export function createVideoAttachmentElement(
     wrapper.appendChild(reveal);
   }
 
-  wrapper.appendChild(video);
-  wrapper.appendChild(play);
   return wrapper;
 }
