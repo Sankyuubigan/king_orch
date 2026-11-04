@@ -158,6 +158,8 @@ where
     pub(crate) signal_contract: Option<SignalContract>,
     pub(crate) continuation_count: usize,
     pub(crate) continuation_restarts: usize,
+    /// Перегенерации «начисто» при рестарте-классе докачки (кап MAX_RESTART_REGENS).
+    pub(crate) restart_regens: usize,
     pub(crate) continuation_raw: String,
     pub(crate) continuation_mark: Option<usize>,
     pub(crate) action_found: bool,

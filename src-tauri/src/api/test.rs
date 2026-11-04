@@ -583,6 +583,7 @@ pub fn list_test_reports(app: AppHandle) -> Vec<TestReportMeta> {
     };
 
     scan(&test_cases.join("custom_runs"), "custom_report_", "custom", &mut reports);
+    scan(&test_cases.join("triage_runs"), "triage_report_", "triage", &mut reports);
     if let Ok(rd) = std::fs::read_dir(test_cases.join("fixtures")) {
         for fixture in rd.flatten() {
             scan(&fixture.path(), "batch_report_", "pipeline", &mut reports);
@@ -1226,6 +1227,129 @@ pub fn cancel_test_run() -> Result<(), String> {
 /// Герметичные фикстуры: собственный корень под `target/` (в системные temp не
 /// лезем, §1.2) — база канонизируется, файлы создаются тестом. Зависимости от
 /// `AppHandle`/`find_agents_dir` нет — функция чистая, база передаётся явно.
+// ─── Триаж моделей (7 пробников известных классов отказов, см. domain::triage) ───
+
+/// Триаж одной модели: 7 пробников на известные классы отказов малых моделей
+/// (попугайство, think-жор, yes-bias, рестарт-докачка, петли, JSON, инструкции).
+/// Механика запуска — та же, что у run_custom_prompt_test (гейт VRAM, PID-снимок,
+/// MemSampler), но БЕЗ агентов/графов: только engine.generate_chat.
+#[tauri::command]
+pub async fn run_triage_test_cmd(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model_path: String,
+) -> Result<domain::triage::TriageModelReport, String> {
+    init_test_log_file();
+    append_test_log(&format!("--- Триаж модели '{}' ---", model_path));
+
+    // Гейт локального движка: триаж — потребитель VRAM (одна модель за раз).
+    let _engine_permit = state
+        .local_engine_gate
+        .clone()
+        .acquire_owned()
+        .await
+        .map_err(|e| format!("Гейт локального движка: {}", e))?;
+
+    let config = infra::load_config(&app);
+    let model_params = config.model_params.get(&model_path).cloned().unwrap_or_default();
+    let engine_dir = crate::infra::get_engine_dir(&app);
+
+    let log_cb = {
+        let app_handle = app.clone();
+        move |msg: String| {
+            append_test_log(&msg);
+            let _ = app_handle.emit("log", format!("[triage] {}", msg));
+        }
+    };
+    let status_cb = {
+        let app_handle = app.clone();
+        let model_short = short_model_name(&model_path).to_string();
+        move |probe_idx: usize, title: &str| {
+            let _ = app_handle.emit(
+                "triage_status",
+                serde_json::json!({
+                    "model": model_short,
+                    "probe": probe_idx,
+                    "total": domain::triage::PROBE_TITLES.len(),
+                    "title": title,
+                }),
+            );
+        }
+    };
+    let cancel_flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    let before_pids = llama_server_pids();
+    let vram_before = crate::domain::coding_bench::kv_probe::vram_used_mb();
+
+    let engine = infra::LlmEngine::local(infra::LlamaEngine::new(
+        &engine_dir,
+        &model_path,
+        config.context_size,
+        config.kv_quant_keys,
+        config.kv_quant_values,
+        config.reasoning_budget,
+        log_cb.clone(),
+        |_: String| {},
+    )?);
+    let mut mem_sampler = crate::infra::MemSampler::start(new_llama_server_pid(&before_pids));
+
+    let start_time = Instant::now();
+    let probes = domain::triage::run_triage(
+        &engine,
+        &model_params,
+        cancel_flag,
+        &log_cb,
+        &status_cb,
+    );
+    let duration_ms = start_time.elapsed().as_millis() as u64;
+    let (ram_peak, vram_peak, _vram_delta) = mem_fields(mem_sampler.stop_and_report(), vram_before);
+
+    let report = domain::triage::TriageModelReport {
+        model: short_model_name(&model_path).to_string(),
+        verdict_label: domain::triage::verdict_label(&probes),
+        error: None,
+        probes,
+        duration_ms,
+        ram_peak_mb: ram_peak,
+        vram_peak_mb: vram_peak,
+    };
+    append_test_log(&format!(
+        "--- Триаж '{}' завершён за {:.1}s: {} ---",
+        report.model,
+        duration_ms as f64 / 1000.0,
+        report.verdict_label
+    ));
+    Ok(report)
+}
+
+/// Сохранить сводный триаж-отчёт батча: `triage_runs/triage_report_<ts>.json`.
+/// `test_id` — читаемая метка для списка отчётов (list_test_reports берёт её).
+#[tauri::command]
+pub fn write_triage_report(
+    app: AppHandle,
+    reports: Vec<domain::triage::TriageModelReport>,
+    total_duration_ms: u64,
+) -> Result<String, String> {
+    let base = report_base_dir(&app)?;
+    let dir = base.join("triage_runs");
+    std::fs::create_dir_all(&dir).map_err(|e| format!("Не создать {}: {}", dir.display(), e))?;
+    let timestamp = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    let json_path = dir.join(format!("triage_report_{}.json", timestamp));
+    let json = serde_json::json!({
+        "type": "triage_report",
+        "created": timestamp,
+        "test_id": format!("Триаж · {} модел.", reports.len()),
+        "total_duration_ms": total_duration_ms,
+        "entries": reports,
+    });
+    std::fs::write(
+        &json_path,
+        serde_json::to_string_pretty(&json).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("Ошибка записи {}: {}", json_path.display(), e))?;
+    Ok(json_path.display().to_string())
+}
+
 #[cfg(test)]
 mod report_path_tests {
     use super::*;

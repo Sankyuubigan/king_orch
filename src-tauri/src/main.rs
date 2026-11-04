@@ -260,6 +260,8 @@ async fn main() {
             api::test::list_test_reports,
             api::test::read_test_report,
             api::test::cancel_test_run,
+            api::test::run_triage_test_cmd,
+            api::test::write_triage_report,
             api::coding_test::get_coding_bench_info,
             api::coding_test::run_coding_bench,
             api::file_utils::write_text_file,

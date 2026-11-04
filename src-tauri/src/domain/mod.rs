@@ -10,6 +10,7 @@ pub mod signals;
 pub mod workflow_engine;
 pub mod coding_bench;
 pub mod pipeline_test;
+pub mod triage;
 
 // ─── Публичные типы ───
 pub use agent_manager::AgentEntry;

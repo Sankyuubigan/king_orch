@@ -101,8 +101,6 @@ fn push_continuation_for_cutoff(
     cancel_flag: Arc<AtomicBool>,
     ctx_label: &str,
     stream_meta: Arc<Mutex<StreamMeta>>,
-    combined: &str,
-    parse_target: &str,
     raw_response: &str,
     llm_messages: &mut Vec<LlmMessage>,
     continuation_raw: &mut String,
@@ -219,27 +217,21 @@ fn push_continuation_for_cutoff(
         }
     }
 
-    // Точная точка обрыва: передаём модели последний сырой кусок + указание закончить
-    let in_json = parse_target.contains("{") || parse_target.contains("    \"target\"");
-    let hint = if in_json {
-        "❌ Твой ответ оборвался в ПОЛОВИНЕ JSON-объекта из-за лимита токенов. Продолжи РОВНО с места обрыва и ЗАКРОЙ начатый JSON (все кавычки и скобки). НЕ повторяй уже написанное и не начинай заново. Пиши ТОЛЬКО реальные данные: запрещены комментарии (//), строки-заглушки («пример расчета», «и так далее») и пересказ плана."
-    } else if is_thinking_truncated(combined) {
-        "❌ Твои размышления оборваны лимитом токенов. Продолжи РОВНО с места обрыва, без повторений: кратко заверши мысль и СРАЗУ напиши финальный ответ простым текстом (без JSON)."
-    } else {
-        "❌ Твой ответ оборвался из-за лимита токенов. Продолжи РОВНО с места обрыва, без повторений, и заверши ответ."
-    };
+    // Prefill-продолжение (assistant-prefill, Anthropic-стиль): последним сообщением
+    // остаётся assistant с сырым обрывком — chat-шаблон минимально закрывает тег
+    // ассистента, и модель механически продолжает текст. Раньше сюда пушился ещё и
+    // юзер-ход «продолжи ровно с места обрыва»: слабые модели (granite/Spark/LFM-
+    // класс, прогоны 04.11.26) трактуют юзер-ход как НОВУЮ задачу и перезапускают
+    // ответ с нуля с галлюцинациями. Рестарт устраняется формой запроса (§00.2),
+    // а не наставлением; остаточный рестарт ловит детект
+    // is_continuation_restart в run_agent_node.
     llm_messages.push(LlmMessage {
         role: "assistant".to_string(),
         content: raw_response.to_string(),
         ..Default::default()
     });
-    llm_messages.push(LlmMessage {
-        role: "user".to_string(),
-        content: hint.to_string(),
-        ..Default::default()
-    });
     log_cb(format!(
-        "⏩ [{}] докача размышлений после обрыва (продолжение #{})",
+        "⏩ [{}] prefill-продолжение после обрыва (#{}, без юзер-хода)",
         agent_id, continuation_count
     ));
     Ok(false)
@@ -1609,6 +1601,7 @@ where
         signal_contract: signal_contract.clone(),
         continuation_count: 0,
         continuation_restarts: 0,
+        restart_regens: 0,
         continuation_raw: String::new(),
         continuation_mark: None,
         action_found: false,
@@ -1975,6 +1968,47 @@ where
             extract_think_content(&raw_response)
         };
 
+        // ── Детект рестарта при докачке: модель повторяет НАЧАЛО ответа вместо
+        // продолжения (granite/Spark/LFM-класс, прогоны 04.11.26). Раньше куски
+        // склеивались в combined и мусор шёл дальше в парсер/юзеру. Теперь:
+        // откат докачанных ходов (truncate до continuation_mark) + перегенерация
+        // начисто с выключенным думателем; кап MAX_RESTART_REGENS → честная ошибка
+        // вместо бесконечного цикла. Критерий — SSOT-хелпер
+        // domain::triage::is_continuation_restart (тот же, что в триаж-пробнике
+        // «Продолжение с обрыва» — меряем класс на модели тем же инструментом,
+        // которым лечим).
+        if is_continuation
+            && !ctx.continuation_raw.is_empty()
+            && crate::domain::triage::is_continuation_restart(&ctx.continuation_raw, &raw_response)
+        {
+            ctx.restart_regens += 1;
+            if ctx.restart_regens > MAX_RESTART_REGENS {
+                ctx.final_response = format!(
+                    "{} Агент '{}' повторяет начало ответа вместо продолжения после обрыва (рестарт-класс, {} перегенераций). Невозможно продолжить.",
+                    AGENT_ERROR_PREFIX,
+                    agent.id,
+                    ctx.restart_regens - 1
+                );
+                break;
+            }
+            log_cb(format!(
+                "⚠️ [{}] модель повторяет начало ответа вместо продолжения (рестарт-класс) — откат докачанных ходов и перегенерация начисто ({}/{})",
+                agent.name, ctx.restart_regens, MAX_RESTART_REGENS
+            ));
+            if let Some(mark) = ctx.continuation_mark {
+                ctx.llm_messages.truncate(mark);
+            }
+            ctx.continuation_raw.clear();
+            ctx.continuation_mark = None;
+            force_no_thinking.set(true);
+            ctx.llm_messages.push(LlmMessage {
+                role: "user".to_string(),
+                content: "Ты начал повторять свой ответ с начала вместо продолжения. Не думай: сразу напиши финальный ответ на исходную задачу, компактно, без размышлений и без повторов ранее написанного.".to_string(),
+                ..Default::default()
+            });
+            continue;
+        }
+
         // ── Нативный OpenAI tools[]: модель вернула ПРЯМЫЕ tool_calls (без
         // legacy-JSON-конверта). Исполняем все вызовы за один ход (execute_native_tool_calls,
         // OpenAI-формат истории: assistant c tool_calls + role "tool") и переходим к
@@ -2046,8 +2080,6 @@ where
                         cancel_flag.clone(),
                         &ctx_label,
                         stream_meta.clone(),
-                        &combined,
-                        &parse_target,
                         &raw_response,
                         &mut ctx.llm_messages,
                         &mut ctx.continuation_raw,
@@ -2178,8 +2210,6 @@ where
                 cancel_flag.clone(),
                 &ctx_label,
                 stream_meta.clone(),
-                &combined,
-                &parse_target,
                 &raw_response,
                 &mut ctx.llm_messages,
                 &mut ctx.continuation_raw,
