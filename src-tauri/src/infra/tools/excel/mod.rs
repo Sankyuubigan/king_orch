@@ -367,6 +367,12 @@ fn tool_error(e: ko_excel_tools::ExcelError) -> ToolError {
         ko_excel_tools::ExcelError::SofficeNotDetected => ToolError::NotFound(e.to_string()),
         ko_excel_tools::ExcelError::Usage(_) => ToolError::Usage(e.to_string()),
         ko_excel_tools::ExcelError::UnsupportedFormat(..) => ToolError::Usage(e.to_string()),
+        // Детерминированный отказ пер-операции (лист не найден, не последний
+        // лист, «БЕЗ ведущего '='»…): Display готов к показу — агент обязан
+        // видеть причину (core §2.2). Кейс 04.11.26: OpFailed проваливался в
+        // Io-маску → модели уходила «внутренняя ошибка excel-обработки» →
+        // слепой аборт по лимиту неудач.
+        ko_excel_tools::ExcelError::OpFailed { .. } => ToolError::Usage(e.to_string()),
         _ => ToolError::Io(e.to_string()),
     }
 }
@@ -538,7 +544,7 @@ impl Tool for ExcelApply {
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Опционально: абсолютный путь .xlsx-исходника для редактирования (новая книга, если не задан)."},
-                "ops": {"type": "array", "items": {"type": "object"}, "description": "Список операций. Доступные op: add_sheet{name}; delete_sheet{name} (не последний); rename_sheet{from,to}; set_cell{sheet,addr,value|formula,style?,number_format?} — формула БЕЗ ведущего '=' (\"=B2*2\" неверно, \"B2*2\" верно), value сохраняет JSON-тип (число — числом, строка — текстом); set_rows{sheet,addr,rows} — БЛОК строк одной операцией (rows: массив строк-массивов от addr; ячейка — значение, null (пропуск) или {value?,formula?,number_format?,style?}) — данные таблиц ПИШИ ИМ, а не десятками set_cell; ≤15 строк за вызов (блоки больше тул отклонит — дроби на несколько excel_apply); format_range{sheet,range,number_format?,style?} — формат/стиль на весь диапазон; add_table{sheet,range,name?} — умная таблица Excel (первая строка диапазона — заголовки); set_column_width{sheet,col,width}; autofit_columns{sheet?,min?,max?}; merge_cells{sheet,range}; auto_filter{sheet,range}; freeze_panes{sheet,cell}; add_chart{sheet,chart_type:bar|column|line|pie|area|scatter,anchor,series:[\"Лист!$B$2:$B$10\"],categories_range?,title?,width_cells?,height_cells?}. Неизвестная op — отказ."},
+                "ops": {"type": "array", "items": {"type": "object"}, "description": "Список операций. Доступные op: add_sheet{name}; delete_sheet{name} (не последний); rename_sheet{from,to}; set_cell{sheet,addr,value|formula,style?,number_format?} — формула БЕЗ ведущего '=' (\"=B2*2\" неверно, \"B2*2\" верно), value сохраняет JSON-тип (число — числом, строка — текстом); set_rows{sheet,addr,rows} — БЛОК строк одной операцией (rows: массив строк-массивов от addr; ячейка — значение, null (пропуск) или {value?,formula?,number_format?,style?}) — данные таблиц ПИШИ ИМ, а не десятками set_cell; ≤15 строк за вызов (блоки больше тул отклонит — дроби на несколько excel_apply); format_range{sheet,range,number_format?,style?} — формат/стиль на весь диапазон; add_table{sheet,range,name?} — умная таблица Excel (первая строка диапазона — заголовки); set_column_width{sheet,col,width}; autofit_columns{sheet?,min?,max?}; merge_cells{sheet,range}; auto_filter{sheet,range}; freeze_panes{sheet,cell}; add_chart{sheet,chart_type:bar|column|line|pie|area|scatter,anchor,series:[\"Лист!$B$2:$B$10\"],categories_range?,title?,width_cells?,height_cells?}. Неизвестная op — отказ. Форма операции — ТАГГИРОВАННАЯ: имя op в поле \"op\", не ключом объекта. Для НОВОЙ книги (без path) создавать лист заранее НЕ нужно: листы из операций создаются автоматически; можно писать и в стартовый лист \"Sheet1\". Пример ops: [{\"op\":\"set_rows\",\"sheet\":\"Продажи\",\"addr\":\"A1\",\"rows\":[[\"Дата\",\"Товар\",\"Цена\"],[\"2026-10-01\",\"Ноутбук\",45000]]}]"},
                 "output_stem": {"type": "string", "description": "Имя файла результата без расширения (опционально). Без него — автоген: <имя исходника>_изменённый / новая_таблица."},
                 "allow_issues": {"type": "boolean", "description": "true — сохранить файл несмотря на найденные проблемы (только когда они унаследованы от данных пользователя и осознаны). По умолчанию false."}
             },
@@ -721,6 +727,74 @@ mod tests {
         for op in ["set_rows", "format_range", "add_table"] {
             assert!(ops_desc.contains(op), "в схеме ops нет '{op}'");
         }
+        // Кейс 04.11.26: модель учила tagged-форму на ошибках (missing `op`,
+        // missing `addr`) и пропускала создание листа. Пример и правило новой
+        // книги обязательны в контракте.
+        assert!(ops_desc.contains("Пример ops"), "нет JSON-примера в описании ops");
+        assert!(ops_desc.contains("Sheet1"), "нет правила стартового листа");
+        assert!(ops_desc.contains("\"op\":\"set_rows\""), "пример без tagged-формы");
+    }
+
+    #[test]
+    fn op_failed_error_reaches_agent_honestly() {
+        // Кейс 04.11.26: OpFailed маскировался в ToolError::Io → агент получал
+        // «внутренняя ошибка excel-обработки» и не мог исправить ops → аборт
+        // по лимиту неудач. Контракт: детерминированный отказ пер-операции —
+        // Usage-класс (is_honest_tool_error в vram.rs пропускает Usage как есть).
+        let mapped = tool_error(ko_excel_tools::ExcelError::OpFailed {
+            op: "set_rows (#0)".to_string(),
+            msg: "Некорректные аргументы: Лист 'Продажи' не найден".to_string(),
+        });
+        assert!(matches!(mapped, ToolError::Usage(_)), "{mapped}");
+        assert!(mapped.to_string().contains("Лист 'Продажи' не найден"), "{mapped}");
+    }
+
+    #[test]
+    fn apply_new_book_auto_creates_sheets_from_ops() {
+        // §00.2: для новой книги отказ «Лист 'X' не найден» невозможен —
+        // пре-пасс создаёт листы из ops (модель не обязана звать add_sheet).
+        let (ctx, _registry) = ctx_with_registry("apply_autosheet");
+        let out = excel_session_outputs_dir(ctx.session_id);
+        let _ = std::fs::remove_dir_all(&out);
+        let args = serde_json::json!({
+            "ops": [
+                {"op": "set_rows", "sheet": "Продажи", "addr": "A1",
+                 "rows": [["Дата", "Товар", "Цена"], ["2026-10-01", "Ноутбук", 45000]]}
+            ]
+        });
+        let result = execute_excel_tool("excel_apply", &args, &ctx, &[])
+            .expect("инструмент диспетчеризован")
+            .expect("новая книга: лист из ops создан пре-пассом");
+        assert!(result.contains("\"ok_"), "{result}");
+        let _ = std::fs::remove_dir_all(&out);
+    }
+
+    #[test]
+    fn apply_existing_book_missing_sheet_is_honest_usage() {
+        // Для СУЩЕСТВУЮЩЕЙ книги режим строгий: опечатка в имени листа —
+        // честный отказ с именем операции и причиной (не Io-маска).
+        let (ctx, _registry) = ctx_with_registry("apply_strict");
+        // Гейт источников читает существующие книги только из session outputs —
+        // source-книга создаётся в разрешённой зоне, не в sandbox.
+        let dir = excel_session_outputs_dir(ctx.session_id);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("source.xlsx");
+        write_sample_book(&file);
+        let args = serde_json::json!({
+            "path": file.to_string_lossy(),
+            "ops": [
+                {"op": "set_rows", "sheet": "Нет_такого", "addr": "A1",
+                 "rows": [["a"], ["b"]]}
+            ]
+        });
+        let err = execute_excel_tool("excel_apply", &args, &ctx, &[])
+            .expect("инструмент диспетчеризован")
+            .expect_err("опечатка в листе существующей книги — отказ");
+        assert!(matches!(err, ToolError::Usage(_)), "{err}");
+        assert!(err.to_string().contains("Нет_такого"), "{err}");
+        assert!(err.to_string().contains("set_rows"), "в ошибке нет имени операции: {err}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
