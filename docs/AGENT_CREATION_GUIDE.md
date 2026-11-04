@@ -99,7 +99,7 @@ nodes:
   - id: filter_data
     type: llm_worker
     agent: filter_agent
-    output_type: thought
+    output_type: backend
 
   - id: check_filter
     type: condition_check
@@ -110,7 +110,7 @@ nodes:
   - id: process_items
     type: llm_worker
     agent: processor_agent
-    output_type: message
+    output_type: frontend
 ```
 
 **Главное правило №2 (один экстрактор на граф):** в каждом workflow **ровно ОДИН** `llm_fact_extractor` — сразу после ноды входа `user_message`, для классификации запроса. Факты объявляются один раз в `config.facts` / `config.facts_file` (один `facts.yaml` на команду). Mid-flow решения (нужен ли поиск документации, достаточно ли данных, качество черновика) **не делаются вторым экстрактором** — их выносит воркер-вердикт (JSON в отчёте воркера или `emit_signal`), а роутит чистый `switch` / `condition_check` / `signal_router` по `{{ nodes.X.output.result }}`.
@@ -322,7 +322,7 @@ edges:
 | Тип узла | Что делает | Ключевые поля |
 |----------|-----------|---------------|
 | `user_message` | **Точка входа графа.** Отдаёт текст текущего хода пользователя как `{"text": ...}`. LLM не вызывается. Входящих рёбер нет by design | — |
-| `llm_worker` | Вызывает `.md` агента с задачей. Результат — `thought` (свёрнутый отчёт) или `message` (в чат), управляется `output_type` | `agent`, `task`, `output_type`, `inject_response`, `llm_params` |
+| `llm_worker` | Вызывает `.md` агента с задачей. Результат — внутренний отчёт (`backend`) или сообщение в чат (`frontend`), управляется `output_type` | `agent`, `task`, `output_type`, `inject_response`, `llm_params` |
 | `llm_fact_extractor` | Generic экстрактор фактов (один на граф, сразу после входа — см. «Главное правило №2»). Факты + критерии из `config.facts` / `config.facts_file`. Возвращает JSON `{"fact_id": true/false, ...}` | `input` (обязателен: `{{ nodes.user_message.output.text }}`) |
 | `llm_freeform` | Зовёт LLM без системного промпта (только история чата) — для off-topic | `input` |
 | `system_condition` | Rust-side проверка состояния сессии / агрегация отчётов | `action`, `required` |
@@ -348,19 +348,19 @@ edges:
 
 ### Параметр `output_type` (для `llm_worker`)
 
-Управляет, куда сохраняется результат агента:
+Управляет, куда сохраняется результат агента. Канонические значения — `frontend` / `backend`; legacy имена `message` / `thought` канонизируются при загрузке (`parser.rs::canonical_output_type`), старые графы продолжают работать.
 
 | Значение | Куда сохраняется | Внешний вид в чате |
 |----------|----------|-------------------|
-| `message` | Сразу как обычное сообщение (`type: "message"`, `author: ID_агента`) | Полноценное сообщение в чате, как от ассистента |
-| `thought` / не указан | Как внутренний отчёт (`type: "thought"`, виден только в свёрнутом блоке отчётов) | Свёрнутый блок "Мысли агентов" (🧠) |
+| `frontend` (legacy `message`) | Сразу как обычное сообщение (`type: "message"`, `author: ID_агента`) | Полноценное сообщение в чате, как от ассистента |
+| `backend` / не указан (legacy `thought`) | Как внутренний отчёт (`type: "thought"`, виден только в свёрнутом блоке отчётов) | Свёрнутый блок "Мысли агентов" (🧠) |
 
 ```yaml
   # Агент пишет сразу в чат — никаких дублей
   - id: call_soma_aux
     type: llm_worker
     agent: soma_translator
-    output_type: message
+    output_type: frontend
 
   # Агент работает внутри — отчёт только в сведённый блок
   - id: analyze_data
@@ -368,13 +368,15 @@ edges:
     agent: data_analyzer
 ```
 
-**Важно:** если узел не последний в pipeline (дальше есть другие узлы), результат сохраняется как `thought`, а в чат пишет только последний узел. `output_type: message` определяет поведение последнего узла терминальной ветки.
+**Важно:** если узел не последний в pipeline (дальше есть другие узлы), результат сохраняется как `thought`, а в чат пишет только последний узел. `output_type: frontend` определяет поведение последнего узла терминальной ветки.
 
 ### `inject_response` (отчёты коллег в system prompt)
 
 Для `llm_worker` можно указать список инжекции (альтернатива инструменту `batch_get_agent_report`):
 
 - `inject_response: [agent_id, ...]` — подставляются ответы перечисленных агентов в блок `### [ОТВЕТЫ КОЛЛЕГ]`. Приоритет у сигнала (структурированного JSON), иначе — последний `message`/`thought` без сырых мыслей (`phase: 1` фильтруется). (Пример: `call_collector` инжектит `validator_report` с полями `eX`.)
+
+**Гвард дублей (проверка перед инжектом):** инжект — канал только для **бэкенд**-отчётов. Если в списке назван фронтенд-агент (`output_type: frontend`), его отчёт пропускается с `log::warn!` (`reports.rs::build_injected_reports`): его ответы и так попадают в историю сессии, которая инжектится каждому `llm_worker` автоматически — иначе было бы задвоение. Если весь список фронтендовый, раздел «ОТВЕТЫ КОЛЛЕГ» не подставляется вовсе.
 
 См. `main_conversation_flow.yaml` — агенты инжектят отчёты коллег, при этом история сессии инжектится автоматически.
 
@@ -431,7 +433,7 @@ nodes:
     default: final_answer     # условие выхода из цикла
 ```
 
-> **⚠️ Важное предупреждение (тишина = ложь, §2.2):** выход из цикла происходит и при **исчерпании `max_visits`** — переход «назад» перестаёт срабатывать, и если у этой последней попытки нет терминального узла с `output_type: message` (или `aggregate_and_output`), граф закончится **без сообщения пользователю**. Поэтому:
+> **⚠️ Важное предупреждение (тишина = ложь, §2.2):** выход из цикла происходит и при **исчерпании `max_visits`** — переход «назад» перестаёт срабатывать, и если у этой последней попытки нет терминального узла с `output_type: frontend` (или `aggregate_and_output`), граф закончится **без сообщения пользователю**. Поэтому:
 > - либо гарантируй message-узел на каждом пути выхода (включая «исчерпал попытки»);
 > - либо используй **линейную схему с оценщиком** (максимум 2 попытки, финальное сообщение всегда есть).
 
@@ -443,13 +445,13 @@ nodes:
   - id: call_web
     type: llm_worker
     agent: web_researcher       # черновик ответа
-    output_type: thought
+    output_type: backend
 
   - id: eval_answer
     type: llm_worker
     agent: answer_evaluator     # оценщик: {"pass": bool, "reasons": [], "improvement_plan": "..."}
     task: "Оцени черновик: {{ nodes.call_web.output }}"
-    output_type: thought
+    output_type: backend
 
   - id: check_eval
     type: switch                # вердикт оценщика → маршрут
@@ -468,7 +470,7 @@ nodes:
     type: llm_worker
     agent: web_researcher       # повторный проход с планом улучшения из оценщика
     task: "Переработай черновик по плану: {{ nodes.eval_answer.output.improvement_plan }}"
-    output_type: message
+    output_type: frontend
 ```
 
 ### Действия `system_condition`
@@ -617,12 +619,12 @@ nodes:
   - id: respond
     type: llm_worker
     agent: therapist_communicator
-    output_type: message
+    output_type: frontend
 
   - id: call_intake_specialist
     type: llm_worker
     agent: intake_specialist
-    output_type: message        # сборщик данных задаёт вопрос в чат юзеру
+    output_type: frontend        # сборщик данных задаёт вопрос в чат юзеру
     inject_response:
       - validator
       - decomposer

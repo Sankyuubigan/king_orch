@@ -32,6 +32,12 @@ export interface GraphNodeDef {
   logic?: string;
   input_object?: string;
   inject_response?: string[];
+  /**
+   * Куда публикуется результат ноды: `frontend` (в чат) | `backend`
+   * (внутренний отчёт, дефолт). Legacy `message`/`thought` канонизирует
+   * бэкенд при загрузке (`canonical_output_type` в parser.rs). Зеркало
+   * `NodeDef.output_type`.
+   */
   output_type?: string;
   ui_pos?: { x: number; y: number };
   signal_name?: string;

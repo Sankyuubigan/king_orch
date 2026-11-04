@@ -4,7 +4,7 @@
 //! Контекст отказа: агент с контрактом работает по Method 3 — ответ модели
 //! оформляется конвертом `emit_signal` и попадает в signal bus, но НЕ в чат.
 //! Если ключ никто не потребляет, работа выбрасывается: сигнал мёртв,
-//! а при `output_type: message` пользователь получает пустое сообщение
+//! а при `output_type: frontend` пользователь получает пустое сообщение
 //! (исторический кейс — synthesizer 17.10.26).
 //!
 //! Проверяется только агенты, которых ВЫЗЫВАЕТ данный граф (`llm_worker.agent`),
@@ -53,7 +53,7 @@ pub fn collect_dead_signal_diagnostics(workflow: &WorkflowDef) -> Vec<GraphDiagn
                 "агент '{}' объявляет сигнал \"{}\" (signals/root.schema.json), но граф его не \
                  потребляет: ни signal_router (signal_name), ни condition field-путь \"{}...\", \
                  ни шаблон {{{{ signals.{} }}}}. Такой агент работает по Method 3 — ответ уходит \
-                 в сигнал и не попадает в чат: при output_type: message пользователь увидит \
+                 в сигнал и не попадает в чат: при output_type: frontend пользователь увидит \
                  ПУСТОЕ сообщение",
                 agent_id, key, key, key
             ),
@@ -228,7 +228,7 @@ nodes:
   - id: call_test_signal_agent
     type: llm_worker
     agent: test_signal_agent
-    output_type: message
+    output_type: frontend
   {consumer}
 edges: []
 "#,

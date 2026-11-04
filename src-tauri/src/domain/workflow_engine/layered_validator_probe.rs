@@ -363,13 +363,15 @@ impl FunnelHarness {
 
             // Инжект собирается функцией, которую вызывает и `execute_node`, а
             // хвост промпта — общей `finalize_system_prompt`: стенд видит ровно
-            // тот же текст, что увидит боевая нода.
+            // тот же текст, что увидит боевая нода. `&[]` — у стенда нет графа:
+            // неразрешённые агенты гвардом дублей не режутся.
             let injected = build_injected_reports(
                 &super::parser::NodeDef {
                     inject_response: Some(layer.context_from.clone()),
                     ..super::parser::NodeDef::default()
                 },
                 &messages,
+                &[],
             );
             let prompt = crate::domain::orchestrator::prompt::finalize_system_prompt(
                 &layer.system_prompt,
@@ -965,6 +967,7 @@ mod tests {
                 ..super::super::parser::NodeDef::default()
             },
             &messages,
+            &[],
         );
         assert!(
             injected.contains(previous.layer.agent.as_str()),

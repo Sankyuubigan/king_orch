@@ -79,8 +79,8 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
     html += `<div class="graph-detail-section">
       <div class="detail-label">Тип вывода</div>
       <select id="ge-output-type" class="ge-select">
-        <option value="message" ${data.output_type === "message" ? "selected" : ""}>message</option>
-        <option value="thought" ${!data.output_type || data.output_type === "thought" ? "selected" : ""}>thought</option>
+        <option value="frontend" ${data.output_type === "frontend" ? "selected" : ""}>frontend — в чат</option>
+        <option value="backend" ${!data.output_type || data.output_type === "backend" ? "selected" : ""}>backend — внутренний отчёт</option>
       </select>
     </div>`;
     html += `<div class="graph-detail-section">
@@ -278,7 +278,8 @@ export function showNodeEditor(this: GraphController, nodeId: string): void {
   if (outputTypeSelect) {
     outputTypeSelect.addEventListener("change", () => {
       this.saveCheckpoint();
-      data.output_type = outputTypeSelect.value === "thought" ? undefined : outputTypeSelect.value;
+      // backend — дефолт движка: в YAML не пишется (как раньше thought)
+      data.output_type = outputTypeSelect.value === "backend" ? undefined : outputTypeSelect.value;
       this.updateNodeHtml(nodeId);
     });
   }

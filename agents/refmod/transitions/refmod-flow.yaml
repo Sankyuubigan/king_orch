@@ -55,7 +55,7 @@ nodes:
       Уже существующие карточки (проверь, не дублируешь ли персонажа;
       slug занятый перезапишет карточку — правила твоего агента):
       {{ video_refmods }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: -40
@@ -76,7 +76,7 @@ nodes:
 
       Изображения запроса (если правке нужны новые фото):
       {{ refmod_image_candidates }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: 40
@@ -93,7 +93,7 @@ nodes:
       НЕ вызывай инструменты (у тебя их нет).
 
       Сообщение пользователя: {{ nodes.user_message.output.text }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: 160

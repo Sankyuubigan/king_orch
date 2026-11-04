@@ -456,8 +456,11 @@ where
             //
             // Сборка живёт в `reports::build_injected_reports`: её использует и
             // стенд замеров, иначе измерялся бы не боевой текст инжекта.
-            let injected_reports =
-                crate::domain::workflow_engine::reports::build_injected_reports(node, &context.messages);
+            let injected_reports = crate::domain::workflow_engine::reports::build_injected_reports(
+                node,
+                &context.messages,
+                &workflow.nodes,
+            );
 
             (runner.log_cb)(format!(
                 "[worker] Вызов '{}': {}",
@@ -466,9 +469,10 @@ where
             ));
 
             let start_len = runner.all_sub_calls.len();
-            // Только узлы с output_type: message стримят ответ в основной чат.
-            // Остальные (thought по умолчанию) стримят мысли в блок «Мысли агентов».
-            let allow_stream = node.output_type.as_deref() == Some("message");
+            // Только фронтенд-ноды (output_type: frontend) стримят ответ
+            // в основной чат. Остальные (backend по умолчанию) стримят
+            // мысли в блок «Мысли агентов».
+            let allow_stream = node.publishes_to_chat();
             let resolved_params = runner.resolve_llm_params(&node.llm_params, &workflow.config, Some(agent));
             // Фрейм ноды (`NodeDef.system_prompt_file` или графовый дефолт
             // `config.default_system_prompt_*`): отчёт об ошибке чтения — честная
@@ -525,8 +529,9 @@ where
                 None
             };
 
-            // Тип сохранения: message (в чат юзеру) или thought (внутренний отчёт)
-            let msg_type = node.output_type.as_deref().unwrap_or("thought");
+            // Тип сохранения: frontend → message (в чат юзеру),
+            // backend/дефолт → thought (внутренний отчёт)
+            let msg_type = node.session_msg_type();
             let mut msg = ChatMessage {
                 id: Some(format!("msg_{}", runner.msg_counter)),
                 msg_type: msg_type.to_string(),
@@ -598,7 +603,7 @@ where
                 push_report(&mut context.messages, msg, agent.replace_report, Some(2));
                 *runner.msg_counter += 1;
             }
-            context.output_emitted = node.output_type.as_deref() == Some("message");
+            context.output_emitted = node.publishes_to_chat();
 
             Ok(NodeResult {
                 output: serde_json::json!({"result": result, "agent": agent_id}),

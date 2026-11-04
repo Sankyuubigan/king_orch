@@ -115,7 +115,7 @@ nodes:
       first_frame (один id, первый кадр) или reference (1–3 id, референсы
       движка) — по правилам твоего агента):
       {{ video_image_candidates }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: 40
@@ -141,7 +141,7 @@ nodes:
 
       Кандидаты изображений (id для `source_image_ids`):
       {{ video_image_candidates }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: -120
@@ -166,7 +166,7 @@ nodes:
 
       Кандидаты изображений (id для `source_image_ids`):
       {{ video_image_candidates }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: 100
@@ -175,7 +175,7 @@ nodes:
   - id: clarify_video_role
     type: llm_worker
     agent: video_helper
-    output_type: message
+    output_type: frontend
     task: |
       Ветка УТОЧНЕНИЯ РОЛИ ВЛОЖЕНИЯ. В чате есть изображения и пользователь
       просит видео, но по формулировке нельзя однозначно понять роль картинки:
@@ -210,7 +210,7 @@ nodes:
       инструменты.
 
       Сообщение пользователя: {{ nodes.user_message.output.text }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: 200

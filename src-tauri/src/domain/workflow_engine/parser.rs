@@ -349,6 +349,57 @@ where
         .collect())
 }
 
+/// Канонические значения `output_type` ноды `llm_worker`.
+///
+/// `frontend` — результат публикуется в чат пользователю (в сессии хранится
+/// как `type: "message"`); `backend` — внутренний отчёт коллегам (в сессии
+/// `type: "thought"`, дефолт). Legacy имена `message`/`thought` канонизируются
+/// при десериализации (`deserialize_output_type`): старые графы грузятся,
+/// редактор сохраняет уже канонические значения.
+pub const OUTPUT_TYPE_FRONTEND: &str = "frontend";
+pub const OUTPUT_TYPE_BACKEND: &str = "backend";
+
+/// Канонизация значения `output_type`: legacy (`message` → `frontend`,
+/// `thought` → `backend`). Неизвестная строка проходит как есть — молча
+/// переписывать её на канон нельзя: опечатка автора должна остаться видимой
+/// (в исполнении неизвестное трактуется как `backend`, см. `session_msg_type`).
+pub fn canonical_output_type(raw: &str) -> String {
+    match raw.trim() {
+        "message" => OUTPUT_TYPE_FRONTEND.to_string(),
+        "thought" => OUTPUT_TYPE_BACKEND.to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Десериализатор `output_type`: канонизирует legacy-имена в точке входа.
+/// SSOT: все пути чтения нод (загрузка YAML и сохранение из редактора) идут
+/// через serde, поэтому нормализация живёт здесь одна.
+fn deserialize_output_type<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    Ok(Option::<String>::deserialize(deserializer)?.map(|v| canonical_output_type(&v)))
+}
+
+impl NodeDef {
+    /// Публикует ли нода результат в чат пользователю (стрим ответа +
+    /// `output_emitted`). Канон: `output_type: frontend`.
+    pub fn publishes_to_chat(&self) -> bool {
+        self.output_type.as_deref() == Some(OUTPUT_TYPE_FRONTEND)
+    }
+
+    /// Тип сообщения сессии для результата ноды: `frontend` → `message`
+    /// (история чата, она инжектится всем агентам автоматически), иначе —
+    /// `thought` (внутренний отчёт). Дефолт поля (None) — `backend`.
+    pub fn session_msg_type(&self) -> &'static str {
+        if self.publishes_to_chat() {
+            "message"
+        } else {
+            "thought"
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct NodeDef {
     pub id: String,
@@ -369,7 +420,14 @@ pub struct NodeDef {
     pub agent: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Куда публикуется результат ноды: `frontend` (в чат; legacy `message`)
+    /// или `backend` (внутренний отчёт; legacy `thought`, дефолт). Legacy-имена
+    /// канонизируются при десериализации — см. `canonical_output_type`.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_output_type"
+    )]
     pub output_type: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<String>,
@@ -1952,7 +2010,7 @@ edges: []
         };
 
         let call_web = get("call_web");
-        assert_eq!(call_web.output_type.as_deref(), Some("thought"));
+        assert_eq!(call_web.output_type.as_deref(), Some("backend"));
 
         let eval = get("eval_answer");
         assert_eq!(eval.agent.as_deref(), Some("answer_evaluator"));
@@ -1971,7 +2029,7 @@ edges: []
 
         let improve = get("improve_web");
         assert_eq!(improve.agent.as_deref(), Some("web_researcher"));
-        assert_eq!(improve.output_type.as_deref(), Some("thought"));
+        assert_eq!(improve.output_type.as_deref(), Some("backend"));
 
         let eval_again = get("eval_again");
         assert_eq!(eval_again.agent.as_deref(), Some("answer_evaluator"));
@@ -1990,7 +2048,7 @@ edges: []
 
         let honest = get("honest_fail");
         assert_eq!(honest.agent.as_deref(), Some("web_researcher"));
-        assert_eq!(honest.output_type.as_deref(), Some("message"));
+        assert_eq!(honest.output_type.as_deref(), Some("frontend"));
 
         let route = get("route");
         assert_eq!(route.node_type, NodeType::Switch);
@@ -2010,12 +2068,12 @@ edges: []
         let dec = get("decompose_topic");
         assert_eq!(dec.node_type, NodeType::LlmWorker);
         assert_eq!(dec.agent.as_deref(), Some("topic_decomposer"));
-        assert_eq!(dec.output_type.as_deref(), Some("thought"));
+        assert_eq!(dec.output_type.as_deref(), Some("backend"));
 
         for i in 1..=3 {
             let sub = get(&format!("call_sub{}", i));
             assert_eq!(sub.agent.as_deref(), Some("web_researcher"));
-            assert_eq!(sub.output_type.as_deref(), Some("thought"));
+            assert_eq!(sub.output_type.as_deref(), Some("backend"));
             assert!(
                 sub.task
                     .as_deref()
@@ -2030,7 +2088,7 @@ edges: []
         assert_eq!(comp.agent.as_deref(), Some("research_compiler"));
         assert_eq!(
             comp.output_type.as_deref(),
-            Some("thought"),
+            Some("backend"),
             "compile_research не терминальный — дальше оценщик"
         );
         let comp_task = comp.task.as_deref().unwrap_or("");
@@ -2047,7 +2105,7 @@ edges: []
 
         let improve_deep = get("improve_deep");
         assert_eq!(improve_deep.agent.as_deref(), Some("research_compiler"));
-        assert_eq!(improve_deep.output_type.as_deref(), Some("thought"));
+        assert_eq!(improve_deep.output_type.as_deref(), Some("backend"));
 
         let eval_deep2 = get("eval_deep2");
         assert_eq!(eval_deep2.agent.as_deref(), Some("answer_evaluator"));
@@ -2077,7 +2135,7 @@ edges: []
 
         let honest_deep = get("honest_fail_deep");
         assert_eq!(honest_deep.agent.as_deref(), Some("research_compiler"));
-        assert_eq!(honest_deep.output_type.as_deref(), Some("message"));
+        assert_eq!(honest_deep.output_type.as_deref(), Some("frontend"));
 
         let final_web = get("final_web");
         assert_eq!(final_web.node_type, NodeType::SystemCondition);
@@ -2778,7 +2836,7 @@ edges: []
         );
         assert_eq!(
             get("call_apply_plan").output_type.as_deref(),
-            Some("thought")
+            Some("backend")
         );
         assert!(get("call_apply_plan")
             .task
@@ -2913,7 +2971,7 @@ edges: []
         );
         assert_eq!(
             get("call_code_explainer").output_type.as_deref(),
-            Some("message")
+            Some("frontend")
         );
 
         assert_eq!(get("call_project_mapper").node_type, NodeType::LlmWorker);
@@ -2929,7 +2987,7 @@ edges: []
         );
         assert_eq!(
             get("call_bug_analyst").output_type.as_deref(),
-            Some("thought")
+            Some("backend")
         );
 
         assert_eq!(get("route_search").node_type, NodeType::ConditionCheck);
@@ -2983,7 +3041,7 @@ edges: []
         assert_eq!(get("honest_fail_bug").agent.as_deref(), Some("bug_analyst"));
         assert_eq!(
             get("honest_fail_bug").output_type.as_deref(),
-            Some("message")
+            Some("frontend")
         );
 
         assert_eq!(get("note_use_coder").node_type, NodeType::Note);

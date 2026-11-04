@@ -45,7 +45,7 @@ nodes:
 - id: call_collector
   type: llm_worker
   agent: data_collector
-  output_type: message
+  output_type: frontend
   inject_response:
   - validator
   - synthesizer
@@ -123,7 +123,7 @@ nodes:
     {{ signals.validator_report }}
 
     Переведи описание паттерна на контекст проблемы пользователя, следуя ИНСТРУКЦИИ и формату вывода из системного промпта.
-  output_type: message
+  output_type: frontend
   inject_response:
   - synthesizer
   - decomposer
@@ -135,7 +135,7 @@ nodes:
 - id: call_shadow_worker
   type: llm_worker
   agent: shadow_worker
-  output_type: message
+  output_type: frontend
   inject_response:
   - validator
   - synthesizer
@@ -239,7 +239,7 @@ nodes:
 - id: call_request_helper
   type: llm_worker
   agent: request_helper
-  output_type: message
+  output_type: frontend
   ui_pos:
     y: 864
     x: -808
@@ -266,7 +266,7 @@ nodes:
   type: llm_worker
   group: group_1
   agent: synthesizer
-  output_type: message
+  output_type: frontend
   inject_response:
   - decomposer
   - soma_translator

@@ -77,7 +77,7 @@ nodes:
       Доступные LoRA пользователя (стемы для аргумента `lora`; выбор — по
       правилам твоего агента, обычной правке LoRA не нужны):
       {{ image_loras }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: -80
@@ -92,7 +92,7 @@ nodes:
 
       Уточнение задачи: {{ nodes.extract_facts.output.rewritten_query }}
       Исходный текст пользователя: {{ nodes.user_message.output.text }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: 40
@@ -127,7 +127,7 @@ nodes:
       Доступные LoRA пользователя (стемы для аргумента `lora`; выбор — по
       правилам твоего агента, обычной генерации LoRA не нужны):
       {{ image_loras }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: 160
@@ -165,7 +165,7 @@ nodes:
       Доступные LoRA пользователя (стемы для аргумента `lora`; выбор — по
       правилам твоего агента, обычной композиции LoRA не нужны):
       {{ image_loras }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: 240
@@ -182,7 +182,7 @@ nodes:
       НЕ вызывай инструменты.
 
       Сообщение пользователя: {{ nodes.user_message.output.text }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: 280

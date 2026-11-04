@@ -57,7 +57,7 @@ nodes:
     type: llm_worker
     agent: code_explainer
     task: "Ответь на вопрос пользователя, изучив код: {{ nodes.user_message.output.text }}"
-    output_type: message
+    output_type: frontend
     ui_pos:
       y: -554
       x: 750
@@ -66,7 +66,7 @@ nodes:
     type: llm_worker
     agent: project_mapper
     task: "Сделай карту проекта: {{ nodes.user_message.output.text }}"
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 759
       y: -419
@@ -75,7 +75,7 @@ nodes:
     type: llm_worker
     agent: qa_diagnost
     task: "Выполни напрямую: {{ nodes.user_message.output.text }}"
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 740
       y: -80
@@ -83,7 +83,7 @@ nodes:
   - id: call_research_team
     type: sub_workflow
     task: "{{ nodes.user_message.output.text }}"
-    output_type: thought
+    output_type: backend
     workflow: search-specialist
     ui_pos:
       x: 750
@@ -104,7 +104,7 @@ nodes:
     type: llm_worker
     agent: bug_analyst
     task: "Найди первопричину бага: {{ nodes.user_message.output.text }}"
-    output_type: thought
+    output_type: backend
     ui_pos:
       y: 48
       x: 751
@@ -122,7 +122,7 @@ nodes:
   - id: call_search_for_bug
     type: sub_workflow
     task: "Найди документацию и best practice для решения: {{ nodes.call_bug_analyst.output.result }}"
-    output_type: thought
+    output_type: backend
     workflow: search-specialist
     ui_pos:
       x: 1380
@@ -135,7 +135,7 @@ nodes:
       Напиши падающий тест (Failing Test First) в песочнице, чтобы поймать баг с поличным.
       Отчёт аналитика: {{ nodes.call_bug_analyst.output.result }}
       Best practice из инета (если был): {{ nodes.call_search_for_bug.output.result }}
-    output_type: thought
+    output_type: backend
     ui_pos:
       y: 91
       x: 1611
@@ -162,7 +162,7 @@ nodes:
       Исходная задача: {{ nodes.user_message.output.text }}
       Отчёт аналитика: {{ nodes.call_bug_analyst.output.result }}
       Отчёт QA (падающий тест): {{ nodes.call_qa_reproduce.output.result }}
-    output_type: thought
+    output_type: backend
     ui_pos:
       x: 2433
       y: 651
@@ -174,7 +174,7 @@ nodes:
     task: |
       Проверь план на архитектурную чистоту, размер файлов (<500 строк) и наличие логирования.
       План: {{ nodes.call_task_planner.output.result }}
-    output_type: thought
+    output_type: backend
     ui_pos:
       y: 626
       x: 2778
@@ -203,7 +203,7 @@ nodes:
     type: llm_worker
     agent: bug_analyst
     task: QA не смог поймать баг с поличным. Честно сообщи пользователю, что корень не найден и нужен ручной аудит.
-    output_type: message
+    output_type: frontend
     ui_pos:
       y: 172
       x: 2308

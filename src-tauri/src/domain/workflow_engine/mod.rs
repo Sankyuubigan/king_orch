@@ -1024,7 +1024,7 @@ where
     }
     // В шину сигналы пишет планировщик — здесь только объявляем результат шага.
     // Текст пользователю: явная группа отвечает своим `message`; авто-склейка —
-    // этапом с `output_type: message`.
+    // этапом с `output_type: frontend`.
     Ok(step_output::StepOutput {
         message: if !output.message.is_empty() {
             Some(output.message.clone())

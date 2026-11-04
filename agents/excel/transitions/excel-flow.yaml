@@ -49,7 +49,7 @@ nodes:
       Таблицы в запросе (path для аргумента `path` excel-тулов; создаваемая
       книга — без path):
       {{ spreadsheet_files }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: 40
@@ -66,7 +66,7 @@ nodes:
       НЕ вызывай инструменты (у тебя их нет).
 
       Сообщение пользователя: {{ nodes.user_message.output.text }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 360
       y: 160

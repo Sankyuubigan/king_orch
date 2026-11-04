@@ -566,7 +566,7 @@ pub fn output_contract(
         // Авто-склейка: у КАЖДОГО этапа своя обязательная канавка, чтобы пропуск
         // этапа был невозможен форматом (грамматика требует все ключи). Общий
         // `message` не объявляется: текст пользователю — этапная нода, у которой
-        // `output_type: message` (её текст публикуется отдельным сообщением).
+        // `output_type: frontend` (её текст публикуется отдельным сообщением).
         for spec in stage_output_specs(workflow, group) {
             if !string_keys.iter().any(|k| k == &spec.key) {
                 string_keys.push(spec.key);
@@ -665,7 +665,8 @@ pub struct StageSpec {
     /// Автор публикации отчёта — id агента ноды. `None` — этап без агента
     /// (`llm_freeform`): его отчёт в сессию не публикуется (как и в detailed).
     pub author: Option<String>,
-    /// Тип публикации этапа с агентом: `output_type` ноды или `thought`.
+    /// Тип сообщения сессии для отчёта этапа с агентом: `message`
+    /// (frontend-нода, `output_type: frontend`) или `thought` (backend/дефолт).
     pub msg_type: String,
 }
 
@@ -711,10 +712,7 @@ pub fn stage_output_specs(workflow: &WorkflowDef, group: &GroupDef) -> Vec<Stage
                 .map(str::trim)
                 .filter(|a| !a.is_empty())
                 .map(ToOwned::to_owned),
-            msg_type: n
-                .output_type
-                .clone()
-                .unwrap_or_else(|| "thought".to_string()),
+            msg_type: n.session_msg_type().to_string(),
         })
         .collect()
 }
@@ -1618,7 +1616,7 @@ mod tests {
             .iter_mut()
             .find(|n| n.id == "second")
             .expect("нода second")
-            .output_type = Some("message".to_string());
+            .output_type = Some(crate::domain::workflow_engine::parser::OUTPUT_TYPE_FRONTEND.to_string());
 
         let specs = stage_output_specs(&wf, &wf.groups[0]);
         assert_eq!(specs.len(), 2, "каждый этап — своя канавка");
@@ -1643,7 +1641,7 @@ mod tests {
 
     /// Контракт авто-группы требует КАЖДЫЙ этап и не требует message:
     /// пропуск этапа должен быть невозможен форматом, а `message` для юзера
-    /// берётся из этапа, у которого `output_type: message`.
+    /// берётся из этапа, у которого `output_type: frontend`.
     #[test]
     fn auto_contract_requires_stage_keys_and_no_message() {
         let wf = workflow(

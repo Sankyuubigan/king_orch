@@ -54,7 +54,7 @@ nodes:
     task: |
       Спроектируй UI/UX для задачи: {{ nodes.user_message.output.text }}
       Верни подробные визуальные инструкции для Primary Coder: файлы, компоненты, CSS/Tailwind-классы, цвета, отступы, анимации. Сам код в файлы не пиши — только инструкции.
-    output_type: thought
+    output_type: backend
     ui_pos:
       y: -220
       x: 740
@@ -66,7 +66,7 @@ nodes:
       Примени визуальные инструкции дизайнера строго как описано, в указанные файлы.
       Дизайн-инструкции: {{ nodes.call_ux_ui_designer.output.result }}
       Исходная задача: {{ nodes.user_message.output.text }}
-    output_type: message
+    output_type: frontend
     ui_pos:
       y: -379
       x: 1065
@@ -77,7 +77,7 @@ nodes:
     task: |
       Выполни напрямую, без отдельного плана: {{ nodes.user_message.output.text }}
       Если не хватает контекста — верни 'Не хватает контекста файла X'. Обязательно ставь логи.
-    output_type: message
+    output_type: frontend
     ui_pos:
       x: 744
       y: 279
@@ -94,7 +94,7 @@ nodes:
       просто перенеси готовый код из плана в файл.
       Если утверждённого плана нет — честно верни: "Нет утверждённого плана. Сначала прогони пайплайн «Аналитик кода»."
       Исходная задача: {{ nodes.user_message.output.text }}
-    output_type: thought
+    output_type: backend
     ui_pos:
       x: 3376
       y: 253
@@ -107,7 +107,7 @@ nodes:
       Проверь написанный кодером код. Запусти тесты. Убедись, что баг исправлен и новые фичи работают.
       План (если есть в истории или в `.agents_workspace/task.md`): {{ nodes.call_apply_plan.output.result }}
       Внесённые изменения: {{ nodes.call_apply_plan.output.result }}
-    output_type: thought
+    output_type: backend
     ui_pos:
       y: 120
       x: 3654

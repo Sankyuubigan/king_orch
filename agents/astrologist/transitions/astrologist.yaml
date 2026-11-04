@@ -73,7 +73,7 @@ nodes:
     переформулировку. НЕ вызывай инструменты — у тебя их нет.
 
     Сообщение пользователя: {{ nodes.user_message.output.text }}
-  output_type: message
+  output_type: frontend
   ui_pos:
     y: 506
     x: 1142
@@ -93,7 +93,7 @@ nodes:
     «вы неправильно спросили».
 
     Сообщение пользователя: {{ nodes.user_message.output.text }}
-  output_type: message
+  output_type: frontend
   ui_pos:
     y: 357
     x: 1142
@@ -152,7 +152,7 @@ nodes:
     инструменты — у тебя их нет.
 
     Сообщение пользователя: {{ nodes.user_message.output.text }}
-  output_type: message
+  output_type: frontend
   ui_pos:
     y: 77
     x: 1705
@@ -204,7 +204,7 @@ nodes:
        сводке или JSON; повторяющиеся разделы с одними и теми же мыслями
        (например «Разбор», а следом «Синтез» с тем же содержанием);
        канцелярит и учебная лекция вместо живого ответа человеку.
-  output_type: message
+  output_type: frontend
   ui_pos:
     y: 158
     x: 2349
