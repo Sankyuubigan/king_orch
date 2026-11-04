@@ -48,7 +48,9 @@ nodes:
   output_type: message
   inject_response:
   - validator
+  - synthesizer
   - decomposer
+  - soma_translator
   ui_pos:
     x: 2744
     y: 781
@@ -57,7 +59,6 @@ nodes:
   type: llm_worker
   agent: soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
-  output_type: message
   ui_pos:
     x: -426
     y: 219
@@ -67,8 +68,6 @@ nodes:
   type: llm_worker
   group: group_1
   agent: decomposer
-  inject_response:
-  - soma_translator
   ui_pos:
     y: 486
     x: 240
@@ -78,9 +77,7 @@ nodes:
   agent: validator
   inject_response:
   - synthesizer
-  - shadow_worker
-  - grounder
-  - data_collector
+  - decomposer
   ui_pos:
     y: 410
     x: 1349
@@ -130,9 +127,7 @@ nodes:
   inject_response:
   - synthesizer
   - decomposer
-  - shadow_worker
-  - grounder
-  - data_collector
+  - soma_translator
   ui_pos:
     x: 2647
     y: 293
@@ -143,9 +138,8 @@ nodes:
   output_type: message
   inject_response:
   - validator
+  - synthesizer
   - decomposer
-  - data_collector
-  - grounder
   - soma_translator
   ui_pos:
     x: 2684
@@ -275,6 +269,7 @@ nodes:
   output_type: message
   inject_response:
   - decomposer
+  - soma_translator
   ui_pos:
     x: 526
     y: 382
