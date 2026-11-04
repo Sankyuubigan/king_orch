@@ -838,6 +838,7 @@ where
             .with_image_candidates(context.image_candidates.clone())
             .with_video_loras(context.video_loras.clone())
             .with_video_refmods(context.video_refmods.clone())
+            .with_refmod_image_candidates(context.refmod_image_candidates.clone())
             .with_image_loras(context.image_loras.clone())
             .with_spreadsheet_files(context.spreadsheet_files.clone())
             .with_request_media(context.request_media.clone());

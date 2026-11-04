@@ -301,6 +301,7 @@ pub fn build_worst_agent_prompt(
             tools.extend(crate::infra::image_tool_schemas(&agent.tools));
             tools.extend(crate::infra::video_tool_schemas(&agent.tools));
             tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
+            tools.extend(crate::infra::refmod_tool_schemas(&agent.tools));
             tools.extend(crate::infra::diag_tool_schemas(&agent.tools));
             let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
             let mut sp =
@@ -450,6 +451,7 @@ where
                  tools.extend(crate::infra::image_tool_schemas(&agent.tools));
                  tools.extend(crate::infra::video_tool_schemas(&agent.tools));
                  tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
+                 tools.extend(crate::infra::refmod_tool_schemas(&agent.tools));
                  tools.extend(crate::infra::diag_tool_schemas(&agent.tools));
                  let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
                 (
@@ -718,6 +720,9 @@ where
         // Каталог RefMod-карточек (`{{ video_refmods }}`): лёгкие карточки
         // персонажей для generate_video (аргумент refmod), зеркало video_loras.
         .with_video_refmods(crate::infra::tools::refmod::refmods_prompt())
+        // Каталог изображений для refmod-графа (`{{ refmod_image_candidates }}`):
+        // футер — конвенция кадров карточки (лицо → ракурс → фигура).
+        .with_refmod_image_candidates(request_media.refmod_candidate_prompt())
         // Каталог image-лор (`{{ image_loras }}`): зеркало видео-каталога —
         // image-агенты выбирают лору из того, что реально есть, а не выдумывают.
         .with_image_loras(crate::infra::tools::media::media_lora::image_loras_prompt())
@@ -1203,6 +1208,11 @@ where
     // excel-тулов (мета-имя "excel"). Исполнение — нативно через ko-excel-tools
     // (umya + LibreOffice), источники — allow-read вложения и outputs сессии.
     all_tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
+
+    // 🧩 Capability RefMod: `tools: {refmod_create: true, refmod_edit: true}` в .md
+    // → схемы refmod-тулов (мета-имя "refmod"). Исполнение — нативно (SSOT формата
+    // карточек в tauri-plugin-image-engine), источники create — вложения запроса.
+    all_tools.extend(crate::infra::refmod_tool_schemas(&agent.tools));
 
     // 🩺 Capability Diag: `tools: {diag_snapshot: true, ...}` в .md → схемы
     // диагностических тулов (мета-имя "diag"). Исполнение — нативно через

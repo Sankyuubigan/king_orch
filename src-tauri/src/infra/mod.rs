@@ -72,3 +72,4 @@ pub use tools::excel::{
 pub use tools::diag::{
     attach_saved_diag_from_sub_calls, diag_tool_schemas, execute_diag_tool, is_diag_tool,
 };
+pub use tools::refmod::{execute_refmod_tool, refmod_tool_schemas, is_refmod_tool};

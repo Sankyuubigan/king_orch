@@ -897,6 +897,7 @@ mod tests {
         "agents/research/transitions/search-specialist.yaml",
         "agents/image-gen/transitions/image-gen-flow.yaml",
         "agents/excel/transitions/excel-flow.yaml",
+        "agents/refmod/transitions/refmod-flow.yaml",
         "agents/diagnostics/transitions/diagnostics-flow.yaml",
         "agents/tarot-master/transitions/tarot_master.yaml",
         "agents/astrologist/transitions/astrologist.yaml",
@@ -1628,11 +1629,10 @@ edges: []
 
     /// Настоящий граф обязан распознаваться как граф и грузиться.
     ///
-    /// На 31.10.26 в `agents/` живёт 10 графов (день добавил два: excel-flow —
-    /// команда «Excel-таблицы», excel_operator/excel_helper; diagnostics-flow —
-    /// команда «Диагностика ПК», diag_specialist/diag_helper). Вариант
-    /// психотерапевта из `experiments/` удалён коммитом `83e37f9` вместе с нодой
-    /// System-1.
+    /// На 04.11.26 в `agents/` живёт 11 графов (день добавил excel-flow,
+    /// diagnostics-flow и refmod-flow — команда «RefMod-карточки персонажей»,
+    /// refmod_maker/refmod_helper). Вариант психотерапевта из `experiments/`
+    /// удалён коммитом `83e37f9` вместе с нодой System-1.
     #[test]
     fn real_graphs_are_still_discovered() {
         let agents_dir = workspace_root().join("agents");
@@ -1652,6 +1652,7 @@ edges: []
                 "excel-flow",
                 "image-gen-flow",
                 "main_conversation_flow",
+                "refmod-flow",
                 "search-specialist",
                 "tarot_master",
                 "video-gen-flow",

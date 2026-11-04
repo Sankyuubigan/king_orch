@@ -819,6 +819,106 @@ where
                     }
                 }
             }
+        } else if crate::infra::is_refmod_tool(tool_name) {
+            // 🧩 RefMod-тулы: create (карточка из вложений юзера) / edit (warp/hue/splice
+            // → новая карточка). Источники create — ТОЛЬКО вложения текущего запроса
+            // (гейт §00.2: диспетчер резолвит source_image_ids → аттачменты; произвольные
+            // пути диска структурно недоступны). VRAM-suspend не нужен: чистый Rust над
+            // PNG-кадрами, с движком не конфликтует.
+            tool_found = true;
+            let granted = self
+                .all_tools
+                .iter()
+                .any(|(meta, name, _)| meta == "refmod" && name == tool_name);
+            if !granted {
+                tool_output = Some(format!(
+                    "Ошибка '{}': инструмент недоступен агенту '{}'",
+                    tool_name, self.agent.id
+                ));
+            } else {
+                let code_ctx = crate::infra::ToolCtx {
+                    workspace_root: &self.workspace_root,
+                    write_root: &self.write_root,
+                    write_outside: self.write_outside,
+                    session_id: &self.session_id,
+                    approver: &self.approver,
+                    agent_id: &self.agent.id,
+                    bins_dir: self.bins_dir,
+                    image_artifacts: Some(&self.image_artifacts),
+                };
+                // refmod_create читает вложения через source_image_ids (шаблон media-ветки);
+                // refmod_edit работает только с карточками — вложения не нужны.
+                let mut attachments = Vec::new();
+                if tool_name == "refmod_create" {
+                    match self
+                        .request_media
+                        .resolve_arguments(arguments, &*self.messages)
+                    {
+                        Ok(resolved) => {
+                            log::info!(
+                                "[REFMOD-TOOL] Resolved source_image_ids for agent '{}': resolved={}",
+                                self.agent.id,
+                                resolved.len()
+                            );
+                            attachments = resolved;
+                        }
+                        Err(error) => {
+                            tool_output = Some(super::vram::tool_error_to_output(
+                                tool_name,
+                                crate::infra::ToolError::Usage(error),
+                            ));
+                        }
+                    }
+                }
+                if tool_output.is_none() {
+                    match crate::infra::execute_refmod_tool(
+                        tool_name,
+                        arguments,
+                        &code_ctx,
+                        &attachments,
+                    ) {
+                        Some(Ok(result)) => {
+                            tool_output = Some(result);
+                            tool_succeeded = true;
+                            crate::infra::event_bus::global_bus().publish(
+                                crate::infra::event_bus::AgentEvent::ToolCall {
+                                    agent: self.agent.id.clone(),
+                                    tool: tool_name.to_string(),
+                                },
+                            );
+                        }
+                        Some(Err(error)) => {
+                            let raw_error = error.to_string();
+                            log::error!(
+                                "Ошибка refmod-тула '{}' (агент '{}'): {}",
+                                tool_name,
+                                self.agent.id,
+                                raw_error
+                            );
+                            // Честный текст (core §2.2): Usage/NotFound/Io несут конкретную
+                            // причину — маскировать «внутренней ошибкой» нельзя (иначе агент
+                            // гоняет ретраи детерминированного отказа).
+                            if super::vram::is_resource_error(&raw_error)
+                                || super::vram::is_honest_tool_error(&error)
+                            {
+                                tool_output =
+                                    Some(super::vram::tool_error_to_output(tool_name, error));
+                            } else {
+                                tool_output = Some(format!(
+                                    "Ошибка '{}': внутренняя ошибка refmod-обработки",
+                                    tool_name
+                                ));
+                            }
+                        }
+                        None => {
+                            tool_output = Some(format!(
+                                "Ошибка: Инструмент '{}' не найден.",
+                                tool_name
+                            ));
+                        }
+                    }
+                }
+            }
         } else if crate::infra::is_diag_tool(tool_name) {
             // 🩺 Diag-тулы (SSOT в ko-diag-tools): snapshot (readonly) +
             // recorder start/stop («чёрный ящик», фоновый поток хоста).

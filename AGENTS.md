@@ -332,6 +332,13 @@ pub struct ChatMessage {
 - Тулы `generate_image`/`edit_image`/`upscale_image` — `infra/tools/media.rs` (схемы `image_tool_schemas`, диспетчеризация `execute_image_tool`), движок — плагин `tauri-plugin-image-engine` (sd.cpp). Артефакты: маркер `[IMAGE_SAVED id=N]` → `attach_saved_images_from_sub_calls` → `ChatAttachment{file_path}` **без base64** (SSOT: файл в `<exe>/image_outputs/<session_id>/`; фронт рендерит лениво через `get_image_data_url`). Тест-страж: `saved_image_attachments_are_path_only` (`media_tests.rs`). Вложения старых сессий с `data_base64` остаются читаемыми.
 - Граф `agents/image-gen/transitions/image-gen-flow.yaml`: факты `needs_image_edit` / `needs_image_upscale` / `needs_image_compose` / `needs_image_generate` (приоритет edit → upscale → compose → generate, см. `facts.yaml`). Ветка `needs_image_compose` («НОВАЯ КОМПОЗИЦИЯ») — вложение только источник внешности/объекта/стилистики, холст описывается промптом; правила режима — в `agents/image-gen/backend/image_editor.md`.
 
+### Нативные refmod-тулы (🧩 Capability refmod, паттерн медиа-тулов; RefMods Этап 2)
+
+- **SSOT формата карточки — плагин** (`tauri_plugin_image_engine::engine::refmod`): мета+кадры, нормализация (длинная ≤1024px, обе стороны кратно 32, Lanczos3), каталог, миниатюра (JPEG 256px data URL). Хост держит тонкие обёртки (`infra/tools/refmod.rs`, `RefModError`→`ToolError` вариант-в-вариант) — дублировать формат в хосте запрещено. Карточки: `<KingOrchData>/refmods/<slug>/` = `meta.json` + `frames/frame_NN.png`; конвенция кадров: 1=лицо крупно, 2=ракурс 3/4, 3=фигура; в движок видео идёт take(3).
+- Тулы `refmod_create` (карточка из ПРИКРЕПЛЁННЫХ фото любых размеров, гейт источников как у excel: только вложения через `resolve_ref_paths`) и `refmod_edit` (warp 0.7–1.3 / hue ±40 / splice попарно с растушёвкой 32px → НОВАЯ карточка `<slug>_v2`, перезапись только `overwrite: true`). Операции — `infra/tools/refmod_ops.rs` (гейты parse_ops ДО диска); диспетчер — refmod-ветка `dispatch.rs` с grant `meta == "refmod"`; `refmod_create` резолвит `source_image_ids` через `request_media.resolve_arguments`. Маркер результата `[REFMOD_SAVED slug=...]` (без реестра артефактов — карточка живёт на диске).
+- Граф `agents/refmod/transitions/refmod-flow.yaml`: факты `needs_refmod_create` / `needs_refmod_edit` (приоритет create → edit), дефолт — `refmod_helper`. Каталоги графа: `{{ refmod_image_candidates }}` (футер — конвенция кадров, НЕ роли видео) и `{{ video_refmods }}`.
+- Плашка «Рефмодс» — web-компонент `<image-refmod-panel>` плагина (команды `list_refmod_cards` / `refmod_card_thumbnail`), маунт в «Движки» (`index.html`, template-engines-content).
+
 ## 5. Код-стайл
 
 ### TypeScript (frontend)

@@ -53,6 +53,10 @@ pub struct WorkflowContext {
     /// generate_video). Заполняется при создании контекста, резолвится
     /// шаблоном — по образцу `{{ video_loras }}`.
     pub video_refmods: String,
+    /// Каталог изображений для refmod-агентов (`{{ refmod_image_candidates }}`):
+    /// футер — конвенция кадров карточки (лицо → ракурс → фигура), не ролей
+    /// видео/холста. По образцу `{{ video_image_candidates }}`.
+    pub refmod_image_candidates: String,
     /// То же для image-агентов (`{{ image_loras }}`): каталог image-лор на базе
     /// активного image-бандла. Без него модель выдумывает несуществующие стемы.
     pub image_loras: String,
@@ -83,6 +87,7 @@ impl WorkflowContext {
             video_image_candidates: String::new(),
             video_loras: String::new(),
             video_refmods: String::new(),
+            refmod_image_candidates: String::new(),
             image_loras: String::new(),
             spreadsheet_files: String::new(),
             request_media: Arc::new(RequestMedia::empty()),
@@ -106,6 +111,11 @@ impl WorkflowContext {
 
     pub fn with_video_refmods(mut self, block: String) -> Self {
         self.video_refmods = block;
+        self
+    }
+
+    pub fn with_refmod_image_candidates(mut self, candidates: String) -> Self {
+        self.refmod_image_candidates = candidates;
         self
     }
 
@@ -143,6 +153,7 @@ impl WorkflowContext {
         result = result.replace("{{ video_image_candidates }}", &self.video_image_candidates);
         result = result.replace("{{ video_loras }}", &self.video_loras);
         result = result.replace("{{ video_refmods }}", &self.video_refmods);
+        result = result.replace("{{ refmod_image_candidates }}", &self.refmod_image_candidates);
         result = result.replace("{{ image_loras }}", &self.image_loras);
         result = result.replace("{{ spreadsheet_files }}", &self.spreadsheet_files);
 

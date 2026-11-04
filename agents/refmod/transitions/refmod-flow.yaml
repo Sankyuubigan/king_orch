@@ -1,0 +1,106 @@
+name: RefMod-Агент Персонажей
+description: Сборка карточек постоянных персонажей из фото (любых размеров) и правка существующих карточек (телосложение, цвет, склейка) для генерации видео и картинок.
+
+config:
+  facts_file: facts.yaml
+  default_llm_params: strict
+
+# Точка входа графа — текст, отправленный пользователем в чат.
+entry: user_message
+
+nodes:
+  # ── Источник данных: текст пользователя (без LLM) ──
+  - id: user_message
+    type: user_message
+    ui_pos:
+      x: -320
+      y: 40
+
+  # ── Классификация: создать карточку / править существующую? ──
+  - id: extract_facts
+    type: llm_fact_extractor
+    input: "{{ nodes.user_message.output.text }}"
+    llm_params: strict
+    ui_pos:
+      x: -80
+      y: 40
+
+  - id: route
+    type: switch
+    input_object: "{{ nodes.extract_facts.output }}"
+    cases_priority:
+      - key: needs_refmod_create
+        to: make_refmod
+      - key: needs_refmod_edit
+        to: edit_refmod
+    default: no_refmod_task
+    ui_pos:
+      x: 140
+      y: 40
+
+  # ── Ветка СОЗДАНИЯ карточки из фото (терминальная) ──
+  - id: make_refmod
+    type: llm_worker
+    agent: refmod_maker
+    task: |
+      Режим: СОЗДАНИЕ карточки персонажа из прикреплённых фото.
+
+      Запрос пользователя (самодостаточная форма): {{ nodes.extract_facts.output.rewritten_query }}
+      Исходный текст пользователя: {{ nodes.user_message.output.text }}
+
+      Изображения запроса (id для source_image_ids; порядок id = порядок
+      кадров карточки по конвенции — правила твоего агента):
+      {{ refmod_image_candidates }}
+
+      Уже существующие карточки (проверь, не дублируешь ли персонажа;
+      slug занятый перезапишет карточку — правила твоего агента):
+      {{ video_refmods }}
+    output_type: message
+    ui_pos:
+      x: 360
+      y: -40
+
+  # ── Ветка ПРАВКИ существующей карточки (терминальная) ──
+  - id: edit_refmod
+    type: llm_worker
+    agent: refmod_maker
+    task: |
+      Режим: ПРАВКА существующей карточки (телосложение / цвет / склейка;
+      результат — новая карточка-вариант, правила твоего агента).
+
+      Запрос пользователя (самодостаточная форма): {{ nodes.extract_facts.output.rewritten_query }}
+      Исходный текст пользователя: {{ nodes.user_message.output.text }}
+
+      Существующие карточки (slug для refmod_edit):
+      {{ video_refmods }}
+
+      Изображения запроса (если правке нужны новые фото):
+      {{ refmod_image_candidates }}
+    output_type: message
+    ui_pos:
+      x: 360
+      y: 40
+
+  # ── Не задача про карточки: помощник (вопросы, уточнение) ──
+  - id: no_refmod_task
+    type: llm_worker
+    agent: refmod_helper
+    task: |
+      Классификатор НЕ распознал запрос как работу с карточками: пользователь
+      либо спрашивает о возможностях, либо описал задачу неточно, либо просит
+      не про RefMod. Ответь по правилам твоего агента: вопрос — компактным
+      ответом, расплывчатая задача — одним уточняющим вопросом.
+      НЕ вызывай инструменты (у тебя их нет).
+
+      Сообщение пользователя: {{ nodes.user_message.output.text }}
+    output_type: message
+    ui_pos:
+      x: 360
+      y: 160
+
+edges:
+  - from: user_message
+    to: extract_facts
+
+  - from: extract_facts
+    to: route

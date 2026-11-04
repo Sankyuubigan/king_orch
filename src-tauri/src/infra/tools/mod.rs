@@ -19,6 +19,7 @@ pub mod diag;
 pub mod excel;
 pub mod media;
 pub mod refmod;
+pub mod refmod_ops;
 pub mod video;
 
 /// Хелперы ядра: ними пользуется media.rs через `super::` (имена прежние).
