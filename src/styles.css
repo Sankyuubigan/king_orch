@@ -684,10 +684,21 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 .toast-success { background: #2e7d32; color: #ffffff; border: 1px solid #1b5e20; }
 .toast-info { background: #1565c0; color: #ffffff; border: 1px solid #0d47a1; }
 
+/* ─── Меню ⋮ (сообщения и строки-действия) ───
+   Кнопка живёт в правом верхнем углу пузыря/строки. Чтобы она НИКОГДА не
+   налегала на текст, угол вырезается заранее: в пузыре — float-распорка
+   .msg-menu-spacer внутри .msg-content (текст обтекает её), у строк-действий
+   конец линии резервируется padding-right .thought-row__line. */
 .msg-menu-wrapper { position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity 0.15s ease; z-index: 10; }
 .message:hover .msg-menu-wrapper { opacity: 1; }
-.msg-menu-btn { background: var(--panel-bg); border: 1px solid var(--border); color: var(--text); cursor: pointer; padding: 1px 6px; border-radius: 4px; font-size: 16px; font-weight: bold; line-height: 1.2; opacity: 0.6; transition: opacity 0.15s, background 0.15s; }
+.msg-menu-btn { background: var(--panel-bg); border: 1px solid var(--border); color: var(--text); cursor: pointer; width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border-radius: 6px; font-size: 15px; font-weight: bold; line-height: 1; opacity: 0.55; transition: opacity 0.15s, background 0.15s; }
 .msg-menu-btn:hover { opacity: 1; background: var(--session-hover); }
+/* Распорка угла: первый ребёнок .msg-content (вставляет render.ts вместе с меню).
+   Ширина = кнопка (24px) минус правый padding пузыря (15px) с запасом: первая
+   строка текста заканчивается ЛЕВЕЕ кнопки, наложение структурно невозможно.
+   Высота ≥ высоты первой строки (14px × 1.5 = 21px) — вторая строка начинается
+   ниже, чем низ кнопки. */
+.msg-menu-spacer { float: right; width: 24px; height: 24px; }
 .msg-menu-dropdown { position: absolute; right: 0; top: 100%; background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 100; display: none; flex-direction: column; min-width: 210px; padding: 5px 0; }
 .msg-menu-dropdown.show { display: flex; }
 .msg-menu-item { padding: 8px 12px; cursor: pointer; font-size: 13px; text-align: left; background: none; border: none; color: var(--text); width: 100%; border-radius: 0; }
@@ -698,6 +709,8 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 .msg-edit-input { width: 100%; min-height: 120px; resize: vertical; box-sizing: border-box; background: var(--bg, #1a1a1a); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 10px; font-family: inherit; font-size: 14px; line-height: 1.5; }
 
 .message.message-editing { align-self: stretch; max-width: 100%; width: 100%; }
+/* В режиме редактирования меню не нужно: textarea на всю ширину пузыря. */
+.message-editing .msg-menu-wrapper { display: none; }
 .msg-edit-input:focus { outline: none; border-color: var(--accent, #4a9eff); }
 .msg-edit-actions { display: flex; gap: 8px; margin-top: 8px; }
 .msg-edit-save, .msg-edit-cancel { cursor: pointer; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--border); font-size: 13px; background: var(--panel-bg); color: var(--text); }
@@ -715,7 +728,9 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 
 .thought-row { align-self: stretch; position: relative; margin: 2px 0; padding-left: var(--chat-row-indent); color: #888; font-size: calc(var(--chat-font-scale, 1) * 13px); line-height: 1.5; min-width: 0; }
 .thought-row:hover { background: color-mix(in srgb, var(--text) 4%, transparent); border-radius: 4px; }
-.thought-row__line { display: flex; align-items: center; gap: 6px; min-width: 0; }
+/* padding-right резервирует конец линии под кнопку ⋮ (absolute right:4, ширина
+   24px) — summary/мета/chevron заканчиваются ЛЕВЕЕ кнопки, наложение невозможно. */
+.thought-row__line { display: flex; align-items: center; gap: 6px; min-width: 0; padding-right: 30px; }
 .thought-row__icon { flex: 0 0 auto; }
 .thought-row__label { flex: 0 0 auto; color: #999; font-weight: 600; white-space: nowrap; }
 .thought-row__summary { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -731,6 +746,8 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 .thought-row__detail-text { white-space: pre-wrap; word-break: break-word; color: #888; font-size: 12.5px; }
 .thought-row--open .thought-row__line { color: #aaa; }
 .thought-row:hover .msg-menu-wrapper { opacity: 1; }
+/* ⋮ строки центрируется по линии (кнопка 24px выше линии ~20px). */
+.thought-row .msg-menu-wrapper { top: -2px; }
 /* Меню открыто (.show у msg-menu-dropdown) → обёртка всегда непрозрачна, независимо
    от hover сообщения/строки. Иначе при уводе мыши меню «исчезает», оставаясь
    открытым (и невидимым продолжает ловить клики). Закрытие — по клику вне меню.

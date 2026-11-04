@@ -74,6 +74,11 @@ export function createMessageElement(
 
   if (msgUid && menuCallbacks && (role === 'user' || role === 'agent')) {
     const menu = createMessageMenu(msgUid, menuCallbacks, role === 'agent' ? translateLabel : undefined);
+    // Угол под кнопку ⋮ вырезается float-распоркой: текст первой строки
+    // обтекает её и физически не может попасть под кнопку (styles.css).
+    const spacer = document.createElement("div");
+    spacer.className = "msg-menu-spacer";
+    contentDiv.prepend(spacer);
     msgDiv.appendChild(menu);
   }
 

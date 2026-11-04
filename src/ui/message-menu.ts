@@ -42,6 +42,7 @@ export function createMessageMenu(
 
   const btn = document.createElement("button");
   btn.className = "msg-menu-btn";
+  btn.type = "button";
   btn.innerHTML = "⋮";
   btn.title = "Действия";
 
