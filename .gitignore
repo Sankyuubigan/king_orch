@@ -38,3 +38,8 @@ src-tauri/tauri-dev-override.json
 /nul
 /test_cases/custom_runs
 temp_test_gate.log
+# MSIX/Store и мобильные иконки генератора tauri icon — проект десктопный (NSIS), не используются
+/src-tauri/icons/Square*
+/src-tauri/icons/StoreLogo.png
+/src-tauri/icons/android/
+/src-tauri/icons/ios/
