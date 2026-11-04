@@ -354,7 +354,7 @@
               <option value="yaml">YAML тест (input/output сравнение)</option>
               <option value="pipeline">Pipeline test (fixture-папка, 3-уровневая валидация)</option>
               <option value="custom">Кастомный промпт (свой текст → агент/пайплайн)</option>
-              <option value="triage">Триаж моделей (7 пробников классов отказов)</option>
+              <option value="triage">Триаж моделей (14 пробников классов отказов)</option>
             </select>
           </div>
 
@@ -471,7 +471,7 @@
             </div>
           </div>
 
-          <!-- Triage mode: 7 пробников известных классов отказов малых моделей.
+          <!-- Triage mode: 14 пробников известных классов отказов малых моделей.
                Пул моделей общий; агенты не нужны — пробники говорят с движком напрямую. -->
           <div id="s-{p}-triage-test-panel" style="display:none;">
             <div class="cards-grid">
@@ -479,8 +479,12 @@
               <div class="group-title">Что проверяет триаж</div>
               <div class="test-hint">
                 Попугайство (эхо контекста) · think-жор бюджета · yes-bias/штамп «всё true» ·
-                рестарт вместо продолжения · петли повтора · JSON-надёжность · instruction following.
+                рестарт вместо продолжения · петли повтора · JSON-надёжность · instruction following ·
+                утечка служебных токенов · EOS-отказ · языковой дрейф/CJK-мусор · игла в стоге ·
+                утечка системного промпта · конфабуляция (advisory) · over-refusal (advisory).
                 Пробники GENERIC: никаких пользовательских кейсов.
+                Конфабуляция и over-refusal — advisory: возможны ложные срабатывания,
+                на итоговый вердикт не влияют.
               </div>
             </div>
 

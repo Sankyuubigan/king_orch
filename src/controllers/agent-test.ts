@@ -140,7 +140,7 @@ export class AgentTestController {
   private customBatchLabel = "";
   private customBatchCancelled = false;
 
-  // Triage test state (7 пробников классов отказов)
+  // Triage test state (14 пробников классов отказов)
   private triageBatch: { total: number; done: number } | null = null;
   private triageBatchCancelled = false;
   private pipelineTestsLoaded = false;
@@ -944,7 +944,7 @@ export class AgentTestController {
     return table + details;
   }
 
-  // ─── Triage test mode (7 пробников классов отказов) ───
+  // ─── Triage test mode (14 пробников классов отказов) ───
 
   private updateTriageRunButton(): void {
     this.el.btnRunTriageTest.disabled = this.selectedModels.size === 0;
