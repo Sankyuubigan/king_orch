@@ -69,6 +69,14 @@ fn normalized_path(path: &str) -> String {
     path.replace('/', "\\").to_ascii_lowercase()
 }
 
+/// Есть ли в пути поднимающийся компонент (`..`)? Проверка по компонентам,
+/// а не подстрокой: имя файла с двумя точками подряд («бюджет..2024.xlsx»)
+/// легально, а `..\evil.xlsx` — нет.
+fn path_has_parent_ref(path: &Path) -> bool {
+    path.components()
+        .any(|c| matches!(c, std::path::Component::ParentDir))
+}
+
 /// Гейт источника: путь обязан быть абсолютным, без `..`, и входить в
 /// allow-read список (вложения юзера) ИЛИ в папку результатов сессии
 /// (артефакты, созданные в этой сессии — сценарий «почини свой же файл»).
@@ -81,7 +89,7 @@ fn ensure_allowed_source(path: &str, ctx: &ToolCtx, allowed: &[String]) -> Resul
                 .to_string(),
         ));
     }
-    if trimmed.contains("..") {
+    if path_has_parent_ref(Path::new(trimmed)) {
         return Err(ToolError::Usage(
             "path с '..' запрещён: используй точный абсолютный путь".to_string(),
         ));
@@ -256,15 +264,16 @@ fn run_audit(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, 
     let path = ensure_allowed_source(&path, ctx, allowed)?;
     let out_dir = output_dir(ctx)?;
     let temp = out_dir.join("audit_tmp");
+    // Cleanup ДО `?`: Err не должен покидать функцию с живой аудиторской
+    // копией на диске (раньше ранний выход оставлял файл в audit_tmp).
     let result = ko_excel_tools::pipeline::audit(
         &path,
         &temp,
         soffice_for_tools().as_deref(),
         ko_excel_tools::soffice::DEFAULT_TIMEOUT,
-    )
-    .map_err(tool_error)?;
+    );
     let _ = std::fs::remove_dir_all(&temp);
-    Ok(result.to_string())
+    result.map_err(tool_error).map(|v| v.to_string())
 }
 
 fn run_render(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, ToolError> {
@@ -281,8 +290,10 @@ fn run_render(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String,
     let pdf = ko_excel_tools::soffice::render_pdf(&soffice, &path, &out_dir, ko_excel_tools::soffice::DEFAULT_TIMEOUT)
         .map_err(tool_error)?;
     // render_pdf возвращает <stem из исходника>.pdf — переименование в
-    // уникальное имя (seq) для защиты от коллизии за секунду.
-    let unique = out_dir.join(format!("{stem}.pdf"));
+    // уникальное имя SSOT-нейминга lib (seq + эпоха): эпоха закрывает
+    // перезапись PDF после рестарта приложения (seq process-global сбрасывается,
+    // а rename на Windows молча заменяет существующий файл).
+    let unique = ko_excel_tools::pipeline::unique_pdf_path(&out_dir, &stem);
     if pdf != unique {
         std::fs::rename(&pdf, &unique)
             .map_err(|e| ToolError::Io(format!("переименование PDF: {e}")))?;
@@ -823,6 +834,35 @@ mod tests {
         // Отсутствующий файл ИЗ allow-read — NotFound (не Forbidden).
         let err = ensure_allowed_source(missing.to_string_lossy().as_ref(), &ctx, &allowed).unwrap_err();
         assert!(matches!(err, ToolError::NotFound(_)), "{err}");
+    }
+
+    #[test]
+    fn source_gate_allows_double_dot_in_filename() {
+        // T-B4: «бюджет..2024.xlsx» — легальное имя (точки внутри имени файла,
+        // а не компонент «..»); подстрочный contains("..") давал ложный отказ.
+        let (ctx, _registry) = ctx_with_registry("gate_dd");
+        let dir = sandbox("gate_dd");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("бюджет..2024.xlsx");
+        std::fs::write(&file, b"stub").unwrap();
+        let allowed = vec![file.to_string_lossy().to_string()];
+        let ok = ensure_allowed_source(file.to_string_lossy().as_ref(), &ctx, &allowed)
+            .expect("имя с двумя точками подряд — легальный файл");
+        assert_eq!(ok, file);
+    }
+
+    #[test]
+    fn source_gate_rejects_parent_traversal() {
+        // T-B4: поднимающийся компонент «..» остаётся запрещён.
+        let (ctx, _registry) = ctx_with_registry("gate_trav");
+        let dir = sandbox("gate_trav");
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("real.xlsx");
+        std::fs::write(&file, b"stub").unwrap();
+        let allowed = vec![file.to_string_lossy().to_string()];
+        let evil = format!("{}\\..\\real.xlsx", dir.display());
+        let err = ensure_allowed_source(evil.as_str(), &ctx, &allowed).unwrap_err();
+        assert!(matches!(err, ToolError::Usage(_)), "{err}");
     }
 
     #[test]
