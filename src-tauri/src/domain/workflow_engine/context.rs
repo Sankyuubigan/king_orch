@@ -48,6 +48,11 @@ pub struct WorkflowContext {
     /// описания). Заполняется при создании контекста (orchestrator), резолвится
     /// шаблоном `{{ video_loras }}` — по образцу `{{ image_candidates }}`.
     pub video_loras: String,
+    /// Каталог RefMod-карточек для видео-агентов (`{{ video_refmods }}`):
+    /// slug — имя — описание — число кадров (аргумент `refmod` тула
+    /// generate_video). Заполняется при создании контекста, резолвится
+    /// шаблоном — по образцу `{{ video_loras }}`.
+    pub video_refmods: String,
     /// То же для image-агентов (`{{ image_loras }}`): каталог image-лор на базе
     /// активного image-бандла. Без него модель выдумывает несуществующие стемы.
     pub image_loras: String,
@@ -77,6 +82,7 @@ impl WorkflowContext {
             image_candidates: String::new(),
             video_image_candidates: String::new(),
             video_loras: String::new(),
+            video_refmods: String::new(),
             image_loras: String::new(),
             spreadsheet_files: String::new(),
             request_media: Arc::new(RequestMedia::empty()),
@@ -95,6 +101,11 @@ impl WorkflowContext {
 
     pub fn with_video_loras(mut self, block: String) -> Self {
         self.video_loras = block;
+        self
+    }
+
+    pub fn with_video_refmods(mut self, block: String) -> Self {
+        self.video_refmods = block;
         self
     }
 
@@ -131,6 +142,7 @@ impl WorkflowContext {
         result = result.replace("{{ image_candidates }}", &self.image_candidates);
         result = result.replace("{{ video_image_candidates }}", &self.video_image_candidates);
         result = result.replace("{{ video_loras }}", &self.video_loras);
+        result = result.replace("{{ video_refmods }}", &self.video_refmods);
         result = result.replace("{{ image_loras }}", &self.image_loras);
         result = result.replace("{{ spreadsheet_files }}", &self.spreadsheet_files);
 
@@ -332,6 +344,21 @@ mod tests {
         assert!(
             resolved.contains("- alpha — тестовая лора"),
             "{{{{ image_loras }}}} обязан резолвиться: {}",
+            resolved
+        );
+        assert!(!resolved.contains("{{"), "литералов не осталось: {}", resolved);
+    }
+
+    /// Каталог RefMod-карточек (`{{ video_refmods }}`, RefMods Этап 1) резолвится
+    /// шаблоном — зеркало image_loras-теста: плейсхолдер обязан уходить из промпта.
+    #[test]
+    fn video_refmods_template_resolves() {
+        let mut context = WorkflowContext::new("test".to_string(), vec![], vec![]);
+        context.video_refmods = "- alice — Алиса — тест (кадров: 3)\n".to_string();
+        let resolved = context.resolve_template("Каталог:\n{{ video_refmods }}");
+        assert!(
+            resolved.contains("- alice — Алиса — тест"),
+            "{{{{ video_refmods }}}} обязан резолвиться: {}",
             resolved
         );
         assert!(!resolved.contains("{{"), "литералов не осталось: {}", resolved);

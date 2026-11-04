@@ -420,3 +420,166 @@ fn attach_videos_skips_other_tools_and_unknown_ids_survive() {
     assert_eq!(attached.unwrap(), 0);
     assert!(message.attachments.is_none());
 }
+
+// ── RefMod-гейты (tasks/261104_0230-db2cb59c, Этап 1) ──
+
+fn png_attachment(name: &str) -> crate::infra::ChatAttachment {
+    crate::infra::ChatAttachment {
+        file_name: format!("{}.png", name),
+        mime_type: "image/png".to_string(),
+        data_base64: String::new(),
+        file_path: Some(format!("D:\\no\\{}.png", name)),
+        is_dir: Some(false),
+    }
+}
+
+/// Схема тула объявляет refmod: опциональная строка (карточка вместо вложений),
+/// несовместимость с source_image_ids/image_usage задокументирована.
+#[test]
+fn video_schema_declares_refmod() {
+    let tool = GenerateVideo;
+    let params = tool.parameters();
+    let refmod = params
+        .pointer("/properties/refmod")
+        .expect("refmod объявлен в схеме");
+    assert_eq!(refmod.get("type").and_then(|v| v.as_str()), Some("string"));
+    let required = params
+        .pointer("/required")
+        .and_then(|v| v.as_array())
+        .unwrap();
+    assert!(!required.iter().any(|v| v == "refmod"), "refmod опционален");
+    let desc = refmod.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(desc.contains("RefMod-карточки"), "{}", desc);
+    assert!(desc.contains("НЕ сочетается"), "несовместимость с вложениями описана: {}", desc);
+    assert!(desc.contains("первые 3"), "take(3) из большой карточки задокументирован: {}", desc);
+    assert!(tool.description().contains("RefMod"), "описание тула упоминает карточки");
+}
+
+/// Гейт источников (§00.2): refmod + вложения или image_usage — Usage ДО
+/// обращения к диску: референсы либо из карточки, либо из вложений.
+#[test]
+fn video_refuses_refmod_with_attachments_or_role() {
+    let ctx = test_ctx(None);
+    // refmod + вложение.
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"prompt_en": "тест", "refmod": "alice"}),
+        &ctx,
+        &[png_attachment("a")],
+    )
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
+    match err {
+        ToolError::Usage(msg) => {
+            assert!(msg.contains("либо из RefMod-карточки"), "{}", msg);
+        }
+        other => panic!("ожидался Usage, получен: {:?}", other),
+    }
+    // refmod + роль reference (без вложений) — та же несовместимость.
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"prompt_en": "тест", "refmod": "alice", "image_usage": "reference"}),
+        &ctx,
+        &[],
+    )
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
+    assert!(matches!(err, ToolError::Usage(_)), "{:?}", err);
+    // refmod + роль first_frame — Ref2VA нельзя с init-image (api.md).
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"prompt_en": "тест", "refmod": "alice", "image_usage": "first_frame"}),
+        &ctx,
+        &[],
+    )
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
+    assert!(matches!(err, ToolError::Usage(_)), "{:?}", err);
+}
+
+/// Неизвестный slug карточки — NotFound (честный отказ до движка).
+#[test]
+fn video_refmod_unknown_slug_is_not_found() {
+    let ctx = test_ctx(None);
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"prompt_en": "тест", "refmod": "no_such_char_xyz"}),
+        &ctx,
+        &[],
+    )
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
+    match err {
+        ToolError::NotFound(msg) => {
+            assert!(msg.contains("no_such_char_xyz"), "{}", msg);
+        }
+        other => panic!("ожидался NotFound, получен: {:?}", other),
+    }
+}
+
+/// E2E (#[ignore], запуск по явной просьбе владельца — GPU-минуты): видео по
+/// RefMod-карточке чистым Ref2VA БЕЗ лор. Гейты (зафиксированы до прогона):
+/// тул вернул [VIDEO_SAVED ...]; в логе refs>0 и ref_image_size_max=true.
+/// Подготовка: положить 2–3 sample-PNG персонажа (датасет malcolmrey/samples)
+/// в temp/e2e_refmod_src/ — тест сам соберёт карточку "e2e_char" (даунскейл
+/// 1024/32px) и удалит её после прогона.
+#[test]
+#[ignore]
+fn e2e_refmod_card_video_without_loras() {
+    // Путь от корня репо через CARGO_MANIFEST_DIR: cwd прогона — src-tauri,
+    // а sample-кадры кладутся в <repo>/temp/e2e_refmod_src.
+    let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("temp")
+        .join("e2e_refmod_src");
+    let sources: Vec<std::path::PathBuf> = match std::fs::read_dir(&src_dir) {
+        Ok(entries) => entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.extension().and_then(|e| e.to_str()).map(|e| e.eq_ignore_ascii_case("png")) == Some(true)
+            })
+            .collect(),
+        Err(_) => panic!(
+            "E2E-подготовка: нет {}. Положи туда 2–3 sample-PNG персонажа \
+             (датасет malcolmrey/samples, HF) и запусти тест снова.",
+            src_dir.display()
+        ),
+    };
+    assert!(!sources.is_empty(), "в {} нет PNG", src_dir.display());
+
+    let card = crate::infra::tools::refmod::save_refmod_card(
+        "e2e_char",
+        "E2E персонаж",
+        "тестовая карточка из сэмплов malcolmrey",
+        &sources,
+    )
+    .expect("карточка собирается с даунскейлом 1024/32px");
+    let registry = ImageArtifactRegistry::new();
+    let ctx = test_ctx(Some(&registry));
+    let result = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({
+            "prompt_en": "The person smiles and waves their hand. Cinematic lighting, smooth motion. No subtitles, no captions, no on-screen text.",
+            "refmod": card.slug,
+            "seconds": 4
+        }),
+        &ctx,
+        &[],
+    )
+    .expect("generate_video обрабатывается");
+
+    let output = result.expect("генерация успешна");
+    assert!(
+        extract_saved_video_id(&output).is_some(),
+        "тул вернул маркер видео: {}",
+        output
+    );
+    assert!(
+        !output.contains(".safetensors"),
+        "лор в refmod-прогоне нет: {}",
+        output
+    );
+    // Тестовая карточка — артефакт прогона, не пользовательские данные: убираем.
+    let _ = std::fs::remove_dir_all(crate::infra::tools::refmod::refmods_dir().join(&card.slug));
+}

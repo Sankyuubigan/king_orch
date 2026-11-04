@@ -51,6 +51,9 @@ ko-excel-tools = { path = "../../my-tauri-plugins/ko-excel-tools" }
 # сбоев (журнал/дампы), «чёрный ящик» рекордера с sync_all. PowerShell —
 # внешняя программа, не зависимость.
 ko-diag-tools = { path = "../../my-tauri-plugins/ko-diag-tools" }
+# RefMod-карточки (tasks/04.11.26): декод/ресайз кадров персонажа при сохранении
+# в карточку (кратность 32px, длинная сторона ≤1024px) — png/jpeg/webp фото юзера.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.37", features = ["full"] }

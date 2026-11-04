@@ -715,6 +715,9 @@ where
         // Каталог видео-лор юзера (скан папки + sidecar-описания): дёшево
         // (десятки файлов), резолвится только там, где граф шаблоном просит.
         .with_video_loras(crate::infra::tools::media::media_lora::video_loras_prompt())
+        // Каталог RefMod-карточек (`{{ video_refmods }}`): лёгкие карточки
+        // персонажей для generate_video (аргумент refmod), зеркало video_loras.
+        .with_video_refmods(crate::infra::tools::refmod::refmods_prompt())
         // Каталог image-лор (`{{ image_loras }}`): зеркало видео-каталога —
         // image-агенты выбирают лору из того, что реально есть, а не выдумывают.
         .with_image_loras(crate::infra::tools::media::media_lora::image_loras_prompt())

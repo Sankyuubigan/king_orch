@@ -118,6 +118,7 @@ fn run_generate_video(
     final_quality: bool,
     init_path: Option<&str>,
     ref_paths: &[String],
+    ref_image_size_max: bool,
     loras: &[tauri_plugin_image_engine::engine::LoraSpec],
     ctx: &ToolCtx,
 ) -> Result<VideoRunOutput, ToolError> {
@@ -152,11 +153,13 @@ fn run_generate_video(
 
     // Честный прогон: движок spawn'ится на прогон и его же Drop убивает.
     log::info!(
-        "[VID-TOOL] generate_video start: bundle={}, seconds={}, quality={}, mode={}",
+        "[VID-TOOL] generate_video start: bundle={}, seconds={}, quality={}, mode={}, refs={}, ref_image_size_max={}",
         entry.name,
         seconds,
         if final_quality { "final" } else { "draft" },
-        mode
+        mode,
+        ref_paths.len(),
+        ref_image_size_max
     );
     let out_dir = video_session_outputs_dir(ctx.session_id);
     let ts = std::time::SystemTime::now()
@@ -176,6 +179,7 @@ fn run_generate_video(
         final_quality,
         init_path,
         ref_paths,
+        ref_image_size_max,
         &out_path,
         None,
         loras,
@@ -338,7 +342,7 @@ impl Tool for GenerateVideo {
         "generate_video"
     }
     fn description(&self) -> &str {
-        "Сгенерировать короткое видео (+аудио) по английскому промпту: либо с нуля по тексту, либо ПО ПРИКРЕПЛЁННОЙ КАРТИНКЕ. Роль картинки задаёт image_usage: \"first_frame\" — картинка станет ПЕРВЫМ КАДРОМ видео (передай её ID в source_image_ids); \"reference\" — картинки-референсы (персонаж, стиль, позы): передай их ID (1–3) в source_image_ids, и движок учтёт их при генерации (речь персонажа референса задаётся в промпте). Клип будет приложен к ответу как файл."
+        "Сгенерировать короткое видео (+аудио) по английскому промпту: либо с нуля по тексту, либо ПО ПРИКРЕПЛЁННОЙ КАРТИНКЕ. Роль картинки задаёт image_usage: \"first_frame\" — картинка станет ПЕРВЫМ КАДРОМ видео (передай её ID в source_image_ids); \"reference\" — картинки-референсы (персонаж, стиль, позы): передай их ID (1–3) в source_image_ids, и движок учтёт их при генерации (речь персонажа референса задаётся в промпте). Персонажа из каталога RefMod-карточек бери аргументом refmod (кадры карточки станут референсами движка). Клип будет приложен к ответу как файл."
     }
     fn parameters(&self) -> Value {
         serde_json::json!({
@@ -346,6 +350,7 @@ impl Tool for GenerateVideo {
             "properties": {
                 "prompt_en": {"type": "string", "description": "Развёрнутый английский промпт: объект, действие/движение, окружение, свет, стиль. Описывай ДВИЖЕНИЕ сцены и камеры, а не статичную картинку. При i2va описывай, КАК сцена на картинке оживает и движется; при reference — желаемую сцену с учётом референсов (что взять с каждой). Если пользователь просит РЕЧЬ/озвучку/диалог — включи реплику ДОСЛОВНО на языке пользователя, не переводя: The woman looks at the camera and says in Russian: <реплика> (реплика ≤10–12 слов, без кавычек и спецсимволов), и добавь в конец промпта: No subtitles, no captions, no on-screen text."},
                 "image_usage": {"type": "string", "enum": ["first_frame", "reference"], "description": "Роль прикреплённых картинок. \"first_frame\" — картинка станет ПЕРВЫМ КАДРОМ видео (оживить/продолжить само изображение): требует ровно один source_image_ids. \"reference\" — картинки (персонаж, character sheet, эскиз, пример позы/стиля) — референсы сцены: передай их ID (1–3), движок учтёт их как образцы; без ID сцена описывается только текстом. Передавай всегда, когда к запросу прикреплены изображения."},
+                "refmod": {"type": "string", "description": "Slug RefMod-карточки персонажа из блока «Доступные RefMod-карточки» контекста: кадры карточки пойдут референсами движка (Ref2VA) — внешность/персонаж возьмутся с карточки, сцена описывается prompt_en. НЕ сочетается с source_image_ids и image_usage (референсы либо из карточки, либо из вложений). Если в карточке больше 3 кадров — первые 3 (лицо → ракурс → фигура) уйдут автоматически. Лоры при этом не нужны."},
                 "source_image_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 3, "description": "ID картинок из блока доступных изображений. first_frame: РОВНО ОДИН ID — картинка станет первым кадром (image-to-video). reference: 1–3 ID — картинки пойдут в движок референсами (консистентный персонаж/стиль); больше 3 не принимается. Опционально: без него видео генерируется с нуля по тексту. Файловые пути запрещены."},
                 "seconds": {"type": "integer", "minimum": 1, "maximum": 15, "description": "Длительность клипа в секундах (по умолчанию 5). Лимит зависит от выбранного набора моделей: больше — только если пользователь прямо попросил."},
                 "final_quality": {"type": "boolean", "description": "false (по умолчанию) = черновик (быстро, минуты). true = финальное качество (медленно: 10+ минут на 5 секунд — предупреждай пользователя о времени)."},
@@ -409,6 +414,42 @@ pub fn execute_video_tool(
                 .get("image_usage")
                 .and_then(|value| value.as_str())
                 .unwrap_or("");
+            // RefMod-карточка: рефы движка из каталога карточек вместо вложений
+            // (единая лёгкая архитектура без лор, tasks/261104_0230-db2cb59c).
+            let refmod_bundle = match args
+                .get("refmod")
+                .and_then(|value| value.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                Some(slug) => {
+                    // Гейт (§00.2): рефы ЛИБО из карточки, ЛИБО из вложений —
+                    // состояние «те и другие» не существует: Ref2VA нельзя
+                    // комбинировать с init-image (api.md), reference — это
+                    // вложения. Отказ ДО обращения к диску.
+                    if !attachments.is_empty() || !role.is_empty() {
+                        return Some(Err(ToolError::Usage(
+                            "refmod не сочетается с вложениями и image_usage: референсы \
+                             либо из RefMod-карточки (аргумент refmod), либо из картинок \
+                             (source_image_ids + image_usage). Передай что-то одно."
+                                .to_string(),
+                        )));
+                    }
+                    match crate::infra::tools::refmod::load_refmod_card(slug) {
+                        Ok(bundle) => {
+                            log::info!(
+                                "[VID-TOOL] refmod '{}': {} кадров в карточке, в движок пойдут первые {}",
+                                bundle.slug,
+                                bundle.frames.len(),
+                                crate::infra::tools::refmod::FRAMES_PER_RUN
+                            );
+                            Some(bundle)
+                        }
+                        Err(e) => return Some(Err(e)),
+                    }
+                }
+                None => None,
+            };
             match role {
                 "first_frame" if attachments.len() != 1 => {
                     return Some(Err(ToolError::Usage(format!(
@@ -437,19 +478,29 @@ pub fn execute_video_tool(
             }
             // Пустой запрос без картинок — чистый t2va: resolve не зовём
             // (он на пустом списке честно ошибается «Не выбрано изображение»).
-            let paths = if attachments.is_empty() {
-                Vec::new()
-            } else {
-                match crate::infra::tools::media::resolve_ref_paths(attachments, ctx.session_id) {
-                    Ok(paths) => paths,
-                    Err(error) => return Some(Err(ToolError::Usage(error))),
-                }
-            };
-            let (init_path, ref_paths): (Option<String>, Vec<String>) = match role {
-                "first_frame" => (Some(paths[0].clone()), Vec::new()),
-                "reference" => (None, paths),
-                _ => (paths.into_iter().next(), Vec::new()),
-            };
+            let (init_path, ref_paths): (Option<String>, Vec<String>) =
+                if let Some(bundle) = &refmod_bundle {
+                    // Карточка: первые 3 кадра (конвенция лицо → ракурс → фигура);
+                    // карточка с 4–8 кадрами НЕ ошибка — take, а не отказ.
+                    (None, crate::infra::tools::refmod::engine_ref_paths(bundle))
+                } else {
+                    let paths = if attachments.is_empty() {
+                        Vec::new()
+                    } else {
+                        match crate::infra::tools::media::resolve_ref_paths(
+                            attachments,
+                            ctx.session_id,
+                        ) {
+                            Ok(paths) => paths,
+                            Err(error) => return Some(Err(ToolError::Usage(error))),
+                        }
+                    };
+                    match role {
+                        "first_frame" => (Some(paths[0].clone()), Vec::new()),
+                        "reference" => (None, paths),
+                        _ => (paths.into_iter().next(), Vec::new()),
+                    }
+                };
             let seconds = args
                 .get("seconds")
                 .and_then(|value| value.as_u64())
@@ -484,6 +535,7 @@ pub fn execute_video_tool(
                     final_quality,
                     init_path.as_deref(),
                     &ref_paths,
+                    refmod_bundle.is_some(),
                     &loras,
                     ctx,
                 )

@@ -18,6 +18,7 @@ use crate::infra::permissions::PermissionApprover;
 pub mod diag;
 pub mod excel;
 pub mod media;
+pub mod refmod;
 pub mod video;
 
 /// Хелперы ядра: ними пользуется media.rs через `super::` (имена прежние).
