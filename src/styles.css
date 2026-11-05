@@ -696,19 +696,21 @@ textarea#log-view { flex: 1; width: 100%; padding: 10px; border: 1px solid var(-
 
 /* ─── Меню ⋮ (сообщения и строки-действия) ───
    Кнопка живёт в правом верхнем углу пузыря/строки. Чтобы она НИКОГДА не
-   налегала на текст, угол вырезается заранее: в пузыре — float-распорка
-   .msg-menu-spacer внутри .msg-content (текст обтекает её), у строк-действий
+   налегала на текст, угол резервируется заранее: в пузыре — правым padding
+   (правило .message-user/.message-agent ниже), у строк-действий —
    конец линии резервируется padding-right .thought-row__line. */
 .msg-menu-wrapper { position: absolute; top: 4px; right: 4px; opacity: 0; transition: opacity 0.15s ease; z-index: 10; }
 .message:hover .msg-menu-wrapper { opacity: 1; }
 .msg-menu-btn { background: var(--panel-bg); border: 1px solid var(--border); color: var(--text); cursor: pointer; width: 24px; height: 24px; padding: 0; display: grid; place-items: center; border-radius: 6px; font-size: 15px; font-weight: bold; line-height: 1; opacity: 0.55; transition: opacity 0.15s, background 0.15s; }
 .msg-menu-btn:hover { opacity: 1; background: var(--session-hover); }
-/* Распорка угла: первый ребёнок .msg-content (вставляет render.ts вместе с меню).
-   Ширина = кнопка (24px) минус правый padding пузыря (15px) с запасом: первая
-   строка текста заканчивается ЛЕВЕЕ кнопки, наложение структурно невозможно.
-   Высота ≥ высоты первой строки (14px × 1.5 = 21px) — вторая строка начинается
-   ниже, чем низ кнопки. */
-.msg-menu-spacer { float: right; width: 24px; height: 24px; }
+/* Резерв угла под ⋮ — часть ГЕОМЕТРИИ пузыря: паддинг входит в intrinsic-ширину.
+   Раньше угол вырезала float-распорка .msg-menu-spacer внутри .msg-content:
+   float вне потока и в fit-content-ширину пузыря юзера не входил, поэтому строка
+   рядом с ним получала ширину текста минус 24px — word-wrap: break-word рвал
+   слова по буквам («апс/кей/л»), короткий пузырь сплющивался. Кнопка занимает
+   [w−28, w−4] от края (right:4, ширина 24): padding-right 30px держит текст
+   левее кнопки в ЛЮБОЙ строке (та же конвенция, что .thought-row__line). */
+.message-user, .message-agent { padding-right: 30px; }
 .msg-menu-dropdown { position: absolute; right: 0; top: 100%; background: var(--panel-bg); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 4px 12px rgba(0,0,0,0.3); z-index: 100; display: none; flex-direction: column; min-width: 210px; padding: 5px 0; }
 .msg-menu-dropdown.show { display: flex; }
 .msg-menu-item { padding: 8px 12px; cursor: pointer; font-size: 13px; text-align: left; background: none; border: none; color: var(--text); width: 100%; border-radius: 0; }
