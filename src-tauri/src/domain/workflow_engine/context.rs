@@ -57,6 +57,9 @@ pub struct WorkflowContext {
     /// футер — конвенция кадров карточки (лицо → ракурс → фигура), не ролей
     /// видео/холста. По образцу `{{ video_image_candidates }}`.
     pub refmod_image_candidates: String,
+    /// Каталог аудио для voice-фн refmod-тулов (`{{ audio_candidates }}`,
+    /// Этап 3): сэмплы голоса (mime audio/*) текущего запроса и истории.
+    pub audio_candidates: String,
     /// То же для image-агентов (`{{ image_loras }}`): каталог image-лор на базе
     /// активного image-бандла. Без него модель выдумывает несуществующие стемы.
     pub image_loras: String,
@@ -88,6 +91,7 @@ impl WorkflowContext {
             video_loras: String::new(),
             video_refmods: String::new(),
             refmod_image_candidates: String::new(),
+            audio_candidates: String::new(),
             image_loras: String::new(),
             spreadsheet_files: String::new(),
             request_media: Arc::new(RequestMedia::empty()),
@@ -116,6 +120,11 @@ impl WorkflowContext {
 
     pub fn with_refmod_image_candidates(mut self, candidates: String) -> Self {
         self.refmod_image_candidates = candidates;
+        self
+    }
+
+    pub fn with_audio_candidates(mut self, candidates: String) -> Self {
+        self.audio_candidates = candidates;
         self
     }
 
@@ -154,6 +163,7 @@ impl WorkflowContext {
         result = result.replace("{{ video_loras }}", &self.video_loras);
         result = result.replace("{{ video_refmods }}", &self.video_refmods);
         result = result.replace("{{ refmod_image_candidates }}", &self.refmod_image_candidates);
+        result = result.replace("{{ audio_candidates }}", &self.audio_candidates);
         result = result.replace("{{ image_loras }}", &self.image_loras);
         result = result.replace("{{ spreadsheet_files }}", &self.spreadsheet_files);
 

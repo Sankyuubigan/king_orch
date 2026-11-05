@@ -296,6 +296,12 @@ struct ImageCandidate {
 pub struct RequestMedia {
     request_attachments: Vec<ChatAttachment>,
     candidates: Vec<ImageCandidate>,
+    /// Аудио-вложения текущего запроса (backing store для `aud_req_NN`).
+    audio_request_attachments: Vec<ChatAttachment>,
+    /// Аудио-кандидаты (mime audio/*): сэмплы голоса для voice-фн refmod-тулов
+    /// (Этап 3). Алиасы `aud_req_NN` / `aud_hist_NN` — не пересекаются с
+    /// image-кандидатами (`req_NN` / `hist_NN`).
+    audio_candidates: Vec<ImageCandidate>,
     /// Все вложения (любого формата) текущего запроса + истории — структурные
     /// ссылки `{file_name, mime_type, file_path, is_dir, origin}` для графа
     /// (`user_message.output.attachments`) и allow-read тулов. Политика
@@ -324,8 +330,13 @@ impl RequestMedia {
         let has_current_images = request_attachments
             .iter()
             .any(|attachment| attachment.mime_type.starts_with("image/"));
+        let has_current_audios = request_attachments
+            .iter()
+            .any(|attachment| attachment.mime_type.starts_with("audio/"));
         let mut candidates = Vec::new();
         let mut stored_request_attachments = Vec::new();
+        let mut audio_candidates = Vec::new();
+        let mut stored_audio_attachments = Vec::new();
         let mut attachment_refs = Vec::new();
         // Алиасы истории от старых к новым (порядок обхода messages). Две
         // цифры ровно: `hist_01`…`hist_25` — канонические виды алиасов не
@@ -333,6 +344,7 @@ impl RequestMedia {
         // embedded-подстроки в lookup_id не порождает ложных матчей между
         // алиасами (у одноцифровой схемы `hist_1`/`hist_10` было бы).
         let mut history_sequence = 0usize;
+        let mut audio_history_sequence = 0usize;
 
         for (index, attachment) in request_attachments.iter().enumerate() {
             attachment_refs.push(serde_json::json!({
@@ -342,6 +354,23 @@ impl RequestMedia {
                 "is_dir": attachment.is_dir.unwrap_or(false),
                 "origin": "current",
             }));
+            if attachment.mime_type.starts_with("audio/") {
+                // Сэмпл голоса (Этап 3): алиас `aud_req_NN`, позиция в
+                // audio_request_attachments = locator Request(index).
+                audio_candidates.push(ImageCandidate {
+                    id: format!("aud_req_{index}"),
+                    alias: format!("aud_req_{index}"),
+                    locator: ImageLocator::Request(stored_audio_attachments.len()),
+                    origin: ImageOrigin::CurrentRequest,
+                    message_id: current_user_id.clone(),
+                    author: "user".to_string(),
+                    file_name: attachment.file_name.clone(),
+                    mime_type: attachment.mime_type.clone(),
+                    context: current_user_context.clone(),
+                });
+                stored_audio_attachments.push(attachment.clone());
+                continue;
+            }
             if !attachment.mime_type.starts_with("image/") {
                 continue;
             }
@@ -366,7 +395,7 @@ impl RequestMedia {
             }
             let is_current_user_message =
                 message.id.as_deref() == Some(current_user_id.as_str());
-            if has_current_images && is_current_user_message {
+            if (has_current_images || has_current_audios) && is_current_user_message {
                 continue;
             }
             let Some(attachments) = message.attachments.as_ref() else {
@@ -387,6 +416,25 @@ impl RequestMedia {
                         "is_dir": attachment.is_dir.unwrap_or(false),
                         "origin": "history",
                     }));
+                }
+                if attachment.mime_type.starts_with("audio/") {
+                    audio_history_sequence += 1;
+                    audio_candidates.push(ImageCandidate {
+                        id: history_image_id(&message_id, attachment_index, attachment),
+                        alias: format!("aud_hist_{:02}", audio_history_sequence),
+                        locator: ImageLocator::Message {
+                            message_id: message_id.clone(),
+                            message_index,
+                            attachment_index,
+                        },
+                        origin: ImageOrigin::History,
+                        message_id: message_id.clone(),
+                        author: message.author.clone().unwrap_or_default(),
+                        file_name: attachment.file_name.clone(),
+                        mime_type: attachment.mime_type.clone(),
+                        context: compact_context(&message.content),
+                    });
+                    continue;
                 }
                 if !attachment.mime_type.starts_with("image/") {
                     continue;
@@ -413,6 +461,8 @@ impl RequestMedia {
         Self {
             request_attachments: stored_request_attachments,
             candidates,
+            audio_request_attachments: stored_audio_attachments,
+            audio_candidates,
             attachment_refs,
         }
     }
@@ -469,10 +519,14 @@ impl RequestMedia {
             .collect()
     }
 
-    /// Строки перечисления кандидатов — общие для image- и video-каталога.
+    /// Строки перечисления кандидатов — общие для image-, audio- и video-каталога.
     fn candidate_rows(&self) -> String {
+        Self::rows_of(&self.candidates)
+    }
+
+    fn rows_of(candidates: &[ImageCandidate]) -> String {
         let mut out = String::new();
-        for candidate in &self.candidates {
+        for candidate in candidates {
             let origin = match candidate.origin {
                 ImageOrigin::CurrentRequest => "текущий запрос",
                 ImageOrigin::History => "история чата",
@@ -590,6 +644,22 @@ impl RequestMedia {
         out
     }
 
+    /// Каталог аудио для voice-фн refmod-тулов (`{{ audio_candidates }}`,
+    /// Этап 3): сэмплы голоса, прикладываемые к refmod_create/refmod_edit.
+    pub fn audio_candidates_prompt(&self) -> String {
+        if self.audio_candidates.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from("[ДОСТУПНЫЕ АУДИО-САМПЛЫ]\n");
+        out.push_str(&Self::rows_of(&self.audio_candidates));
+        out.push_str(
+            "Выбирай только существующие id. id уходят в `source_audio_ids` refmod-тулов \
+             (сэмпл голоса персонажа карточки). mp3/wav/m4a/ogg-vorbis/flac поддержаны; \
+             записи webm/opus движок не декодирует — честно попроси mp3 или wav.",
+        );
+        out
+    }
+
     pub fn message_suffix(&self, message_id: Option<&str>) -> String {
         let Some(message_id) = message_id else {
             return String::new();
@@ -629,6 +699,33 @@ impl RequestMedia {
         self.resolve(&source_image_ids, messages)
     }
 
+    /// Резолв аудио-вложений для voice-фн (Этап 3). `source_audio_ids`
+    /// ОПЦИОНАЛЕН: нет / [] → Ok(vec![]) — обязательность пары решает тул
+    /// по своей семантике (create — опционально; edit с voice_desc без
+    /// голоса — честный Usage на своей стороне).
+    pub fn resolve_audio_arguments(
+        &self,
+        arguments: &serde_json::Value,
+        messages: &[ChatMessage],
+    ) -> Result<Vec<ChatAttachment>, String> {
+        let Some(source_audio_ids) = arguments.get("source_audio_ids") else {
+            return Ok(Vec::new());
+        };
+        let source_audio_ids = source_audio_ids
+            .as_array()
+            .ok_or_else(|| "source_audio_ids должен быть массивом строк".to_string())?;
+        let source_audio_ids = source_audio_ids
+            .iter()
+            .map(|value| {
+                value
+                    .as_str()
+                    .map(str::to_string)
+                    .ok_or_else(|| "source_audio_ids должен содержать только строки".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        self.resolve_audio(&source_audio_ids, messages)
+    }
+
     pub fn resolve(
         &self,
         source_image_ids: &[String],
@@ -640,29 +737,62 @@ impl RequestMedia {
                 self.valid_ids()
             ));
         }
+        self.resolve_from(&self.candidates, &self.request_attachments, source_image_ids, messages)
+    }
+
+    /// Аудио-версия `resolve` (backing store — audio_request_attachments,
+    /// каталог — audio_candidates; допустимость пустого списка решает
+    /// resolve_audio_arguments).
+    pub fn resolve_audio(
+        &self,
+        source_audio_ids: &[String],
+        messages: &[ChatMessage],
+    ) -> Result<Vec<ChatAttachment>, String> {
+        if source_audio_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.resolve_from(
+            &self.audio_candidates,
+            &self.audio_request_attachments,
+            source_audio_ids,
+            messages,
+        )
+    }
+
+    /// Общий ресолв id → вложения (медиа-агностичен). Двухфазный поиск
+    /// (F1, 29.10.26): сцена 1 — алиасы (модель видит только их), сцена 2 —
+    /// легаси hex-id из старой схемы чата.
+    fn resolve_from(
+        &self,
+        candidates: &[ImageCandidate],
+        backing: &[ChatAttachment],
+        source_ids: &[String],
+        messages: &[ChatMessage],
+    ) -> Result<Vec<ChatAttachment>, String> {
+        let valid = if candidates.is_empty() {
+            "(нет доступных)".to_string()
+        } else {
+            candidates
+                .iter()
+                .map(|candidate| candidate.alias.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
         let mut seen = HashSet::new();
-        let mut resolved = Vec::with_capacity(source_image_ids.len());
-        for source_id in source_image_ids {
+        let mut resolved = Vec::with_capacity(source_ids.len());
+        for source_id in source_ids {
             if !seen.insert(source_id.clone()) {
                 continue;
             }
-            // Двухфазный ресолв (F1, 29.10.26). Сцена 1 — алиасы: модель видит
-            // ТОЛЬКО их, поэтому это первый и основной путь (терпимый
-            // ресолв image_ids: канонизация + embedded + Левенштейн ≤2).
-            // Сцена 2 — легаси: сырой hex `hist_<16hex>` из старой схемы
-            // чата всё ещё принимается точным/близким матчем, чтобы
-            // закешированные в истории сессии формы продолжали работать.
             // Фазы раздельные НАРОЧНО: алиасы короткие («hist01»), а
             // fuzz-восстановление по hex-списку не должно иметь шанса
             // сматчить короткую форму (insertion-дистанция до 16-символьного
             // hex — заведомо > 2). Ошибки показывают только алиасы.
-            let alias_ids: Vec<&str> = self
-                .candidates
+            let alias_ids: Vec<&str> = candidates
                 .iter()
                 .map(|candidate| candidate.alias.as_str())
                 .collect();
-            let real_ids: Vec<&str> = self
-                .candidates
+            let real_ids: Vec<&str> = candidates
                 .iter()
                 .map(|candidate| candidate.id.as_str())
                 .collect();
@@ -672,37 +802,31 @@ impl RequestMedia {
             } else {
                 lookup
             };
-            let matched_id = super::image_ids::finalize_lookup(
-                lookup,
-                source_id,
-                &self.valid_ids(),
-            )?;
-            let candidate = self
-                .candidates
+            let matched_id = super::image_ids::finalize_lookup(lookup, source_id, &valid)?;
+            let candidate = candidates
                 .iter()
                 .find(|candidate| candidate.alias == matched_id || candidate.id == matched_id)
                 .ok_or_else(|| {
                     format!(
-                        "Изображение '{}' исчезло из каталога между стадиями ресолва",
+                        "Вложение '{}' исчезло из каталога между стадиями ресолва",
                         matched_id
                     )
                 })?;
-            resolved.push(self.resolve_candidate(candidate, messages)?);
+            resolved.push(Self::resolve_candidate_from(backing, candidate, messages)?);
         }
         Ok(resolved)
     }
 
-    fn resolve_candidate(
-        &self,
+    fn resolve_candidate_from(
+        backing: &[ChatAttachment],
         candidate: &ImageCandidate,
         messages: &[ChatMessage],
     ) -> Result<ChatAttachment, String> {
         match &candidate.locator {
-            ImageLocator::Request(index) => self
-                .request_attachments
+            ImageLocator::Request(index) => backing
                 .get(*index)
                 .cloned()
-                .ok_or_else(|| format!("Изображение '{}' отсутствует в текущем запросе", candidate.id)),
+                .ok_or_else(|| format!("Вложение '{}' отсутствует в текущем запросе", candidate.id)),
             ImageLocator::Message {
                 message_id,
                 message_index,
@@ -1357,5 +1481,116 @@ mod tests {
             assert!(branch_pos > marker_pos, "ветка после маркера: {}", block);
         }
         assert_eq!(full_media_prompt_block("", None), "", "без фактов — пусто");
+    }
+
+    // ── Аудио-кандидаты (Этап 3: голос RefMod-карточек) ──
+
+    fn audio_attachment(name: &str, data: &str) -> ChatAttachment {
+        ChatAttachment {
+            file_name: name.to_string(),
+            mime_type: "audio/wav".to_string(),
+            data_base64: data.to_string(),
+            file_path: None,
+            is_dir: Some(false),
+        }
+    }
+
+    /// Аудио-вложения попадают в СВОЙ каталог (aud_req/aud_hist), не смешиваясь
+    /// с картинками: счётчики и алиасы независимы.
+    #[test]
+    fn audio_candidates_get_own_aliases_and_prompt() {
+        let messages = vec![message(
+            "msg_1",
+            "user",
+            "вот голос",
+            vec![
+                audio_attachment("voice_req.wav", "cur"),
+                attachment("current.png", "img"),
+            ],
+        )];
+        // Текущий запрос — аудио-сэмпл (первый аргумент build), как из чата.
+        let media = RequestMedia::build(&[audio_attachment("voice_req.wav", "cur")], &messages);
+        let audio_ids = media
+            .audio_candidates
+            .iter()
+            .map(|c| c.id.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(audio_ids.len(), 1, "одно аудио-вложение: {}", audio_ids.len());
+        let audio_prompt = media.audio_candidates_prompt();
+        assert!(audio_prompt.contains("aud_req_0"), "{}", audio_prompt);
+        assert!(audio_prompt.contains("voice_req.wav"), "{}", audio_prompt);
+        assert!(
+            audio_prompt.contains("source_audio_ids"),
+            "футер про usage тулов: {}",
+            audio_prompt
+        );
+        // Картинный каталог при этом аудио не содержит.
+        let image_prompt = media.candidate_prompt();
+        assert!(!image_prompt.contains("voice_req.wav"), "{}", image_prompt);
+    }
+
+    /// История: аудио из прошлых сообщений — aud_hist_NN (отдельный счётчик),
+    /// skip-current работает и для аудио (текущий сэмпл не дублируется hist).
+    #[test]
+    fn audio_history_and_skip_current() {
+        let messages = vec![
+            message("msg_1", "user", "старый голос", vec![audio_attachment("old.wav", "old")]),
+            message(
+                "msg_2",
+                "user",
+                "новый голос",
+                vec![audio_attachment("new.wav", "new")],
+            ),
+        ];
+        // Текущий запрос — аудио из последнего юзер-сообщения.
+        let media = RequestMedia::build(&[audio_attachment("new.wav", "new")], &messages);
+        let prompt = media.audio_candidates_prompt();
+        assert!(prompt.contains("aud_req_0") && prompt.contains("new.wav"), "{}", prompt);
+        assert!(prompt.contains("aud_hist_") && prompt.contains("old.wav"), "{}", prompt);
+        // Дедупликация: текущий сэмпл не живёт и как hist.
+        let new_hist = prompt
+            .lines()
+            .filter(|line| line.contains("new.wav") && line.contains("aud_hist"))
+            .count();
+        assert_eq!(new_hist, 0, "текущий сэмпл не дублируется в истории: {}", prompt);
+    }
+
+    /// resolve_audio_arguments: ids ОПЦИОНАЛЬНЫ (нет → Ok(vec![])), валидные
+    /// резолвятся, неизвестные — честная ошибка.
+    #[test]
+    fn resolve_audio_arguments_optional_and_strict() {
+        let messages = vec![message(
+            "msg_1",
+            "user",
+            "голос",
+            vec![audio_attachment("voice.wav", "cur")],
+        )];
+        let media = RequestMedia::build(&[], &messages);
+        let audio_id = media.audio_candidates[0].id.clone();
+        // Нет поля → пусто (тул сам решает обязательность).
+        assert!(
+            media
+                .resolve_audio_arguments(&serde_json::json!({}), &messages)
+                .unwrap()
+                .is_empty()
+        );
+        // Валидный id → резолв в аттачмент.
+        let resolved = media
+            .resolve_audio_arguments(
+                &serde_json::json!({"source_audio_ids": [audio_id]}),
+                &messages,
+            )
+            .unwrap();
+        assert_eq!(resolved.len(), 1);
+        assert_eq!(resolved[0].file_name, "voice.wav");
+        // Неизвестный id → ошибка.
+        assert!(
+            media
+                .resolve_audio_arguments(
+                    &serde_json::json!({"source_audio_ids": ["aud_nonexistent"]}),
+                    &messages,
+                )
+                .is_err()
+        );
     }
 }

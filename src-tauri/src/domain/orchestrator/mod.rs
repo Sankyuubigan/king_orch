@@ -623,6 +623,9 @@ where
         // Каталог изображений для refmod-графа (`{{ refmod_image_candidates }}`):
         // футер — конвенция кадров карточки (лицо → ракурс → фигура).
         .with_refmod_image_candidates(request_media.refmod_candidate_prompt())
+        // Каталог аудио-сэмплов (`{{ audio_candidates }}`, Этап 3): голосовые
+        // вложения для voice-фн refmod-тулов (сэмпл голоса персонажа).
+        .with_audio_candidates(request_media.audio_candidates_prompt())
         // Каталог image-лор (`{{ image_loras }}`): зеркало видео-каталога —
         // image-агенты выбирают лору из того, что реально есть, а не выдумывают.
         .with_image_loras(crate::infra::tools::media::media_lora::image_loras_prompt())
