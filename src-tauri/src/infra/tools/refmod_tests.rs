@@ -78,7 +78,7 @@ fn is_refmod_tool_matrix() {
 #[test]
 fn execute_unknown_refmod_tool_returns_none() {
     let args = serde_json::json!({});
-    assert!(execute_refmod_tool("refmod_rename", &args, &ctx(), &[]).is_none());
+    assert!(execute_refmod_tool("refmod_rename", &args, &ctx(), &[], &[]).is_none());
 }
 
 // ── Гейты refmod_create ──
@@ -93,6 +93,7 @@ fn create_requires_slug_name_and_sources() {
         &serde_json::json!({"name": "Имя"}),
         &ctx,
         &[],
+        &[],
     )
     .unwrap_err();
     assert!(matches!(err, ToolError::Usage(ref m) if m.contains("slug")), "{:?}", err);
@@ -102,6 +103,7 @@ fn create_requires_slug_name_and_sources() {
         &serde_json::json!({"slug": "char"}),
         &ctx,
         &[],
+        &[],
     )
     .unwrap_err();
     assert!(matches!(err, ToolError::Usage(ref m) if m.contains("name")), "{:?}", err);
@@ -110,6 +112,7 @@ fn create_requires_slug_name_and_sources() {
         &root,
         &serde_json::json!({"slug": "char", "name": "Имя"}),
         &ctx,
+        &[],
         &[],
     )
     .unwrap_err();
@@ -131,6 +134,7 @@ fn create_rejects_bad_slug_before_disk_write() {
         &serde_json::json!({"slug": "Bad Slug!", "name": "Имя"}),
         &ctx(),
         std::slice::from_ref(&att),
+        &[],
     )
     .unwrap_err();
     assert!(
@@ -162,6 +166,7 @@ fn create_then_edit_roundtrip_keeps_grid_and_original() {
         }),
         &ctx(),
         &atts,
+        &[],
     )
     .expect("карточка создаётся из вложений");
     assert!(marker.contains("[REFMOD_SAVED slug=test_char]"), "{}", marker);
@@ -170,6 +175,7 @@ fn create_then_edit_roundtrip_keeps_grid_and_original() {
     let edit_marker = edit_card(
         &root,
         &serde_json::json!({"slug": "test_char", "ops": [{"op": "hue", "degrees": -20}]}),
+        &[],
     )
     .expect("правка проходит");
     assert!(
@@ -191,6 +197,7 @@ fn create_then_edit_roundtrip_keeps_grid_and_original() {
     let edit_marker = edit_card(
         &root,
         &serde_json::json!({"slug": "test_char", "ops": [{"op": "warp", "factor": 0.85}]}),
+        &[],
     )
     .expect("вторая правка проходит");
     assert!(
@@ -207,13 +214,15 @@ fn create_then_edit_roundtrip_keeps_grid_and_original() {
 fn edit_honest_gates_before_disk() {
     let root = temp_root("edit_gates");
     // Пустой slug.
-    let err = edit_card(&root, &serde_json::json!({"ops": [{"op": "hue", "degrees": 5}]}))
-        .unwrap_err();
+    let err =
+        edit_card(&root, &serde_json::json!({"ops": [{"op": "hue", "degrees": 5}]}), &[])
+            .unwrap_err();
     assert!(matches!(err, ToolError::Usage(ref m) if m.contains("slug")), "{:?}", err);
     // ops-гейт срабатывает ДО чтения карточки (неизвестный slug + битые ops → Usage про ops).
     let err = edit_card(
         &root,
         &serde_json::json!({"slug": "nobody", "ops": []}),
+        &[],
     )
     .unwrap_err();
     assert!(
@@ -225,6 +234,7 @@ fn edit_honest_gates_before_disk() {
     let err = edit_card(
         &root,
         &serde_json::json!({"slug": "nobody", "ops": [{"op": "hue", "degrees": 5}]}),
+        &[],
     )
     .unwrap_err();
     assert!(
@@ -233,4 +243,237 @@ fn edit_honest_gates_before_disk() {
         err
     );
     let _ = std::fs::remove_dir_all(root);
+}
+
+// ── Voice-ветки тулов (Этап 3) ──
+
+/// WAV-файл (синтетический тон заданной частоты) + аттачмент с file_path —
+/// сэмпл голоса юзера. Контейнер строится SSOT-фн плагина (to_wav_bytes),
+/// symphonia его читает. Разные freq → разные байты (смена голоса отличима).
+fn wav_attachment(dir: &Path, name: &str, freq: f64) -> crate::infra::ChatAttachment {
+    let wav = tauri_plugin_image_engine::engine::VoiceWav {
+        // Амплитуда 12000: синус [-1, 1] кастом в i16 даёт почти все нули
+        // (sin не достигает ±1.0 в этих точках) — v1 и v2 становятся
+        // неразличимыми, и тест смены голоса сравнивает пустышки.
+        samples: (0..4410)
+            .map(|i| (((i as f64 / 100.0) * freq).sin() * 12_000.0) as i16)
+            .collect(),
+        sample_rate: 44_100,
+        channels: 1,
+    }
+    .to_wav_bytes();
+    let path = dir.join(name);
+    std::fs::write(&path, &wav).unwrap();
+    crate::infra::ChatAttachment {
+        file_name: name.to_string(),
+        mime_type: "audio/wav".to_string(),
+        data_base64: String::new(),
+        file_path: Some(path.to_string_lossy().to_string()),
+        is_dir: Some(false),
+    }
+}
+
+#[test]
+fn create_with_voice_attaches_sample() {
+    let root = temp_root("create_voice");
+    let src = temp_root("create_voice_src");
+    let atts = vec![png_attachment(&src, "face.png", 128, 96)];
+    let wav = wav_attachment(&src, "voice.wav", 6000.0);
+    let marker = create_card(
+        &root,
+        &serde_json::json!({"slug": "voiced", "name": "Голос"}),
+        &ctx(),
+        &atts,
+        std::slice::from_ref(&wav),
+    )
+    .expect("карточка с голосом создаётся");
+    assert!(marker.contains("🎤 голос задан"), "{}", marker);
+    let card = load_refmod_card_in(&root, "voiced").expect("карточка жива");
+    let voice = card.voice.expect("голос записан в карточку");
+    let on_disk = std::fs::read(&voice).unwrap();
+    assert!(on_disk.starts_with(b"RIFF"), "voice.wav — канонический WAV");
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn create_rejects_multiple_voice_samples() {
+    let root = temp_root("multi_voice");
+    let src = temp_root("multi_voice_src");
+    let atts = vec![png_attachment(&src, "face.png", 128, 96)];
+    let wavs = vec![
+        wav_attachment(&src, "a.wav", 6000.0),
+        wav_attachment(&src, "b.wav", 9000.0),
+    ];
+    let err = create_card(
+        &root,
+        &serde_json::json!({"slug": "char", "name": "Имя"}),
+        &ctx(),
+        &atts,
+        &wavs,
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, ToolError::Usage(ref m) if m.contains("РОВНО ОДИН")),
+        "мульти-голос структурно запрещён: {:?}",
+        err
+    );
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn edit_voice_change_is_in_place() {
+    let root = temp_root("edit_voice");
+    let src = temp_root("edit_voice_src");
+    let atts = vec![png_attachment(&src, "face.png", 128, 96)];
+    create_card(
+        &root,
+        &serde_json::json!({"slug": "char", "name": "Имя"}),
+        &ctx(),
+        &atts,
+        &[],
+    )
+    .unwrap();
+    let v1 = wav_attachment(&src, "v1.wav", 6000.0);
+    let out = edit_card(
+        &root,
+        &serde_json::json!({"slug": "char", "voice_desc": "низкий"}),
+        std::slice::from_ref(&v1),
+    )
+    .expect("голос добавлен");
+    assert!(out.contains("без смены кадров"), "{}", out);
+    let before = load_refmod_card_in(&root, "char").unwrap();
+    assert_eq!(before.voice_desc.as_deref(), Some("низкий"));
+    // Байты v1 читаются ДО второй записи: путь voice.wav один и тот же,
+    // после смены там уже v2 — сравнивать было бы нечего.
+    let a = std::fs::read(before.voice.expect("v1 был")).unwrap();
+
+    // Смена голоса: та же карточка (IN-PLACE, без v2), файл перезаписан.
+    // freq другой — сэмплы обязаны отличаться (иначе тест не о том).
+    let v2 = wav_attachment(&src, "v2.wav", 11_500.0);
+    let out = edit_card(&root, &serde_json::json!({"slug": "char"}), std::slice::from_ref(&v2))
+        .expect("голос сменён");
+    assert!(out.contains("без смены кадров"), "{}", out);
+    let after = load_refmod_card_in(&root, "char").unwrap();
+    assert_eq!(after.slug, "char");
+    assert!(
+        !root.join("char_v2").join("meta.json").exists(),
+        "IN-PLACE — v2 не создаётся"
+    );
+    let b = std::fs::read(after.voice.expect("v2 записан")).unwrap();
+    assert_ne!(a, b, "voice.wav перезаписан новым сэмплом");
+    assert_eq!(
+        after.voice_desc, None,
+        "старое описание сменившегося тембра не живёт"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn edit_voice_desc_only_and_missing_voice() {
+    let root = temp_root("desc_only");
+    let src = temp_root("desc_only_src");
+    let atts = vec![png_attachment(&src, "face.png", 128, 96)];
+    create_card(
+        &root,
+        &serde_json::json!({"slug": "char", "name": "Имя"}),
+        &ctx(),
+        &atts,
+        &[],
+    )
+    .unwrap();
+
+    // desc без голоса — описывать нечего (честный Usage, не тихий no-op).
+    let err = edit_card(
+        &root,
+        &serde_json::json!({"slug": "char", "voice_desc": "хриплый"}),
+        &[],
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, ToolError::Usage(ref m) if m.contains("голос")),
+        "{:?}",
+        err
+    );
+
+    // Голос есть — desc-only правит описание, файл не трогает.
+    let wav = wav_attachment(&src, "v.wav", 6000.0);
+    edit_card(
+        &root,
+        &serde_json::json!({"slug": "char"}),
+        std::slice::from_ref(&wav),
+    )
+    .unwrap();
+    let before = load_refmod_card_in(&root, "char").unwrap();
+    let on_disk = std::fs::read(before.voice.as_ref().unwrap()).unwrap();
+    let out = edit_card(
+        &root,
+        &serde_json::json!({"slug": "char", "voice_desc": "хриплый"}),
+        &[],
+    )
+    .expect("desc правится");
+    assert!(out.contains("описание голоса обновлено"), "{}", out);
+    let after = load_refmod_card_in(&root, "char").unwrap();
+    assert_eq!(after.voice_desc.as_deref(), Some("хриплый"));
+    assert_eq!(
+        std::fs::read(after.voice.as_ref().unwrap()).unwrap(),
+        on_disk,
+        "desc-only не трогает voice.wav"
+    );
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(src);
+}
+
+#[test]
+fn edit_ops_and_voice_are_two_calls() {
+    let root = temp_root("xor_voice");
+    let src = temp_root("xor_voice_src");
+    let atts = vec![png_attachment(&src, "face.png", 128, 96)];
+    create_card(
+        &root,
+        &serde_json::json!({"slug": "char", "name": "Имя"}),
+        &ctx(),
+        &atts,
+        &[],
+    )
+    .unwrap();
+    // ops + аудио → Usage (двумя вызовами).
+    let wav = wav_attachment(&src, "v.wav", 6000.0);
+    let err = edit_card(
+        &root,
+        &serde_json::json!({"slug": "char", "ops": [{"op": "hue", "degrees": 10}]}),
+        std::slice::from_ref(&wav),
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, ToolError::Usage(ref m) if m.contains("двумя вызовами")),
+        "{:?}",
+        err
+    );
+    // ops + voice_desc → тот же гейт.
+    let err = edit_card(
+        &root,
+        &serde_json::json!({"slug": "char", "ops": [{"op": "hue", "degrees": 10}], "voice_desc": "низкий"}),
+        &[],
+    )
+    .unwrap_err();
+    assert!(
+        matches!(err, ToolError::Usage(ref m) if m.contains("двумя вызовами")),
+        "{:?}",
+        err
+    );
+    // Пустой вызов (только slug) → Usage с подсказкой про режимы.
+    let err = edit_card(&root, &serde_json::json!({"slug": "char"}), &[]).unwrap_err();
+    assert!(
+        matches!(err, ToolError::Usage(ref m) if m.contains("пустой вызов")),
+        "{:?}",
+        err
+    );
+    // Голос при XOR-гейте не потрачен: карточка всё ещё без голоса.
+    let card = load_refmod_card_in(&root, "char").unwrap();
+    assert!(card.voice.is_none(), "XOR-гейт до записи голоса");
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(src);
 }

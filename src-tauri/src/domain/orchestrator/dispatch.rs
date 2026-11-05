@@ -872,12 +872,38 @@ where
                         }
                     }
                 }
+                // Этап 3: голос — резолв source_audio_ids для create И edit (edit:
+                // смена голоса IN-PLACE). Резолвер опционален: нет/[] → Ok(vec![]),
+                // обязательность пары решает тул по своей семантике.
+                let mut audio_attachments = Vec::new();
+                match self
+                    .request_media
+                    .resolve_audio_arguments(arguments, &*self.messages)
+                {
+                    Ok(resolved) => {
+                        if !resolved.is_empty() {
+                            log::info!(
+                                "[REFMOD-TOOL] Resolved source_audio_ids for agent '{}': resolved={}",
+                                self.agent.id,
+                                resolved.len()
+                            );
+                        }
+                        audio_attachments = resolved;
+                    }
+                    Err(error) => {
+                        tool_output = Some(super::vram::tool_error_to_output(
+                            tool_name,
+                            crate::infra::ToolError::Usage(error),
+                        ));
+                    }
+                }
                 if tool_output.is_none() {
                     match crate::infra::execute_refmod_tool(
                         tool_name,
                         arguments,
                         &code_ctx,
                         &attachments,
+                        &audio_attachments,
                     ) {
                         Some(Ok(result)) => {
                             tool_output = Some(result);

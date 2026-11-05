@@ -22,8 +22,8 @@ use crate::infra::tools::{Tool, ToolCtx, ToolError};
 
 // ── SSOT-реэкспорт (типы и константы без ошибок) ──
 pub use tauri_plugin_image_engine::engine::{
-    engine_ref_paths, normalize_frame, RefModBundle, RefModMeta, FRAME_LONG_SIDE_MAX,
-    FRAME_SIZE_MULTIPLE, FRAMES_MAX, FRAMES_PER_RUN,
+    copy_card_voice_in, engine_ref_paths, normalize_frame, set_card_voice_in,
+    update_voice_desc_in, RefModBundle, FRAME_LONG_SIDE_MAX, FRAME_SIZE_MULTIPLE, FRAMES_PER_RUN,
 };
 
 /// Маппинг ошибки SSOT в ошибку тул-слоя (вариант в вариант — семантика честных
@@ -132,7 +132,9 @@ impl Tool for RefmodCreate {
          (любых размеров и форматов png/jpeg/webp — габариты нормируются автоматически). \
          Обязательно передавай source_image_ids из блока доступных изображений ПОРЯДКОМ КОНВЕНЦИИ: \
          1-й id — лицо крупно в камеру без перекрытий, 2-й — ракурс 3/4 или профиль, 3-й — фигура/одежда, \
-         дальше — дополнительные ракурсы (до 8). Все фото — ОДИН И ТОТ ЖЕ человек. Не смешивай разных людей."
+         дальше — дополнительные ракурсы (до 8). Все фото — ОДИН И ТОТ ЖЕ человек. Не смешивай разных людей. \
+         Опционально задай голос персонажа: source_audio_ids (сэмпл голоса из блока доступных аудио, \
+         ровно один файл) + voice_desc (краткое описание тембра)."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -145,7 +147,11 @@ impl Tool for RefmodCreate {
                 "name": {"type": "string", "minLength": 1,
                     "description": "Человекочитаемое имя персонажа для каталога, например 'Маша (рыжая)'."},
                 "description": {"type": "string",
-                    "description": "Короткое описание внешности (2–3 фразы) для каталога персонажей."}
+                    "description": "Короткое описание внешности (2–3 фразы) для каталога персонажей."},
+                "source_audio_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 1,
+                    "description": "Опционально: ровно ОДИН id аудио-сэмпла голоса из блока [ДОСТУПНЫЕ АУДИО-САМПЛЫ] — голос персонажа карточки. mp3/wav/m4a/ogg-vorbis/flac; записи webm/opus не декодируются."},
+                "voice_desc": {"type": "string",
+                    "description": "Опционально: краткое описание тембра голоса (низкий, звонкий, хриплый…) для каталога — видео-агент использует его при озвучке."}
             },
             "required": ["source_image_ids", "slug", "name"]
         })
@@ -167,13 +173,14 @@ impl Tool for RefmodEdit {
         "refmod_edit"
     }
     fn description(&self) -> &str {
-        "Отредактировать существующую RefMod-карточку персонажа фиксированными операциями \
-         и сохранить результат в НОВУЮ карточку (<slug>_v2, …) — исходник не меняется; \
-         перезапись исходника — только по overwrite:true. Операции: \
-         {\"op\":\"warp\",\"factor\":0.7–1.3} — телосложение (горизонтальный масштаб), \
-         {\"op\":\"hue\",\"degrees\":-40..40} — цвет волос/кожи/одежды, \
-         {\"op\":\"splice\",\"other_slug\":\"...\",\"position\":\"top|bottom\"} — сборка из двух \
-         карточек (вертикальная склейка кадров попарно с растушёвкой шва)."
+        "Отредактировать RefMod-карточку персонажа. ДВА РЕЖИМА (не смешивать в одном вызове): \
+         (1) ОПЕРАЦИИ над кадрами — фиксированные ops (warp 0.7–1.3 телосложение, hue ±40 цвет, \
+         splice сборка из двух карточек) → результат в НОВУЮ карточку <slug>_v2 (исходник не меняется; \
+         перезапись исходника — overwrite:true); голос карточки наследуется. \
+         (2) ГОЛОС — добавить голос (если его нет) или ПОМЕНЯТЬ (если есть): source_audio_ids \
+         (сэмпл из блока доступных аудио, ровно один) + опционально voice_desc; правка IN-PLACE, \
+         карточка и кадры не меняются. voice_desc без аудио — правка описания УЖЕ заданного голоса. \
+         Операции и голос в одном вызове запрещены — двумя вызовами."
     }
     fn parameters(&self) -> Value {
         json!({
@@ -181,16 +188,20 @@ impl Tool for RefmodEdit {
             "properties": {
                 "slug": {"type": "string", "minLength": 1,
                     "description": "Slug существующей карточки из блока «Доступные RefMod-карточки»."},
-                "ops": {"type": "array", "minItems": 1, "maxItems": 8, "items": {"type": "object"},
-                    "description": "Операции применяются по порядку: [{\"op\":\"warp\",\"factor\":0.85}, {\"op\":\"hue\",\"degrees\":-20}, {\"op\":\"splice\",\"other_slug\":\"x\",\"position\":\"bottom\"}]."},
+                "ops": {"type": "array", "items": {"type": "object"},
+                    "description": "Режим (1): операции применяются по порядку: [{\"op\":\"warp\",\"factor\":0.85}, {\"op\":\"hue\",\"degrees\":-20}, {\"op\":\"splice\",\"other_slug\":\"x\",\"position\":\"bottom\"}]. НЕ совмещать с голосом (source_audio_ids/voice_desc)."},
                 "overwrite": {"type": "boolean",
-                    "description": "true — перезаписать карточку slug результатом; false (по умолчанию) — создать <slug>_v2 (или следующий свободный вариант)."},
+                    "description": "Только для режима операций: true — перезаписать карточку slug результатом; false (по умолчанию) — создать <slug>_v2 (или следующий свободный вариант)."},
                 "name": {"type": "string",
-                    "description": "Опционально: новое имя карточки-результата (по умолчанию наследуется)."},
+                    "description": "Только для режима операций: новое имя карточки-результата (по умолчанию наследуется)."},
                 "description": {"type": "string",
-                    "description": "Опционально: новое описание карточки-результата (по умолчанию наследуется)."}
+                    "description": "Только для режима операций: новое описание карточки-результата (по умолчанию наследуется)."},
+                "source_audio_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 1,
+                    "description": "Режим (2): ровно ОДИН id аудио-сэмпла из блока [ДОСТУПНЫЕ АУДИО-САМПЛЫ] — задать/сменить голос карточки (IN-PLACE, кадры не меняются). mp3/wav/m4a/ogg-vorbis/flac; webm/opus не декодируются."},
+                "voice_desc": {"type": "string",
+                    "description": "Режим (2): описание тембра. Без source_audio_ids — правка описания уже заданного голоса."}
             },
-            "required": ["slug", "ops"]
+            "required": ["slug"]
         })
     }
     fn is_readonly(&self) -> bool {
@@ -223,17 +234,66 @@ pub fn refmod_tool_schemas(agent_tools: &[String]) -> Vec<(String, String, Value
 
 /// Исполнить refmod-тул по имени. `refmod_create` читает ТОЛЬКО вложения текущего
 /// запроса (гейт источников §00.2: диспетчер резолвит source_image_ids в
-/// аттачменты; произвольные пути диска структурно недоступны).
+/// аттачменты; произвольные пути диска структурно недоступны). `audio_attachments`
+/// — резолвнутые source_audio_ids (Этап 3: сэмпл голоса).
 pub fn execute_refmod_tool(
     name: &str,
     args: &Value,
     ctx: &ToolCtx,
     attachments: &[crate::infra::ChatAttachment],
+    audio_attachments: &[crate::infra::ChatAttachment],
 ) -> Option<Result<String, ToolError>> {
     match name {
-        "refmod_create" => Some(create_card(&refmods_dir(), args, ctx, attachments)),
-        "refmod_edit" => Some(edit_card(&refmods_dir(), args)),
+        "refmod_create" => Some(create_card(&refmods_dir(), args, ctx, attachments, audio_attachments)),
+        "refmod_edit" => Some(edit_card(&refmods_dir(), args, audio_attachments)),
         _ => None,
+    }
+}
+
+/// Байты голосового сэмпла из резолвнутых аудио-вложений. Ровно один сэмпл на
+/// карточку (структурный запрет мульти-голосов — H3 2+ ref_audios путает):
+/// 0 → None (без голоса), 1 → байты (file_path → чтение, иначе legacy b64),
+/// 2+ → Usage — лишние не отбрасываем молча.
+fn voice_bytes(
+    attachments: &[crate::infra::ChatAttachment],
+) -> Result<Option<Vec<u8>>, ToolError> {
+    match attachments.len() {
+        0 => Ok(None),
+        1 => {
+            let attachment = &attachments[0];
+            if attachment.is_dir.unwrap_or(false) {
+                return Err(ToolError::Usage(format!(
+                    "Голос персонажа требует конкретный аудио-файл, а не папку: {}",
+                    attachment.file_name
+                )));
+            }
+            if let Some(path) = attachment.file_path.as_deref() {
+                let bytes = std::fs::read(path).map_err(|error| {
+                    log::error!("Не удалось прочитать аудио-сэмпл {}: {}", path, error);
+                    ToolError::Usage(format!("Аудио-сэмпл недоступен: {}", path))
+                })?;
+                Ok(Some(bytes))
+            } else {
+                let raw = attachment
+                    .data_base64
+                    .split_once(',')
+                    .map(|(_, b)| b)
+                    .unwrap_or(&attachment.data_base64);
+                use base64::Engine;
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(raw.trim())
+                    .map_err(|error| {
+                        log::error!("Ошибка декодирования аудио-вложения {:?}: {}", attachment.file_name, error);
+                        ToolError::Usage("Не удалось декодировать аудио-вложение".to_string())
+                    })?;
+                Ok(Some(bytes))
+            }
+        }
+        _ => Err(ToolError::Usage(format!(
+            "Голос персонажа — РОВНО ОДИН сэмпл (передано {}). Второй голос H3 путает; \
+             карточка несёт один voice.wav.",
+            attachments.len()
+        ))),
     }
 }
 
@@ -242,6 +302,7 @@ fn create_card(
     args: &Value,
     ctx: &ToolCtx,
     attachments: &[crate::infra::ChatAttachment],
+    audio_attachments: &[crate::infra::ChatAttachment],
 ) -> Result<String, ToolError> {
     let slug = args
         .get("slug")
@@ -282,6 +343,29 @@ fn create_card(
         paths.len()
     );
     let card = save_refmod_card_in(refmods_root, slug, name, description, &paths)?;
+    // Голос опционален (Этап 3): сэмпл декодируется ДО записи (битый аудио —
+    // Usage; карточка с кадрами уже сохранена и остаётся без голоса).
+    let voice_desc = args
+        .get("voice_desc")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let voice_line = match voice_bytes(audio_attachments)? {
+        Some(bytes) => {
+            let voiced =
+                set_card_voice_in(refmods_root, &card.slug, &bytes, voice_desc).map_err(map_error)?;
+            format!(
+                ", 🎤 голос задан{}",
+                voiced
+                    .voice_desc
+                    .as_deref()
+                    .map(|d| format!(" ({})", d))
+                    .unwrap_or_default()
+            )
+        }
+        None => String::new(),
+    };
     log::info!(
         "[REFMOD-TOOL] create done: slug={}, кадров={}, dir={}",
         card.slug,
@@ -290,16 +374,26 @@ fn create_card(
     );
     Ok(format!(
         "[REFMOD_SAVED slug={}] Карточка персонажа сохранена: {} кадр(ов), {} кадров доступно \
-         видео-агенту в первом прогоне. Теперь её можно использовать в генерации видео \
+         видео-агенту в первом прогоне{}{}. Теперь её можно использовать в генерации видео \
          аргументом refmod=\"{}\".",
         card.slug,
         card.frames.len(),
         FRAMES_PER_RUN,
+        voice_line,
+        if card.voice.is_some() {
+            " (голос уйдёт в ref_audios при генерации видео)".to_string()
+        } else {
+            String::new()
+        },
         card.slug
     ))
 }
 
-fn edit_card(refmods_root: &Path, args: &Value) -> Result<String, ToolError> {
+fn edit_card(
+    refmods_root: &Path,
+    args: &Value,
+    audio_attachments: &[crate::infra::ChatAttachment],
+) -> Result<String, ToolError> {
     let slug = args
         .get("slug")
         .and_then(|v| v.as_str())
@@ -310,7 +404,85 @@ fn edit_card(refmods_root: &Path, args: &Value) -> Result<String, ToolError> {
             "refmod_edit: обязателен slug существующей карточки".to_string(),
         ));
     }
-    let ops = parse_ops(args.get("ops"))?;
+    let ops_arg = args.get("ops");
+    // ops ОПЦИОНАЛЕН (Этап 3): отсутствие поля = voice-режим (правка голоса
+    // без кадров); присутствующее поле валидируется как раньше (битый/пустой
+    // массив — честный Usage до диска).
+    let ops = match ops_arg {
+        None => Vec::new(),
+        Some(value) => parse_ops(Some(value))?,
+    };
+    let voice_desc = args
+        .get("voice_desc")
+        .and_then(|v| v.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    let has_audio = !audio_attachments.is_empty();
+    let has_voice_desc = voice_desc.is_some();
+    let has_ops = !ops.is_empty();
+
+    // Режимы XOR (поправка владельца 05.11.26): операции над кадрами и правка
+    // голоса — разные операции, смешивание молча порождало бы одновременно и
+    // новую карточку v2, и смену голоса исходника. Только явная граница.
+    if has_ops && (has_audio || has_voice_desc) {
+        return Err(ToolError::Usage(
+            "refmod_edit: операции кадров и правка голоса в одном вызове запрещены — \
+             двумя вызовами (сначала голос, потом ops, или наоборот)."
+                .to_string(),
+        ));
+    }
+    if !has_ops && !has_audio && !has_voice_desc {
+        return Err(ToolError::Usage(
+            "refmod_edit: пустой вызов — передай ops (операции над кадрами) либо \
+             source_audio_ids/voice_desc (голос карточки)."
+                .to_string(),
+        ));
+    }
+
+    // ── Режим (2): голос — IN-PLACE, кадры и slug не меняются ──
+    if !has_ops {
+        let voice_line = if has_audio {
+            let bytes = voice_bytes(audio_attachments)?;
+            let bundle = match bytes {
+                Some(bytes) => {
+                    set_card_voice_in(refmods_root, slug, &bytes, voice_desc).map_err(map_error)?
+                }
+                None => {
+                    return Err(ToolError::Usage(
+                        "refmod_edit: аудио-вложение пустое".to_string(),
+                    ))
+                }
+            };
+            format!(
+                "🎤 голос задан/сменён{}",
+                bundle
+                    .voice_desc
+                    .as_deref()
+                    .map(|d| format!(" ({})", d))
+                    .unwrap_or_default()
+            )
+        } else {
+            let bundle = update_voice_desc_in(refmods_root, slug, voice_desc.expect("desc"))
+                .map_err(map_error)?;
+            format!(
+                "🎤 описание голоса обновлено{}",
+                bundle
+                    .voice_desc
+                    .as_deref()
+                    .map(|d| format!(" → «{}»", d))
+                    .unwrap_or_default()
+            )
+        };
+        log::info!("[REFMOD-TOOL] edit voice in-place: slug={}", slug);
+        return Ok(format!(
+            "[REFMOD_SAVED slug={}] Карточка обновлена без смены кадров: {}. \
+             Она продолжает использоваться аргументом refmod=\"{}\".",
+            slug, voice_line, slug
+        ));
+    }
+
+    // ── Режим (1): ops над кадрами → новая карточка / overwrite ──
     let overwrite = args.get("overwrite").and_then(|v| v.as_bool()).unwrap_or(false);
     let new_name = args.get("name").and_then(|v| v.as_str()).map(str::trim);
     let new_desc = args
@@ -353,6 +525,11 @@ fn edit_card(refmods_root: &Path, args: &Value) -> Result<String, ToolError> {
     let description = new_desc.unwrap_or(&source.description).to_string();
     let card =
         save_refmod_card_images_in(refmods_root, &target_slug, &name, &description, &frames)?;
+    // Наследование голоса в новую карточку (v2): при overwrite голос уже
+    // наследует save_refmod_card_images_in — копирование не нужно.
+    if target_slug != slug {
+        copy_card_voice_in(refmods_root, slug, &target_slug).map_err(map_error)?;
+    }
     log::info!(
         "[REFMOD-TOOL] edit done: {} → {}, кадров={}",
         slug,
@@ -360,11 +537,13 @@ fn edit_card(refmods_root: &Path, args: &Value) -> Result<String, ToolError> {
         card.frames.len()
     );
     Ok(format!(
-        "[REFMOD_SAVED slug={}] Карточка сохранена: {} кадр(ов) (операций: {}). Исходная карточка '{}'.",
+        "[REFMOD_SAVED slug={}] Карточка сохранена: {} кадр(ов) (операций: {}). Исходная карточка '{}'. \
+         Голос: {}.",
         card.slug,
         card.frames.len(),
         ops.len(),
-        slug
+        slug,
+        if card.voice.is_some() { "унаследован из исходной карточки" } else { "у исходной карточки голоса не было" }
     ))
 }
 
