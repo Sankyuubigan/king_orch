@@ -232,10 +232,14 @@ fn run_single_task(
     }
 
     match prepare_sandbox(model, task, &code) {
-        Ok(sandbox) => match run_command(&task.run_cmd, &sandbox, task.timeout_sec, &opts.bins_dir)
-        {
-            Ok(verdict) => apply_verdict(&mut record, verdict),
-            Err(e) => record.error = Some(e),
+        Ok(sandbox) => match task.run_cmd.as_deref() {
+            Some(cmd) => match run_command(cmd, &sandbox, task.timeout_sec, &opts.bins_dir) {
+                Ok(verdict) => apply_verdict(&mut record, verdict),
+                Err(e) => record.error = Some(e),
+            },
+            // run_with активный, а команды нет — битые данные задачи: честная ошибка
+            // в отчёте, а не тихий skip.
+            None => record.error = Some("В задаче нет run_cmd, хотя рантайм активен".to_string()),
         },
         Err(e) => record.error = Some(e),
     }

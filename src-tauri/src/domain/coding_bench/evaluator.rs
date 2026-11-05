@@ -212,7 +212,7 @@ mod tests {
             entry_point: Some("f".to_string()),
             signature_re: re.map(|r| r.to_string()),
             test: "assert f() == 1".to_string(),
-            run_cmd: "python main.py".to_string(),
+            run_cmd: Some("python main.py".to_string()),
             max_tokens: 512,
             temperature: 0.0,
             timeout_sec: 60,

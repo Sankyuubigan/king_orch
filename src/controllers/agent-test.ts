@@ -6,7 +6,7 @@ import { store } from "../store";
 import { bus } from "../events";
 import { trackError } from "../telemetry";
 import type { AgentEntry, TestCaseDef, SingleTestResult, PipelineTestInfo, PipelineTestResult, CustomPromptResult, TestReportMeta } from "../types";
-import { formatTriageScore, hasTriageRanking, rankTriageModels, triageScoreBand } from "../services/triage-score";
+import { triageBatchHtml, type TriageModelReport } from "../services/triage-score";
 
 /** Одна строка батч-прогона: результат харнесса либо ошибка запуска модели. */
 interface PipelineBatchEntry {
@@ -23,31 +23,6 @@ interface CustomPromptEntry {
   model: string;
   error: string | null;
   result: CustomPromptResult | null;
-}
-
-/** Вердикт одного пробника (совпадает с Rust TriageVerdict). */
-interface TriageVerdict {
-  probe_id: string;
-  title: string;
-  status: "pass" | "warn" | "fail" | "skip";
-  detail: string;
-  metrics?: unknown;
-  /** Вес в итоговом балле (SSOT — Rust probe_weight); старые отчёты без поля. */
-  weight?: number;
-}
-
-/** Отчёт триажа одной модели (совпадает с Rust TriageModelReport). */
-interface TriageModelReport {
-  model: string;
-  verdict_label: string;
-  error: string | null;
-  probes: TriageVerdict[];
-  duration_ms: number;
-  ram_peak_mb?: number | null;
-  vram_peak_mb?: number | null;
-  /** Балл «X из Y» (считает бэкенд); старые отчёты и ошибки запуска — без поля. */
-  score?: number;
-  score_max?: number;
 }
 
 /** Сообщение цепочки переходов (совпадает с Rust AgentMessage в отчётах). */
@@ -91,14 +66,6 @@ export interface AgentTestElements {
   customProgressBar: HTMLDivElement;
   customResultsBox: HTMLDivElement;
   customResultsContent: HTMLDivElement;
-  triageTestPanel: HTMLDivElement;
-  btnRunTriageTest: HTMLButtonElement;
-  btnStopTriageTest: HTMLButtonElement;
-  triageProgress: HTMLDivElement;
-  triageStatusLabel: HTMLDivElement;
-  triageProgressBar: HTMLDivElement;
-  triageResultsBox: HTMLDivElement;
-  triageResultsContent: HTMLDivElement;
   reportSelect: HTMLSelectElement;
   btnRefreshReports: HTMLButtonElement;
   reportView: HTMLDivElement;
@@ -146,9 +113,6 @@ export class AgentTestController {
   private customBatchLabel = "";
   private customBatchCancelled = false;
 
-  // Triage test state (14 пробников классов отказов)
-  private triageBatch: { total: number; done: number } | null = null;
-  private triageBatchCancelled = false;
   private pipelineTestsLoaded = false;
   private pipelineListenersSetup = false;
   /**
@@ -172,13 +136,6 @@ export class AgentTestController {
         this.modelsLoaded = false;
         void this.loadModels();
       }),
-    );
-    // Прогресс внутри одной модели триажа (backend эмитит triage_status на каждый пробник).
-    this.trackListen(
-      listen<{ model: string; probe: number; total: number; title: string }>(
-        "triage_status",
-        (ev) => this.onTriageStatus(ev.payload),
-      ),
     );
   }
 
@@ -227,8 +184,6 @@ export class AgentTestController {
     this.el.btnStopPipelineTest.addEventListener("click", () => this.stopPipelineBatch());
     this.el.btnRunCustomTest.addEventListener("click", () => this.runCustomTest());
     this.el.btnStopCustomTest.addEventListener("click", () => this.stopCustomBatch());
-    this.el.btnRunTriageTest.addEventListener("click", () => this.runTriageTest());
-    this.el.btnStopTriageTest.addEventListener("click", () => this.stopTriageBatch());
     this.el.customPromptInput.addEventListener("input", () => this.updateCustomRunButton());
     this.el.btnRefreshReports.addEventListener("click", () => this.loadReportList());
     this.el.btnRefreshModels.addEventListener("click", () => this.loadModels());
@@ -239,11 +194,9 @@ export class AgentTestController {
     const mode = this.el.testModeSelect.value;
     const isPipeline = mode === "pipeline";
     const isCustom = mode === "custom";
-    const isTriage = mode === "triage";
-    this.el.yamlTestPanel.style.display = isPipeline || isCustom || isTriage ? "none" : "block";
+    this.el.yamlTestPanel.style.display = isPipeline || isCustom ? "none" : "block";
     this.el.pipelineTestPanel.style.display = isPipeline ? "block" : "none";
     this.el.customTestPanel.style.display = isCustom ? "block" : "none";
-    this.el.triageTestPanel.style.display = isTriage ? "block" : "none";
   }
 
   // ─── YAML test mode (existing) ───
@@ -333,7 +286,6 @@ export class AgentTestController {
     this.updateRunButton();
     this.updatePipelineRunButton();
     this.updateCustomRunButton();
-    this.updateTriageRunButton();
   }
 
   private async selectFile(): Promise<void> {
@@ -950,204 +902,6 @@ export class AgentTestController {
     return table + details;
   }
 
-  // ─── Triage test mode (14 пробников классов отказов) ───
-
-  private updateTriageRunButton(): void {
-    this.el.btnRunTriageTest.disabled = this.selectedModels.size === 0;
-  }
-
-  private stopTriageBatch(): void {
-    if (!this.triageBatch) return;
-    this.triageBatchCancelled = true;
-    void invoke("cancel_test_run").catch(() => {});
-    showToast("Останавливаю текущую модель...", "info");
-  }
-
-  /** Прогресс батча триажа: доля завершённых моделей + доля текущей модели. */
-  private setTriageBatchProgress(currentModelPct: number): void {
-    if (!this.triageBatch) return;
-    const current = Math.max(0, Math.min(100, currentModelPct)) / 100;
-    const overall = ((this.triageBatch.done + current) / this.triageBatch.total) * 100;
-    this.el.triageProgressBar.style.width = `${Math.max(0, Math.min(100, overall))}%`;
-  }
-
-  /** Событие triage_status: пробник N/7 текущей модели (эмитит backend). */
-  private onTriageStatus(p: { model: string; probe: number; total: number; title: string }): void {
-    if (!this.triageBatch) return;
-    this.el.triageStatusLabel.textContent =
-      `Модель ${this.triageBatch.done + 1}/${this.triageBatch.total} (${p.model}) — пробник ${p.probe}/${p.total}: ${p.title}`;
-    this.setTriageBatchProgress(((p.probe - 1) / p.total) * 100);
-  }
-
-  /**
-   * Батч-триаж всех отмеченных моделей — последовательно, как custom-батч
-   * (VRAM §6.5: одна модель за раз). Ошибка запуска модели не роняет батч:
-   * попадает в отчёт как 💥-запись с error.
-   */
-  private async runTriageTest(): Promise<void> {
-    if (this.selectedModels.size === 0) {
-      showToast("Выберите хотя бы одну модель", "error");
-      return;
-    }
-    const modelPaths = Array.from(this.selectedModels);
-
-    this.el.btnRunTriageTest.disabled = true;
-    this.el.triageProgress.style.display = "block";
-    this.el.triageResultsBox.style.display = "none";
-    this.el.triageStatusLabel.textContent = "Подготовка...";
-    this.el.triageProgressBar.style.width = "0%";
-    this.el.btnStopTriageTest.style.display = "inline-block";
-
-    this.triageBatch = { total: modelPaths.length, done: 0 };
-    this.triageBatchCancelled = false;
-    const reports: TriageModelReport[] = [];
-    const batchStart = Date.now();
-
-    try {
-      for (let i = 0; i < modelPaths.length; i++) {
-        if (this.triageBatchCancelled) break;
-        const modelPath = modelPaths[i];
-        const shortName = modelPath.split(/[/\\]/).pop() || modelPath;
-        this.el.triageStatusLabel.textContent = `Модель ${i + 1}/${modelPaths.length} (${shortName}) — запуск...`;
-        try {
-          const report = await invoke<TriageModelReport>("run_triage_test_cmd", { modelPath });
-          reports.push(report);
-        } catch (e) {
-          reports.push({
-            model: modelPath,
-            verdict_label: "",
-            error: String(e),
-            probes: [],
-            duration_ms: 0,
-          });
-          void trackError("agentTest.runTriageBatch", e);
-        }
-        this.triageBatch.done = i + 1;
-        this.setTriageBatchProgress(0);
-      }
-
-      const totalMs = Date.now() - batchStart;
-      this.el.triageProgressBar.style.width = "100%";
-      const doneCount = reports.filter((r) => !r.error).length;
-      this.el.triageStatusLabel.textContent = this.triageBatchCancelled
-        ? `Остановлено пользователем: выполнено ${reports.length} из ${modelPaths.length} · общее время: ${(totalMs / 1000).toFixed(1)}s`
-        : `Готово: ${doneCount}/${reports.length} моделей отбрано · общее время: ${(totalMs / 1000).toFixed(1)}s`;
-      this.el.triageResultsContent.innerHTML = this.triageBatchHtml(reports, totalMs);
-      this.el.triageResultsBox.style.display = "block";
-
-      try {
-        const reportPath = await invoke<string>("write_triage_report", {
-          reports,
-          totalDurationMs: totalMs,
-        });
-        showToast(`Сводный отчёт: ${reportPath}`, "success");
-      } catch (e) {
-        showToast(`Не удалось сохранить сводный отчёт: ${e}`, "error");
-        void trackError("agentTest.saveTriageReport", e);
-      }
-    } finally {
-      this.triageBatch = null;
-      this.el.btnRunTriageTest.disabled = false;
-      this.el.btnStopTriageTest.style.display = "none";
-    }
-  }
-
-  /** Иконка/цвет статуса пробника. */
-  private triageStatusStyle(status: string): { icon: string; color: string } {
-    switch (status) {
-      case "pass": return { icon: "✅", color: "var(--green, #4caf50)" };
-      case "warn": return { icon: "⚠️", color: "var(--orange, #ff9800)" };
-      case "fail": return { icon: "💥", color: "var(--red, #f44336)" };
-      default: return { icon: "⏭", color: "var(--border, #888)" };
-    }
-  }
-
-  /** Цвет вердикт-лейбла модели. */
-  private triageVerdictColor(label: string): string {
-    if (label.includes("МУСОР")) return "var(--red, #f44336)";
-    if (label.includes("Рискованная")) return "var(--orange, #ff9800)";
-    if (label.includes("Годна")) return "var(--green, #4caf50)";
-    return "var(--border, #888)";
-  }
-
-  /** Цвет бэнда итогового балла (чисто визуально; семантику вердикта не трогает). */
-  private triageScoreColor(score: number, max: number): string {
-    switch (triageScoreBand(score, max)) {
-      case "good": return "var(--green, #4caf50)";
-      case "mid": return "var(--orange, #ff9800)";
-      default: return "var(--red, #f44336)";
-    }
-  }
-
-  /** Бэйдж «Балл: X из Y» для шапки карточки модели; старые отчёты — «—». */
-  private triageScoreBadge(r: TriageModelReport): string {
-    if (typeof r.score !== "number" || typeof r.score_max !== "number") {
-      return `<span style="opacity:0.6;">Балл: —</span>`;
-    }
-    return `<span style="color:${this.triageScoreColor(r.score, r.score_max)}; font-weight:bold;">Балл: ${this.escapeHtml(formatTriageScore(r.score, r.score_max))}</span>`;
-  }
-
-  /** Топ-лист батча (показывается при ≥2 моделях с баллом): место/модель/балл/вердикт/fail'ы. */
-  private triageRankingHtml(reports: TriageModelReport[]): string {
-    if (!hasTriageRanking(reports)) return "";
-    const border = "1px solid var(--border, #444)";
-    const rows = rankTriageModels(reports).map((row) => `
-      <tr>
-        <td style="padding:3px 8px; border-bottom:${border}; white-space:nowrap;">${row.place}</td>
-        <td style="padding:3px 8px; border-bottom:${border};">${this.escapeHtml(row.model)}</td>
-        <td style="padding:3px 8px; border-bottom:${border}; color:${this.triageScoreColor(row.score, row.scoreMax)}; white-space:nowrap;"><strong>${this.escapeHtml(formatTriageScore(row.score, row.scoreMax))}</strong></td>
-        <td style="padding:3px 8px; border-bottom:${border}; color:${this.triageVerdictColor(row.verdictLabel)};">${this.escapeHtml(row.verdictLabel)}</td>
-        <td style="padding:3px 8px; border-bottom:${border};">${this.escapeHtml(row.criticalFails.join("; ")) || "—"}</td>
-      </tr>`).join("");
-    return `<table style="border-collapse:collapse; width:100%; margin:0 0 12px 0;">
-      <thead><tr>
-        <th style="text-align:left; padding:3px 8px; border-bottom:${border};">#</th>
-        <th style="text-align:left; padding:3px 8px; border-bottom:${border};">Модель</th>
-        <th style="text-align:left; padding:3px 8px; border-bottom:${border};">Балл</th>
-        <th style="text-align:left; padding:3px 8px; border-bottom:${border};">Вердикт</th>
-        <th style="text-align:left; padding:3px 8px; border-bottom:${border};">Критичные fail'ы</th>
-      </tr></thead>
-      <tbody>${rows}</tbody></table>`;
-  }
-
-  /** HTML сводки триажа: общий для живых результатов и просмотрщика отчётов. */
-  private triageBatchHtml(reports: TriageModelReport[], totalMs: number | null = null): string {
-    const border = "1px solid var(--border, #444)";
-    const totalPart = typeof totalMs === "number"
-      ? ` · <strong>общее время батча:</strong> ${(totalMs / 1000).toFixed(1)}s`
-      : "";
-    const cards = reports.map((r, i) => {
-      const short = r.model.split(/[/\\]/).pop() || r.model;
-      const head = r.error
-        ? `<div style="color: var(--red, #f44336); font-weight:bold;">💥 ОШИБКА ЗАПУСКА</div>
-           <pre style="white-space:pre-wrap; color: var(--red, #f44336)">${this.escapeHtml(r.error)}</pre>`
-        : `<div style="font-weight:bold; font-size:1.05em;">
-             <span style="color:${this.triageVerdictColor(r.verdict_label)}">${this.escapeHtml(r.verdict_label)}</span>
-             · ${this.triageScoreBadge(r)}
-           </div>
-           <div style="opacity:0.7; margin:2px 0 6px 0;">${(r.duration_ms / 1000).toFixed(1)}s · VRAM: ${this.fmtVram(null, r.vram_peak_mb ?? null)} · ОЗУ: ${this.fmtMb(r.ram_peak_mb ?? null)}</div>
-           <table style="border-collapse:collapse; width:100%; margin-bottom:8px;">
-             <thead><tr>
-               <th style="text-align:left; padding:3px 8px; border-bottom:${border}">Пробник</th>
-               <th style="text-align:left; padding:3px 8px; border-bottom:${border}">Итог</th>
-               <th style="text-align:left; padding:3px 8px; border-bottom:${border}">Детали</th>
-             </tr></thead>
-             <tbody>${r.probes.map((p) => {
-               const st = this.triageStatusStyle(p.status);
-               return `<tr>
-                 <td style="padding:3px 8px; border-bottom:${border}">${this.escapeHtml(p.title)}</td>
-                 <td style="padding:3px 8px; border-bottom:${border}; color:${st.color}; white-space:nowrap;">${st.icon} ${this.escapeHtml(p.status)}</td>
-                 <td style="padding:3px 8px; border-bottom:${border}">${this.escapeHtml(p.detail)}</td>
-               </tr>`;
-             }).join("")}</tbody>
-           </table>`;
-      return `<div style="margin-bottom:16px;"><strong>${i + 1}. ${this.escapeHtml(short)}</strong>${head}</div>`;
-    }).join('<hr style="border:none; border-top:1px solid var(--border, #444); margin:12px 0"/>');
-
-    return `<div style="margin-bottom:12px;"><strong>Триаж моделей</strong> · моделей: ${reports.length}${totalPart}</div>` +
-      this.triageRankingHtml(reports) + cards;
-  }
-
   // ─── Плашки итога и цепочки переходов (общие для живых результатов и отчётов) ───
 
   /** Автор итогового ответа: последнее message-сообщение от агента (зеркало backend-логики). */
@@ -1265,7 +1019,7 @@ export class AgentTestController {
           totalMs,
         );
       } else if (type === "triage_report") {
-        html = this.triageBatchHtml(entries as unknown as TriageModelReport[], totalMs);
+        html = triageBatchHtml(entries as unknown as TriageModelReport[], totalMs);
       } else {
         html = `<div style="color: var(--red, #f44336)">Неизвестный формат отчёта (type: ${this.escapeHtml(type || "—")})</div>`;
       }

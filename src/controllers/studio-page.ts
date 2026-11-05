@@ -4,6 +4,8 @@ import { AgentTestController } from "./agent-test";
 import type { AgentTestElements } from "./agent-test";
 import { CodingTestController } from "./coding-test";
 import type { CodingTestElements } from "./coding-test";
+import { TriageTestController } from "./triage-test";
+import type { TriageTestElements } from "./triage-test";
 
 /**
  * Экземпляр страницы «Студия агентов».
@@ -47,6 +49,8 @@ export interface AgentStudioPage {
   agentTest: AgentTestElements;
   /** Элементы панели «Кодинг тест LLM». */
   codingTest: CodingTestElements;
+  /** Элементы панели триажа (живёт внутри вкладки «Тест LLM»). */
+  triageTest: TriageTestElements;
   /** Показать одну из суб-вкладок. */
   switchSubTab(tab: StudioSubTab): void;
 }
@@ -176,14 +180,6 @@ export function buildAgentStudioPage(instanceKey = ""): AgentStudioPage {
     customProgressBar: pick<HTMLDivElement>(root, prefix, "custom-progress-bar"),
     customResultsBox: pick<HTMLDivElement>(root, prefix, "custom-results-box"),
     customResultsContent: pick<HTMLDivElement>(root, prefix, "custom-results-content"),
-    triageTestPanel: pick<HTMLDivElement>(root, prefix, "triage-test-panel"),
-    btnRunTriageTest: pick<HTMLButtonElement>(root, prefix, "btn-run-triage-test"),
-    btnStopTriageTest: pick<HTMLButtonElement>(root, prefix, "btn-stop-triage-test"),
-    triageProgress: pick<HTMLDivElement>(root, prefix, "triage-progress"),
-    triageStatusLabel: pick<HTMLDivElement>(root, prefix, "triage-status-label"),
-    triageProgressBar: pick<HTMLDivElement>(root, prefix, "triage-progress-bar"),
-    triageResultsBox: pick<HTMLDivElement>(root, prefix, "triage-results-box"),
-    triageResultsContent: pick<HTMLDivElement>(root, prefix, "triage-results-content"),
     reportSelect: pick<HTMLSelectElement>(root, prefix, "report-select"),
     btnRefreshReports: pick<HTMLButtonElement>(root, prefix, "btn-refresh-reports"),
     reportView: pick<HTMLDivElement>(root, prefix, "report-view"),
@@ -205,6 +201,17 @@ export function buildAgentStudioPage(instanceKey = ""): AgentStudioPage {
     codingReportLink: pick<HTMLAnchorElement>(root, prefix, "coding-report-link"),
   };
 
+  const triageTest: TriageTestElements = {
+    triageTestPanel: pick<HTMLDivElement>(root, prefix, "triage-test-panel"),
+    btnRunTriageTest: pick<HTMLButtonElement>(root, prefix, "btn-run-triage-test"),
+    btnStopTriageTest: pick<HTMLButtonElement>(root, prefix, "btn-stop-triage-test"),
+    triageProgress: pick<HTMLDivElement>(root, prefix, "triage-progress"),
+    triageStatusLabel: pick<HTMLDivElement>(root, prefix, "triage-status-label"),
+    triageProgressBar: pick<HTMLDivElement>(root, prefix, "triage-progress-bar"),
+    triageResultsBox: pick<HTMLDivElement>(root, prefix, "triage-results-box"),
+    triageResultsContent: pick<HTMLDivElement>(root, prefix, "triage-results-content"),
+  };
+
   /**
    * Переключение суб-вкладок живёт в экземпляре, а не в глобальной переменной:
    * у каждой вкладки студии своя активная суб-вкладка (в одной открыт граф,
@@ -219,7 +226,7 @@ export function buildAgentStudioPage(instanceKey = ""): AgentStudioPage {
     views.codingTest.classList.toggle("active", tab === "coding-test");
   };
 
-  return { root, subtabs, views, graph, agentTest, codingTest, switchSubTab };
+  return { root, subtabs, views, graph, agentTest, codingTest, triageTest, switchSubTab };
 }
 
 /**
@@ -260,6 +267,8 @@ export function createAgentStudioTab(
 
   const agentTest = new AgentTestController(page.agentTest);
   const codingTest = new CodingTestController(page.codingTest);
+  // Триаж делит пул моделей с бенчмарком: выбор читается из чекбоксов codingModelList.
+  const triageTest = new TriageTestController(page.triageTest, page.codingTest.codingModelList);
 
   let activeSubTab: StudioSubTab = "graph";
   let graphCtrl: GraphController | null = null;
@@ -317,6 +326,7 @@ export function createAgentStudioTab(
       graphPromise = null;
       agentTest.destroy();
       codingTest.destroy();
+      triageTest.destroy();
       // Снимаем корень из DOM: слушатели внутри него собираются вместе с ним, а
       // `GraphController` больше не найдёт свои элементы (его поиски идут от `root`).
       page.root.remove();

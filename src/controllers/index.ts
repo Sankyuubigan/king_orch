@@ -25,6 +25,9 @@ export type { AgentTestElements } from './agent-test'
 export { CodingTestController } from './coding-test'
 export type { CodingTestElements } from './coding-test'
 
+export { TriageTestController } from './triage-test'
+export type { TriageTestElements } from './triage-test'
+
 export { UpdatePopupController } from './update_popup'
 export type { UpdatePopupElements } from './update_popup'
 
