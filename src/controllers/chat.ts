@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { store } from "../store";
 import { bus } from "../events";
-import { createMessageElement, createSubcallElement, createToolCallElement, createThoughtElement, createThoughtRow, updateThoughtRowSummary, completeToolRow, TOOL_ICONS, showToast, createProcessingIndicator, createAttachmentCallbacks } from "../ui";
+import { createMessageElement, createSubcallElement, createToolCallElement, createThoughtElement, createThoughtRow, updateThoughtRowSummary, completeToolRow, TOOL_ICONS, showToast, createProcessingIndicator, createAttachmentCallbacks, materializeNeurosisCases } from "../ui";
 import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks, ProcessingIndicator } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
@@ -1020,7 +1020,7 @@ export class ChatController {
 
   private appendMessageToContainer(container: HTMLDivElement, role: Role, content: string, agentName?: string, timeText?: string) {
     container.appendChild(createMessageElement(role, content, agentName, timeText));
-    this.scrollToBottomIfNearEnd(container); renderMermaid();
+    this.scrollToBottomIfNearEnd(container); renderMermaid(); materializeNeurosisCases(container, renderMermaid);
   }
 
   appendMessage(role: Role, content: string, agentName?: string, timeText?: string, subCalls?: any[], skipSubcallRender = false, uid?: string, attachments?: Attachment[]) {
@@ -1031,7 +1031,7 @@ export class ChatController {
     }
     const hasMenu = uid !== undefined && (role === 'user' || role === 'agent');
     const msgEl = createMessageElement(role, content, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, attachments, this.translatorMenuLabel(), undefined, this.imageCallbacks);
-    this.el.chatHistory.appendChild(msgEl); this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
+    this.el.chatHistory.appendChild(msgEl); this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid(); materializeNeurosisCases(this.el.chatHistory, renderMermaid);
   }
 
   private isCloud(): boolean {
@@ -1231,7 +1231,7 @@ export class ChatController {
     // возвращаем строку-индикатор в DOM (инвариант: она живёт в чате,
     // пока isProcessing; убрать её может только setProcessingState(false)).
     if (this.state.processingIndicator) this.el.chatHistory.appendChild(this.state.processingIndicator.el);
-    this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid();
+    this.scrollToBottomIfNearEnd(this.el.chatHistory); renderMermaid(); materializeNeurosisCases(this.el.chatHistory, renderMermaid);
   }
 
   /** Разбор сохранённой мысли-инструмента вида

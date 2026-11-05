@@ -401,6 +401,7 @@ pub fn run_pipeline_test(
         ),
         image_artifacts: std::sync::Arc::new(crate::infra::ImageArtifactRegistry::new()),
         write_outside,
+        tool_write_dir: std::env::temp_dir(),
     };
 
     let mut ctx = WorkflowContext::new(test.task_prompt.clone(), vec![], vec![]);

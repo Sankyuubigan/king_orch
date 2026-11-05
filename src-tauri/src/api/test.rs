@@ -970,6 +970,8 @@ pub async fn run_custom_prompt_test(
             request_media: std::sync::Arc::new(domain::RequestMedia::empty()),
             image_artifacts: std::sync::Arc::new(crate::infra::ImageArtifactRegistry::new()),
             write_outside: crate::infra::WriteOutside::Deny,
+            // Тестовый стенд — часть живого приложения: кейсы сохраняются туда же.
+            tool_write_dir: crate::infra::storage::app_data_root(),
         };
         // Промпт юзера кладётся в messages[] как user-сообщение — так же, как в
         // боевом чате (chat.ts:commitUserMessage → orchestrator передаёт history
@@ -1304,6 +1306,11 @@ pub async fn run_triage_test_cmd(
     let duration_ms = start_time.elapsed().as_millis() as u64;
     let (ram_peak, vram_peak, _vram_delta) = mem_fields(mem_sampler.stop_and_report(), vram_before);
 
+    // Балл «X из Y» (SSOT — domain::triage); десятые доли → одна десятичная.
+    let (score, score_max) = match domain::triage::compute_score_decipoints(&probes) {
+        Some((earned, max)) => (Some(earned as f64 / 10.0), Some(max as f64 / 10.0)),
+        None => (None, None),
+    };
     let report = domain::triage::TriageModelReport {
         model: short_model_name(&model_path).to_string(),
         verdict_label: domain::triage::verdict_label(&probes),
@@ -1312,6 +1319,8 @@ pub async fn run_triage_test_cmd(
         duration_ms,
         ram_peak_mb: ram_peak,
         vram_peak_mb: vram_peak,
+        score,
+        score_max,
     };
     append_test_log(&format!(
         "--- Триаж '{}' завершён за {:.1}s: {} ---",

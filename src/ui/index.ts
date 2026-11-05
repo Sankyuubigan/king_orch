@@ -36,3 +36,5 @@ export { extractVideoFirstFrame, extractVideoFirstFrameFromDataUrl, extractVideo
 
 export { createWorkspaceMenu } from './workspace-menu'
 export type { WorkspaceMenuAction, WorkspaceMenuController } from './workspace-menu'
+
+export { materializeNeurosisCases } from './neurosis-view'

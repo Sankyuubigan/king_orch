@@ -9,19 +9,20 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "e1": { "type": "boolean" },
-          "e2": { "type": "boolean" },
-          "e3": { "type": "boolean" },
-          "e4": { "type": "boolean" },
-          "e5": { "type": "boolean" },
-          "e6": { "type": "boolean" },
-          "e7": { "type": "boolean" },
-          "e8": { "type": "boolean" },
-          "e9": { "type": "boolean" },
+          "e1": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }], "description": "Этаж 0: Проблема / Ментальное сопротивление + симптом в теле — компактный вердикт, ЧТО определено (1-2 предложения, до 200 симв); если критерий элемента не прошёл — false" },
+          "e2": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }], "description": "Этаж -1: Автоматическое поведение (что делает / избегает) — компактный вердикт; если критерий не прошёл — false" },
+          "e3": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }], "description": "Этаж -2: Катастрофа / Онтологическая Дыра (Ядро) — компактный вердикт; если критерий не прошёл — false" },
+          "e4": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }], "description": "Этаж 0: Самооценка / Я-концепция (Кто я в этой проблеме) — компактный вердикт; если критерий не прошёл — false" },
+          "e5": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }], "description": "Этаж -1: Правило-Кнут / Запрет — компактный вердикт; если критерий не прошёл — false" },
+          "e6": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }], "description": "Этаж -2: Триггер (Забор вокруг Дыры e3) — компактный вердикт; если критерий не прошёл — false" },
+          "e7": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }], "description": "Этаж 0: Эмоция-повторитель / Грех этажа — компактный вердикт; если критерий не прошёл — false" },
+          "e8": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }], "description": "Этаж -1: Иллюзия / Картина мира — компактный вердикт; если критерий не прошёл — false" },
+          "e9": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }], "description": "Этаж -2: Корневой Идол / Маяк спасения — компактный вердикт; если критерий не прошёл — false" },
           "floor0_type": { "type": "string", "enum": ["1", "2", "3", "4", "5", "6", "7", "8", "9"] },
-          "floor1_type": { "type": "string", "enum": ["1", "2", "3", "4", "5", "6", "7", "8", "9"] }
+          "floor1_type": { "type": "string", "enum": ["1", "2", "3", "4", "5", "6", "7", "8", "9"] },
+          "target": { "type": "string", "minLength": 1, "maxLength": 160, "description": "Краткое имя мишени разбора (симптом + застревание), по которой валидатор проверял критерии элементов; идёт в имя файла кейса и шапку визуального отчёта" }
         },
-        "required": ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "floor0_type", "floor1_type"]
+        "required": ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9", "floor0_type", "floor1_type", "target"]
       }
     },
     "validator_flat": {

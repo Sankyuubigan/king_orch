@@ -139,6 +139,12 @@ pub struct WorkflowRunner<'a, L, S, C> {
     pub image_artifacts: Arc<crate::infra::ImageArtifactRegistry>,
     /// Поведение при записи вне write_root (Prompt | Deny).
     pub write_outside: crate::infra::WriteOutside,
+    /// Каталог записи custom-тулов графа (custom_tool_call): уходит в Deno как
+    /// `--allow-write=<dir>` + env `KO_TOOL_WRITE_DIR` (политика 05.11.2026:
+    /// тулам команды запись разрешена ТОЛЬКО сюда — кейс-файлы психотерапевта
+    /// живут в `<app_data_root>/психо кейсы/`, NSIS-обновления appdata не
+    /// трогают). Прод — `app_data_root()`; тесты/пробы — temp.
+    pub tool_write_dir: std::path::PathBuf,
 }
 
 fn sanitized_llm_message(message: &ChatMessage) -> LlmMessage {

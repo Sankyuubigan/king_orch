@@ -19,10 +19,12 @@
  * дефицита: нет типа лучше неверного). Гейт критических элементов {e3,e6,e8,e9}
  * живёт ЗДЕСЬ (04.11.2026: нода check_critical_elements удалена из графа — её
  * проверка e3 дублировала тул, остаток переехал следом; §00.2 — механический
- * гейт в тотальной функции, а не отдельной нодой). Маршрутизация графа
- * (check_pattern, type condition_check) читает производный булев
- * `pattern_found` — состояние, которое роутер способен прочитать: у
- * condition_check нет доступа к шине, а condition_router не читает output
+ * гейт в тотальной функции, а не отдельной нодой). Предикат «элемент
+ * подтверждён» — `is_proven` (SSOT, 05.11.2026): `true` или непустая
+ * строка-вердикт (сигнал валидатора перешёл на вердикт-тексты). Маршрутизация
+ * графа читает производные булевы `pattern_found` и `surface_proven`
+ * (check_elements1) — состояния, которые condition_check способен прочитать:
+ * у condition_check нет доступа к шине, а condition_router не читает output
  * тула (мёртвое условие 03.11.2026). Exit(1) — только за сломанную инвокацию
  * (не-JSON вход, нет поля report): это ошибка узла движка, а не доменный отказ.
  *
@@ -55,11 +57,31 @@ export interface PatternVerdict {
    * check_pattern (condition_check) не имеет доступа к шине и не умеет
    * сравнивать строки — только boolean (nodes.rs: condition_check as_bool). */
   pattern_found: boolean;
+  /** Производный булев (05.11.2026): ВСЕ элементы поверхностного контура
+   * {e1, e2, e6, e7} подтверждены — состояние для ноды check_elements1
+   * (condition_check читает только boolean; равенство строк/union-форм
+   * ему недоступно). Считается из сигнала даже при отказе сцепки. */
+  surface_proven: boolean;
   /** Честное объяснение исхода (для логов и диагностики пайплайна). */
   reason: string;
 }
 
 const NONE = "none";
+
+/** Элементы поверхностного контура для производного surface_proven:
+ * соматика (e1), автоматизм (e2), триггер (e6), эмоция-повторитель (e7). */
+const SURFACE_ELEMENTS: readonly string[] = ["e1", "e2", "e6", "e7"];
+
+/** SSOT-предикат «элемент подтверждён»: старая форма — `true`; новая
+ * (вердикт-тексты, 05.11.2026) — непустая строка-вердикт. `false`, число,
+ * null, пустая/бельная строка — не подтверждено. Потребители: гейты
+ * критических элементов ниже, производный `surface_proven`; та же семантика
+ * в пробах движка (flat_validator_probe) и в туле сохранения кейса. Форма
+ * сигнала эволюционирует — предикат один. */
+export function is_proven(value: unknown): boolean {
+  if (value === true) return true;
+  return typeof value === "string" && value.trim() !== "";
+}
 
 /** Критические элементы контура: тип Триады Травмы не объявляется, пока не
  * подтверждены все (SSOT — бывшая нода check_critical_elements, 04.11.2026
@@ -67,7 +89,8 @@ const NONE = "none";
 const CRITICAL_ELEMENTS: readonly string[] = ["e6", "e8", "e9"];
 
 function refusal(reason: string): PatternVerdict {
-  return { pattern_type: NONE, pattern_found: false, reason };
+  // Сигнал не разобрать (не JSON / не объект) — ни один элемент не доказан.
+  return { pattern_type: NONE, pattern_found: false, surface_proven: false, reason };
 }
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -106,37 +129,47 @@ export function computePatternType(report: unknown): PatternVerdict {
   if (!obj) {
     return refusal("значение сигнала не объект");
   }
+  // Производное состояние поверхностного контура — считается из сигнала даже
+  // при отказе сцепки (пайплайн читает его независимо от pattern_found).
+  const surface_proven = SURFACE_ELEMENTS.every((element) => is_proven(obj[element]));
+  const refuse = (reason: string): PatternVerdict => ({
+    pattern_type: NONE,
+    pattern_found: false,
+    surface_proven,
+    reason,
+  });
   const floor0 = typeof obj["floor0_type"] === "string" ? obj["floor0_type"].trim() : undefined;
   const floor1 = typeof obj["floor1_type"] === "string" ? obj["floor1_type"].trim() : undefined;
   if (floor0 === undefined || floor1 === undefined) {
-    return refusal("этажи не классифицированы (floor0_type/floor1_type отсутствуют)");
+    return refuse("этажи не классифицированы (floor0_type/floor1_type отсутствуют)");
   }
-  if (obj["e3"] !== true) {
-    return refusal("ядро не подтверждено (e3 != true) — тип Триады Травмы не объявляется");
+  if (!is_proven(obj["e3"])) {
+    return refuse("ядро не подтверждено (e3 — false или пустой вердикт) — тип Триады Травмы не объявляется");
   }
   for (const element of CRITICAL_ELEMENTS) {
-    if (obj[element] !== true) {
-      return refusal(
+    if (!is_proven(obj[element])) {
+      return refuse(
         `критический элемент ${element} не подтверждён — тип Триады Травмы не объявляется`,
       );
     }
   }
   const t0 = parseTypeDigit(floor0);
   if (t0 === undefined) {
-    return refusal(`мусор вместо цифры Этажа 0: ${floor0}`);
+    return refuse(`мусор вместо цифры Этажа 0: ${floor0}`);
   }
   const t1 = parseTypeDigit(floor1);
   if (t1 === undefined) {
-    return refusal(`мусор вместо цифры Этажа -1: ${floor1}`);
+    return refuse(`мусор вместо цифры Этажа -1: ${floor1}`);
   }
   if (SAFETY_TRANSITIONS[t0] !== t1) {
-    return refusal(
+    return refuse(
       `SAFETY-сцепка этажей не сходится: Тип ${t0} -> Безопасность -> не Тип ${t1}`,
     );
   }
   return {
     pattern_type: String(SAFETY_TRANSITIONS[t1]),
     pattern_found: true,
+    surface_proven,
     reason: "SAFETY-сцепка этажей сходится",
   };
 }

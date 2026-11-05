@@ -96,6 +96,23 @@ nodes:
     y: 601
     x: -42
 
+- id: save_neurosis_case
+  type: custom_tool_call
+  ui_pos:
+    x: 2170
+    y: 400
+  tool_file: ../tools/save_neurosis_case.ts
+  args:
+    report: '{{ signals.validator_report }}'
+    core_type: '{{ nodes.compute_pattern.output.pattern_type }}'
+  output_message: true
+  system_message: |-
+    Кейс сохранён: {{ nodes.save_neurosis_case.output.file_name }}
+
+    ```neurosis_case
+    {{ nodes.save_neurosis_case.output.case_json_text }}
+    ```
+
 - id: read_pattern_section
   type: custom_tool_call
   ui_pos:
@@ -172,7 +189,7 @@ nodes:
   type: condition_check
   input_object: '{{ nodes.compute_pattern.output }}'
   field: pattern_found
-  true_to: read_pattern_section
+  true_to: save_neurosis_case
   false_to: check_elements1
   ui_pos:
     y: 523
@@ -245,19 +262,11 @@ nodes:
     x: -808
 
 - id: check_elements1
-  type: condition_router
+  type: condition_check
+  input_object: '{{ nodes.compute_pattern.output }}'
+  field: surface_proven
   true_to: call_shadow_worker
   false_to: call_collector
-  conditions:
-  - field: validator_report.e1
-    equals: true
-  - field: validator_report.e2
-    equals: true
-  - field: validator_report.e6
-    equals: true
-  - field: validator_report.e7
-    equals: true
-  logic: all
   ui_pos:
     x: 2353
     y: 638
@@ -287,6 +296,9 @@ edges:
 
 - from: read_pattern_section
   to: call_healer
+
+- from: save_neurosis_case
+  to: read_pattern_section
 
 - from: call_validator
   to: compute_pattern

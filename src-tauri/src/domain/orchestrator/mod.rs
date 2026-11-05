@@ -43,15 +43,17 @@ use crate::domain::parsers::{
     parse_tool_call, parse_tool_call_detailed, split_thinking_and_answer, ToolCallParse,
 };
 use crate::domain::signals::{
-    assemble_slot_signal_value, auto_think_budget_chars,
+    assemble_slot_signal_value,
     build_signal_envelope_grammar_with_think_budget, build_signal_envelope_json_only_grammar,
-    draft_count_for_contract, slot_anchor_labels, extract_signal_value_from_text,
-    load_signal_contract, think_slot_count, SignalContract,
+    contract_envelope_tokens, draft_count_for_contract, slot_anchor_labels,
+    extract_signal_value_from_text, load_signal_contract, think_slot_count, SignalContract,
 };
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, NodeType, WorkflowContext, WorkflowDef, WorkflowRunner,
 };
 use crate::infra::llm_types::GenerationResult;
+// Формула авто-потолка think с контрактом-резервом — SSOT плагина (инфра-дверь).
+use crate::infra::auto_think_budget_chars_with_envelope;
 use crate::infra::{
     extract_model_filename, llm_history, ChatAttachment, ChatMessage, FunctionDef, GrammarSpec,
     CloudEndpoint, LlamaEngine, LlmEngine, LlmMessage, ModelParams, SubCall, ToolDefinition,
@@ -675,6 +677,8 @@ where
             request_media: request_media.clone(),
             image_artifacts: image_artifacts.clone(),
             write_outside,
+            // Кейс-файлы custom-тулов (психо кейсы) — рядом с сессиями в appdata.
+            tool_write_dir: crate::infra::storage::app_data_root(),
         };
         let mut fallback_error: Option<String> = None;
         match crate::domain::workflow_engine::run_workflow(workflow, &mut ctx, &mut runner) {
@@ -1452,10 +1456,14 @@ where
     // отключить reasoning-флаги, тогда конфигурационный кап недействителен.
     let signal_think_budget: Option<usize> = signal_contract.as_ref().map(|contract| {
         agent.think_budget_chars.or_else(|| {
-            auto_think_budget_chars(
+            // Резерв конверта — из КОНТРАКТА (05.11.2026): слоты вердикт-текстов
+            // занимают больше фикс-константы ENVELOPE_TOKENS, и прежняя формула
+            // не оставляла места под них в max_gen_tokens («дума съела конверт»).
+            auto_think_budget_chars_with_envelope(
                 max_gen_tokens,
                 engine.reasoning_budget() as usize,
                 think_slot_count(&contract.value_schema),
+                contract_envelope_tokens(&contract.value_schema),
             )
         })
     }).flatten();
@@ -3951,6 +3959,7 @@ mod tests {
                 request_media: Arc::new(RequestMedia::empty()),
                 image_artifacts: Arc::new(ImageArtifactRegistry::new()),
                 write_outside: crate::infra::WriteOutside::Prompt,
+                tool_write_dir: std::env::temp_dir(),
             };
 
             let mut ctx = WorkflowContext::new(user_text.to_string(), vec![], vec![]);

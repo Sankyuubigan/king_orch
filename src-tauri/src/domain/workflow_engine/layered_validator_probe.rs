@@ -83,8 +83,8 @@ use crate::domain::agent_manager::load_agents;
 use crate::domain::orchestrator::prompt::build_system_prompt;
 use crate::domain::orchestrator::RequestMedia;
 use crate::domain::signals::{
-    build_signal_envelope_grammar_with_think_budget, load_all_signal_contracts,
-    per_draft_budget_chars, required_field_count, SignalContract,
+    build_signal_envelope_grammar_with_think_budget, contract_think_budget,
+    load_all_signal_contracts, required_field_count, SignalContract,
 };
 use crate::infra::config::load_config_early;
 use crate::infra::{load_sampling_presets, ImageArtifactRegistry, ModelParams, SamplingPresets, SubCall, WriteOutside};
@@ -204,7 +204,7 @@ fn prepare_layers(
                 layer.agent
             ));
         }
-        let draft_budget_chars = per_draft_budget_chars(max_gen_tokens, drafts);
+        let draft_budget_chars = contract_think_budget(max_gen_tokens, &contract.value_schema);
         let grammar = build_signal_envelope_grammar_with_think_budget(&contract, draft_budget_chars);
         if draft_budget_chars.is_none() {
             return Err(format!(
@@ -495,6 +495,7 @@ impl FunnelHarness {
             request_media: Arc::new(RequestMedia::empty()),
             image_artifacts: Arc::new(ImageArtifactRegistry::new()),
             write_outside: WriteOutside::Deny,
+            tool_write_dir: std::env::temp_dir(),
         };
         let params = runner.resolve_llm_params(&Some("strict".to_string()), &None, None);
         runner

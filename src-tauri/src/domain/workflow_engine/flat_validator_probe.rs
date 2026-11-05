@@ -11,7 +11,8 @@
 //! Этот стенд — недостающая ячейка. Здесь ровно одна переменная: **число вызовов**.
 //! Всё остальное — критерии (`element_validation_rules.yaml` через `<<INCLUDE>>`),
 //! грамматика (`signals::build_signal_envelope_grammar_with_think_budget`),
-//! функция границы (`signals::per_draft_budget_chars`), модель, семплирование
+//! функция границы (`signals::contract_think_budget` — от резерва контракта),
+//! модель, семплирование
 //! `strict`, боевой гейт `mental_presence` и счёт (`verdict_contract`).
 //!
 //! # Почему не старый стенд плоского Орнита
@@ -26,7 +27,8 @@
 //!
 //! # Две ячейки
 //!
-//! `per_draft_budget_chars(2048, 9)` = **398** символов на черновик против **896**
+//! `contract_think_budget(2048, validator_flat)` = **398** символов на черновик
+//! против **896**
 //! у слоя из четырёх. То есть плоская форма получает втрое меньше места под
 //! размышление не из-за формы, а из-за числа черновиков. Поэтому:
 //!
@@ -75,12 +77,14 @@ use crate::domain::orchestrator::prompt::{build_system_prompt, finalize_system_p
 use crate::domain::orchestrator::RequestMedia;
 use crate::domain::parsers::extract_think_content;
 use crate::domain::signals::{
-    assemble_slot_signal_value, auto_think_budget_chars, build_signal_envelope_grammar_with_think_budget,
-    load_all_signal_contracts, per_draft_budget_chars,
-    slot_min_chars,
+    assemble_slot_signal_value,
+    build_signal_envelope_grammar_with_think_budget, contract_envelope_tokens,
+    contract_think_budget, load_all_signal_contracts, slot_min_chars,
     required_field_count, think_slot_count, SignalContract,
 };
 use crate::infra::config::load_config_early;
+// Формула авто-потолка think с контрактом-резервом — SSOT плагина (инфра-дверь).
+use crate::infra::auto_think_budget_chars_with_envelope;
 use crate::infra::{
     load_sampling_presets, ImageArtifactRegistry, LlmEngine, ModelParams, SamplingPresets, SubCall,
     WriteOutside,
@@ -111,7 +115,7 @@ fn funnel_total_draft_chars(agents_dir: &Path, max_gen_tokens: usize) -> Result<
             .get(&layer.agent)
             .ok_or_else(|| format!("у слоя '{}' нет контракта сигнала", layer.agent))?;
         let drafts = required_field_count(&contract.value_schema);
-        let chars = per_draft_budget_chars(max_gen_tokens, drafts).ok_or_else(|| {
+        let chars = contract_think_budget(max_gen_tokens, &contract.value_schema).ok_or_else(|| {
             format!(
                 "бюджет {} токенов не вмещает ни одного черновика слоя '{}' ({} штук)",
                 max_gen_tokens, layer.agent, drafts
@@ -192,7 +196,7 @@ fn prepare_flat(
 
     let think_budget_chars = match draft_budget_override {
         Some(budget) => budget,
-        None => per_draft_budget_chars(max_gen_tokens, drafts).ok_or_else(|| {
+        None => contract_think_budget(max_gen_tokens, &contract.value_schema).ok_or_else(|| {
             format!(
                 "бюджет генерации {} токенов не вмещает ни одного черновика ({} штук) — \
                  увеличьте max_gen_tokens",
@@ -443,6 +447,7 @@ impl FlatHarness {
             request_media: Arc::new(RequestMedia::empty()),
             image_artifacts: Arc::new(ImageArtifactRegistry::new()),
             write_outside: WriteOutside::Deny,
+            tool_write_dir: std::env::temp_dir(),
         };
         let params = runner.resolve_llm_params(&Some("strict".to_string()), &None, None);
         runner
@@ -490,10 +495,8 @@ fn flat_validator_probe() {
     // `max_gen_tokens` пользователя, F2 — из боевой конфигурации слоёв воронки.
     // Обе величины обязаны меняться вместе с тем, что они описывают.
     let agents_dir = root.join("agents");
-    let flat_elements = required_bool_keys(
-        &flat_contract(&agents_dir).expect("контракт плоского агента читается"),
-    )
-    .expect("контракт обязан содержать булевы поля");
+    let flat = flat_contract(&agents_dir).expect("контракт плоского агента читается");
+    let flat_elements = required_bool_keys(&flat).expect("контракт обязан содержать булевы поля");
     let drafts = flat_elements.len();
     let matched_funnel_chars = funnel_total_draft_chars(&agents_dir, harness.max_gen_tokens)
         .expect("бюджет воронки считается из боевой конфигурации слоёв");
@@ -509,7 +512,7 @@ fn flat_validator_probe() {
          граница F2 = {:?} симв. (выровнено с воронкой: {} симв. суммарно), \
          размышление выключено ##########",
         drafts,
-        per_draft_budget_chars(harness.max_gen_tokens, drafts),
+        contract_think_budget(harness.max_gen_tokens, &flat.value_schema),
         matched_funnel_chars / drafts.max(1),
         matched_funnel_chars,
     );
@@ -680,10 +683,17 @@ fn real_validator_session_case_probe() {
         .cloned()
         .expect("агент 'validator' найден в agents/");
 
-    // Грамматика — ровно боевой путь: авто-потолок от think_slot_count (9 дум-слотов).
+    // Грамматика — ровно боевой путь: авто-потолок от think_slot_count (9
+    // дум-слотов) и РЕЗЕРВА КОНТРАКТА (вердикт-тексты занимают больше
+    // фикс-константы — 05.11.2026).
     let slots = think_slot_count(&contract.value_schema);
-    let think_budget = auto_think_budget_chars(max_gen_tokens, reasoning_budget, slots)
-        .expect("авто-бюджет think считается из конфига");
+    let think_budget = auto_think_budget_chars_with_envelope(
+        max_gen_tokens,
+        reasoning_budget,
+        slots,
+        contract_envelope_tokens(&contract.value_schema),
+    )
+    .expect("авто-бюджет think считается из конфига");
     let grammar = build_signal_envelope_grammar_with_think_budget(&contract, Some(think_budget));
 
     // Жалоба — точный текст msg_0 сессии 1793638300847 (UTF-8 копия в test/).
@@ -762,6 +772,7 @@ fn real_validator_session_case_probe() {
         request_media: Arc::new(RequestMedia::empty()),
         image_artifacts: Arc::new(ImageArtifactRegistry::new()),
         write_outside: WriteOutside::Deny,
+        tool_write_dir: std::env::temp_dir(),
     };
     let params = runner.resolve_llm_params(&Some("strict".to_string()), &None, None);
     let (text, reasoning) = runner
@@ -801,25 +812,31 @@ fn real_validator_session_case_probe() {
         "дум-тел должно быть ровно {} (по одному на e-слот)",
         slots
     );
-    // Вердикты e1..e9 живут ТОЛЬКО в конверте (грамматика форсирует каждый
-    // булев после think-блока) — вердикт-токены в дум-теле не гейтятся: их
-    // туда велел писать только удалённый промптовый костыль «вердикт первой
+    // Вердикты e1..e9 живут ТОЛЬКО в слотах (грамматика форсирует вердикт
+    // после think-блока) — вердикт-токены в дум-теле не гейтятся: их туда
+    // велел писать только удалённый промптовый костыль «вердикт первой
     // строкой». Гейт тел — количество, а не содержимое.
     // Гейт механики 02.11.2026 (зафиксирован ДО прогона): модель
     // классифицирует этажи (`floor0_type`/`floor1_type`); `pattern_type`
     // моделью НЕ выдаётся и в сигнале не появляется — его вычисляет нода
     // `compute_pattern` графа (тул команды compute_pattern_type.ts, покрыт
     // vitest-гейтом test/compute-pattern-type-tool.test.ts и Deno-гейтом
-    // custom_tool::real_deno_compute_pattern_tool_contract). e3 == true —
-    // правильный ответ владельца по этому кейсу. Сцепка этажей — эпистемика
+    // custom_tool::real_deno_compute_pattern_tool_contract). Вердикт-тексты
+    // (05.11.2026): proven = непустая строка (предикат SSOT — is_proven в
+    // compute_pattern_type.ts). e3 proven — правильный ответ владельца по
+    // этому кейсу. Сцепка этажей — эпистемика
     // модели, её качество проба НЕ гейтит (как и нестабильность типа 5/4/4/8
     // в фазе B — вопрос бюджета/модели, выбор владельца). Сигнал сохраняется
     // КАК ВЫДАН — никаких кодовых вставок в движке.
-    let e3 = value.get("e3").and_then(Value::as_bool);
+    let e3 = match value.get("e3") {
+        Some(Value::Bool(b)) => Some(*b),
+        Some(Value::String(s)) => Some(!s.trim().is_empty()),
+        _ => None,
+    };
     assert_eq!(
         e3,
         Some(true),
-        "e3 на этом кейсе обязан быть true (ядро подтверждено владельцем): e3={:?}",
+        "e3 на этом кейсе обязан быть proven (ядро подтверждено владельцем): e3={:?}",
         e3
     );
     let floor0 = value.get("floor0_type").and_then(Value::as_str);
@@ -838,11 +855,12 @@ fn real_validator_session_case_probe() {
     let verdicts: Vec<String> = (1..=slots)
         .map(|n| {
             let key = format!("e{}", n);
-            format!(
-                "e{}={}",
-                n,
-                value.get(&key).and_then(Value::as_bool).unwrap_or(false)
-            )
+            let proven = match value.get(&key) {
+                Some(Value::Bool(b)) => *b,
+                Some(Value::String(s)) => !s.trim().is_empty(),
+                _ => false,
+            };
+            format!("e{}={}", n, proven)
         })
         .collect();
     println!(
@@ -865,7 +883,7 @@ fn write_report(
         "note": "Плоская форма проверки 9 элементов невроза: ОДИН вызов агента \
                  backend/validator_flat.md, девять черновиков по числу обязательных \
                  полей контракта, грамматика — signals::build_signal_envelope_grammar_with_think_budget \
-                 с границей signals::per_draft_budget_chars. Контракт — signals/root.schema.json, \
+                 с границей signals::contract_think_budget. Контракт — signals/root.schema.json, \
                  критерии — element_validation_rules.yaml (те же, что у слоёв воронки). \
                  Маршрут кейса — из боевого гейта mental_presence (артефакт fact_extractor_mental_*.json), \
                  золото для маршрутизации не используется. Ячейки F1 (граница из max_gen_tokens) \
@@ -1075,10 +1093,11 @@ fn prompt_draft_order_matches_contract() {
         );
         // F1 обязан совпасть с границей из `max_gen_tokens` — иначе ячейка «как есть»
         // перестала бы описывать бой.
+        let flat = flat_contract(&dir).expect("контракт плоского агента");
         assert_eq!(
             Some(runtime_f1.think_budget_chars),
-            per_draft_budget_chars(2048, drafts),
-            "F1 обязана быть границей из max_gen_tokens"
+            contract_think_budget(2048, &flat.value_schema),
+            "F1 обязана быть границей из max_gen_tokens (от резерва контракта)"
         );
         // F2 обязана дать плоской форме столько же места, сколько воронка. Сравнение —
         // с точностью до одного черновика: бюджет делится на целое число черновиков,
@@ -1107,8 +1126,9 @@ fn prompt_draft_order_matches_contract() {
         let dir = agents_dir();
         let drafts = prepare_flat(&dir, 2048, None).expect("слой собран").elements.len();
         let matched = funnel_total_draft_chars(&dir, 2048).expect("бюджет воронки посчитан");
+        let flat = flat_contract(&dir).expect("контракт плоского агента");
         for budget in [
-            per_draft_budget_chars(2048, drafts).expect("граница F1"),
+            contract_think_budget(2048, &flat.value_schema).expect("граница F1"),
             matched / drafts,
         ] {
             let runtime =

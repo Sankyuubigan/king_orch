@@ -11,8 +11,10 @@
 //!   (Deno: `Deno.args[0]`), без shell;
 //! - stdout процесса обязан быть JSON-объектом — это `NodeResult.output`,
 //!   доступный шаблонам как `{{ nodes.<id>.output.<key> }}`;
-//! - права Deno минимальны: только `--allow-read` своих папок (папка тула,
-//!   папка графа и корень команды), НЕТ сети/записи/запуска;
+//! - права Deno минимальны: `--allow-read` своих папок (папка тула, папка
+//!   графа и корень команды) + файлы, явно прикреплённые юзером, и запись
+//!   ТОЛЬКО в `tool_write_dir` (`--allow-write=<dir>` + env
+//!   `KO_TOOL_WRITE_DIR` + `--allow-env=KO_TOOL_WRITE_DIR`); НЕТ сети/запуска;
 //! - любой отказ (нет файла, выход за `agents/`, не-JSON stdout, ненулевой
 //!   exit, таймаут) — честная ошибка узла, workflow останавливается;
 //!   пустой/нулевой output «по умолчанию» запрещён.
@@ -80,6 +82,7 @@ where
         &script_path,
         &args_json,
         &attachment_paths,
+        &runner.tool_write_dir,
     )?;
 
     for line in String::from_utf8_lossy(&stderr).lines() {
@@ -124,6 +127,15 @@ where
         started.elapsed().as_millis(),
         dump(&stdout_text)
     ));
+
+    // Самореференс: system_message ноды может ссылаться на собственный output
+    // (`{{ nodes.<own>.output.X }}` — save_neurosis_case печатает кейс-JSON
+    // фенс-блоком в чат). run_workflow вставляет output в node_outputs ПОСЛЕ
+    // execute_node (mod.rs) — вставим здесь заранее, идемпотентно: run_workflow
+    // перезапишет тем же значением.
+    if !node.disabled {
+        context.node_outputs.insert(node.id.clone(), output.clone());
+    }
 
     if node.output_message {
         let attachments = build_attachments(&output, workflow_dir, node.attachments_dir.as_deref())?;
@@ -228,7 +240,8 @@ where
     crate::infra::bin_downloader::ensure_runtime_bin("deno", bins_dir, |msg| log_cb(msg))
 }
 
-/// Запускает one-shot Deno с минимальными правами чтения и дедлайном.
+/// Запускает one-shot Deno с минимальными правами (чтение своих папок +
+/// прикреплённых файлов, запись только в `tool_write_dir`) и дедлайном.
 ///
 /// stdout/stderr читаются фоновыми потоками (зависший тул с переполненным
 /// пайпом не должен упереться в deadlock), главный поток ждёт завершения
@@ -263,6 +276,7 @@ fn run_deno(
     script_path: &Path,
     args_json: &str,
     attachment_paths: &[String],
+    tool_write_dir: &Path,
 ) -> Result<(Vec<u8>, Vec<u8>, std::process::ExitStatus), String> {
     let allow_read = build_allow_read_paths(script_dir, workflow_dir, attachment_paths);
 
@@ -271,6 +285,12 @@ fn run_deno(
         .arg("--no-check")
         .arg("--no-config")
         .arg(format!("--allow-read={}", allow_read.join(",")))
+        // Запись только в vetted-каталог данных приложения (env продублирует
+        // путь в тул: тул строит `<dir>/психо кейсы/<файл>`; --allow-env даёт
+        // тулу прочитать РОВНО эту одну переменную).
+        .arg(format!("--allow-write={}", tool_write_dir.display()))
+        .arg("--allow-env=KO_TOOL_WRITE_DIR")
+        .env("KO_TOOL_WRITE_DIR", tool_write_dir)
         .arg(script_path)
         .arg(args_json)
         .stdin(Stdio::null())
@@ -626,7 +646,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         .expect("скрипт записан");
 
         let (stdout, stderr, status) =
-            run_deno(&deno, &root, &root, &root.join("fixture_tool.ts"), r#"{"n":"2"}"#, &[])
+            run_test_tool(&deno, &root, &root, &root.join("fixture_tool.ts"), r#"{"n":"2"}"#, &[])
                 .expect("тул выполнен");
         assert!(stderr.is_empty(), "stderr: {}", String::from_utf8_lossy(&stderr));
         assert!(status.success(), "exit: {}", status);
@@ -656,7 +676,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         .expect("скрипт записан");
 
         let (stdout, stderr, status) =
-            run_deno(&deno, &root, &root, &root.join("failing_tool.ts"), "{}", &[])
+            run_test_tool(&deno, &root, &root, &root.join("failing_tool.ts"), "{}", &[])
                 .expect("процесс запущен");
         assert!(!status.success());
         assert!(stdout.is_empty());
@@ -671,6 +691,29 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             .parent()
             .expect("корень проекта")
             .to_path_buf()
+    }
+
+    /// Обёртка тестов над run_deno: пишущим тулам выдаётся temp-каталог
+    /// (политика записи 05.11.2026 — тулы пишут ТОЛЬКО в tool_write_dir).
+    fn run_test_tool(
+        deno_path: &Path,
+        script_dir: &Path,
+        workflow_dir: &Path,
+        script_path: &Path,
+        args_json: &str,
+        attachment_paths: &[String],
+    ) -> Result<(Vec<u8>, Vec<u8>, std::process::ExitStatus), String> {
+        let write_dir = std::env::temp_dir().join("king_orch_tool_write_test");
+        std::fs::create_dir_all(&write_dir).expect("write_dir создан");
+        run_deno(
+            deno_path,
+            script_dir,
+            workflow_dir,
+            script_path,
+            args_json,
+            attachment_paths,
+            &write_dir,
+        )
     }
 
     /// gate_cards_json: manifest карт — валидный JSON, ровно 78 записей,
@@ -773,7 +816,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         let deno = resolve_deno(&bins_dir, &log).expect("deno доступен");
         let (tools, transitions, _) = tarot_team_dirs();
 
-        let (stdout, stderr, status) = run_deno(
+        let (stdout, stderr, status) = run_test_tool(
             &deno,
             &tools,
             &transitions,
@@ -817,7 +860,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         let deno = resolve_deno(&bins_dir, &log).expect("deno доступен");
         let (tools, transitions, _) = tarot_team_dirs();
 
-        let (stdout, stderr, status) = run_deno(
+        let (stdout, stderr, status) = run_test_tool(
             &deno,
             &tools,
             &transitions,
@@ -860,7 +903,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         let deno = resolve_deno(&bins_dir, &log).expect("deno доступен");
         let (tools, transitions, _) = tarot_team_dirs();
 
-        let (stdout, stderr, status) = run_deno(
+        let (stdout, stderr, status) = run_test_tool(
             &deno,
             &tools,
             &transitions,
@@ -926,7 +969,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         let deno = resolve_deno(&bins_dir, &log).expect("deno доступен");
         let (tools, transitions, _) = psycho_dirs();
 
-        let (stdout, stderr, status) = run_deno(
+        let (stdout, stderr, status) = run_test_tool(
             &deno,
             &tools,
             &transitions,
@@ -959,7 +1002,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         let deno = resolve_deno(&bins_dir, &log).expect("deno доступен");
         let (tools, transitions, _) = psycho_dirs();
 
-        let (stdout, stderr, status) = run_deno(
+        let (stdout, stderr, status) = run_test_tool(
             &deno,
             &tools,
             &transitions,
@@ -987,7 +1030,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         let deno = resolve_deno(&bins_dir, &log).expect("deno доступен");
         let (tools, transitions, _) = psycho_dirs();
 
-        let (stdout, stderr, status) = run_deno(
+        let (stdout, stderr, status) = run_test_tool(
             &deno,
             &tools,
             &transitions,
@@ -1023,7 +1066,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         let tools = team.join("tools");
         let run = |report: &str| -> (Vec<u8>, Vec<u8>, std::process::ExitStatus) {
             let args = serde_json::json!({ "report": report }).to_string();
-            run_deno(
+            run_test_tool(
                 &deno,
                 &tools,
                 &transitions,
@@ -1036,14 +1079,23 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
 
         // Валидные цепи: (1,7) -> 5; (3,6) -> 9 (тип 3 на Этаже 0 валиден —
         // множества {1,4,7}/{3,6,9} в SSOT — элементы этажей, не типы).
-        for (report, expected) in [
+        // Третий кейс — вердикт-тексты (05.11.2026): is_proven принимает
+        // непустые строки; surface_proven собирается из e1,e2,e6,e7.
+        for (report, expected, expected_surface) in [
             (
                 r#"{"e3":true,"e6":true,"e8":true,"e9":true,"floor0_type":"1","floor1_type":"7"}"#,
                 "5",
+                false,
             ),
             (
                 r#"{"e3":true,"e6":true,"e8":true,"e9":true,"floor0_type":"3","floor1_type":"6"}"#,
                 "9",
+                false,
+            ),
+            (
+                r#"{"e1":"спазм лба и висков","e2":"замираю перед звонком","e3":"дыра: страх отвержения","e6":"триггер: замечание начальника","e7":"волна стыда","e8":"идол: чужое одобрение","e9":"дыра: «я недостаточен»","floor0_type":"3","floor1_type":"6"}"#,
+                "9",
+                true,
             ),
         ] {
             let (stdout, stderr, status) = run(report);
@@ -1052,6 +1104,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
                 serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
             assert_eq!(output["pattern_type"], expected, "цепь {}", report);
             assert_eq!(output["pattern_found"], true, "цепь {}", report);
+            assert_eq!(output["surface_proven"], expected_surface, "цепь {}", report);
             assert_eq!(output["reason"], "SAFETY-сцепка этажей сходится");
         }
 
@@ -1096,6 +1149,143 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
                 "reason объясняет отказ ({}): {}",
                 reason_part,
                 output["reason"]
+            );
+        }
+    }
+
+    /// gate_tool_contract (реальный Deno): тул сохранения кейса психотерапевта
+    /// (05.11.2026, замена удалённого агента case_packer) — эталонная триада
+    /// 6→9→3: РОВНО 13 полей в каноническом порядке (target, core_type,
+    /// floor1_type, floor0_type, e1..e9), этажи — ЧИСЛА (сигнал отдаёт
+    /// строками), e-поля — вердикт-тексты|false; never-overwrite (идентичное →
+    /// skip, изменённое → ревизия « (2)»); честные отказы на мусорной форме.
+    #[test]
+    #[ignore]
+    fn real_deno_save_neurosis_case_contract() {
+        let log = |msg: String| println!("[log] {}", msg);
+        let bins_dir = std::env::temp_dir().join("king_orch_bins");
+        std::fs::create_dir_all(&bins_dir).expect("создано");
+        let deno = resolve_deno(&bins_dir, &log).expect("deno доступен");
+        let (_, transitions, team) = psycho_dirs();
+        let tools = team.join("tools");
+
+        // Тул пишет через env KO_TOOL_WRITE_DIR (ставит run_deno) в каталог
+        // обёртки тестов; чистим психо-подкаталог для детерминизма прогона.
+        let cases_dir = std::env::temp_dir()
+            .join("king_orch_tool_write_test")
+            .join("психо кейсы");
+        let _ = std::fs::remove_dir_all(&cases_dir);
+
+        let report = r#"{"e1":"Тупик: «помню = контролирую», давит «надо»","e2":"Заморозка важных дел, 60 вкладок, уход в сонливость","e3":"«Я будто НЕ СУЩЕСТВУЮ в этом мире»","e4":"Держусь, пока всё под контролем","e5":"Мне нельзя в нудную тяжесть без гарантии легкости","e6":"Медленные «жирные» задачи, остановка прогресса","e7":"Хронические сомнения и упадок сил","e8":"Важные дела — вязкое болото, высосет силы","e9":"Успеть получить опыт как доказательство жизни","floor0_type":"6","floor1_type":"9","target":"Спазм лба и висков + Заморозка важных дел"}"#;
+        let args = serde_json::json!({ "report": report, "core_type": "3" }).to_string();
+        let run = |args: &str| {
+            run_test_tool(
+                &deno,
+                &tools,
+                &transitions,
+                &tools.join("save_neurosis_case.ts"),
+                args,
+                &[],
+            )
+            .expect("тул выполнен")
+        };
+
+        // 1-й прогон: файл создаётся, форма эталонная.
+        let (stdout, stderr, status) = run(&args);
+        assert!(
+            status.success(),
+            "exit: {}, stderr: {}",
+            status,
+            String::from_utf8_lossy(&stderr)
+        );
+        let output: serde_json::Value =
+            serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
+        let case = &output["case_json"];
+        assert_eq!(case["target"], "Спазм лба и висков + Заморозка важных дел");
+        // Числа, не строки: визуализация и каталог «<core>тип - …» ждут int.
+        assert_eq!(case["core_type"], 3);
+        assert_eq!(case["floor1_type"], 9);
+        assert_eq!(case["floor0_type"], 6);
+        for key in ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9"] {
+            assert!(
+                case[key].is_string() || case[key] == "false",
+                "{} — вердикт-текст или false, получено {}",
+                key,
+                case[key]
+            );
+        }
+        assert_eq!(output["is_new"], true);
+        assert_eq!(
+            output["file_name"],
+            "3тип - Спазм лба и висков + Заморозка важных дел.json"
+        );
+        let saved_path = output["saved_path"].as_str().expect("saved_path");
+        let text = std::fs::read_to_string(saved_path).expect("файл кейса читается");
+        // Канонический порядок полей эталона (одно поле на строку).
+        let mut pos = 0usize;
+        for key in [
+            "\"target\"", "\"core_type\"", "\"floor1_type\"", "\"floor0_type\"",
+            "\"e1\"", "\"e2\"", "\"e3\"", "\"e4\"", "\"e5\"", "\"e6\"", "\"e7\"",
+            "\"e8\"", "\"e9\"",
+        ] {
+            let found = text[pos..].find(key).expect("ключ в файле") + pos;
+            assert!(found >= pos, "порядок полей нарушен на {}", key);
+            pos = found;
+        }
+
+        // 2-й прогон (идентичное) → skip, файл не плодится.
+        let (stdout, _, status) = run(&args);
+        assert!(status.success());
+        let output: serde_json::Value =
+            serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
+        assert_eq!(output["is_new"], false, "идентичный кейс — skip");
+        assert_eq!(output["saved_path"], output["saved_path"]);
+
+        // 3-й прогон (юзер уточнил данные) → ревизия « (2)», оригинал не тронут.
+        let revised = report.replace("60 вкладок", "70 вкладок");
+        let args2 = serde_json::json!({ "report": revised, "core_type": "3" }).to_string();
+        let (stdout, _, status) = run(&args2);
+        assert!(status.success());
+        let output: serde_json::Value =
+            serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
+        assert_eq!(output["is_new"], true, "изменённое содержимое — новая ревизия");
+        let revised_path = output["saved_path"].as_str().expect("saved_path");
+        assert!(
+            revised_path.ends_with(" (2).json"),
+            "ревизия: {}",
+            revised_path
+        );
+        assert!(std::path::Path::new(saved_path).is_file(), "оригинал не перезаписан");
+
+        // Честные отказы: мусорная форма → exit≠0 и объяснение в stderr.
+        for (bad_args, reason_part) in [
+            (r#"{"core_type":"3"}"#.to_string(), "report"),
+            (r#"{"report":"не json","core_type":"3"}"#.to_string(), "JSON"),
+            (
+                serde_json::json!({ "report": report, "core_type": "none" }).to_string(),
+                "мусор вместо цифры",
+            ),
+            (
+                serde_json::json!({ "report": report.replace("\"target\":\"Спазм лба и висков + Заморозка важных дел\"", "\"target\":\"\""), "core_type": "3" }).to_string(),
+                "target",
+            ),
+            (
+                serde_json::json!({ "report": report.replace("\"e5\":\"Мне нельзя в нудную тяжесть без гарантии легкости\",", ""), "core_type": "3" }).to_string(),
+                "e5",
+            ),
+        ] {
+            let (stdout, stderr, status) = run(&bad_args);
+            assert!(
+                !status.success(),
+                "мусорная форма обязана дать exit≠0: {}",
+                bad_args
+            );
+            assert!(stdout.is_empty(), "ошибочный тул не пишет stdout");
+            assert!(
+                String::from_utf8_lossy(&stderr).contains(reason_part),
+                "stderr объясняет отказ ({}): {}",
+                reason_part,
+                String::from_utf8_lossy(&stderr)
             );
         }
     }
@@ -1152,7 +1342,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         )
         .expect("тул-проба записан");
 
-        let result = run_deno(
+        let result = run_test_tool(
             &deno,
             &tools,
             &transitions,
@@ -1167,7 +1357,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         assert_eq!(output["read"], "jhd-probe-ok");
 
         // Контроль честности: БЕЗ allow-read на вложение тот же тул обязан упасть.
-        let denied = run_deno(
+        let denied = run_test_tool(
             &deno,
             &tools,
             &transitions,

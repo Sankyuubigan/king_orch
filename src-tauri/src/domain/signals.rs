@@ -212,7 +212,7 @@ pub fn build_signal_envelope_grammar_with_think_budget(
     if let Some(plan) = slot_verdict_plan(schema) {
         let body = &draft_rule["draft ::= ".len()..];
         let mut rule = String::from("root ::= drafts-block\ndrafts-block ::=");
-        for k in 1..=plan.e_pairs.len() {
+        for k in 1..=plan.e_slots.len() {
             if k > 1 {
                 rule.push_str(" sp");
             }
@@ -221,16 +221,22 @@ pub fn build_signal_envelope_grammar_with_think_budget(
         for t in 0..plan.trailing.len() {
             rule.push_str(&format!(" sp trail-{}", t));
         }
-        for ((label, key), idx) in plan.e_pairs.iter().zip(1..=plan.e_pairs.len()) {
+        let mut needs_string_rules = false;
+        for ((label, key, verdict_cap), idx) in plan.e_slots.iter().zip(1..=plan.e_slots.len()) {
             // Литерал вердикта собран так, чтобы кавычки внутри него остались
             // экранированными В ГРАММАТИКЕ (форма `\"e1\": `), — как и все
             // кавычки-литералы этого файла.
+            let value_rule = if verdict_cap.is_some() {
+                needs_string_rules = true;
+                format!("verdict-value-{}", idx)
+            } else {
+                "bool".to_string()
+            };
             rule.push_str(&format!(
-                "\ndraft-{} ::= \"{}\" {} \"\\\"{}\\\": \" bool",
-                idx, label, body, key
+                "\ndraft-{} ::= \"{}\" {} \"\\\"{}\\\": \" {}",
+                idx, label, body, key, value_rule
             ));
         }
-        let mut needs_string_rules = false;
         for (idx, (label, key)) in plan.trailing.iter().enumerate() {
             // Значение финального слота: перечисление из enum схемы (SSOT —
             // литералы не переписываются руками), без enum — свободная
@@ -269,6 +275,19 @@ pub fn build_signal_envelope_grammar_with_think_budget(
             crate::infra::THINK_BODY_RULE,
             "bool ::= \"true\" | \"false\""
         ));
+        // Вердикт-тексты (05.11.2026): строка ограничена maxLength СХЕМЫ
+        // (бюджет конверта зашит в формат, §00.2), класс символов — канонический
+        // `string-char` плагина (raw «<» запрещён — легитимный «<» выпускается
+        // как `\u003c` и декодируется сборке); альтернатива `false` — при
+        // непрошедшем критерии элемента.
+        for ((_, key, verdict_cap), idx) in plan.e_slots.iter().zip(1..=plan.e_slots.len()) {
+            if let Some(cap) = verdict_cap {
+                rule.push_str(&format!(
+                    "\nverdict-value-{idx} ::= verdict-string-{idx} | \"false\"\n\
+                     verdict-string-{idx} ::= \"\\\"\" string-char{{1,{cap}}} \"\\\"\"",
+                ));
+            }
+        }
         if needs_string_rules {
             rule.push('\n');
             rule.push_str(&crate::infra::strict_json_string_rules());
@@ -358,7 +377,7 @@ pub fn draft_count_for_contract(schema: &serde_json::Value) -> usize {
 /// всем элементам без причины. Для неслотовых контрактов — [`draft_count_for_contract`].
 pub fn think_slot_count(schema: &serde_json::Value) -> usize {
     slot_verdict_plan(schema)
-        .map(|p| p.e_pairs.len().max(1))
+        .map(|p| p.e_slots.len().max(1))
         .unwrap_or_else(|| draft_count_for_contract(schema))
 }
 
@@ -369,8 +388,8 @@ pub fn think_slot_count(schema: &serde_json::Value) -> usize {
 /// где N — номер из имени e-поля (слои воронки наследуют те же якоря: у
 /// `validator_surface` required = e1,e2,e6,e7 → слоты Element 1/2/6/7).
 /// Финальные строковые слоты (без дум-тела) в списке якорей НЕ участвуют —
-/// у валидатора (9 e-пар + `floor0_type`/`floor1_type`) якорей 9 при 11
-/// слотах. Поля другого вида
+/// у валидатора (9 e-слотов + `floor0_type`/`floor1_type`/`target`) якорей
+/// 9 при 12 слотах. Поля другого вида
 /// (`idol`, enum-строки, pattern) — прежний свободный черновик (`None`):
 /// им текстуальный якорь не соответствует по смыслу.
 ///
@@ -378,17 +397,54 @@ pub fn think_slot_count(schema: &serde_json::Value) -> usize {
 /// если оно совпадает с планом схемы.
 pub fn slot_anchor_labels(schema: &serde_json::Value, drafts: usize) -> Option<Vec<String>> {
     let plan = slot_verdict_plan(schema)?;
-    if plan.e_pairs.len() + plan.trailing.len() != drafts {
+    if plan.e_slots.len() + plan.trailing.len() != drafts {
         return None;
     }
-    Some(plan.e_pairs.into_iter().map(|(l, _)| l).collect())
+    Some(plan.e_slots.into_iter().map(|(l, _, _)| l).collect())
 }
 
-/// План слотовых вердиктов (Вариант B): think-слоты с булевыми вердиктами
+/// Форма e-поля схемы: булев вердикт или вердикт-текст — union
+/// `anyOf: [string{1..maxLength}, const false]` (05.11.2026: слот пишет,
+/// ЧТО именно определено, 1-2 предложения; `false` остаётся при непрошедшем
+/// критерии). Без `maxLength` у строковой ветки форма не ограничена схемой —
+/// план не строится (честное падение в конвертный путь), а не безлимит.
+#[derive(Debug, PartialEq)]
+enum EFieldKind {
+    Bool,
+    Union { max_chars: usize },
+}
+
+fn e_field_kind(prop: &Value) -> Option<EFieldKind> {
+    if prop.get("type").and_then(Value::as_str) == Some("boolean") {
+        return Some(EFieldKind::Bool);
+    }
+    let variants = prop.get("anyOf")?.as_array()?;
+    let mut has_string = false;
+    let mut has_false = false;
+    let mut max_chars = None;
+    for v in variants {
+        if v.get("const").and_then(Value::as_bool) == Some(false) {
+            has_false = true;
+        } else if v.get("type").and_then(Value::as_str) == Some("string") {
+            has_string = true;
+            max_chars = v.get("maxLength").and_then(Value::as_u64);
+        }
+    }
+    match (has_string, has_false, max_chars) {
+        (true, true, Some(n)) if n > 0 => Some(EFieldKind::Union {
+            max_chars: n as usize,
+        }),
+        _ => None,
+    }
+}
+
+/// План слотовых вердиктов (Вариант B): think-слоты с вердиктами
 /// плюс опциональные финальные строковые слоты без дум-тела.
 struct SlotPlan {
-    /// (метка якоря `Element N: `, ключ вердикта `eN`) — think-слоты.
-    e_pairs: Vec<(String, String)>,
+    /// (метка якоря `Element N: `, ключ вердикта `eN`, форма вердикта:
+    /// `None` — булев, `Some(cap)` — вердикт-текст до `cap` символов) —
+    /// think-слоты.
+    e_slots: Vec<(String, String, Option<usize>)>,
     /// (человеческая метка `Floor0 type: `, ключ `floor0_type`) — финальные
     /// строковые слоты.
     trailing: Vec<(String, String)>,
@@ -396,10 +452,11 @@ struct SlotPlan {
 
 /// План слотов для схемы контракта — общая основа якорей слотов, Варианта B
 /// (вердикт внутри слота) и сборки значения. План существует только если:
-/// - `required` непуст, а поля контракта есть в `properties` с типом;
-/// - e-поля (`e<N>`, boolean) идут ПЕРВЫМИ, без перемешивания со строковыми;
-/// - после них — финальные поля типа string (`floor0_type`/`floor1_type`
-///   у валидатора);
+/// - `required` непуст, а поля контракта есть в `properties`;
+/// - e-поля (`e<N>`; булевы или вердикт-тексты — [`EFieldKind`]) идут ПЕРВЫМИ,
+///   без перемешивания со строковыми;
+/// - после них — финальные поля типа string (`floor0_type`/`floor1_type`/
+///   `target` у валидатора);
 /// - хотя бы одно e-поле есть (иначе контракт не слотовый).
 ///
 /// Ключ вердикта think-слота k — само имя k-го e-поля (SSOT: и якорь, и
@@ -410,35 +467,38 @@ fn slot_verdict_plan(schema: &serde_json::Value) -> Option<SlotPlan> {
         return None;
     }
     let props = schema.get("properties")?;
-    let mut e_pairs: Vec<(String, String)> = Vec::new();
+    let mut e_slots: Vec<(String, String, Option<usize>)> = Vec::new();
     let mut trailing: Vec<(String, String)> = Vec::new();
     for field in required {
         let name = field.as_str()?;
-        let field_type = props
-            .get(name)
-            .and_then(|ps| ps.get("type"))
-            .and_then(Value::as_str);
-        let is_e_bool = field_type == Some("boolean") && name.starts_with('e');
-        if trailing.is_empty() && is_e_bool {
+        let prop = props.get(name)?;
+        let kind = e_field_kind(prop);
+        if trailing.is_empty() && name.starts_with('e') {
+            // e-слот: булев или вердикт-текст; прочая форма — не слотовый план.
+            let verdict_cap = match kind {
+                Some(EFieldKind::Bool) => None,
+                Some(EFieldKind::Union { max_chars }) => Some(max_chars),
+                None => return None,
+            };
             // e-слот: имя = ровно "e" + цифры (дублируют якорь Element N).
             let digits: String = name.chars().filter(|c| c.is_ascii_digit()).collect();
             if digits.is_empty() || digits.len() != name.chars().count().saturating_sub(1) {
                 return None;
             }
-            e_pairs.push((format!("Element {}: ", digits), name.to_string()));
+            e_slots.push((format!("Element {}: ", digits), name.to_string(), verdict_cap));
         } else {
             // Финальный слот: только string-поля ПОСЛЕ всех e-полей. Не-e
             // boolean (или e-поле после строкового) — не слотовый план.
-            if field_type != Some("string") {
+            if prop.get("type").and_then(Value::as_str) != Some("string") {
                 return None;
             }
             trailing.push((slot_label_for_field(name), name.to_string()));
         }
     }
-    if e_pairs.is_empty() {
+    if e_slots.is_empty() {
         return None;
     }
-    Some(SlotPlan { e_pairs, trailing })
+    Some(SlotPlan { e_slots, trailing })
 }
 
 /// Человеческая метка финального слота из имени поля: `floor0_type` →
@@ -462,9 +522,10 @@ fn slot_label_for_field(name: &str) -> String {
 }
 
 /// Является ли контракт контрактом **слотовых вердиктов** (Вариант B):
-/// e-поля boolean (вердикты ВНУТРИ think-слотов, конверт булей не существует)
-/// плюс допустимые финальные строковые слоты (напр. `pattern_type`). Форму
-/// задаёт [`slot_verdict_plan`] — единственный источник этой классификации.
+/// e-поля (булевы или вердикт-тексты; вердикты ВНУТРИ think-слотов, конверт
+/// булей не существует) плюс допустимые финальные строковые слоты (напр.
+/// `floor0_type`). Форму задаёт [`slot_verdict_plan`] — единственный источник
+/// этой классификации.
 pub fn is_slot_verdict_contract(schema: &serde_json::Value) -> bool {
     slot_verdict_plan(schema).is_some()
 }
@@ -488,9 +549,15 @@ pub fn build_cloud_signal_prompt_block(contract: &SignalContract) -> String {
              поэтому твой ответ обязан закончиться слотовыми вердиктами в строгом формате — \
              сигнал соберётся из слотов автоматически, инструмент emit_signal вызывать НЕ нужно:\n",
         );
-        for (label, key) in &plan.e_pairs {
+        for (label, key, verdict_cap) in &plan.e_slots {
+            let verdict = match verdict_cap {
+                Some(cap) => format!(
+                    "`\"{key}\": \"вердикт: что именно определено (до {cap} символов)\"` или `\"{key}\": false`"
+                ),
+                None => format!("`\"{key}\": true` или `\"{key}\": false`"),
+            };
             block.push_str(&format!(
-                "- строка-якорь `{label}`, затем размышление, затем вердикт `\"{key}\": true` или `\"{key}\": false`.\n"
+                "- строка-якорь `{label}`, затем размышление, затем вердикт {verdict}.\n"
             ));
         }
         for (label, key) in &plan.trailing {
@@ -572,7 +639,12 @@ fn describe_value_schema(schema: &Value) -> String {
                 .unwrap_or_default();
             if let Some(props) = schema.get("properties").and_then(Value::as_object) {
                 for (name, ps) in props {
-                    let ptype = ps.get("type").and_then(Value::as_str).unwrap_or("any");
+                    let ptype = match e_field_kind(ps) {
+                        Some(EFieldKind::Union { max_chars }) => {
+                            format!("вердикт-текст до {max_chars} симв | false")
+                        }
+                        _ => ps.get("type").and_then(Value::as_str).unwrap_or("any").to_string(),
+                    };
                     let enum_note = ps
                         .get("enum")
                         .and_then(Value::as_array)
@@ -718,6 +790,74 @@ pub fn per_draft_budget_chars(max_gen_tokens: usize, drafts: usize) -> Option<us
     auto_think_budget_chars(max_gen_tokens, 0, drafts)
 }
 
+/// Резерв конверта/слотов контракта в ТОКЕНАХ — вход формулы авто-потолка
+/// think. До 05.11.2026 резервом служила фиксированная константа
+/// ENVELOPE_TOKENS=256; контракт валидатора с вердикт-текстами (9 слотов до
+/// 200 симв + target до 160) занимает заметно больше, и фиксированная
+/// константа занижала резерв: потолки думы не учитывали место под слоты
+/// (механический отказ «дума съела конверт» при заполнении по грамматике).
+///
+/// Оценка — худший case СЛОТОВОГО контракта: Σ(метка якоря + `"ключ": ` +
+/// вердикт максимальной формы) по всем слотам плана плюс структурный запас
+/// на разделители; результат в токенах (CHARS_PER_TOKEN). Неслотовый
+/// контракт — прежняя константа (поведение без изменений). Формула
+/// консервативна в бОльшую сторону — перебор резерва лишь занижает потолок
+/// думы (не отказ), недобор создаёт непроходимый формат.
+pub fn contract_envelope_tokens(schema: &serde_json::Value) -> usize {
+    let Some(plan) = slot_verdict_plan(schema) else {
+        return crate::infra::ENVELOPE_TOKENS;
+    };
+    let mut chars = 128usize; // sp-разделители, кавычки, структурный запас
+    for (label, key, verdict_cap) in &plan.e_slots {
+        chars += label.chars().count();
+        chars += key.chars().count() + 5; // `"ключ": ` — кавычки, двоеточие, пробел
+        chars += match verdict_cap {
+            Some(cap) => cap + 2, // кавычки вердикт-текста
+            None => 5,            // «false»/«true»
+        };
+    }
+    for (label, key) in &plan.trailing {
+        chars += label.chars().count();
+        chars += key.chars().count() + 5;
+        // Значение финального слота: enum — самый длинный литерал, свободная
+        // строка — maxLength схемы, без него — константа резерва (честный
+        // консервативный дефолт для свободных строк без объявленной длины).
+        let prop = schema.get("properties").and_then(|p| p.get(key.as_str()));
+        let value_cap = prop
+            .and_then(|ps| ps.get("enum"))
+            .and_then(Value::as_array)
+            .map(|vals| {
+                vals.iter()
+                    .filter_map(Value::as_str)
+                    .map(|v| v.chars().count())
+                    .max()
+                    .unwrap_or(0)
+            })
+            .or_else(|| {
+                prop.and_then(|ps| ps.get("maxLength"))
+                    .and_then(Value::as_u64)
+                    .map(|n| n as usize)
+            })
+            .unwrap_or(crate::infra::ENVELOPE_TOKENS);
+        chars += 2 + value_cap;
+    }
+    (chars / crate::infra::CHARS_PER_TOKEN).max(crate::infra::ENVELOPE_TOKENS)
+}
+
+/// Авто-потолок ОДНОГО дум-слота для боевого прогона от контракта: формула
+/// плагина ([`crate::infra::auto_think_budget_chars_with_envelope`]) от
+/// бюджета генерации и РЕЗЕРВА КОНТРАКТА ([`contract_envelope_tokens`]) —
+/// место под слоты вычитается из бюджета ДО деления на дум-слоты. Заменяет
+/// вызовы `per_draft_budget_chars` там, где есть схема контракта.
+pub fn contract_think_budget(max_gen_tokens: usize, schema: &serde_json::Value) -> Option<usize> {
+    crate::infra::auto_think_budget_chars_with_envelope(
+        max_gen_tokens,
+        0,
+        think_slot_count(schema),
+        contract_envelope_tokens(schema),
+    )
+}
+
 /// Авто-потолок ОДНОГО черновика для боевого прогона (frontmatter агента без
 /// `think_budget:`).
 ///
@@ -823,40 +963,42 @@ fn build_value_grammar(schema: &serde_json::Value) -> String {
                 })
                 .unwrap_or_default();
 
-            let mut fields: Vec<String> = Vec::new();
-            for (name, pschema) in props {
-                let typ = pschema.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                let value_rule = match typ {
-                    "boolean" => "bool".to_string(),
-                    "string" => "json-string".to_string(),
-                    "number" | "integer" => "json-number".to_string(),
-                    _ => "json-string".to_string(),
-                };
-                fields.push(format!(
-                    "\"\\\"{}\\\"\" sp \":\" sp {}",
-                    name, value_rule
-                ));
-            }
+            let mut needs_verdict_rule = false;
+            let mut value_rule_for = |pschema: &Value| -> String {
+                match e_field_kind(pschema) {
+                    // Вердикт-union (строка | false, 05.11.2026): JSON-only
+                    // retry тоже обязан выпускать `false` при непрошедшем
+                    // критерии — чистый json-string запретил бы легитимную
+                    // альтернативу и порождал бы неразрешимый ретрай.
+                    Some(EFieldKind::Union { .. }) => {
+                        needs_verdict_rule = true;
+                        "verdict-json".to_string()
+                    }
+                    _ => match pschema.get("type").and_then(|t| t.as_str()) {
+                        Some("boolean") => "bool".to_string(),
+                        Some("string") => "json-string".to_string(),
+                        Some("number") | Some("integer") => "json-number".to_string(),
+                        _ => "json-string".to_string(),
+                    },
+                }
+            };
 
             // Обязательные ключи через запятую, опциональные — не включаем
             // (генерируем строго фиксированный порядок для required)
             let required_fields: Vec<String> = props
                 .keys()
                 .filter(|k| required_set.contains(*k))
-                .map(|k| {
-                    let pschema = &props[k];
-                    let typ = pschema.get("type").and_then(|t| t.as_str()).unwrap_or("");
-                    let value_rule = match typ {
-                        "boolean" => "bool".to_string(),
-                        "string" => "json-string".to_string(),
-                        "number" | "integer" => "json-number".to_string(),
-                        _ => "json-string".to_string(),
-                    };
-                    format!("\"\\\"{}\\\"\" sp \":\" sp {}", k, value_rule)
-                })
+                .map(|k| format!("\"\\\"{}\\\"\" sp \":\" sp {}", k, value_rule_for(&props[k])))
                 .collect();
 
-            return format!("value-field ::= \"{{\" sp {} sp \"}}\"", required_fields.join(" \",\" sp "));
+            let mut out = format!(
+                "value-field ::= \"{{\" sp {} sp \"}}\"",
+                required_fields.join(" \",\" sp ")
+            );
+            if needs_verdict_rule {
+                out.push_str("\nverdict-json ::= json-string | \"false\"");
+            }
+            return out;
         }
     }
 
@@ -897,10 +1039,31 @@ pub fn validate_signal_value(contract: &SignalContract, value: &Value) -> Result
             } else {
                 Vec::new()
             };
+        let props = schema.get("properties").and_then(Value::as_object);
         let mut missing: Vec<String> = Vec::new();
         for pname in &required_fields {
             if value.get(pname).is_none() {
                 missing.push(pname.clone());
+                continue;
+            }
+            // Вердикт-union (e-поле anyOf [string, false], 05.11.2026):
+            // значение обязано быть непустой строкой-вердиктом или `false`.
+            // Число/null/пустая строка — порча формы: честная ошибка эмиттеру
+            // на retry вместо тихого мусора downstream.
+            if let Some(ps) = props.as_ref().and_then(|p| p.get(pname.as_str())) {
+                if matches!(e_field_kind(ps), Some(EFieldKind::Union { .. })) {
+                    let shape_ok = match value.get(pname) {
+                        Some(Value::Bool(_)) => true,
+                        Some(Value::String(s)) => !s.trim().is_empty(),
+                        _ => false,
+                    };
+                    if !shape_ok {
+                        return Err(format!(
+                            "Ошибка: поле '{}' контракта '{}' должно быть вердикт-текстом (непустая строка) или false. Исправь и вызови СНОВА.",
+                            pname, contract.key
+                        ));
+                    }
+                }
             }
         }
         if !missing.is_empty() {
@@ -990,58 +1153,101 @@ pub fn extract_signal_value_from_text(contract: &SignalContract, text: &str) -> 
 }
 
 /// Вариант B: собирает значение слотового контракта из **слотовых вердиктов** —
-/// пар `"e<N>": true|false`, которыми заканчивается каждый think-слот, плюс
-/// строковых вердиктов финальных слотов (`"pattern_type": "…"`) —
+/// пар `"e<N>": <вердикт>`, которыми заканчивается каждый think-слот, плюс
+/// строковых вердиктов финальных слотов (`"floor0_type": "…"`) —
 /// см. [`slot_verdict_plan`].
 ///
 /// SSOT: слоты — единственный источник вердикта; конверта для таких
-/// контрактов не существует (грамматика его не выпускает). Для каждого
-/// e-поля берётся ПЕРВОЕ вхождение `"ключ": true|false` в тексте; для
-/// финального поля — вхождение ПОСЛЕ якоря его метки (дум-тела, цитирующие
-/// формат `"pattern_type": "…"`, не должны перехватывать парсер).
-/// Грамматика гарантирует ровно одно вхождение на ключ (слоты идут по
-/// элементам без повторов). Если хоть один ключ не найден — `None`: сигнал
-/// не собран, и штатные ретраи формата работают как раньше.
+/// контрактов не существует (грамматика его не выпускает). Сборка
+/// ПРОГРЕССИРУЮЩИМ курсором (05.11.2026): метка слота ищется только ПОСЛЕ
+/// вердикта предыдущего, поэтому цитата формата в дум-теле (раньше — риск
+/// перехвата у глобального скана) не может стать якорем или вердиктом.
+/// Дума собственного слота исключается якорем `</think>`: тело думы
+/// запрещает `</think` ([`crate::infra::THINK_BODY_RULE`]), поэтому первое
+/// закрытие после метки — конец думы этого слота, вердикт ищется за ним.
+/// У облачных ответов think-тегов нет — вердикт ищется прямо от метки.
+/// Если хоть один слот не собран — `None`: сигнал не собран, и штатные
+/// ретраи формата работают как раньше.
 pub fn assemble_slot_signal_value(schema: &Value, text: &str) -> Option<Value> {
     let plan = slot_verdict_plan(schema)?;
     let mut obj = serde_json::Map::new();
-    for (_, key) in &plan.e_pairs {
-        let b = find_bool_after_key(text, key)?;
-        obj.insert(key.clone(), Value::Bool(b));
+    let mut cursor = 0usize;
+    for (label, key, verdict_cap) in &plan.e_slots {
+        let label_pos = text[cursor..].find(label.as_str())? + cursor;
+        let after_label = label_pos + label.len();
+        // Якорь вердикта: конец думы слота (грамматика) или сама метка (облако).
+        let anchor = match text[after_label..].find("</think>") {
+            Some(rel) => after_label + rel + "</think>".len(),
+            None => after_label,
+        };
+        let (verdict, past_key) = find_verdict_from(text, anchor, key, verdict_cap.is_some())?;
+        obj.insert(key.clone(), verdict.into_value());
+        cursor = past_key;
     }
     for (label, key) in &plan.trailing {
-        let tail = text
-            .rfind(label.as_str())
-            .map(|pos| &text[pos..])
-            .unwrap_or(text);
-        let s = find_string_after_key(tail, key)?;
-        obj.insert(key.clone(), Value::String(s));
+        let label_pos = text[cursor..].find(label.as_str())? + cursor;
+        let after_label = label_pos + label.len();
+        let (verdict, past_key) = find_verdict_from(text, after_label, key, true)?;
+        obj.insert(key.clone(), verdict.into_value());
+        cursor = past_key;
     }
     Some(Value::Object(obj))
 }
 
-/// Первое `"ключ": true|false` в тексте после указанной позиции ключа.
-/// Сканирует все вхождения литерала `"ключ"`, за каждым — двоеточие и
-/// литерал буля; вхождения без буля после двоеточия пропускаются (модельный
-/// текст мог упомянуть ключ в мысли), продолжение идентификатора после
-/// `true`/`false` отбраковывается (защита от `trueish`).
-fn find_bool_after_key(text: &str, key: &str) -> Option<bool> {
+/// Форма вердикта e-поля: булев литерал или вердикт-текст (union
+/// `string|false` из схемы; у булевых слотов текст не допускается).
+enum Verdict {
+    Bool(bool),
+    Text(String),
+}
+
+impl Verdict {
+    fn into_value(self) -> Value {
+        match self {
+            Verdict::Bool(b) => Value::Bool(b),
+            Verdict::Text(s) => Value::String(s),
+        }
+    }
+}
+
+/// Первое `"ключ": <вердикт>` в тексте с позиции `from` (байтовое смещение).
+/// Возвращает значение и позицию ЗА литералом ключа — прогрессирующий курсор
+/// сборки продолжает поиск следующего слота отсюда, чтобы цитаты формата в
+/// дум-теле не находились повторно. Вхождения без вердикта после двоеточия
+/// пропускаются (модельный текст мог упомянуть ключ в мысли);
+/// продолжение идентификатора после `true`/`false` отбраковывается
+/// (защита от `trueish`). `allow_text = false` — булев слот: строки
+/// пропускаются (прежняя семантика `find_bool_after_key`).
+fn find_verdict_from(
+    text: &str,
+    from: usize,
+    key: &str,
+    allow_text: bool,
+) -> Option<(Verdict, usize)> {
     let needle = format!("\"{}\"", key);
-    let mut search_from = 0;
+    let mut search_from = from;
     while let Some(rel) = text[search_from..].find(&needle) {
         let abs = search_from + rel;
         let after = text[abs + needle.len()..].trim_start();
         if let Some(rest) = after.strip_prefix(':') {
             let v = rest.trim_start();
-            for (lit, val) in [("true", true), ("false", false)] {
-                if let Some(tail) = v.strip_prefix(lit) {
-                    let ident_continues = tail
-                        .chars()
-                        .next()
-                        .map(|c| c.is_alphanumeric() || c == '_')
-                        .unwrap_or(false);
-                    if !ident_continues {
-                        return Some(val);
+            if let Some(inner) = v.strip_prefix('"') {
+                if allow_text {
+                    if let Some(s) = scan_json_string(inner) {
+                        return Some((Verdict::Text(s), abs + needle.len()));
+                    }
+                }
+            } else {
+                for (lit, val) in [("true", true), ("false", false)] {
+                    if let Some(tail) = v.strip_prefix(lit) {
+                        let ident_continues = tail
+                            .chars()
+                            .next()
+                            .map(|c| c.is_alphanumeric() || c == '_')
+                            .unwrap_or(false);
+                        if !ident_continues {
+                            return Some((Verdict::Bool(val), abs + needle.len()));
+                        }
                     }
                 }
             }
@@ -1051,38 +1257,54 @@ fn find_bool_after_key(text: &str, key: &str) -> Option<bool> {
     None
 }
 
-/// Первое `"ключ": "строка"` в тексте после указанной позиции ключа.
-/// Возвращает содержимое БЕЗ кавычек; экраны внутри сохраняются как есть
-/// (вердикты финальных слотов — короткие enum-строки без экранов).
-/// Вхождения без строки после двоеточия пропускаются (модельный текст мог
-/// упомянуть ключ в мысли).
-fn find_string_after_key(text: &str, key: &str) -> Option<String> {
-    let needle = format!("\"{}\"", key);
-    let mut search_from = 0;
-    while let Some(rel) = text[search_from..].find(&needle) {
-        let abs = search_from + rel;
-        let after = text[abs + needle.len()..].trim_start();
-        if let Some(rest) = after.strip_prefix(':') {
-            let v = rest.trim_start();
-            if let Some(inner) = v.strip_prefix('"') {
-                let mut out = String::new();
-                let mut chars = inner.chars();
-                while let Some(c) = chars.next() {
-                    match c {
-                        '\\' => match chars.next() {
-                            Some(escaped) => {
-                                out.push('\\');
-                                out.push(escaped);
-                            }
-                            None => return None,
-                        },
-                        '"' => return Some(out),
-                        _ => out.push(c),
+/// Первое `"ключ": true|false` в тексте (легаси-обёртка: юнит-проверки
+/// отбраковки идентификаторов и булевых слотов).
+fn find_bool_after_key(text: &str, key: &str) -> Option<bool> {
+    match find_verdict_from(text, 0, key, false) {
+        Some((Verdict::Bool(b), _)) => Some(b),
+        _ => None,
+    }
+}
+
+/// Скан JSON-строки от содержимого ПОСЛЕ открывающей кавычки; возвращает
+/// декодированное содержимое до закрывающей кавычки. Экраны декодируются
+/// (`\n \t \r \b \f \/ \" \\` и `\uXXXX`): вердикт с «<», выпущенный
+/// грамматикой как `\u003c`, обязан дойти до потребителя литералом «<» —
+/// иначе serde при сериализации переэкранирует экран повторно и карточка
+/// покажет `\u003c`. Незакрытая строка или битый `\u` — `None` (честный
+/// отказ сборке, штатный ретрай формата); неизвестный экран сохраняется
+/// как есть.
+fn scan_json_string(inner: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut chars = inner.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\\' => match chars.next() {
+                Some('n') => out.push('\n'),
+                Some('t') => out.push('\t'),
+                Some('r') => out.push('\r'),
+                Some('b') => out.push('\u{0008}'),
+                Some('f') => out.push('\u{000C}'),
+                Some('/') => out.push('/'),
+                Some('"') => out.push('"'),
+                Some('\\') => out.push('\\'),
+                Some('u') => {
+                    let mut hex = String::new();
+                    for _ in 0..4 {
+                        hex.push(chars.next()?);
                     }
+                    let code = u32::from_str_radix(&hex, 16).ok()?;
+                    out.push(char::from_u32(code)?);
                 }
-            }
+                Some(other) => {
+                    out.push('\\');
+                    out.push(other);
+                }
+                None => return None,
+            },
+            '"' => return Some(out),
+            _ => out.push(c),
         }
-        search_from = abs + needle.len();
     }
     None
 }
@@ -1132,15 +1354,32 @@ mod tests {
         let dir = path.parent().expect("папка signals");
         let c = load_signal_contract(dir, "validator").expect("контракт валидатора");
         assert_eq!(c.key, "validator_report");
-        assert_eq!(c.value_schema["properties"]["e1"]["type"].as_str(), Some("boolean"));
-        // 9 булевых e-полей + классификация двух этажей (03.11.2026: pattern_type
-        // из схемы УДАЛЁН — модель его не выдаёт, SAFETY-механика вычисления
-        // живёт в туле команды `agents/psychotherapist/tools/compute_pattern_type.ts`
-        // (нода compute_pattern графа); движок агент-агностичен).
-        assert_eq!(c.value_schema["required"].as_array().map(|e| e.len()), Some(11));
+        // Вердикт-union (05.11.2026): e-поле — вердикт-текст (строка до 200
+        // симв) или false; булева форма осталась только у слоёв-стендов
+        // (validator_flat/surface/facade/core).
+        assert_eq!(
+            e_field_kind(&c.value_schema["properties"]["e1"]),
+            Some(EFieldKind::Union { max_chars: 200 })
+        );
+        // 9 вердикт-полей + классификация двух этажей + target (мишень разбора,
+        // 05.11.2026). pattern_type из схемы УДАЛЁН — модель его не выдаёт,
+        // SAFETY-механика вычисления живёт в туле
+        // `agents/psychotherapist/tools/compute_pattern_type.ts` (нода
+        // compute_pattern графа); движок агент-агностичен.
+        assert_eq!(c.value_schema["required"].as_array().map(|e| e.len()), Some(12));
         assert!(
             c.value_schema["properties"].get("pattern_type").is_none(),
             "pattern_type больше не свойство контракта: его вычисляет нода compute_pattern"
+        );
+        // target — ПОСЛЕДНИЙ в required (порядок required = порядок слотов
+        // грамматики; финальные строковые слоты идут после всех e-слотов).
+        assert_eq!(
+            c.value_schema["required"]
+                .as_array()
+                .and_then(|a| a.last())
+                .and_then(Value::as_str),
+            Some("target"),
+            "target обязан быть последним слотом контракта"
         );
         for field in ["floor0_type", "floor1_type"] {
             assert_eq!(
@@ -1926,6 +2165,28 @@ mod tests {
         });
         assert!(is_slot_verdict_contract(&mixed));
 
+        // Вердикт-текст (union string{1..maxLength} | false) вместо буля —
+        // тоже слотовый контракт (05.11.2026, боевой вид валидатора).
+        let union = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "e1": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }] }
+            },
+            "required": ["e1"]
+        });
+        assert!(is_slot_verdict_contract(&union));
+
+        // Union без maxLength: форма не ограничена схемой — план не строится
+        // (честное падение в конвертный путь), а не безлимитный вердикт.
+        let union_unbounded = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "e1": { "anyOf": [{ "type": "string" }, { "const": false }] }
+            },
+            "required": ["e1"]
+        });
+        assert!(!is_slot_verdict_contract(&union_unbounded));
+
         // Не-e поле (boolean) — конвертный контракт.
         let not_e = serde_json::json!({
             "type": "object",
@@ -2040,17 +2301,134 @@ mod tests {
         assert_eq!(assemble_slot_signal_value(&schema, no_trailing), None);
     }
 
-    /// Грамматика боевого контракта валидатора (11 слотов, 02.11.2026):
-    /// 9 think-слотов с вердиктами e1..e9 + финальные `Floor0 type: `/`Floor1
-    /// type: ` с enum-литералами из схемы; конверта с булями нет (Вариант B).
+    /// Вердикт-тексты (05.11.2026): e-слот union думает, закрывает `</think>`
+    /// и пишет строковый вердикт или `false`. Сборка берёт вердикт ПОСЛЕ
+    /// закрытия думы своего слота (цитата формата `"e1": true` внутри думы
+    /// перехватчика не даёт); экран `\u003c` декодируется до литерала «<»
+    /// (грамматика запрещает raw «<» в строках).
     #[test]
-    fn validator_contract_builds_eleven_slot_grammar() {
+    fn assemble_slot_signal_value_union_verdict_texts() {
+        let union_field = serde_json::json!({
+            "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }]
+        });
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": { "e1": union_field, "e2": union_field },
+            "required": ["e1", "e2"]
+        });
+        let text = "Element 1: <think>проверка критерия; формат: \"e1\": true — так НЕ отвечать</think> \"e1\": \"Спазм лба и висков: зажим держит тревогу без разрядки\"\n\
+                    Element 2: <think>повтора нет</think> \"e2\": false";
+        assert_eq!(
+            assemble_slot_signal_value(&schema, text),
+            Some(serde_json::json!({
+                "e1": "Спазм лба и висков: зажим держит тревогу без разрядки",
+                "e2": false
+            })),
+            "вердикт-текст берётся после закрытия думы своего слота; цитата формата в думе не перехватывает"
+        );
+
+        // Экран `\u003c` декодируется до литерала «<». Сборка тотальна по
+        // плану слотов (required e1+e2) — вход обязан содержать оба слота.
+        let escaped = "Element 1: <think>разбор</think> \"e1\": \"вдох \\u003c выдох по длительности\"\n\
+                       Element 2: <think>повтора нет</think> \"e2\": false";
+        assert_eq!(
+            assemble_slot_signal_value(&schema, escaped),
+            Some(serde_json::json!({ "e1": "вдох < выдох по длительности", "e2": false })),
+            "экран строки обязан декодироваться, а не доходить до карточки литералом"
+        );
+
+        // Прогрессирующий курсор: цитата ЧУЖОГО слота целиком (метка + дума +
+        // вердикт) внутри думы слота 1 не перехватывает сборку — поиск слота 2
+        // начинается после вердикта слота 1.
+        let quoted_next = "Element 1: <think>цитата: Element 2: <think>fake</think> \"e2\": true</think> \"e1\": \"вердикт один\"\n\
+                           Element 2: <think>разбор</think> \"e2\": false";
+        assert_eq!(
+            assemble_slot_signal_value(&schema, quoted_next),
+            Some(serde_json::json!({ "e1": "вердикт один", "e2": false })),
+            "цитата чужого слота в думе не должна становиться якорем или вердиктом"
+        );
+    }
+
+    /// Резерв конверта из контракта (05.11.2026): вердикт-тексты занимают
+    /// заметно больше фикс-константы ENVELOPE_TOKENS=256, поэтому потолки
+    /// думы обязаны считать место под слоты из схемы — иначе заполнение по
+    /// грамматике упирается в max_gen_tokens («дума съела конверт»).
+    #[test]
+    fn contract_envelope_tokens_scales_with_verdict_texts() {
+        let path = schema_path();
+        let dir = path.parent().expect("папка signals");
+        let validator = load_signal_contract(dir, "validator").expect("контракт валидатора");
+        let reserve = contract_envelope_tokens(&validator.value_schema);
+        assert!(
+            reserve > crate::infra::ENVELOPE_TOKENS,
+            "вердикт-тексты (9×200 симв + target 160) обязаны дать резерв больше фикс-константы: {}",
+            reserve
+        );
+        // Боевой потолок думы слота от резерва КОНТРАКТА строже прежней
+        // формулы от константы: место под слоты вычитается до деления.
+        let budget = contract_think_budget(2048, &validator.value_schema);
+        let legacy = per_draft_budget_chars(2048, 9);
+        assert!(
+            budget.is_some() && budget < legacy,
+            "бюджет с резервом контракта ({:?}) обязан быть строже прежнего {:?}",
+            budget,
+            legacy
+        );
+        // Булев слотовый контракт (слои-стенды) — прежняя константа: короткие
+        // вердикты `false`/`true` не раздувают резерв.
+        let flat = SignalContract {
+            key: "validator_flat".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "properties": { "e1": { "type": "boolean" } },
+                "required": ["e1"]
+            }),
+        };
+        assert_eq!(
+            contract_envelope_tokens(&flat.value_schema),
+            crate::infra::ENVELOPE_TOKENS,
+            "булев слотовый контракт не должен раздувать резерв"
+        );
+        // Неслотовый контракт — константа (поведение без изменений).
+        let enum_schema = serde_json::json!({ "type": "string", "enum": ["А", "Б"] });
+        assert_eq!(contract_envelope_tokens(&enum_schema), crate::infra::ENVELOPE_TOKENS);
+    }
+
+    /// Вердикт-union (05.11.2026): непустая строка или `false` проходит;
+    /// число/null/пустая строка — честная ошибка эмиттеру (порча формы),
+    /// а не тихий мусор downstream.
+    #[test]
+    fn validate_signal_value_rejects_malformed_verdict_union() {
+        let c = SignalContract {
+            key: "validator_report".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "e1": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }] }
+                },
+                "required": ["e1"]
+            }),
+        };
+        assert!(validate_signal_value(&c, &serde_json::json!({ "e1": "Спазм лба: зажим" })).is_ok());
+        assert!(validate_signal_value(&c, &serde_json::json!({ "e1": false })).is_ok());
+        assert!(validate_signal_value(&c, &serde_json::json!({ "e1": 42 })).is_err());
+        assert!(validate_signal_value(&c, &serde_json::json!({ "e1": "" })).is_err());
+        assert!(validate_signal_value(&c, &serde_json::json!({ "e1": null })).is_err());
+    }
+
+    /// Грамматика боевого контракта валидатора (12 слотов, 05.11.2026):
+    /// 9 think-слотов с вердиктами-текстами e1..e9 (union `string{1..200} |
+    /// false` — потолок из maxLength схемы) + финальные `Floor0 type: `/`Floor1
+    /// type: ` (enum из схемы) и `Target: ` (свободная строка, целевой якорь
+    /// разбора); конверта с булями нет (Вариант B).
+    #[test]
+    fn validator_contract_builds_twelve_slot_grammar() {
         let path = schema_path();
         let dir = path.parent().expect("папка signals");
         let c = load_signal_contract(dir, "validator").expect("контракт валидатора");
         let grammar = build_signal_envelope_grammar(&c);
 
-        // Дум-слоты с якорями и вердиктами.
+        // Дум-слоты с якорями и вердиктами-union.
         for i in 1..=9 {
             assert!(
                 grammar.contains(&format!(r#"draft-{} ::= "Element {}: ""#, i, i)),
@@ -2059,13 +2437,27 @@ mod tests {
                 grammar
             );
             assert!(
-                grammar.contains(&format!(r#""\"e{}\": " bool"#, i)),
+                grammar.contains(&format!(r#""\"e{}\": " verdict-value-{}"#, i, i)),
                 "вердикт e{} потерян, grammar:\n{}",
                 i,
                 grammar
             );
+            assert!(
+                grammar.contains(&format!(
+                    r#"verdict-value-{i} ::= verdict-string-{i} | "false""#
+                )),
+                "альтернатива false у вердикта e{} потеряна, grammar:\n{}",
+                i,
+                grammar
+            );
+            assert!(
+                grammar.contains(&format!(r#"verdict-string-{i} ::= "\"" string-char{{1,200}} "\"""#)),
+                "потолок вердикт-строки e{} (maxLength схемы) потерян, grammar:\n{}",
+                i,
+                grammar
+            );
         }
-        // Финальные слоты без дум-тела: метка + ключ + enum из схемы (SSOT).
+        // Финальные слоты без дум-тела: метка + ключ + enum/строка из схемы (SSOT).
         assert!(
             grammar.contains(r#"trail-0 ::= "Floor0 type: " "\"floor0_type\": " trail-0-value"#),
             "финальный слот Floor0 type потерян, grammar:\n{}",
@@ -2076,6 +2468,11 @@ mod tests {
             "финальный слот Floor1 type потерян, grammar:\n{}",
             grammar
         );
+        assert!(
+            grammar.contains(r#"trail-2 ::= "Target: " "\"target\": " json-string"#),
+            "финальный слот Target (свободная строка) потерян, grammar:\n{}",
+            grammar
+        );
         for v in 1..=9 {
             assert!(
                 grammar.contains(&format!(r#""\"{}\"""#, v)),
@@ -2084,14 +2481,20 @@ mod tests {
                 grammar
             );
         }
+        // Класс string-char — канонический блок плагина (raw «<» запрещён).
+        assert!(
+            grammar.contains("string-char ::= [^\"\\\\<] | escape"),
+            "вердикт-строки обязаны держать класс канонических строковых правил, grammar:\n{}",
+            grammar
+        );
         // Конверта нет (Вариант B), границы размышления в дум-слотах есть.
         assert!(!grammar.contains("envelope-json"), "Вариант B не должен выпускать конверт, grammar:\n{}", grammar);
         assert!(grammar.contains("draft-1 ::=") && grammar.contains("<think>"), "дум-слоты обязаны нести think-тело, grammar:\n{}", grammar);
 
-        // Числа слотов: всего 11, дум-слотов 9 (бюджет делится по дум-слотам).
-        assert_eq!(draft_count_for_contract(&c.value_schema), 11);
+        // Числа слотов: всего 12, дум-слотов 9 (бюджет делится по дум-слотам).
+        assert_eq!(draft_count_for_contract(&c.value_schema), 12);
         assert_eq!(think_slot_count(&c.value_schema), 9);
-        assert_eq!(slot_anchor_labels(&c.value_schema, 11).map(|l| l.len()), Some(9));
+        assert_eq!(slot_anchor_labels(&c.value_schema, 12).map(|l| l.len()), Some(9));
     }
 
     /// Защита от продолжения идентификатора: `trueish`/`true_x`/`falsehood` —
