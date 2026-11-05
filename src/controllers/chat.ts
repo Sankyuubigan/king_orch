@@ -140,6 +140,15 @@ export class ChatTabState {
   /// конвертации main → chat (отправка) либо при открытии сессии.
   isChatTab = false;
 
+  /// In-memory `history` отражает ПОЛНОЕ содержимое сессии и авторитетна для
+  /// предпросмотра. Ставится при загрузке сессии (openSession) либо при
+  /// конвертации в чат (becomeChatTab — история начинает строиться с нуля).
+  /// ЛОЖЬ у восстановленной при старте вкладки: контроллер уже зарегистрирован
+  /// в TAB_REGISTRY, но история лениво грузится при первой активации
+  /// (activateSession/sessionLoadStarted) — до этого in-memory history пуста и
+  /// НЕ является правдой об улице диска (фикс лжи «нет сообщений» в предпросмотре).
+  historyLoaded = false;
+
   // Стриминг текста
   rtStreamUid: string | null = null;
   rtStreamBuffer: string = "";
@@ -221,6 +230,7 @@ export class ChatTabState {
     this.streamLastRenderAt = 0;
     this.renderExpandExtra = 0;
     this.isRestoringSession = false;
+    this.historyLoaded = false;
     this.isProcessing = false;
     // Сброс состояния в обход setProcessingState — индикатор обязан уйти
     // вместе с обработкой, иначе строка останется в чате навсегда.
@@ -1444,6 +1454,9 @@ export class ChatController {
   /// по факту отправки сообщения либо открытия сессии, не при наборе черновика.
   private becomeChatTab() {
     this.state.isChatTab = true;
+    // История вкладки с этого момента строится с нуля (первый ход / повтор
+    // с обрезкой) и авторитетна — см. ChatTabState.historyLoaded.
+    this.state.historyLoaded = true;
     this.hooks.onBecameChat?.(this.state.sessionId ?? "");
   }
 
@@ -1693,6 +1706,7 @@ export class ChatController {
       // Единый источник правды: ID сессии из файла (совпадает с ключом вкладки).
       this.state.sessionId = session.id ?? id;
       this.state.history = session.messages;
+      this.state.historyLoaded = true;
       // Счётчик облачных запросов приходит уже поднятым бэкендом (load_session).
       this.state.cloudRequests = session.cloud_requests || 0;
       this.state.uidCounter = 0; this.state.uidList = this.state.history.map(() => this.state.nextUid());

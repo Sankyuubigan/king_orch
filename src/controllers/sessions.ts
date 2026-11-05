@@ -377,7 +377,12 @@ export class SessionController {
 
   private async getPreviewMessages(id: string): Promise<ChatMessage[]> {
     const live = getChatControllerForSession(id);
-    if (live) return live.state.history.filter(m => m && m.type === "message");
+    // Живая история авторитетна только когда она реально загружена/строится
+    // (historyLoaded: openSession/becomeChatTab). Восстановленная при старте
+    // вкладка держит контроллер в реестре с ПУСТОЙ историей до первой
+    // активации — раньше такой live-путь возвращал [] и предпросмотр лгал
+    // «В этой сессии пока нет сообщений» для непустой на диске сессии.
+    if (live && live.state.historyLoaded) return live.state.history.filter(m => m && m.type === "message");
     const cached = this.previewCache.get(id);
     if (cached) return cached;
     const session = await loadSession(id);
