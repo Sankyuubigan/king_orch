@@ -6,6 +6,7 @@ import { store } from "../store";
 import { bus } from "../events";
 import { trackError } from "../telemetry";
 import type { AgentEntry, TestCaseDef, SingleTestResult, PipelineTestInfo, PipelineTestResult, CustomPromptResult, TestReportMeta } from "../types";
+import { formatTriageScore, hasTriageRanking, rankTriageModels, triageScoreBand } from "../services/triage-score";
 
 /** Одна строка батч-прогона: результат харнесса либо ошибка запуска модели. */
 interface PipelineBatchEntry {
@@ -31,6 +32,8 @@ interface TriageVerdict {
   status: "pass" | "warn" | "fail" | "skip";
   detail: string;
   metrics?: unknown;
+  /** Вес в итоговом балле (SSOT — Rust probe_weight); старые отчёты без поля. */
+  weight?: number;
 }
 
 /** Отчёт триажа одной модели (совпадает с Rust TriageModelReport). */
@@ -42,6 +45,9 @@ interface TriageModelReport {
   duration_ms: number;
   ram_peak_mb?: number | null;
   vram_peak_mb?: number | null;
+  /** Балл «X из Y» (считает бэкенд); старые отчёты и ошибки запуска — без поля. */
+  score?: number;
+  score_max?: number;
 }
 
 /** Сообщение цепочки переходов (совпадает с Rust AgentMessage в отчётах). */
@@ -1064,6 +1070,46 @@ export class AgentTestController {
     return "var(--border, #888)";
   }
 
+  /** Цвет бэнда итогового балла (чисто визуально; семантику вердикта не трогает). */
+  private triageScoreColor(score: number, max: number): string {
+    switch (triageScoreBand(score, max)) {
+      case "good": return "var(--green, #4caf50)";
+      case "mid": return "var(--orange, #ff9800)";
+      default: return "var(--red, #f44336)";
+    }
+  }
+
+  /** Бэйдж «Балл: X из Y» для шапки карточки модели; старые отчёты — «—». */
+  private triageScoreBadge(r: TriageModelReport): string {
+    if (typeof r.score !== "number" || typeof r.score_max !== "number") {
+      return `<span style="opacity:0.6;">Балл: —</span>`;
+    }
+    return `<span style="color:${this.triageScoreColor(r.score, r.score_max)}; font-weight:bold;">Балл: ${this.escapeHtml(formatTriageScore(r.score, r.score_max))}</span>`;
+  }
+
+  /** Топ-лист батча (показывается при ≥2 моделях с баллом): место/модель/балл/вердикт/fail'ы. */
+  private triageRankingHtml(reports: TriageModelReport[]): string {
+    if (!hasTriageRanking(reports)) return "";
+    const border = "1px solid var(--border, #444)";
+    const rows = rankTriageModels(reports).map((row) => `
+      <tr>
+        <td style="padding:3px 8px; border-bottom:${border}; white-space:nowrap;">${row.place}</td>
+        <td style="padding:3px 8px; border-bottom:${border};">${this.escapeHtml(row.model)}</td>
+        <td style="padding:3px 8px; border-bottom:${border}; color:${this.triageScoreColor(row.score, row.scoreMax)}; white-space:nowrap;"><strong>${this.escapeHtml(formatTriageScore(row.score, row.scoreMax))}</strong></td>
+        <td style="padding:3px 8px; border-bottom:${border}; color:${this.triageVerdictColor(row.verdictLabel)};">${this.escapeHtml(row.verdictLabel)}</td>
+        <td style="padding:3px 8px; border-bottom:${border};">${this.escapeHtml(row.criticalFails.join("; ")) || "—"}</td>
+      </tr>`).join("");
+    return `<table style="border-collapse:collapse; width:100%; margin:0 0 12px 0;">
+      <thead><tr>
+        <th style="text-align:left; padding:3px 8px; border-bottom:${border};">#</th>
+        <th style="text-align:left; padding:3px 8px; border-bottom:${border};">Модель</th>
+        <th style="text-align:left; padding:3px 8px; border-bottom:${border};">Балл</th>
+        <th style="text-align:left; padding:3px 8px; border-bottom:${border};">Вердикт</th>
+        <th style="text-align:left; padding:3px 8px; border-bottom:${border};">Критичные fail'ы</th>
+      </tr></thead>
+      <tbody>${rows}</tbody></table>`;
+  }
+
   /** HTML сводки триажа: общий для живых результатов и просмотрщика отчётов. */
   private triageBatchHtml(reports: TriageModelReport[], totalMs: number | null = null): string {
     const border = "1px solid var(--border, #444)";
@@ -1077,6 +1123,7 @@ export class AgentTestController {
            <pre style="white-space:pre-wrap; color: var(--red, #f44336)">${this.escapeHtml(r.error)}</pre>`
         : `<div style="font-weight:bold; font-size:1.05em;">
              <span style="color:${this.triageVerdictColor(r.verdict_label)}">${this.escapeHtml(r.verdict_label)}</span>
+             · ${this.triageScoreBadge(r)}
            </div>
            <div style="opacity:0.7; margin:2px 0 6px 0;">${(r.duration_ms / 1000).toFixed(1)}s · VRAM: ${this.fmtVram(null, r.vram_peak_mb ?? null)} · ОЗУ: ${this.fmtMb(r.ram_peak_mb ?? null)}</div>
            <table style="border-collapse:collapse; width:100%; margin-bottom:8px;">
@@ -1097,7 +1144,8 @@ export class AgentTestController {
       return `<div style="margin-bottom:16px;"><strong>${i + 1}. ${this.escapeHtml(short)}</strong>${head}</div>`;
     }).join('<hr style="border:none; border-top:1px solid var(--border, #444); margin:12px 0"/>');
 
-    return `<div style="margin-bottom:12px;"><strong>Триаж моделей</strong> · моделей: ${reports.length}${totalPart}</div>` + cards;
+    return `<div style="margin-bottom:12px;"><strong>Триаж моделей</strong> · моделей: ${reports.length}${totalPart}</div>` +
+      this.triageRankingHtml(reports) + cards;
   }
 
   // ─── Плашки итога и цепочки переходов (общие для живых результатов и отчётов) ───

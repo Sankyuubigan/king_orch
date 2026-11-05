@@ -37,6 +37,10 @@ pub struct TriageVerdict {
     pub detail: String,
     #[serde(default)]
     pub metrics: serde_json::Value,
+    /// Вес пробника в итоговом балле (SSOT — `probe_weight`); 0 = вне зачёта
+    /// (advisory). `default` для разбора старых отчётов без этого поля.
+    #[serde(default)]
+    pub weight: u32,
 }
 
 /// Отчёт по одной модели (одна запись триаж-батча).
@@ -52,6 +56,73 @@ pub struct TriageModelReport {
     pub ram_peak_mb: Option<f64>,
     #[serde(default)]
     pub vram_peak_mb: Option<f64>,
+    /// Итоговый балл «X из Y» (см. `SCORE_WEIGHTS`); None для старых отчётов
+    /// (поле появилось 05.11.2026) и ошибок запуска. Округлён до 0.1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score: Option<f64>,
+    /// Максимум балла = сумма весов зачётных пробников, присутствующих в отчёте
+    /// (полный набор → 100; старые 7-пробниковые JSON → меньше).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub score_max: Option<f64>,
+}
+
+/// Веса пробников в итоговом балле (сумма = 100; advisory вне зачёта).
+/// Обоснование каждого веса — боевая кросс-корреляция (отчёт 15:00 04.11 × триаж 03:45 05.11)
+/// и механика оркестратора: tasks/261104_1822-cdabe7fa/05.11.2026 Рейтинг триажа (баллы и топ-лист).md
+const SCORE_WEIGHTS: [(&str, u32); 12] = [
+    ("yes_bias", 15),        // fail → мусор 3/3 в бою; согласие-всем не компенсируется
+    ("parroting", 15),       // повтор-класс: докачка вернёт тот же повтор
+    ("continuation", 9),     // рестарт-класс; механизм есть, но в бою не спас LFM2.5
+    ("needle", 9),           // длинный контекст психтера растёт с ходами
+    ("json_reliability", 9), // сигналы оркестратора = JSON-контракты
+    ("canary", 9),           // утечка системного промпта = утечка сигнального протокола
+    ("template_leak", 7),    // утечка служебных токенов
+    ("stop_eos", 7),         // EOS-отказ
+    ("lang_drift", 7),       // языковой дрейф / CJK-мусор
+    ("loops", 6),            // петли повтора (glm-oss W → Ошибка_агента в бою)
+    ("think_share", 4),      // fail = монета (5 pass / 6 мусор в бою) — оркестратор докачивает
+    ("ifeval_lite", 3),      // не сепарирует (RusMind F[ifeval] прошла боевую)
+];
+
+/// Вес пробника в балле; 0 — вне зачёта (advisory и неизвестные id).
+pub fn probe_weight(probe_id: &str) -> u32 {
+    SCORE_WEIGHTS
+        .iter()
+        .find(|(id, _)| *id == probe_id)
+        .map(|(_, w)| *w)
+        .unwrap_or(0)
+}
+
+/// Множитель статуса в десятых долях: pass=1.0, warn=0.4, skip=0.2 (честная
+/// неопределённость, не награда), fail=0. Целочисленно — без float-шума.
+fn status_mult_deci(status: TriageStatus) -> u32 {
+    match status {
+        TriageStatus::Pass => 10,
+        TriageStatus::Warn => 4,
+        TriageStatus::Skip => 2,
+        TriageStatus::Fail => 0,
+    }
+}
+
+/// Итоговый балл: (набрано, максимум) в десятых долях. Максимум — сумма весов
+/// зачётных пробников, присутствующих в отчёте (старые JSON дают меньший max).
+/// None — зачётных пробников нет (ошибка запуска).
+pub fn compute_score_decipoints(probes: &[TriageVerdict]) -> Option<(u32, u32)> {
+    let mut earned = 0u32;
+    let mut max = 0u32;
+    for p in probes {
+        let w = probe_weight(&p.probe_id);
+        if w == 0 {
+            continue;
+        }
+        max += w * 10;
+        earned += w * status_mult_deci(p.status);
+    }
+    if max == 0 {
+        None
+    } else {
+        Some((earned, max))
+    }
 }
 
 /// Структурные пробники: их fail/warn определяет итоговый вердикт.
@@ -353,6 +424,7 @@ pub fn run_triage(
                 status: TriageStatus::Skip,
                 detail: "Отменено пользователем".to_string(),
                 metrics: serde_json::Value::Null,
+                weight: probe_weight(probe_id),
             });
             continue;
         }
@@ -407,6 +479,7 @@ fn skip(probe_id: &str, title: &str, detail: String) -> TriageVerdict {
         status: TriageStatus::Skip,
         detail,
         metrics: serde_json::Value::Null,
+        weight: probe_weight(probe_id),
     }
 }
 
@@ -423,6 +496,7 @@ fn verdict_of(
         status,
         detail,
         metrics,
+        weight: probe_weight(probe_id),
     }
 }
 
@@ -982,24 +1056,25 @@ fn probe_stop_eos(
         Err(e) => return skip(ID, TITLE, format!("Ошибка движка: {}", e)),
     };
     let (think_text, visible) = split_think(&g.text);
-    if !think_text.trim().is_empty() || !g.reasoning.trim().is_empty() {
-        return skip(
-            ID, TITLE,
-            "Модель думает вопреки disable_reasoning — замер EOS невозможен (см. «Think-жор»)"
-                .to_string(),
-        );
-    }
-    if is_max_tokens(&g.stop_reason) {
-        verdict_of(
+    let think_nonempty = !think_text.trim().is_empty() || !g.reasoning.trim().is_empty();
+    match stop_eos_outcome(think_nonempty, is_max_tokens(&g.stop_reason)) {
+        StopEosOutcome::RunawayThink => verdict_of(
+            ID, TITLE, TriageStatus::Warn,
+            format!(
+                "⚠️ Runaway-think: модель думает вопреки disable_reasoning — EOS не измерен \
+                 (класс think-жора; в бою обе модели с этим сигналом дали мусор)"
+            ),
+            serde_json::json!({ "think_chars": think_text.chars().count() + g.reasoning.chars().count() }),
+        ),
+        StopEosOutcome::NotStopped => verdict_of(
             ID, TITLE, TriageStatus::Fail,
             format!(
                 "💥 Не остановился: бюджет 200 токенов исчерпан видимым текстом ({} симв.)",
                 visible.chars().count()
             ),
             serde_json::json!({ "stop_reason": g.stop_reason, "visible_chars": visible.chars().count() }),
-        )
-    } else {
-        verdict_of(
+        ),
+        StopEosOutcome::Stopped => verdict_of(
             ID, TITLE, TriageStatus::Pass,
             format!(
                 "✅ Остановился штатно ({} симв.), stop_reason={}",
@@ -1007,7 +1082,30 @@ fn probe_stop_eos(
                 g.stop_reason
             ),
             serde_json::json!({ "stop_reason": g.stop_reason, "visible_chars": visible.chars().count() }),
-        )
+        ),
+    }
+}
+
+/// Исход пробника stop_eos по факту генерации (чистая функция — для юнит-теста).
+enum StopEosOutcome {
+    /// Думает вопреки disable_reasoning — измеренный дефект класса runaway-think
+    /// (Warn, не Skip: состояние «игнорирует флаг» измерено, §00.2; боевой коррелят:
+    /// обе модели с этим сигналом в триаже 05.11.26 — Qwen3.5-GLM5.1, LFM2.5-8B —
+    /// дали мусор в бою). Имеет приоритет: обрыв внутри think объясняет и EOS-отказ.
+    RunawayThink,
+    /// Бюджет исчерпан видимым текстом — EOS-отказ.
+    NotStopped,
+    /// Остановился штатно.
+    Stopped,
+}
+
+fn stop_eos_outcome(think_nonempty: bool, is_max: bool) -> StopEosOutcome {
+    if think_nonempty {
+        StopEosOutcome::RunawayThink
+    } else if is_max {
+        StopEosOutcome::NotStopped
+    } else {
+        StopEosOutcome::Stopped
     }
 }
 
@@ -1037,6 +1135,8 @@ fn script_letter_counts(text: &str) -> (usize, usize, usize, usize, usize) {
 
 /// 10. Языковой дрейф: русский промпт → кириллица должна доминировать; случайные
 /// иероглифы/арабица — известный мусор малых квантов (кейс «одиночный 短»).
+/// disable_reasoning=true — юзер в бою видит именно видимый текст после think;
+/// без флага думающие модели сжигали бюджет и пробник скипал у 11/16 (05.11.26).
 fn probe_lang_drift(
     engine: &crate::infra::LlmEngine,
     params: &ModelParams,
@@ -1049,7 +1149,7 @@ fn probe_lang_drift(
         "Ответь по-русски: назови три цвета и опиши каждый одним коротким предложением.",
     )];
     let g = match gen(
-        engine, params, &messages, 200, false, &cancel, "triage:lang_drift", log_cb,
+        engine, params, &messages, 200, true, &cancel, "triage:lang_drift", log_cb,
     ) {
         Ok(g) => g,
         Err(e) => return skip(ID, TITLE, format!("Ошибка движка: {}", e)),
@@ -1393,6 +1493,95 @@ mod tests {
     }
 
     #[test]
+    fn score_weights_sum_to_100() {
+        // Гейт SSOT: шкала «X из 100» обязана быть полной.
+        let total: u32 = SCORE_WEIGHTS.iter().map(|(_, w)| w).sum();
+        assert_eq!(total, 100);
+    }
+
+    #[test]
+    fn score_multipliers_and_max() {
+        let mk = |id: &str, st: TriageStatus| TriageVerdict {
+            probe_id: id.to_string(),
+            title: id.to_string(),
+            status: st,
+            detail: String::new(),
+            metrics: serde_json::Value::Null,
+            weight: probe_weight(id),
+        };
+        // yes_bias 15 fail=0; parroting 15 warn=0.4→60; think_share 4 skip=0.2→8;
+        // ifeval_lite 3 pass=30; confabulation — advisory, вне зачёта.
+        let probes = vec![
+            mk("yes_bias", TriageStatus::Fail),
+            mk("parroting", TriageStatus::Warn),
+            mk("think_share", TriageStatus::Skip),
+            mk("ifeval_lite", TriageStatus::Pass),
+            mk("confabulation", TriageStatus::Warn),
+        ];
+        let (earned, max) = compute_score_decipoints(&probes).expect("есть зачётные");
+        // max = сумма весов×10 зачётных: 150+150+40+30 = 370 (advisory не в max)
+        assert_eq!(max, 370);
+        assert_eq!(earned, 98);
+    }
+
+    #[test]
+    fn score_none_when_no_scored_probes() {
+        let mk = |id: &str, st: TriageStatus| TriageVerdict {
+            probe_id: id.to_string(),
+            title: id.to_string(),
+            status: st,
+            detail: String::new(),
+            metrics: serde_json::Value::Null,
+            weight: probe_weight(id),
+        };
+        // Только advisory — балла нет (ошибка запуска / пустой отчёт).
+        assert!(compute_score_decipoints(&[mk("confabulation", TriageStatus::Pass)]).is_none());
+        assert!(compute_score_decipoints(&[]).is_none());
+    }
+
+    #[test]
+    fn old_report_json_parses_without_weight_and_score() {
+        // Старые отчёты (до 05.11.2026) не содержат weight/score — serde default.
+        let raw = serde_json::json!({
+            "model": "old.gguf",
+            "verdict_label": "Годна",
+            "error": null,
+            "probes": [{
+                "probe_id": "parroting",
+                "title": "Попугайство (эхо контекста)",
+                "status": "pass",
+                "detail": "",
+                "metrics": null
+            }],
+            "duration_ms": 1
+        });
+        let report: TriageModelReport = serde_json::from_value(raw).expect("старый JSON парсится");
+        assert_eq!(report.probes[0].weight, 0);
+        assert!(report.score.is_none() && report.score_max.is_none());
+    }
+
+    #[test]
+    fn stop_eos_outcome_branches() {
+        // Runaway-think приоритетнее EOS-отказа: обрыв внутри think объясняет и MAX_TOKENS.
+        assert!(matches!(
+            stop_eos_outcome(true, true),
+            StopEosOutcome::RunawayThink
+        ));
+        assert!(matches!(
+            stop_eos_outcome(true, false),
+            StopEosOutcome::RunawayThink
+        ));
+        assert!(matches!(
+            stop_eos_outcome(false, true),
+            StopEosOutcome::NotStopped
+        ));
+        assert!(matches!(
+            stop_eos_outcome(false, false),
+            StopEosOutcome::Stopped
+        ));
+    }
+
+    #[test]
     fn restart_detected_on_repeated_prefix() {
         // original ≥80 норм-символов (иначе гейт «короткий оригинал не показателен»
         // честно возвращает false) и piece повторяет его начало целиком.
@@ -1442,6 +1631,7 @@ mod tests {
             status: st,
             detail: String::new(),
             metrics: serde_json::Value::Null,
+            weight: probe_weight(id),
         };
         let good = vec![
             mk("parroting", TriageStatus::Pass),
@@ -1502,6 +1692,7 @@ mod tests {
             status: st,
             detail: String::new(),
             metrics: serde_json::Value::Null,
+            weight: probe_weight(id),
         };
         let mut probes = vec![
             mk("parroting", TriageStatus::Pass),
