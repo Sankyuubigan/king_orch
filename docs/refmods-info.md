@@ -70,6 +70,34 @@
 >   миниатюрами, команды `list_refmod_cards` / `refmod_card_thumbnail`), маунт на странице
 >   «Движки». Детектор лиц отложен (конвенция + vision агента закрывают сортировку кадров).
 
+> ### 🎤 ГОЛОС ПЕРСОНАЖА (05.11.2026, Этап 3) — фактическое состояние
+>
+> **Формат**: ровно один `voice.wav` в папке карточки (PCM16, исходные rate/channels)
+> + поля `voice_file`/`voice_desc` в meta.json (serde default, skip_serializing_if).
+> Загрузка: meta-voice без файла → warn + голос None (маркер 🎤 не рисуется).
+> Перезапись карточки (ops-правка с `overwrite: true`) НАСЛЕДУЕТ голос
+> (старая meta читается до wipe; wipe чистит только frames/).
+>
+> **refmod_edit — два XOR-режима**: кадры (ops → новая `<slug>_v2`/overwrite, голос
+> наследуется) ЛИБО голос (`source_audio_ids` РОВНО один + `voice_desc` → IN-PLACE,
+> без v2-дублей; смена голоса сбрасывает старое `voice_desc`). Смешивание режимов
+> и desc-only без голоса → честный отказ «двумя вызовами». Парсинг: отсутствие
+> `ops` = voice-режим; присутствующее поле валидируется как раньше.
+>
+> **Аудио-вложения**: плагин декодирует mp3/wav/m4a/ogg-vorbis/flac (symphonia),
+> конвертит в PCM16 WAV (масштаб ×32768 — степень двойки точна в f32, roundtrip
+> идемпотентен); webm/opus НЕ поддержаны symphonia 0.5.5 — агент просит пересохранить.
+> Хост резолвит аудио через `RequestMedia::resolve_audio_arguments`
+> (aliases `aud_req_NN`/`aud_hist_NN`, поле `source_audio_ids` опционально).
+>
+> **Генерация видео**: если у карточки есть голос, `generate_video` забирает
+> `voice.wav` как `ref_audio_paths` → HTTP `ref_audios` (b64 WAV data-URL) движка;
+> гейт `ref_audios_supported(caps)` (`features_by_mode.vid_gen.ref_audios === true`,
+> иначе честный отказ «обнови движок»). Промпт-биндинг движка: «<Audio 1> is the
+> voice-timbre reference for <Subject 1>» + реплика в prompt_en (липсинк авто),
+> 1 озвученный персонаж на клип. Каталог карточек помечает голос 🎤.
+
+
 ---
 
 Хорошая новость: для работы с **RefMods** в **MiniMax H3** вам вообще не нужен Python и тяжелый пайплайн обучения (как для LoRA). 

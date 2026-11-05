@@ -10,6 +10,7 @@
 
 use serde_json::Value;
 use std::sync::atomic::{AtomicU64, Ordering};
+use tauri_plugin_image_engine::engine::RefModBundle;
 
 use crate::infra::tools::media::ImageArtifactRegistry;
 use crate::infra::tools::{Tool, ToolCtx, ToolError};
@@ -112,6 +113,17 @@ fn ensure_bundle_supports_mode(
     )))
 }
 
+/// Пути ref_audios из голоса RefMod-карточки (Этап 3, voice cloning H3):
+/// голос Some → РОВНО один путь; карточки нет / голоса нет → пусто.
+/// Источник голоса — только карточка (у картинок-вложений голоса нет
+/// по построению). Выделена в чистую функцию для герметичного теста.
+fn refmod_voice_paths(bundle: Option<&RefModBundle>) -> Vec<String> {
+    bundle
+        .and_then(|bundle| bundle.voice.as_ref())
+        .map(|voice| vec![voice.to_string_lossy().into_owned()])
+        .unwrap_or_default()
+}
+
 fn run_generate_video(
     prompt_en: &str,
     seconds: u32,
@@ -119,6 +131,7 @@ fn run_generate_video(
     init_path: Option<&str>,
     ref_paths: &[String],
     ref_image_size_max: bool,
+    ref_audio_paths: &[String],
     loras: &[tauri_plugin_image_engine::engine::LoraSpec],
     ctx: &ToolCtx,
 ) -> Result<VideoRunOutput, ToolError> {
@@ -153,12 +166,13 @@ fn run_generate_video(
 
     // Честный прогон: движок spawn'ится на прогон и его же Drop убивает.
     log::info!(
-        "[VID-TOOL] generate_video start: bundle={}, seconds={}, quality={}, mode={}, refs={}, ref_image_size_max={}",
+        "[VID-TOOL] generate_video start: bundle={}, seconds={}, quality={}, mode={}, refs={}, audio={}, ref_image_size_max={}",
         entry.name,
         seconds,
         if final_quality { "final" } else { "draft" },
         mode,
         ref_paths.len(),
+        ref_audio_paths.len(),
         ref_image_size_max
     );
     let out_dir = video_session_outputs_dir(ctx.session_id);
@@ -180,6 +194,7 @@ fn run_generate_video(
         init_path,
         ref_paths,
         ref_image_size_max,
+        &ref_audio_paths,
         &out_path,
         None,
         loras,
@@ -350,7 +365,7 @@ impl Tool for GenerateVideo {
             "properties": {
                 "prompt_en": {"type": "string", "description": "Развёрнутый английский промпт: объект, действие/движение, окружение, свет, стиль. Описывай ДВИЖЕНИЕ сцены и камеры, а не статичную картинку. При i2va описывай, КАК сцена на картинке оживает и движется; при reference — желаемую сцену с учётом референсов (что взять с каждой). Если пользователь просит РЕЧЬ/озвучку/диалог — включи реплику ДОСЛОВНО на языке пользователя, не переводя: The woman looks at the camera and says in Russian: <реплика> (реплика ≤10–12 слов, без кавычек и спецсимволов), и добавь в конец промпта: No subtitles, no captions, no on-screen text."},
                 "image_usage": {"type": "string", "enum": ["first_frame", "reference"], "description": "Роль прикреплённых картинок. \"first_frame\" — картинка станет ПЕРВЫМ КАДРОМ видео (оживить/продолжить само изображение): требует ровно один source_image_ids. \"reference\" — картинки (персонаж, character sheet, эскиз, пример позы/стиля) — референсы сцены: передай их ID (1–3), движок учтёт их как образцы; без ID сцена описывается только текстом. Передавай всегда, когда к запросу прикреплены изображения."},
-                "refmod": {"type": "string", "description": "Slug RefMod-карточки персонажа из блока «Доступные RefMod-карточки» контекста: кадры карточки пойдут референсами движка (Ref2VA) — внешность/персонаж возьмутся с карточки, сцена описывается prompt_en. НЕ сочетается с source_image_ids и image_usage (референсы либо из карточки, либо из вложений). Если в карточке больше 3 кадров — первые 3 (лицо → ракурс → фигура) уйдут автоматически. Лоры при этом не нужны."},
+                "refmod": {"type": "string", "description": "Slug RefMod-карточки персонажа из блока «Доступные RefMod-карточки» контекста: кадры карточки пойдут референсами движка (Ref2VA) — внешность/персонаж возьмутся с карточки, сцена описывается prompt_en. НЕ сочетается с source_image_ids и image_usage (референсы либо из карточки, либо из вложений). Если в карточке больше 3 кадров — первые 3 (лицо → ракурс → фигура) уйдут автоматически. Если у карточки есть голос (🎤 в каталоге) — он уйдёт в ref_audios движка: персонаж заговорит этим голосом, реплику задай в prompt_en в кавычках. Лоры при этом не нужны."},
                 "source_image_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 3, "description": "ID картинок из блока доступных изображений. first_frame: РОВНО ОДИН ID — картинка станет первым кадром (image-to-video). reference: 1–3 ID — картинки пойдут в движок референсами (консистентный персонаж/стиль); больше 3 не принимается. Опционально: без него видео генерируется с нуля по тексту. Файловые пути запрещены."},
                 "seconds": {"type": "integer", "minimum": 1, "maximum": 15, "description": "Длительность клипа в секундах (по умолчанию 5). Лимит зависит от выбранного набора моделей: больше — только если пользователь прямо попросил."},
                 "final_quality": {"type": "boolean", "description": "false (по умолчанию) = черновик (быстро, минуты). true = финальное качество (медленно: 10+ минут на 5 секунд — предупреждай пользователя о времени)."},
@@ -443,6 +458,12 @@ pub fn execute_video_tool(
                                 bundle.frames.len(),
                                 crate::infra::tools::refmod::FRAMES_PER_RUN
                             );
+                            if bundle.voice.is_some() {
+                                log::info!(
+                                    "[VID-TOOL] refmod '{}': 🎤 голос карточки уйдёт в ref_audios (voice cloning H3)",
+                                    bundle.slug
+                                );
+                            }
                             Some(bundle)
                         }
                         Err(e) => return Some(Err(e)),
@@ -501,6 +522,10 @@ pub fn execute_video_tool(
                         _ => (paths.into_iter().next(), Vec::new()),
                     }
                 };
+            // Этап 3: голос карточки → ref_audios движка (voice cloning H3).
+            // Источник — ТОЛЬКО карточка refmod: у картинок-вложений голоса нет
+            // по построению (состояние «у вложения есть голос» не существует).
+            let ref_audio_paths = refmod_voice_paths(refmod_bundle.as_ref());
             let seconds = args
                 .get("seconds")
                 .and_then(|value| value.as_u64())
@@ -536,6 +561,7 @@ pub fn execute_video_tool(
                     init_path.as_deref(),
                     &ref_paths,
                     refmod_bundle.is_some(),
+                    &ref_audio_paths,
                     &loras,
                     ctx,
                 )

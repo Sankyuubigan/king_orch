@@ -331,6 +331,57 @@ fn extract_saved_video_id_parses_marker() {
     assert_eq!(extract_saved_video_id("нет маркера"), None);
 }
 
+// ── Голос RefMod-карточки → ref_audios (Этап 3) ──
+
+#[test]
+fn refmod_voice_paths_carries_card_voice() {
+    use std::path::PathBuf;
+    use tauri_plugin_image_engine::engine::RefModBundle;
+    let make = |voice: Option<PathBuf>| RefModBundle {
+        slug: "char".to_string(),
+        name: "Персонаж".to_string(),
+        description: String::new(),
+        frames: vec![PathBuf::from("C:/x/frames/frame_1.png")],
+        voice,
+        voice_desc: Some("низкий бас".to_string()),
+    };
+    // Голос есть → ровно один путь, абсолютный.
+    let voiced = refmod_voice_paths(Some(&make(Some(PathBuf::from("C:/x/voice.wav")))));
+    assert_eq!(voiced.len(), 1, "ровно один ref_audio (мульти-голос запрещён)");
+    assert!(voiced[0].ends_with("voice.wav"), "{}", voiced[0]);
+    // Карточка без голоса → пусто (t2va/ref2va без клонирования).
+    assert!(refmod_voice_paths(Some(&make(None))).is_empty());
+    // Карточки нет (вложения/чистый текст) → пусто.
+    assert!(refmod_voice_paths(None).is_empty());
+}
+
+#[test]
+fn video_schema_documents_card_voice() {
+    let tool = GenerateVideo;
+    let params = tool.parameters();
+    let refmod = params
+        .pointer("/properties/refmod/description")
+        .and_then(|v| v.as_str())
+        .expect("refmod объявлен в схеме");
+    assert!(
+        refmod.contains("ref_audios"),
+        "схема описывает голос карточки: {}",
+        refmod
+    );
+    assert!(
+        refmod.contains("🎤"),
+        "схема ссылается на 🎤-маркер каталога: {}",
+        refmod
+    );
+    // Параметра source_audio_ids у generate_video нет и быть не должно:
+    // голос приходит ТОЛЬКО из карточки (гейт источников).
+    assert!(
+        params.pointer("/properties/source_audio_ids").is_none(),
+        "голос не через вложения"
+    );
+}
+
+
 #[test]
 fn attach_videos_uses_current_subcalls_and_file_path_no_base64() {
     let stamp = std::time::SystemTime::now()
