@@ -502,7 +502,11 @@ fn video_schema_declares_refmod() {
     let desc = refmod.get("description").and_then(|v| v.as_str()).unwrap_or("");
     assert!(desc.contains("RefMod-карточки"), "{}", desc);
     assert!(desc.contains("НЕ сочетается"), "несовместимость с вложениями описана: {}", desc);
-    assert!(desc.contains("первые 3"), "take(3) из большой карточки задокументирован: {}", desc);
+    assert!(
+        desc.to_lowercase().contains("все кадры"),
+        "все кадры карточки — референсы: {}",
+        desc
+    );
     assert!(tool.description().contains("RefMod"), "описание тула упоминает карточки");
 }
 
