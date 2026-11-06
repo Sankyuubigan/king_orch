@@ -414,7 +414,12 @@ fn run_refine_video(ctx: &ToolCtx) -> Result<VideoRunOutput, ToolError> {
             (
                 crate::infra::tools::refmod::engine_ref_paths(&bundle),
                 refmod_voice_paths(Some(&bundle)),
-                true,
+                // false → ключ ref_image_args НЕ ставится: движок ужмёт рефы
+                // штатным `match` (до площади драфт-холста 864×480 ≈ 640px).
+                // Раньше `max` (2048px) раздувал активации: +2 ГБ VRAM и
+                // +100 с (X3a/X3c, tasks/261105_1528-92e5af13). Качество лица
+                // не страдает (X3a≈X3c, X7≈P4_1152).
+                false,
             )
         }
         None => (
