@@ -13,8 +13,8 @@ groups:
 - id: group_1
   title: Новая группа
   ui_pos:
-    y: 719
     x: -105
+    y: 719
 
 nodes:
 
@@ -39,8 +39,8 @@ nodes:
   true_to: note_1782221436115
   false_to: note_1785141025138
   ui_pos:
-    y: 495
     x: -1700
+    y: 495
 
 - id: call_collector
   type: llm_worker
@@ -69,8 +69,8 @@ nodes:
   group: group_1
   agent: decomposer
   ui_pos:
-    y: 486
     x: 240
+    y: 486
 
 - id: call_validator
   type: llm_worker
@@ -79,8 +79,8 @@ nodes:
   - synthesizer
   - decomposer
   ui_pos:
-    y: 410
     x: 1349
+    y: 410
   llm_params: strict
 
 - id: check_triage_complexity
@@ -98,30 +98,30 @@ nodes:
 
 - id: save_neurosis_case
   type: custom_tool_call
-  ui_pos:
-    x: 2170
-    y: 400
-  tool_file: ../tools/save_neurosis_case.ts
-  args:
-    report: '{{ signals.validator_report }}'
-    core_type: '{{ nodes.compute_pattern.output.pattern_type }}'
-  output_message: true
   system_message: |-
     Кейс сохранён: {{ nodes.save_neurosis_case.output.file_name }}
 
     ```neurosis_case
     {{ nodes.save_neurosis_case.output.case_json_text }}
     ```
+  ui_pos:
+    y: 390
+    x: 2263
+  tool_file: ../tools/save_neurosis_case.ts
+  args:
+    report: '{{ signals.validator_report }}'
+    core_type: '{{ nodes.compute_pattern.output.pattern_type }}'
+  output_message: true
 
 - id: read_pattern_section
   type: custom_tool_call
   ui_pos:
-    x: 2355
-    y: 297
+    x: 2515
+    y: 300
   tool_file: ../../_shared/tools/read_md_section.ts
   args:
     heading: '## {{ nodes.compute_pattern.output.pattern_type }}'
-    file: psychotherapist/database/inner_contour_9_patterns.md
+    file: psychotherapist/database/inner_9_patterns_by_gifts.md
 
 - id: call_healer
   type: llm_worker
@@ -146,8 +146,8 @@ nodes:
   - decomposer
   - soma_translator
   ui_pos:
-    x: 2647
-    y: 293
+    y: 296
+    x: 2804
 
 - id: call_shadow_worker
   type: llm_worker
@@ -166,8 +166,8 @@ nodes:
   type: note
   input: пересчитываем данные с учетом новых данных от юзера
   ui_pos:
-    y: 255
     x: -1215
+    y: 255
 
 - id: note_1782220193985
   type: note
@@ -192,8 +192,8 @@ nodes:
   true_to: save_neurosis_case
   false_to: check_elements1
   ui_pos:
-    y: 523
-    x: 1988
+    y: 551
+    x: 1957
 
 - id: check_somatic
   type: condition_router
@@ -210,8 +210,8 @@ nodes:
       equals: false
   logic: any
   ui_pos:
-    y: 218
     x: -802
+    y: 218
 
 - id: check_need_handedness
   type: condition_router
@@ -294,11 +294,11 @@ edges:
 - from: note_1782220193985
   to: call_validator
 
-- from: read_pattern_section
-  to: call_healer
-
 - from: save_neurosis_case
   to: read_pattern_section
+
+- from: read_pattern_section
+  to: call_healer
 
 - from: call_validator
   to: compute_pattern
