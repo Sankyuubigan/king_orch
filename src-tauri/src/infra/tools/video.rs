@@ -2,14 +2,17 @@
 //!
 //! Тонкая схема + исполнение поверх `tauri-plugin-image-engine::engine` (SSOT
 //! движка: дефолты размеров/seed/fps/лимит seconds — из пресета каталога,
-//!Никаких локальных копий констант). По образцу `media.rs` (generate_image),
+//! никаких локальных копий констант). По образцу `media.rs` (generate_image),
 //! но: один тул, артефакт прикрепляется к ответу ПО ПУТИ (`file_path`), потому
 //! что webm-клипы десятки МБ — base64-энкачить их в `messages[]` нельзя.
 //!
 //! Файловая точка сохранения: `<exe_dir>/video_outputs/<session_id>/vid_<ts>_<seq>.ext`.
 
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use tauri_plugin_image_engine::engine::RefModBundle;
 
 use crate::infra::tools::media::ImageArtifactRegistry;
@@ -20,6 +23,123 @@ static VIDEO_OUTPUT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 struct VideoRunOutput {
     path: String,
     time_sec: f64,
+    /// Сид прогона (клиентский) — уходит в маркер для replay-рефайна.
+    seed: i64,
+    /// Прогон — рефайн последнего видео (приписка в маркере результата).
+    refined: bool,
+}
+
+/// Память последнего успешного видео-запроса сессии — основа replay-рефайна:
+/// движок видео-латенты не хранит, поэтому рефайн = перегенерация драфта с
+/// тем же сидом и теми же параметрами (R0.4 seed-replay: тот же сид+драфт →
+/// визуально идентичный ролик). Кэш in-memory + файл на диске
+/// (`video_outputs/<session>/last_video_req.json`, рядом с клипами сессии):
+/// после рестарта приложения память дочитывается с диска при первом
+/// обращении — рестарт больше не делает рефайн невозможным (баг 06.11.26:
+/// стёртая память вела к отказу, а отказ — к «самодеятельной» новой
+/// генерации с чужим персонажем). Записи нет → честный отказ (молча
+/// генерировать новое видео нельзя).
+#[derive(Clone, Serialize, Deserialize)]
+struct LastVideoReq {
+    prompt: String,
+    seconds: u32,
+    /// Референсы (пути кадров карточки/вложений) — при refmod перечитываются
+    /// с диска, иначе переиспользуются сохранённые пути.
+    refmod_slug: Option<String>,
+    ref_paths: Vec<String>,
+    ref_image_size_max: bool,
+    ref_audio_paths: Vec<String>,
+    /// Путь первого кадра (i2va). Рефайн i2va бенчем не проверен → honest отказ.
+    init_path: Option<String>,
+    loras: Vec<tauri_plugin_image_engine::engine::LoraSpec>,
+    seed: i64,
+    /// Видео уже прошло рефайн — повторный даст тот же результат (honest отказ).
+    refined: bool,
+}
+
+static LAST_VIDEO_REQUESTS: Mutex<Option<HashMap<String, LastVideoReq>>> = Mutex::new(None);
+
+fn lock_last_video() -> std::sync::MutexGuard<'static, Option<HashMap<String, LastVideoReq>>> {
+    LAST_VIDEO_REQUESTS
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn remember_last_video(session_id: &str, req: LastVideoReq) {
+    lock_last_video()
+        .get_or_insert_with(HashMap::new)
+        .insert(session_id.to_string(), req.clone());
+    // Диск: рефайн должен переживать рестарт приложения (баг 06.11.26:
+    // рестарт стёр память → отказ → агент «выкрутился» новой генерацией
+    // без карточки — чужой персонаж). Ошибка записи не валит успешную
+    // генерацию: рефайн после рестарта тогда честно откажет.
+    let dir = video_session_outputs_dir(session_id);
+    if let Err(err) = persist_last_video(&dir, &req) {
+        log::warn!(
+            "[VID-TOOL] память рефайна не записана на диск ({}): {} — после рестарта рефайн откажет",
+            dir.join(LAST_VIDEO_REQ_FILE).display(),
+            err
+        );
+    }
+}
+
+fn last_video_request(session_id: &str) -> Option<LastVideoReq> {
+    let mut guard = lock_last_video();
+    if let Some(req) = guard.as_ref().and_then(|map| map.get(session_id)) {
+        return Some(req.clone());
+    }
+    // Промах кэша (рестарт приложения / первое обращение): дочитываем с диска.
+    let req = load_last_video(&video_session_outputs_dir(session_id))?;
+    guard
+        .get_or_insert_with(HashMap::new)
+        .insert(session_id.to_string(), req.clone());
+    Some(req)
+}
+
+/// Файл памяти рефайна в каталоге outputs сессии.
+const LAST_VIDEO_REQ_FILE: &str = "last_video_req.json";
+
+/// Записать память рефайна в каталог `dir` (чистая функция — тестируется
+/// напрямую на произвольном каталоге).
+fn persist_last_video(dir: &std::path::Path, req: &LastVideoReq) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let json = serde_json::to_string_pretty(req).map_err(std::io::Error::other)?;
+    std::fs::write(dir.join(LAST_VIDEO_REQ_FILE), json)
+}
+
+/// Дочитать память рефайна из каталога `dir`; файла нет — None (штатно:
+/// драфта ещё не было), битый JSON — None + warn (не отказ генерации).
+fn load_last_video(dir: &std::path::Path) -> Option<LastVideoReq> {
+    let path = dir.join(LAST_VIDEO_REQ_FILE);
+    let text = std::fs::read_to_string(&path).ok()?;
+    match serde_json::from_str(&text) {
+        Ok(req) => Some(req),
+        Err(err) => {
+            log::warn!(
+                "[VID-TOOL] файл памяти рефайна повреждён ({}): {}",
+                path.display(),
+                err
+            );
+            None
+        }
+    }
+}
+
+/// Клиентский сид (i64 > 0): наносекунды времени ^ счётчик прогонов,
+/// смешанный константой Кнута. Сервер сид -1 не возвращает (рандомит молча),
+/// поэтому сид всегда генерирует хост — иначе replay-рефайн невозможен.
+fn client_seed() -> i64 {
+    static SEED_SEQ: AtomicU64 = AtomicU64::new(0);
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let mix = nanos
+        ^ SEED_SEQ
+            .fetch_add(1, Ordering::Relaxed)
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    // Снимаем знаковый бит: сид для CLI -s — положительное число.
+    (mix & 0x7FFF_FFFF_FFFF_FFFF) as i64
 }
 
 /// Mime контейнера по расширению (дублирует логику plugin `ext_for_mime`,
@@ -133,6 +253,7 @@ fn run_generate_video(
     ref_image_size_max: bool,
     ref_audio_paths: &[String],
     loras: &[tauri_plugin_image_engine::engine::LoraSpec],
+    refmod_slug: Option<String>,
     ctx: &ToolCtx,
 ) -> Result<VideoRunOutput, ToolError> {
     let entry = resolve_video_bundle_for_tools()?;
@@ -164,16 +285,19 @@ fn run_generate_video(
         ));
     }
 
-    // Честный прогон: движок spawn'ится на прогон и его же Drop убивает.
+    // Клиентский сид на каждый прогон: сервер сид -1 не возвращает (рандомит
+    // молча) — сид всегда генерирует хост, иначе replay-рефайн невозможен.
+    let seed = client_seed();
     log::info!(
-        "[VID-TOOL] generate_video start: bundle={}, seconds={}, quality={}, mode={}, refs={}, audio={}, ref_image_size_max={}",
+        "[VID-TOOL] generate_video start: bundle={}, seconds={}, quality={}, mode={}, refs={}, audio={}, ref_image_size_max={}, seed={}",
         entry.name,
         seconds,
         if final_quality { "final" } else { "draft" },
         mode,
         ref_paths.len(),
         ref_audio_paths.len(),
-        ref_image_size_max
+        ref_image_size_max,
+        seed
     );
     let out_dir = video_session_outputs_dir(ctx.session_id);
     let ts = std::time::SystemTime::now()
@@ -195,6 +319,7 @@ fn run_generate_video(
         ref_paths,
         ref_image_size_max,
         &ref_audio_paths,
+        Some(seed),
         &out_path,
         None,
         loras,
@@ -202,7 +327,144 @@ fn run_generate_video(
     )
     .map(|r| {
         log::info!("[VID-TOOL] generate_video done: {} ({:.1} сек)", r.path, r.time_sec);
-        VideoRunOutput { path: r.path, time_sec: r.time_sec }
+        // Память последнего запроса сессии (основа replay-рефайна): сид + все
+        // параметры драфта. RefMod-слаг перезапоминается: карточку рефайн
+        // перечитывает с диска (кадры/голос актуальны на момент рефайна).
+        remember_last_video(
+            ctx.session_id,
+            LastVideoReq {
+                prompt: prompt_en.to_string(),
+                seconds,
+                refmod_slug,
+                ref_paths: ref_paths.to_vec(),
+                ref_image_size_max,
+                ref_audio_paths: ref_audio_paths.to_vec(),
+                init_path: init_path.map(str::to_string),
+                loras: loras.to_vec(),
+                seed,
+                refined: false,
+            },
+        );
+        VideoRunOutput { path: r.path, time_sec: r.time_sec, seed, refined: false }
+    })
+    .map_err(ToolError::Io)
+}
+
+/// Рефайн последнего видео сессии: перегенерация драфта с тем же сидом и
+/// параметрами + латент-апскейл 1.4× + второй проход (конфиг каталога
+/// `preset.refine`, бенч-паритет кейса E — 412 с на 5-сек клип). Промпт,
+/// рефы и голос берутся ИЗ ПАМЯТИ последнего запроса — аргументы текущего
+/// вызова тула игнорируются (гейт честности: любые conflicting args — отказ).
+fn run_refine_video(ctx: &ToolCtx) -> Result<VideoRunOutput, ToolError> {
+    let Some(saved) = last_video_request(ctx.session_id) else {
+        return Err(ToolError::Usage(
+            "Недавнего видео для рефайна нет: сначала сгенерируй видео в этой сессии \
+             (draft), потом попроси улучшить его."
+                .to_string(),
+        ));
+    };
+    // Рефайн = replay драфта: повторный рефайн того же сида даст тот же
+    // результат — honest отказ вместо бесполезного 7-минутного прогона.
+    if saved.refined {
+        return Err(ToolError::Usage(
+            "Это видео уже улучшено (рефайн применён). Повторный рефайн того же драфта \
+             даст тот же результат — попроси новое видео или финальное качество \
+             (final_quality) вместо повтора."
+                .to_string(),
+        ));
+    }
+    if !saved.loras.is_empty() {
+        return Err(ToolError::Usage(
+            "Рефайн не воспроизводит пользовательские LoRA (CLI движка грузит лоры только \
+             целым каталогом, одиночной силы нет) — рефайн с другим LoRA-стеком дал бы \
+             ДРУГОЕ видео. Попроси новое видео с этими лорами вместо рефайна."
+                .to_string(),
+        ));
+    }
+    if saved.init_path.is_some() {
+        return Err(ToolError::Usage(
+            "Рефайн проверен для видео по тексту и по референсам (RefMod/вложения); \
+             для видео из первого кадра (first_frame) механика replay бенчем не проверена — \
+             отказ вместо угадывания. Попроси новое видео или финальное качество."
+                .to_string(),
+        ));
+    }
+    let entry = resolve_video_bundle_for_tools()?;
+    let Some(refine) = entry.preset.refine.clone() else {
+        return Err(ToolError::Usage(format!(
+            "Активный видео-бандл «{}» не объявляет параметры рефайна (preset.refine) — \
+             рефайн недоступен. Обновите набор моделей.",
+            entry.name
+        )));
+    };
+    let engine_dir = tauri_plugin_image_engine::engine::engine_dir_early();
+    let bundle_dir = tauri_plugin_image_engine::engine::video_bundle_dir_early();
+    if !tauri_plugin_image_engine::engine::sdcpp_installer::has_any_installed(&engine_dir) {
+        return Err(ToolError::NotFound(
+            "Движок изображений не установлен. Откройте Настройки → «Движок запуска ImageGEN моделей» и нажмите «Установить движок».".to_string(),
+        ));
+    }
+    // RefMod-карточка перечитывается с диска: кадры/голос актуальны на момент
+    // рефайна (юзер мог добавить голос после драфта — он попадёт в рефайн).
+    let (ref_paths, ref_audio_paths, ref_image_size_max) = match &saved.refmod_slug {
+        Some(slug) => {
+            let bundle = crate::infra::tools::refmod::load_refmod_card(slug).map_err(
+                |error| ToolError::NotFound(format!("RefMod-карточка «{}» недоступна: {}", slug, error)),
+            )?;
+            (
+                crate::infra::tools::refmod::engine_ref_paths(&bundle),
+                refmod_voice_paths(Some(&bundle)),
+                true,
+            )
+        }
+        None => (
+            saved.ref_paths.clone(),
+            saved.ref_audio_paths.clone(),
+            saved.ref_image_size_max,
+        ),
+    };
+    log::info!(
+        "[VID-TOOL] refine start: bundle={}, seed={}, refs={}, audio={}, refmod={}",
+        entry.name,
+        saved.seed,
+        ref_paths.len(),
+        ref_audio_paths.len(),
+        saved.refmod_slug.as_deref().unwrap_or("-")
+    );
+    let out_dir = video_session_outputs_dir(ctx.session_id);
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .map_err(|error| ToolError::Io(format!("Некорректное системное время: {}", error)))?;
+    let sequence = VIDEO_OUTPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    // Новый файл: драфт сохраняется, рефайн рядом (не перезапись драфта).
+    let out_path = out_dir.join(format!("vid_{}_{}_refined.webm", ts, sequence));
+    let log_cb = |msg: String| log::info!("[VID-TOOL] {}", msg);
+
+    tauri_plugin_image_engine::engine::generate_video_refine(
+        &engine_dir,
+        &bundle_dir,
+        &entry,
+        &refine,
+        &saved.prompt,
+        saved.seconds,
+        saved.seed,
+        &ref_paths,
+        ref_image_size_max,
+        &ref_audio_paths,
+        &out_path,
+        None,
+        log_cb,
+    )
+    .map(|r| {
+        log::info!("[VID-TOOL] refine done: {} ({:.1} сек)", r.path, r.time_sec);
+        // Память хранит параметры драфта: флаг refined=true закрывает повторный
+        // рефайн того же сида (результат воспроизводим и бесполезен).
+        remember_last_video(
+            ctx.session_id,
+            LastVideoReq { refined: true, ..saved },
+        );
+        VideoRunOutput { path: r.path, time_sec: r.time_sec, seed: r.seed, refined: true }
     })
     .map_err(ToolError::Io)
 }
@@ -225,8 +487,14 @@ fn format_video_result(
         .register(output.path, "generate_video")
         .map_err(ToolError::Usage)?;
     Ok(format!(
-        "[VIDEO_SAVED id={id}] Готово за {:.1} сек",
-        output.time_sec
+        "[VIDEO_SAVED id={id}] Готово за {:.1} сек (seed={}{})",
+        output.time_sec,
+        output.seed,
+        if output.refined {
+            ", улучшено (рефайн: выше разрешение, второй проход)"
+        } else {
+            ""
+        }
     ))
 }
 
@@ -357,7 +625,7 @@ impl Tool for GenerateVideo {
         "generate_video"
     }
     fn description(&self) -> &str {
-        "Сгенерировать короткое видео (+аудио) по английскому промпту: либо с нуля по тексту, либо ПО ПРИКРЕПЛЁННОЙ КАРТИНКЕ. Роль картинки задаёт image_usage: \"first_frame\" — картинка станет ПЕРВЫМ КАДРОМ видео (передай её ID в source_image_ids); \"reference\" — картинки-референсы (персонаж, стиль, позы): передай их ID (1–3) в source_image_ids, и движок учтёт их при генерации (речь персонажа референса задаётся в промпте). Персонажа из каталога RefMod-карточек бери аргументом refmod (кадры карточки станут референсами движка). Клип будет приложен к ответу как файл."
+        "Сгенерировать короткое видео (+аудио) по английскому промпту: либо с нуля по тексту, либо ПО ПРИКРЕПЛЁННОЙ КАРТИНКЕ. Роль картинки задаёт image_usage: \"first_frame\" — картинка станет ПЕРВЫМ КАДРОМ видео (передай её ID в source_image_ids); \"reference\" — картинки-референсы (персонаж, стиль, позы): передай их ID (1–3) в source_image_ids, и движок учтёт их при генерации (речь персонажа референса задаётся в промпте). Персонажа из каталога RefMod-карточек бери аргументом refmod (кадры карточки станут референсами движка). Аргумент refine:true улучшает ПОСЛЕДНЕЕ видео этой сессии (тот же промпт/референсы/голос/сид, повышенное разрешение) — остальные аргументы при рефайне не передаются. Клип будет приложен к ответу как файл."
     }
     fn parameters(&self) -> Value {
         serde_json::json!({
@@ -370,9 +638,9 @@ impl Tool for GenerateVideo {
                 "seconds": {"type": "integer", "minimum": 1, "maximum": 15, "description": "Длительность клипа в секундах (по умолчанию 5). Лимит зависит от выбранного набора моделей: больше — только если пользователь прямо попросил."},
                 "final_quality": {"type": "boolean", "description": "false (по умолчанию) = черновик (быстро, минуты). true = финальное качество (медленно: 10+ минут на 5 секунд — предупреждай пользователя о времени)."},
                 "lora": {"type": "array", "items": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}, "strength": {"type": "number", "minimum": 0, "maximum": 2}}}]}, "description": "Опционально: элементы — строка (стем файла LoRA без расширения) ИЛИ объект {\"name\": стем, \"strength\": 0–2}. Смешивать формы можно. Пустой массив или опущенное поле = генерация БЕЗ лор (легально). Сила элемента переопределяет lora_strength; без strength применяется lora_strength (общий дефолт, по умолчанию 1.0). Какие лоры и с какой силой ставить — правило вашего агента (например, категория «взрослый контент»; обычные запросы не получают LoRA). Стемы доступных лор перечислены в каталоге LoRA вашего контекста — используй ТОЛЬКО их; файлы лежат в подпапке базы активного видео-движка (…\\video_loras\\<база>\\): лора чужой базы найдена не будет."},
-                "lora_strength": {"type": "number", "minimum": 0, "maximum": 2, "description": "Общая сила-дефолт LoRA (0–2, по умолчанию 1.0): применяется к элементам lora БЕЗ собственной strength. Без lora (или с пустым lora) — игнорируется."}
-            },
-            "required": ["prompt_en"]
+                "lora_strength": {"type": "number", "minimum": 0, "maximum": 2, "description": "Общая сила-дефолт LoRA (0–2, по умолчанию 1.0): применяется к элементам lora БЕЗ собственной strength. Без lora (или с пустым lora) — игнорируется."},
+                "refine": {"type": "boolean", "description": "true = улучшить ПОСЛЕДНЕЕ видео этой сессии: тот же промпт, референсы, голос и сид перегенерируются в повышенном разрешении (1216×672) со вторым проходом уточнения. ДРУГИЕ АРГУМЕНТЫ НЕ ПЕРЕДАВАТЬ — промпт/рефы/голос/секунды берутся из последнего видео. Откажет, если: видео в этой сессии ещё не было; оно уже улучшалось; оно делалось из первого кадра; в нём были пользовательские LoRA. Время как у черновика (~7 мин на 5-сек клип)."}
+            }
         })
     }
     fn is_readonly(&self) -> bool {
@@ -411,6 +679,73 @@ pub fn execute_video_tool(
 ) -> Option<Result<String, ToolError>> {
     match name {
         "generate_video" => {
+            // Рефайн-ветка (гейт честности): replay последнего драфта сессии с
+            // тем же сидом + латент-апскейл + второй проход. Промпт/рефы/голос
+            // приходят ИЗ ПАМЯТИ последнего видео — любые конфликтующие
+            // аргументы отклоняются, молча игнорировать их нельзя.
+            let refine = args
+                .get("refine")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            if refine {
+                // Единое время жизни 'a: ключ и элементы вектора — из одного
+                // набора статических литералов (замыкание тут не выводится).
+                fn push_conflict<'a>(key: &'a str, present: bool, conflicts: &mut Vec<&'a str>) {
+                    if present {
+                        conflicts.push(key);
+                    }
+                }
+                let mut conflicts: Vec<&str> = Vec::new();
+                let str_present = |key: &str| {
+                    args.get(key)
+                        .and_then(|value| value.as_str())
+                        .map(|s| !s.trim().is_empty())
+                        .unwrap_or(false)
+                };
+                push_conflict(
+                    "prompt_en",
+                    str_present("prompt_en"),
+                    &mut conflicts,
+                );
+                push_conflict(
+                    "image_usage",
+                    str_present("image_usage"),
+                    &mut conflicts,
+                );
+                push_conflict("refmod", str_present("refmod"), &mut conflicts);
+                push_conflict(
+                    "source_image_ids",
+                    args.get("source_image_ids")
+                        .and_then(|value| value.as_array())
+                        .map(|a| !a.is_empty())
+                        .unwrap_or(false),
+                    &mut conflicts,
+                );
+                push_conflict("seconds", args.get("seconds").is_some(), &mut conflicts);
+                push_conflict(
+                    "final_quality",
+                    args.get("final_quality").is_some(),
+                    &mut conflicts,
+                );
+                push_conflict("lora", args.get("lora").is_some(), &mut conflicts);
+                push_conflict(
+                    "lora_strength",
+                    args.get("lora_strength").is_some(),
+                    &mut conflicts,
+                );
+                if !conflicts.is_empty() {
+                    return Some(Err(ToolError::Usage(format!(
+                        "При refine:true тул НЕ принимает остальные аргументы: {}. \
+                         Промпт, референсы, голос, длительность и LoRA берутся из \
+                         последнего видео этой сессии (рефайн = перегенерация того \
+                         же драфта в повышенном разрешении). Убери лишние аргументы.",
+                        conflicts.join(", ")
+                    ))));
+                }
+                return Some(
+                    run_refine_video(ctx).and_then(|output| format_video_result(output, ctx)),
+                );
+            }
             let prompt = args
                 .get("prompt_en")
                 .and_then(|value| value.as_str())
@@ -563,6 +898,7 @@ pub fn execute_video_tool(
                     refmod_bundle.is_some(),
                     &ref_audio_paths,
                     &loras,
+                    refmod_bundle.as_ref().map(|b| b.slug.clone()),
                     ctx,
                 )
                 .and_then(|output| format_video_result(output, ctx)),

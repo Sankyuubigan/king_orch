@@ -1,11 +1,20 @@
 use super::*;
 
 fn test_ctx(registry: Option<&ImageArtifactRegistry>) -> ToolCtx<'_> {
+    test_ctx_for("test", registry)
+}
+
+/// Отдельный session_id для герметичных тестов памяти последнего видео
+/// (статический LAST_VIDEO_REQUESTS общий на процесс — изоляция по ключу).
+fn test_ctx_for<'a>(
+    session_id: &'a str,
+    registry: Option<&'a ImageArtifactRegistry>,
+) -> ToolCtx<'a> {
     ToolCtx {
         workspace_root: std::path::Path::new("."),
         write_root: std::path::Path::new("."),
         write_outside: crate::infra::tools::WriteOutside::Prompt,
-        session_id: "test",
+        session_id,
         approver: crate::infra::permissions::test_approver(),
         agent_id: "test_agent",
         bins_dir: std::path::Path::new("."),
@@ -19,15 +28,19 @@ fn video_schema_only_for_declared_tool() {
     assert_eq!(schemas.len(), 1);
     assert_eq!(schemas[0].0, "media");
     assert_eq!(schemas[0].1, "generate_video");
+    // required удалён: refine:true — легальный вызов БЕЗ prompt_en
+    // (промпт берётся из памяти последнего видео сессии).
     let required = schemas[0]
         .2
         .pointer("/inputSchema/required")
-        .and_then(|value| value.as_array())
-        .unwrap()
-        .clone();
-    assert_eq!(
-        required,
-        vec![serde_json::Value::String("prompt_en".to_string())]
+        .and_then(|value| value.as_array());
+    assert!(
+        required.is_none()
+            || !required
+                .unwrap()
+                .iter()
+                .any(|v| v == "prompt_en"),
+        "prompt_en не required: рефайн вызывается без промпта"
     );
     // generate_image-агент НЕ получает видео-тул.
     assert!(video_tool_schemas(&[]).is_empty());
@@ -61,12 +74,38 @@ fn video_result_uses_opaque_artifact_id() {
         VideoRunOutput {
             path: "D:\\private\\clip.webm".to_string(),
             time_sec: 12.5,
+            seed: 123456789,
+            refined: false,
         },
         &ctx,
     )
     .unwrap();
     assert!(output.contains("[VIDEO_SAVED id=artifact_1]"), "{}", output);
+    assert!(output.contains("seed=123456789"), "{}", output);
+    assert!(
+        !output.contains("улучшено"),
+        "драфт не помечается рефайном: {}",
+        output
+    );
     assert!(!output.contains("D:\\private"), "путь не должен светиться в промпте");
+    // Рефайн-приписка: маркер остаётся парсируемым (id первым в скобках).
+    let refined = format_video_result(
+        VideoRunOutput {
+            path: "D:\\private\\clip.webm".to_string(),
+            time_sec: 400.0,
+            seed: 42,
+            refined: true,
+        },
+        &ctx,
+    )
+    .unwrap();
+    assert!(refined.contains("seed=42"), "{}", refined);
+    assert!(refined.contains("улучшено"), "{}", refined);
+    assert_eq!(
+        extract_saved_video_id(&refined),
+        Some("artifact_2".to_string()),
+        "маркер рефайна парсится attach-механикой"
+    );
 }
 
 #[test]
@@ -102,11 +141,10 @@ fn video_schema_declares_source_image_ids() {
     let ids_desc = ids.get("description").and_then(|v| v.as_str()).unwrap_or("");
     assert!(ids_desc.contains("reference"), "схема описывает ref-ветку: {}", ids_desc);
     // Не в required: видео с нуля по тексту — легальный вызов без картинок.
-    let required = params
-        .pointer("/required")
-        .and_then(|v| v.as_array())
-        .unwrap();
-    assert!(!required.iter().any(|v| v == "source_image_ids"));
+    // required из схемы удалён (refine:true — вызов без prompt_en); если массив
+    // вернётся, source_image_ids в нём быть не должно.
+    let required = params.pointer("/required").and_then(|v| v.as_array());
+    assert!(!required.is_some_and(|r| r.iter().any(|v| v == "source_image_ids")));
     assert!(tool.description().contains("source_image_ids"));
 }
 
@@ -298,11 +336,8 @@ fn video_schema_declares_image_usage() {
     assert_eq!(variants.len(), 2);
     assert!(variants.iter().any(|v| v == "first_frame"));
     assert!(variants.iter().any(|v| v == "reference"));
-    let required = params
-        .pointer("/required")
-        .and_then(|v| v.as_array())
-        .unwrap();
-    assert!(!required.iter().any(|v| v == "image_usage"));
+    let required = params.pointer("/required").and_then(|v| v.as_array());
+    assert!(!required.is_some_and(|r| r.iter().any(|v| v == "image_usage")));
     assert!(tool.description().contains("image_usage"));
     assert!(tool.description().contains("ПЕРВЫМ КАДРОМ"));
     // reference задокументирован как референсы движка (1–3 ID).
@@ -494,11 +529,11 @@ fn video_schema_declares_refmod() {
         .pointer("/properties/refmod")
         .expect("refmod объявлен в схеме");
     assert_eq!(refmod.get("type").and_then(|v| v.as_str()), Some("string"));
-    let required = params
-        .pointer("/required")
-        .and_then(|v| v.as_array())
-        .unwrap();
-    assert!(!required.iter().any(|v| v == "refmod"), "refmod опционален");
+    let required = params.pointer("/required").and_then(|v| v.as_array());
+    assert!(
+        !required.is_some_and(|r| r.iter().any(|v| v == "refmod")),
+        "refmod опционален"
+    );
     let desc = refmod.get("description").and_then(|v| v.as_str()).unwrap_or("");
     assert!(desc.contains("RefMod-карточки"), "{}", desc);
     assert!(desc.contains("НЕ сочетается"), "несовместимость с вложениями описана: {}", desc);
@@ -570,6 +605,256 @@ fn video_refmod_unknown_slug_is_not_found() {
         }
         other => panic!("ожидался NotFound, получен: {:?}", other),
     }
+}
+
+// ── Рефайн последнего видео (05.11.26) ──
+
+/// Схема тула объявляет refine (boolean, НЕ required) и документирует,
+/// что при рефайне остальные аргументы запрещены.
+#[test]
+fn video_schema_declares_refine() {
+    let tool = GenerateVideo;
+    let params = tool.parameters();
+    let refine = params
+        .pointer("/properties/refine")
+        .expect("refine объявлен в схеме");
+    assert_eq!(refine.get("type").and_then(|v| v.as_str()), Some("boolean"));
+    // required удалён из схемы целиком: refine:true — легальный вызов без
+    // prompt_en (промпт берётся из памяти последнего видео).
+    let required = params.pointer("/required").and_then(|v| v.as_array());
+    assert!(!required.is_some_and(|r| r.iter().any(|v| v == "refine")));
+    let desc = refine.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(desc.contains("последнего видео"), "{}", desc);
+    assert!(desc.contains("НЕ ПЕРЕДАВАТЬ"), "запрет остальных аргументов описан: {}", desc);
+    assert!(desc.contains("1216"), "разрешение рефайна задокументировано: {}", desc);
+    assert!(tool.description().contains("refine"), "описание тула упоминает рефайн");
+}
+
+/// Гейт конфликтов: refine:true с любым другим аргументом — Usage со списком
+/// конфликтующих ключей ДО всякого обращения к памяти/диску (молча игнорировать
+/// запрещено: промпт при рефайне берётся из памяти, не из args).
+#[test]
+fn video_refine_refuses_conflicting_args() {
+    let ctx = test_ctx(None);
+    // Один конфликт — prompt_en.
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"refine": true, "prompt_en": "a cat runs"}),
+        &ctx,
+        &[],
+    )
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
+    match err {
+        ToolError::Usage(msg) => {
+            assert!(msg.contains("prompt_en"), "конфликт назван: {}", msg);
+            assert!(msg.contains("НЕ принимает"), "{}", msg);
+        }
+        other => panic!("ожидался Usage, получен: {:?}", other),
+    }
+    // Несколько конфликтов — все названы.
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"refine": true, "seconds": 8, "lora": [{"name": "x"}], "final_quality": true}),
+        &ctx,
+        &[],
+    )
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
+    match err {
+        ToolError::Usage(msg) => {
+            assert!(msg.contains("seconds"), "{}", msg);
+            assert!(msg.contains("lora"), "{}", msg);
+            assert!(msg.contains("final_quality"), "{}", msg);
+        }
+        other => panic!("ожидался Usage, получен: {:?}", other),
+    }
+    // source_image_ids (непустой массив) и image_usage тоже конфликтуют.
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"refine": true, "source_image_ids": ["img_1"], "image_usage": "reference", "refmod": "a"}),
+        &ctx,
+        &[],
+    )
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
+    match err {
+        ToolError::Usage(msg) => {
+            assert!(msg.contains("source_image_ids"), "{}", msg);
+            assert!(msg.contains("image_usage"), "{}", msg);
+            assert!(msg.contains("refmod"), "{}", msg);
+        }
+        other => panic!("ожидался Usage, получен: {:?}", other),
+    }
+    // Пустой prompt_en при refine — НЕ конфликт (пустая строка = отсутствие).
+    let err = execute_video_tool(
+        "generate_video",
+        &serde_json::json!({"refine": true, "prompt_en": "  "}),
+        &ctx,
+        &[],
+    )
+    .expect("generate_video обрабатывается")
+    .unwrap_err();
+    match err {
+        ToolError::Usage(msg) => {
+            assert!(
+                !msg.contains("НЕ принимает остальные аргументы"),
+                "пустой prompt_en не конфликт: {}",
+                msg
+            );
+            assert!(msg.contains("Недавнего видео"), "дальше гейт памяти: {}", msg);
+        }
+        other => panic!("ожидался Usage, получен: {:?}", other),
+    }
+}
+
+/// Гейт памяти: refine без последнего видео в сессии — честный Usage
+/// (молча генерировать новое видео нельзя). Уникальная сессия = пустая память.
+#[test]
+fn video_refine_without_history_refused() {
+    let ctx = test_ctx_for("refine_no_history_session", None);
+    // Гигиена: файл памяти от прошлых прогонов не должен «оживлять» сессию
+    // (память персистентна на диске).
+    let _ = std::fs::remove_dir_all(video_session_outputs_dir("refine_no_history_session"));
+    let err = execute_video_tool("generate_video", &serde_json::json!({"refine": true}), &ctx, &[])
+        .expect("generate_video обрабатывается")
+        .unwrap_err();
+    match err {
+        ToolError::Usage(msg) => {
+            assert!(msg.contains("Недавнего видео"), "{}", msg);
+            assert!(msg.contains("сначала сгенерируй"), "{}", msg);
+        }
+        other => panic!("ожидался Usage, получен: {:?}", other),
+    }
+}
+
+/// Память последнего запроса: store → lookup → перезапись (новый драфт
+/// затирает старый), изоляция по сессиям.
+#[test]
+fn video_last_request_memory_roundtrip() {
+    let session_a = "mem_roundtrip_a";
+    let session_b = "mem_roundtrip_b";
+    // Гигиена: память персистентна на диске — файлы прошлых прогонов тестов
+    // затираем, иначе «пустая память» в начале окажется ложью.
+    let _ = std::fs::remove_dir_all(video_session_outputs_dir(session_a));
+    let _ = std::fs::remove_dir_all(video_session_outputs_dir(session_b));
+    assert!(last_video_request(session_a).is_none(), "пустая память");
+    remember_last_video(
+        session_a,
+        LastVideoReq {
+            prompt: "first draft".to_string(),
+            seconds: 5,
+            refmod_slug: None,
+            ref_paths: vec!["C:/ref/a.png".to_string()],
+            ref_image_size_max: false,
+            ref_audio_paths: Vec::new(),
+            init_path: None,
+            loras: Vec::new(),
+            seed: 111,
+            refined: false,
+        },
+    );
+    remember_last_video(
+        session_b,
+        LastVideoReq {
+            prompt: "other session".to_string(),
+            seconds: 4,
+            refmod_slug: Some("char".to_string()),
+            ref_paths: Vec::new(),
+            ref_image_size_max: true,
+            ref_audio_paths: vec!["C:/v/voice.wav".to_string()],
+            init_path: None,
+            loras: Vec::new(),
+            seed: 222,
+            refined: false,
+        },
+    );
+    let a = last_video_request(session_a).expect("запись A найдена");
+    assert_eq!(a.prompt, "first draft");
+    assert_eq!(a.seed, 111);
+    assert!(!a.refined);
+    // Изоляция сессий: у B свои поля.
+    let b = last_video_request(session_b).expect("запись B найдена");
+    assert_eq!(b.seed, 222);
+    assert_eq!(b.refmod_slug.as_deref(), Some("char"));
+    // Перезапись: новый прогон той же сессии затирает старый.
+    remember_last_video(
+        session_a,
+        LastVideoReq {
+            prompt: "second draft".to_string(),
+            seconds: 5,
+            refmod_slug: None,
+            ref_paths: Vec::new(),
+            ref_image_size_max: false,
+            ref_audio_paths: Vec::new(),
+            init_path: None,
+            loras: Vec::new(),
+            seed: 333,
+            refined: true,
+        },
+    );
+    let a2 = last_video_request(session_a).expect("перезаписано");
+    assert_eq!(a2.prompt, "second draft");
+    assert_eq!(a2.seed, 333);
+    assert!(a2.refined, "флаг refined сохраняется");
+    let _ = std::fs::remove_dir_all(video_session_outputs_dir(session_a));
+    let _ = std::fs::remove_dir_all(video_session_outputs_dir(session_b));
+}
+
+/// Память рефайна переживает «рестарт» приложения: remember пишет файл рядом
+/// с клипами сессии; после очистки оперативного кэша запись дочитывается с
+/// диска (баг 06.11.26: рестарт стирал память → отказ → агент «выкрутился»
+/// новой генерацией без карточки — чужой персонаж и чужой голос).
+#[test]
+fn video_refine_memory_survives_restart() {
+    let session = format!(
+        "zz_mem_persist_{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("часы живы")
+            .as_nanos()
+    );
+    let dir = video_session_outputs_dir(&session);
+    let _ = std::fs::remove_dir_all(&dir);
+    lock_last_video().take(); // «чистый лист» и в оперативке
+    remember_last_video(
+        &session,
+        LastVideoReq {
+            prompt: "vlad vlog".to_string(),
+            seconds: 5,
+            refmod_slug: Some("vlad_main".to_string()),
+            ref_paths: vec!["C:/card/face.png".to_string()],
+            ref_image_size_max: true,
+            ref_audio_paths: vec!["C:/card/voice.wav".to_string()],
+            init_path: None,
+            loras: Vec::new(),
+            seed: 424242,
+            refined: false,
+        },
+    );
+    assert!(
+        dir.join("last_video_req.json").is_file(),
+        "файл памяти записан рядом с клипами"
+    );
+    // «Рестарт»: оперативка очищена, файл на диске остался.
+    lock_last_video().take();
+    let restored = last_video_request(&session).expect("память дочитана с диска");
+    assert_eq!(restored.seed, 424242);
+    assert_eq!(restored.refmod_slug.as_deref(), Some("vlad_main"));
+    assert_eq!(restored.ref_audio_paths, vec!["C:/card/voice.wav"]);
+    assert!(!restored.refined);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Клиентский сид: положительный (CLI -s), уникален между вызовами
+/// (replay-рефайн требует, чтобы разные драфты имели разные сиды).
+#[test]
+fn client_seed_positive_and_varies() {
+    let s1 = client_seed();
+    let s2 = client_seed();
+    assert!(s1 > 0, "сид положительный: {}", s1);
+    assert!(s2 > 0);
+    assert_ne!(s1, s2, "сиды двух прогонов различаются");
 }
 
 /// E2E (#[ignore], запуск по явной просьбе владельца — GPU-минуты): видео по
