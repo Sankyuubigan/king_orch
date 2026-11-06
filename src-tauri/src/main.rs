@@ -118,6 +118,60 @@ async fn main() {
         .manage(AppState::new())
         .setup(move |app| {
             log::info!("[BOOT] setup begin {}ms", process_started.elapsed().as_millis());
+
+            // ── Окно: иконка панели задач → показ → страховка WebView2 ──
+            // Окно создаётся скрытым (visible: false в tauri.conf.json и в
+            // devWindow .build-config.json). Кнопка панели задач запрашивает
+            // иконки окна ОДИН РАЗ — в момент создания кнопки (показ окна) —
+            // и больше их не перечитывает: поэтому ДО show() на окно
+            // выставляются ICON_SMALL/ICON_BIG из ресурсов exe. Tauri сам
+            // выставляет только SMALL; пустой BIG → Explorer рисует фолбэк из
+            // своего кэша по пути exe (дев-exe заменяется каждой сборкой →
+            // плавающая заглушка, диагностика 06.11.26). Далее — страховка
+            // белого экрана: события окна (фокус/закрытие) в лог и
+            // принудительная перерисовка при возврате фокуса (глюк compositor
+            // под нагрузкой GPU). Важно: on_window_event вешается на САМО окно
+            // (WebviewWindow), а не на App; события Occluded в WebView2/Tauri
+            // нет — только Focused, Destroyed и пр. (см. docs.rs tauri::WindowEvent).
+            {
+                use tauri::Manager;
+                if let Some(win) = app.get_webview_window("main") {
+                    // Кнопка панели фиксует иконку при создании: выставляем
+                    // обе иконки строго до show(). Отказ иконки не фатален —
+                    // окно всё равно показываем (деградация = прежнее поведение).
+                    let icon_result = win
+                        .hwnd()
+                        .map(|hwnd| hwnd.0 as isize)
+                        .map_err(|e| format!("hwnd не получен: {e}"))
+                        .and_then(infra::apply_window_icons);
+                    if let Err(e) = icon_result {
+                        log::warn!("[WINDOW_ICON] иконки не выставлены: {e}");
+                    }
+                    let _ = win.show();
+                    let _ = win.set_focus();
+
+                    // Отдельный клон для замыкания: сам `win` борруется методом
+                    // on_window_event(&self), а клон перемещается в замыкание.
+                    let cb_win = win.clone();
+                    win.on_window_event(move |event| {
+                        match event {
+                            tauri::WindowEvent::Focused(focused) => {
+                                let f = *focused;
+                                if f {
+                                    let _ = cb_win.eval("void document.documentElement.offsetHeight");
+                                }
+                            }
+                            tauri::WindowEvent::Destroyed => {
+                                log::info!("[WV] Destroyed");
+                            }
+                            _ => {}
+                        }
+                    });
+                } else {
+                    log::error!("[BOOT] окно main не найдено — окно не будет показано (окно объявлено в tauri.conf.json, None невозможен)");
+                }
+            }
+
             let app_handle = app.handle();
 
             // Корни подтверждены штатным `app.path()`, данные разнесены из прежнего
@@ -194,36 +248,6 @@ async fn main() {
             });
 
             log::info!("[BOOT] setup complete {}ms", process_started.elapsed().as_millis());
-
-            // ── Диагностика + страховка WebView2 окна ──
-            // Логируем события окна (фокус/закрытие) в локальный лог и
-            // принудительно перерисовываем при возврате фокуса, чтобы окно не
-            // оставалось белым (глюк compositor под нагрузкой GPU).
-            // Важно: on_window_event вешается на САМО окно (WebviewWindow), а не
-            // на App; события Occluded в WebView2/Tauri нет — только Focused,
-            // Destroyed и пр. (см. docs.rs tauri::WindowEvent).
-            {
-                use tauri::Manager;
-                if let Some(win) = app.get_webview_window("main") {
-                    // Отдельный клон для замыкания: сам `win` борруется методом
-                    // on_window_event(&self), а клон перемещается в замыкание.
-                    let cb_win = win.clone();
-                    win.on_window_event(move |event| {
-                        match event {
-                            tauri::WindowEvent::Focused(focused) => {
-                                let f = *focused;
-                                if f {
-                                    let _ = cb_win.eval("void document.documentElement.offsetHeight");
-                                }
-                            }
-                            tauri::WindowEvent::Destroyed => {
-                                log::info!("[WV] Destroyed");
-                            }
-                            _ => {}
-                        }
-                    });
-                }
-            }
 
             Ok(())
         })

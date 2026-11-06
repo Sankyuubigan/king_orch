@@ -71,5 +71,5 @@ url = "2"
 log = "0.4"
 base64 = "0.22"
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Networking_WinHttp", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = ["Win32_Networking_WinHttp", "Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 
