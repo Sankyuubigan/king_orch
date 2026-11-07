@@ -23,7 +23,8 @@ use crate::infra::tools::{Tool, ToolCtx, ToolError};
 // ── SSOT-реэкспорт (типы и константы без ошибок) ──
 pub use tauri_plugin_image_engine::engine::{
     copy_card_voice_in, engine_ref_paths, normalize_frame, set_card_voice_in,
-    update_voice_desc_in, RefModBundle, FRAME_LONG_SIDE_MAX, FRAME_SIZE_MULTIPLE, FRAMES_PER_RUN,
+    update_voice_desc_in, NormalizeReport, RefModBundle, FRAME_LONG_SIDE_MAX,
+    FRAME_SIZE_MULTIPLE, FRAMES_PER_RUN,
 };
 
 /// Маппинг ошибки SSOT в ошибку тул-слоя (вариант в вариант — семантика честных
@@ -47,12 +48,13 @@ pub fn validate_slug(slug: &str) -> Result<(), ToolError> {
 }
 
 /// Сохранить RefMod-карточку из файлов-источников (перезаписывает существующую).
+/// Второй элемент — отчёт нормализации (SSOT — плагин): хост только форматирует.
 pub fn save_refmod_card(
     slug: &str,
     name: &str,
     description: &str,
     sources: &[PathBuf],
-) -> Result<RefModBundle, ToolError> {
+) -> Result<(RefModBundle, NormalizeReport), ToolError> {
     save_refmod_card_in(&refmods_dir(), slug, name, description, sources)
 }
 
@@ -62,7 +64,7 @@ pub fn save_refmod_card_in(
     name: &str,
     description: &str,
     sources: &[PathBuf],
-) -> Result<RefModBundle, ToolError> {
+) -> Result<(RefModBundle, NormalizeReport), ToolError> {
     tauri_plugin_image_engine::engine::save_refmod_card_in(refmods_root, slug, name, description, sources)
         .map_err(map_error)
 }
@@ -74,7 +76,7 @@ pub fn save_refmod_card_images_in(
     name: &str,
     description: &str,
     images: &[image::DynamicImage],
-) -> Result<RefModBundle, ToolError> {
+) -> Result<(RefModBundle, NormalizeReport), ToolError> {
     tauri_plugin_image_engine::engine::save_refmod_card_images_in(
         refmods_root,
         slug,
@@ -342,7 +344,7 @@ fn create_card(
         name,
         paths.len()
     );
-    let card = save_refmod_card_in(refmods_root, slug, name, description, &paths)?;
+    let (card, report) = save_refmod_card_in(refmods_root, slug, name, description, &paths)?;
     // Голос опционален (Этап 3): сэмпл декодируется ДО записи (битый аудио —
     // Usage; карточка с кадрами уже сохранена и остаётся без голоса).
     let voice_desc = args
@@ -372,10 +374,11 @@ fn create_card(
         card.frames.len(),
         refmods_root.join(&card.slug).display()
     );
+    let normalize_note = format_normalize_warning(&report);
     Ok(format!(
         "[REFMOD_SAVED slug={}] Карточка персонажа сохранена: {} кадр(ов), {} кадров доступно \
          видео-агенту в первом прогоне{}{}. Теперь её можно использовать в генерации видео \
-         аргументом refmod=\"{}\".",
+         аргументом refmod=\"{}\".{}",
         card.slug,
         card.frames.len(),
         FRAMES_PER_RUN,
@@ -385,8 +388,51 @@ fn create_card(
         } else {
             String::new()
         },
-        card.slug
+        card.slug,
+        normalize_note
     ))
+}
+
+/// ⚠-блок о нормализации кадров в тексте результата `refmod_create`
+/// (PRP 07.11.26): тул молча сжимал фото пользователя до ≤1024px — потеря
+/// пикселей лица была невидимой (кейс vlad_main: 3024×4032 → 768×1024).
+/// Хост НЕ пересчитывает размеры — только классифицирует и форматирует
+/// отчёт плагина: площадь ужалась → СЖАТИЕ, выросла → РАСТЯЖЕНИЕ (сетка 32).
+fn format_normalize_warning(report: &NormalizeReport) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    let mut compressed = false;
+    for r in &report.resized {
+        let src_area = r.src_w as u64 * r.src_h as u64;
+        let dst_area = r.dst_w as u64 * r.dst_h as u64;
+        if dst_area < src_area {
+            compressed = true;
+            lines.push(format!(
+                "⚠ СЖАТИЕ {}: {}×{} → {}×{} (детали потеряны)",
+                r.frame_file, r.src_w, r.src_h, r.dst_w, r.dst_h
+            ));
+        } else if dst_area > src_area {
+            lines.push(format!(
+                "⚠ РАСТЯЖЕНИЕ {}: {}×{} → {}×{} (выравнивание к сетке 32px)",
+                r.frame_file, r.src_w, r.src_h, r.dst_w, r.dst_h
+            ));
+        } else {
+            lines.push(format!(
+                "⚠ ИЗМЕНЕНИЕ {}: {}×{} → {}×{} (выравнивание к сетке 32px)",
+                r.frame_file, r.src_w, r.src_h, r.dst_w, r.dst_h
+            ));
+        }
+    }
+    if compressed {
+        lines.push(
+            "Совет: прикладывайте кропы лица из ОРИГИНАЛОВ со сторонами ≤1024px — \
+             иначе лицо теряет пиксели ещё до видео-генерации."
+                .to_string(),
+        );
+    }
+    if lines.is_empty() {
+        return String::new();
+    }
+    format!("\n{}", lines.join("\n"))
 }
 
 fn edit_card(
@@ -523,7 +569,7 @@ fn edit_card(
     };
     let name = new_name.unwrap_or(&source.name).to_string();
     let description = new_desc.unwrap_or(&source.description).to_string();
-    let card =
+    let (card, _) =
         save_refmod_card_images_in(refmods_root, &target_slug, &name, &description, &frames)?;
     // Наследование голоса в новую карточку (v2): при overwrite голос уже
     // наследует save_refmod_card_images_in — копирование не нужно.

@@ -147,6 +147,54 @@ fn create_rejects_bad_slug_before_disk_write() {
     let _ = std::fs::remove_dir_all(src);
 }
 
+// ── ⚠-блок нормализации в результате refmod_create (PRP 07.11.26) ──
+
+#[test]
+fn create_reports_compression_and_silent_for_aligned() {
+    let root = temp_root("warn_compress");
+    let src = temp_root("warn_compress_src");
+    // Оверсайз-фото (кейс vlad_main: телефонное 3024×4032) — тул обязан
+    // ВИДИМО сообщить о сжатии (§00.2: молчаливая потеря пикселей недопустима).
+    let big = png_attachment(&src, "big.png", 3024, 4032);
+    let marker = create_card(
+        &root,
+        &serde_json::json!({"slug": "big_char", "name": "Биг"}),
+        &ctx(),
+        std::slice::from_ref(&big),
+        &[],
+    )
+    .expect("оверсайз-карточка сохраняется");
+    assert!(marker.contains("[REFMOD_SAVED slug=big_char]"), "{}", marker);
+    assert!(
+        marker.contains("⚠ СЖАТИЕ frame_01.png: 3024×4032 → 768×1024"),
+        "сжатие названо явно с размерами: {}",
+        marker
+    );
+    assert!(marker.contains("Совет: прикладывайте кропы"), "{}", marker);
+
+    // Уже выровненный набор: отчёт пуст → ⚠-блока нет (не спамим).
+    let root2 = temp_root("warn_clean");
+    let small = png_attachment(&src, "small.png", 320, 288);
+    let clean = create_card(
+        &root2,
+        &serde_json::json!({"slug": "grid_char", "name": "Грид"}),
+        &ctx(),
+        std::slice::from_ref(&small),
+        &[],
+    )
+    .expect("сеточная карточка сохраняется");
+    assert!(clean.contains("[REFMOD_SAVED slug=grid_char]"), "{}", clean);
+    assert!(
+        !clean.contains("СЖАТИЕ") && !clean.contains("РАСТЯЖЕНИЕ"),
+        "сеточные кадры не порождают предупреждений: {}",
+        clean
+    );
+
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(root2);
+    let _ = std::fs::remove_dir_all(src);
+}
+
 // ── Roundtrip create → edit (временный корень) ──
 
 #[test]

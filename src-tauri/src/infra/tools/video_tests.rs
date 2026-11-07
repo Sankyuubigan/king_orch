@@ -894,7 +894,8 @@ fn e2e_refmod_card_video_without_loras() {
         "тестовая карточка из сэмплов malcolmrey",
         &sources,
     )
-    .expect("карточка собирается с даунскейлом 1024/32px");
+    .expect("карточка собирается с даунскейлом 1024/32px")
+    .0;
     let registry = ImageArtifactRegistry::new();
     let ctx = test_ctx(Some(&registry));
     let result = execute_video_tool(
