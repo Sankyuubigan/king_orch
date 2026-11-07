@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use tauri_plugin_image_engine::engine::RefModBundle;
+use tauri_plugin_image_engine::engine::{RefModBundle, VideoSamplingPlan, sampling_plan_for_quality};
 
 use crate::infra::tools::media::ImageArtifactRegistry;
 use crate::infra::tools::{Tool, ToolCtx, ToolError};
@@ -53,6 +53,13 @@ struct LastVideoReq {
     init_path: Option<String>,
     loras: Vec<tauri_plugin_image_engine::engine::LoraSpec>,
     seed: i64,
+    /// Честный реплей (2.3 Euler-PRP): разрешённый план ДРАФТА на момент его
+    /// генерации (шаги/сэмплер/шедулер/shift/вес turbo-лоры). Рефайн реплеит
+    /// ИМЕННО его — смена каталога не переписывает уже снятые видео. None =
+    /// память старого формата (serde default) — план берётся из текущего
+    /// каталога (задокументированное поведение).
+    #[serde(default)]
+    draft_plan: Option<VideoSamplingPlan>,
     /// Видео уже прошло рефайн — повторный даст тот же результат (honest отказ).
     refined: bool,
 }
@@ -247,7 +254,7 @@ fn refmod_voice_paths(bundle: Option<&RefModBundle>) -> Vec<String> {
 fn run_generate_video(
     prompt_en: &str,
     seconds: u32,
-    final_quality: bool,
+    keep_last_seed: bool,
     init_path: Option<&str>,
     ref_paths: &[String],
     ref_image_size_max: bool,
@@ -287,16 +294,24 @@ fn run_generate_video(
 
     // Клиентский сид на каждый прогон: сервер сид -1 не возвращает (рандомит
     // молча) — сид всегда генерирует хост, иначе replay-рефайн невозможен.
-    let seed = client_seed();
+    // keep_last_seed (2.7 Euler-PRP): «повтори то же видео, но …» — сид
+    // последнего видео сессии даёт ту же сцену; памяти нет — новый случайный.
+    let seed = if keep_last_seed {
+        last_video_request(ctx.session_id)
+            .map(|req| req.seed)
+            .unwrap_or_else(client_seed)
+    } else {
+        client_seed()
+    };
     log::info!(
-        "[VID-TOOL] generate_video start: bundle={}, seconds={}, quality={}, mode={}, refs={}, audio={}, ref_image_size_max={}, seed={}",
+        "[VID-TOOL] generate_video start: bundle={}, seconds={}, mode={}, refs={}, audio={}, ref_image_size_max={}, keep_seed={}, seed={}",
         entry.name,
         seconds,
-        if final_quality { "final" } else { "draft" },
         mode,
         ref_paths.len(),
         ref_audio_paths.len(),
         ref_image_size_max,
+        keep_last_seed,
         seed
     );
     let out_dir = video_session_outputs_dir(ctx.session_id);
@@ -314,7 +329,6 @@ fn run_generate_video(
         &entry,
         prompt_en,
         seconds,
-        final_quality,
         init_path,
         ref_paths,
         ref_image_size_max,
@@ -342,6 +356,9 @@ fn run_generate_video(
                 init_path: init_path.map(str::to_string),
                 loras: loras.to_vec(),
                 seed,
+                // План драфта замораживается на момент генерации (2.3): рефайн
+                // реплеит его, а не текущий каталог.
+                draft_plan: Some(sampling_plan_for_quality(&entry, &bundle_dir)),
                 refined: false,
             },
         );
@@ -368,8 +385,7 @@ fn run_refine_video(ctx: &ToolCtx) -> Result<VideoRunOutput, ToolError> {
     if saved.refined {
         return Err(ToolError::Usage(
             "Это видео уже улучшено (рефайн применён). Повторный рефайн того же драфта \
-             даст тот же результат — попроси новое видео или финальное качество \
-             (final_quality) вместо повтора."
+             даст тот же результат — попроси новое видео вместо повтора."
                 .to_string(),
         ));
     }
@@ -385,7 +401,7 @@ fn run_refine_video(ctx: &ToolCtx) -> Result<VideoRunOutput, ToolError> {
         return Err(ToolError::Usage(
             "Рефайн проверен для видео по тексту и по референсам (RefMod/вложения); \
              для видео из первого кадра (first_frame) механика replay бенчем не проверена — \
-             отказ вместо угадывания. Попроси новое видео или финальное качество."
+             отказ вместо угадывания. Попроси новое видео."
                 .to_string(),
         ));
     }
@@ -451,6 +467,8 @@ fn run_refine_video(ctx: &ToolCtx) -> Result<VideoRunOutput, ToolError> {
         &bundle_dir,
         &entry,
         &refine,
+        // План драфта из памяти (2.3): реплей тем же планом, что снял драфт.
+        saved.draft_plan.clone(),
         &saved.prompt,
         saved.seconds,
         saved.seed,
@@ -630,7 +648,7 @@ impl Tool for GenerateVideo {
         "generate_video"
     }
     fn description(&self) -> &str {
-        "Сгенерировать короткое видео (+аудио) по английскому промпту: либо с нуля по тексту, либо ПО ПРИКРЕПЛЁННОЙ КАРТИНКЕ. Роль картинки задаёт image_usage: \"first_frame\" — картинка станет ПЕРВЫМ КАДРОМ видео (передай её ID в source_image_ids); \"reference\" — картинки-референсы (персонаж, стиль, позы): передай их ID (1–3) в source_image_ids, и движок учтёт их при генерации (речь персонажа референса задаётся в промпте). Персонажа из каталога RefMod-карточек бери аргументом refmod (кадры карточки станут референсами движка). Аргумент refine:true улучшает ПОСЛЕДНЕЕ видео этой сессии (тот же промпт/референсы/голос/сид, повышенное разрешение) — остальные аргументы при рефайне не передаются. Клип будет приложен к ответу как файл."
+        "Сгенерировать короткое видео (+аудио) по английскому промпту: либо с нуля по тексту, либо ПО ПРИКРЕПЛЁННОЙ КАРТИНКЕ. Роль картинки задаёт image_usage: \"first_frame\" — картинка станет ПЕРВЫМ КАДРОМ видео (передай её ID в source_image_ids); \"reference\" — картинки-референсы (персонаж, стиль, позы): передай их ID (1–3) в source_image_ids, и движок учтёт их при генерации (речь персонажа референса задаётся в промпте). Персонажа из каталога RefMod-карточек бери аргументом refmod (кадры карточки станут референсами движка). Улучшение уже готового видео — ОТДЕЛЬНЫЙ тул refine_last_video. Клип будет приложен к ответу как файл."
     }
     fn parameters(&self) -> Value {
         serde_json::json!({
@@ -641,10 +659,10 @@ impl Tool for GenerateVideo {
                 "refmod": {"type": "string", "description": "Slug RefMod-карточки персонажа из блока «Доступные RefMod-карточки» контекста: кадры карточки пойдут референсами движка (Ref2VA) — внешность/персонаж возьмутся с карточки, сцена описывается prompt_en. НЕ сочетается с source_image_ids и image_usage (референсы либо из карточки, либо из вложений). В движок уходят ВСЕ кадры карточки (до 8), порядок первых трёх — конвенция лицо → ракурс 3/4 → фигура; кадры 4–8 могут быть любыми (все лица, лица+фигура и т.п.). Если у карточки есть голос (🎤 в каталоге) — он уйдёт в ref_audios движка: персонаж заговорит этим голосом, реплику задай в prompt_en в кавычках. Лоры при этом не нужны."},
                 "source_image_ids": {"type": "array", "items": {"type": "string"}, "minItems": 1, "maxItems": 3, "description": "ID картинок из блока доступных изображений. first_frame: РОВНО ОДИН ID — картинка станет первым кадром (image-to-video). reference: 1–3 ID — картинки пойдут в движок референсами (консистентный персонаж/стиль); больше 3 не принимается. Опционально: без него видео генерируется с нуля по тексту. Файловые пути запрещены."},
                 "seconds": {"type": "integer", "minimum": 1, "maximum": 15, "description": "Длительность клипа в секундах (по умолчанию 5). Лимит зависит от выбранного набора моделей: больше — только если пользователь прямо попросил."},
-                "final_quality": {"type": "boolean", "description": "false (по умолчанию) = черновик (быстро, минуты). true = финальное качество (медленно: 10+ минут на 5 секунд — предупреждай пользователя о времени)."},
+                "max_quality": {"type": "boolean", "description": "true = сразу в максимальном качестве: автоматическая цепочка «черновик → улучшение» двумя проходами внутри одного вызова (в ответ придёт ОДИН готовый улучшенный клип). Долго: ~15 минут на 5-сек клип — предупреждай пользователя о времени. НЕ сочетается с first_frame и пользовательскими LoRA (механика улучшения для них не проверена — отказ). По умолчанию false = черновик (быстро, минуты)."},
+                "keep_last_seed": {"type": "boolean", "description": "true = взять сид последнего видео сессии вместо нового случайного: «повтори то же видео, но …» даст ту же сцену с изменением, а не другого персонажа. Видео в сессии ещё не было — новый случайный сид. По умолчанию false."},
                 "lora": {"type": "array", "items": {"oneOf": [{"type": "string", "minLength": 1}, {"type": "object", "required": ["name"], "properties": {"name": {"type": "string", "minLength": 1}, "strength": {"type": "number", "minimum": 0, "maximum": 2}}}]}, "description": "Опционально: элементы — строка (стем файла LoRA без расширения) ИЛИ объект {\"name\": стем, \"strength\": 0–2}. Смешивать формы можно. Пустой массив или опущенное поле = генерация БЕЗ лор (легально). Сила элемента переопределяет lora_strength; без strength применяется lora_strength (общий дефолт, по умолчанию 1.0). Какие лоры и с какой силой ставить — правило вашего агента (например, категория «взрослый контент»; обычные запросы не получают LoRA). Стемы доступных лор перечислены в каталоге LoRA вашего контекста — используй ТОЛЬКО их; файлы лежат в подпапке базы активного видео-движка (…\\video_loras\\<база>\\): лора чужой базы найдена не будет."},
-                "lora_strength": {"type": "number", "minimum": 0, "maximum": 2, "description": "Общая сила-дефолт LoRA (0–2, по умолчанию 1.0): применяется к элементам lora БЕЗ собственной strength. Без lora (или с пустым lora) — игнорируется."},
-                "refine": {"type": "boolean", "description": "true = улучшить ПОСЛЕДНЕЕ видео этой сессии: тот же промпт, референсы, голос и сид перегенерируются в повышенном разрешении (1216×672) со вторым проходом уточнения. ДРУГИЕ АРГУМЕНТЫ НЕ ПЕРЕДАВАТЬ — промпт/рефы/голос/секунды берутся из последнего видео. Откажет, если: видео в этой сессии ещё не было; оно уже улучшалось; оно делалось из первого кадра; в нём были пользовательские LoRA. Время как у черновика (~7 мин на 5-сек клип)."}
+                "lora_strength": {"type": "number", "minimum": 0, "maximum": 2, "description": "Общая сила-дефолт LoRA (0–2, по умолчанию 1.0): применяется к элементам lora БЕЗ собственной strength. Без lora (или с пустым lora) — игнорируется."}
             }
         })
     }
@@ -659,11 +677,49 @@ impl Tool for GenerateVideo {
     }
 }
 
+/// Улучшение последнего видео сессии — ОТДЕЛЬНЫЙ тул с ПУСТОЙ схемой (2.6
+/// Euler-PRP, структурная защита §00.2): ни промпта, ни рефов, ни сида
+/// передать невозможно — нода рефайна физически не может сгенерировать новое
+/// видео взамен улучшаемого.
+pub struct RefineLastVideo;
+
+impl Tool for RefineLastVideo {
+    fn name(&self) -> &str {
+        "refine_last_video"
+    }
+    fn description(&self) -> &str {
+        "Улучшить ПОСЛЕДНЕЕ видео этой сессии: тот же промпт, референсы, голос и сид перегенерируются в повышенном разрешении (1152×640) со вторым проходом уточнения. НИКАКИХ аргументов — всё берётся из последнего видео сессии. Откажет, если: видео в этой сессии ещё не было; оно уже улучшалось; оно делалось из первого кадра; в нём были пользовательские LoRA. Долго: ~10 минут на 5-сек клип — предупреждай пользователя о времени. Клип будет приложен к ответу как файл."
+    }
+    fn parameters(&self) -> Value {
+        // Пустая схема — структурная защита: передавать нечего.
+        serde_json::json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        })
+    }
+    fn is_readonly(&self) -> bool {
+        false
+    }
+    fn execute(&self, _args: &Value, _ctx: &ToolCtx) -> Result<String, ToolError> {
+        Err(ToolError::Usage(
+            "refine_last_video должен исполняться через диспетчер с media-реестром"
+                .to_string(),
+        ))
+    }
+}
+
 /// Схема video-тула для промпта агента (мета-имя "media").
 pub fn video_tool_schemas(agent_tools: &[String]) -> Vec<(String, String, Value)> {
     let mut out = Vec::new();
     if agent_tools.iter().any(|t| t == "generate_video") {
         let t = GenerateVideo;
+        out.push(("media".to_string(), t.name().to_string(), serde_json::json!({
+            "name": t.name(), "description": t.description(), "inputSchema": t.parameters(),
+        })));
+    }
+    if agent_tools.iter().any(|t| t == "refine_last_video") {
+        let t = RefineLastVideo;
         out.push(("media".to_string(), t.name().to_string(), serde_json::json!({
             "name": t.name(), "description": t.description(), "inputSchema": t.parameters(),
         })));
@@ -684,73 +740,6 @@ pub fn execute_video_tool(
 ) -> Option<Result<String, ToolError>> {
     match name {
         "generate_video" => {
-            // Рефайн-ветка (гейт честности): replay последнего драфта сессии с
-            // тем же сидом + латент-апскейл + второй проход. Промпт/рефы/голос
-            // приходят ИЗ ПАМЯТИ последнего видео — любые конфликтующие
-            // аргументы отклоняются, молча игнорировать их нельзя.
-            let refine = args
-                .get("refine")
-                .and_then(|value| value.as_bool())
-                .unwrap_or(false);
-            if refine {
-                // Единое время жизни 'a: ключ и элементы вектора — из одного
-                // набора статических литералов (замыкание тут не выводится).
-                fn push_conflict<'a>(key: &'a str, present: bool, conflicts: &mut Vec<&'a str>) {
-                    if present {
-                        conflicts.push(key);
-                    }
-                }
-                let mut conflicts: Vec<&str> = Vec::new();
-                let str_present = |key: &str| {
-                    args.get(key)
-                        .and_then(|value| value.as_str())
-                        .map(|s| !s.trim().is_empty())
-                        .unwrap_or(false)
-                };
-                push_conflict(
-                    "prompt_en",
-                    str_present("prompt_en"),
-                    &mut conflicts,
-                );
-                push_conflict(
-                    "image_usage",
-                    str_present("image_usage"),
-                    &mut conflicts,
-                );
-                push_conflict("refmod", str_present("refmod"), &mut conflicts);
-                push_conflict(
-                    "source_image_ids",
-                    args.get("source_image_ids")
-                        .and_then(|value| value.as_array())
-                        .map(|a| !a.is_empty())
-                        .unwrap_or(false),
-                    &mut conflicts,
-                );
-                push_conflict("seconds", args.get("seconds").is_some(), &mut conflicts);
-                push_conflict(
-                    "final_quality",
-                    args.get("final_quality").is_some(),
-                    &mut conflicts,
-                );
-                push_conflict("lora", args.get("lora").is_some(), &mut conflicts);
-                push_conflict(
-                    "lora_strength",
-                    args.get("lora_strength").is_some(),
-                    &mut conflicts,
-                );
-                if !conflicts.is_empty() {
-                    return Some(Err(ToolError::Usage(format!(
-                        "При refine:true тул НЕ принимает остальные аргументы: {}. \
-                         Промпт, референсы, голос, длительность и LoRA берутся из \
-                         последнего видео этой сессии (рефайн = перегенерация того \
-                         же драфта в повышенном разрешении). Убери лишние аргументы.",
-                        conflicts.join(", ")
-                    ))));
-                }
-                return Some(
-                    run_refine_video(ctx).and_then(|output| format_video_result(output, ctx)),
-                );
-            }
             let prompt = args
                 .get("prompt_en")
                 .and_then(|value| value.as_str())
@@ -871,8 +860,8 @@ pub fn execute_video_tool(
                 .and_then(|value| value.as_u64())
                 .map(|s| s as u32)
                 .unwrap_or(5);
-            let final_quality = args
-                .get("final_quality")
+            let keep_last_seed = args
+                .get("keep_last_seed")
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false);
             // LoRA-прокидка (зеркало media.rs): опциональные поля; невалидные
@@ -893,21 +882,79 @@ pub fn execute_video_tool(
                 }
                 Err(e) => return Some(Err(e)),
             };
-            Some(
-                run_generate_video(
-                    prompt,
-                    seconds,
-                    final_quality,
-                    init_path.as_deref(),
-                    &ref_paths,
-                    refmod_bundle.is_some(),
-                    &ref_audio_paths,
-                    &loras,
-                    refmod_bundle.as_ref().map(|b| b.slug.clone()),
-                    ctx,
-                )
-                .and_then(|output| format_video_result(output, ctx)),
-            )
+            // Цепочка «сразу в максимальном качестве» (2.5 Euler-PRP): драфт →
+            // рефайн внутри одного вызова тула, в ответ — ОДИН улучшенный клип.
+            // Гейты ДО драфта: честный отказ вместо сгоревших минут драфта и
+            // гарантированного отказа на середине цепочки.
+            let max_quality = args
+                .get("max_quality")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false);
+            if max_quality {
+                if !loras.is_empty() {
+                    return Some(Err(ToolError::Usage(
+                        "Цепочка max_quality (черновик → улучшение) не воспроизводит \
+                         пользовательские LoRA: улучшение грузит лоры только целым \
+                         каталогом — стек изменится, это будет ДРУГОЕ видео. \
+                         Сгенерируй черновик или убери лоры."
+                            .to_string(),
+                    )));
+                }
+                if init_path.is_some() {
+                    return Some(Err(ToolError::Usage(
+                        "Цепочка max_quality проверена для видео по тексту/референсам; \
+                         для видео из первого кадра (first_frame) механика улучшения \
+                         бенчем не проверена — отказ вместо угадывания. Сгенерируй \
+                         черновик."
+                            .to_string(),
+                    )));
+                }
+            }
+            let run = run_generate_video(
+                prompt,
+                seconds,
+                keep_last_seed,
+                init_path.as_deref(),
+                &ref_paths,
+                refmod_bundle.is_some(),
+                &ref_audio_paths,
+                &loras,
+                refmod_bundle.as_ref().map(|b| b.slug.clone()),
+                ctx,
+            );
+            Some(match run {
+                // max_quality: драфт уже в памяти (refined:false) — рефайн
+                // реплеит его тем же сидом и тем же планом драфта.
+                Ok(output) if max_quality => {
+                    log::info!(
+                        "[VID-TOOL] max_quality: драфт готов ({:.1} сек) — запускаю улучшение",
+                        output.time_sec
+        );
+                    run_refine_video(ctx)
+                        .and_then(|refined| format_video_result(refined, ctx))
+                }
+                Ok(output) => format_video_result(output, ctx),
+                Err(e) => Err(e),
+            })
+        }
+        "refine_last_video" => {
+            // Схема пустая по построению (2.6), но чужие ключи не молчим:
+            // аргументов не предусмотрено ВООБЩЕ — структурная защита.
+            if let Some(obj) = args.as_object() {
+                let extra: Vec<&String> = obj.keys().collect();
+                if !extra.is_empty() {
+                    return Some(Err(ToolError::Usage(format!(
+                        "refine_last_video не принимает аргументов (получено: {}) — \
+                         всё берётся из последнего видео этой сессии.",
+                        extra
+                            .iter()
+                            .map(|s| s.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ))));
+                }
+            }
+            Some(run_refine_video(ctx).and_then(|output| format_video_result(output, ctx)))
         }
         _ => None,
     }

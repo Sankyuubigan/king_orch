@@ -28,8 +28,22 @@ fn video_schema_only_for_declared_tool() {
     assert_eq!(schemas.len(), 1);
     assert_eq!(schemas[0].0, "media");
     assert_eq!(schemas[0].1, "generate_video");
-    // required удалён: refine:true — легальный вызов БЕЗ prompt_en
-    // (промпт берётся из памяти последнего видео сессии).
+    // Рефайн — ОТДЕЛЬНЫЙ тул (2.6 Euler-PRP): объявляется вместе с
+    // generate_video, схема пустая — передавать нечего (структурная защита).
+    let with_refine = video_tool_schemas(&[
+        "generate_video".to_string(),
+        "refine_last_video".to_string(),
+    ]);
+    assert_eq!(with_refine.len(), 2, "оба тула объявляются");
+    assert_eq!(with_refine[1].1, "refine_last_video");
+    let refine_props = with_refine[1]
+        .2
+        .pointer("/inputSchema/properties")
+        .and_then(|v| v.as_object());
+    assert!(refine_props.is_some_and(|p| p.is_empty()), "схема рефайн-тула пуста");
+    let only_refine = video_tool_schemas(&["refine_last_video".to_string()]);
+    assert_eq!(only_refine.len(), 1, "рефайн-тул объявляется и без генерации");
+    // prompt_en не required: гейт пустого промпта — runtime-отказ тула.
     let required = schemas[0]
         .2
         .pointer("/inputSchema/required")
@@ -62,8 +76,10 @@ fn video_schema_documents_motion_and_quality() {
         seconds.get("minimum").and_then(|v| v.as_i64()),
         Some(1)
     );
-    let fq = params.pointer("/properties/final_quality").unwrap();
-    assert_eq!(fq.get("type").and_then(|v| v.as_str()), Some("boolean"));
+    let mq = params.pointer("/properties/max_quality").unwrap();
+    assert_eq!(mq.get("type").and_then(|v| v.as_str()), Some("boolean"));
+    let ks = params.pointer("/properties/keep_last_seed").unwrap();
+    assert_eq!(ks.get("type").and_then(|v| v.as_str()), Some("boolean"));
 }
 
 #[test]
@@ -141,8 +157,8 @@ fn video_schema_declares_source_image_ids() {
     let ids_desc = ids.get("description").and_then(|v| v.as_str()).unwrap_or("");
     assert!(ids_desc.contains("reference"), "схема описывает ref-ветку: {}", ids_desc);
     // Не в required: видео с нуля по тексту — легальный вызов без картинок.
-    // required из схемы удалён (refine:true — вызов без prompt_en); если массив
-    // вернётся, source_image_ids в нём быть не должно.
+    // Массив required в схеме отсутствует; если вернётся, source_image_ids
+    // в нём быть не должно.
     let required = params.pointer("/required").and_then(|v| v.as_array());
     assert!(!required.is_some_and(|r| r.iter().any(|v| v == "source_image_ids")));
     assert!(tool.description().contains("source_image_ids"));
@@ -607,117 +623,88 @@ fn video_refmod_unknown_slug_is_not_found() {
     }
 }
 
-// ── Рефайн последнего видео (05.11.26) ──
+// ── Рефайн последнего видео (05.11.26; раздельный тул — 2.6 Euler-PRP 07.11.26) ──
 
-/// Схема тула объявляет refine (boolean, НЕ required) и документирует,
-/// что при рефайне остальные аргументы запрещены.
+/// Рефайн — ОТДЕЛЬНЫЙ тул (2.6 Euler-PRP, структурная защита): generate_video
+/// больше НЕ содержит ни refine, ни final_quality (2.5 — качественный путь
+/// = max_quality-цепочка), у refine_last_video — пустая схема (передать
+/// нечего), оба идут мета-группой "media".
 #[test]
-fn video_schema_declares_refine() {
+fn refine_last_video_is_separate_tool_with_empty_schema() {
     let tool = GenerateVideo;
     let params = tool.parameters();
-    let refine = params
-        .pointer("/properties/refine")
-        .expect("refine объявлен в схеме");
-    assert_eq!(refine.get("type").and_then(|v| v.as_str()), Some("boolean"));
-    // required удалён из схемы целиком: refine:true — легальный вызов без
-    // prompt_en (промпт берётся из памяти последнего видео).
-    let required = params.pointer("/required").and_then(|v| v.as_array());
-    assert!(!required.is_some_and(|r| r.iter().any(|v| v == "refine")));
-    let desc = refine.get("description").and_then(|v| v.as_str()).unwrap_or("");
-    assert!(desc.contains("последнего видео"), "{}", desc);
-    assert!(desc.contains("НЕ ПЕРЕДАВАТЬ"), "запрет остальных аргументов описан: {}", desc);
-    assert!(desc.contains("1216"), "разрешение рефайна задокументировано: {}", desc);
-    assert!(tool.description().contains("refine"), "описание тула упоминает рефайн");
+    assert!(
+        params.pointer("/properties/refine").is_none(),
+        "refine удалён из generate_video: улучшение — отдельный тул"
+    );
+    assert!(
+        params.pointer("/properties/final_quality").is_none(),
+        "final_quality удалён из generate_video (2.5)"
+    );
+    assert!(params.pointer("/properties/max_quality").is_some(), "max_quality объявлен");
+    assert!(params.pointer("/properties/keep_last_seed").is_some(), "keep_last_seed объявлен");
+    let refine_tool = RefineLastVideo;
+    let schema = refine_tool.parameters();
+    let props = schema.pointer("/properties").and_then(|v| v.as_object()).unwrap();
+    assert!(props.is_empty(), "схема refine_last_video пуста: {:?}", props);
+    assert_eq!(refine_tool.name(), "refine_last_video");
+    let desc = refine_tool.description();
+    assert!(desc.contains("ПОСЛЕДНЕЕ"), "{}", desc);
+    assert!(desc.contains("НИКАКИХ аргументов"), "{}", desc);
+    assert!(
+        tool.description().contains("refine_last_video"),
+        "generate_video направляет к новому тулу"
+    );
 }
 
-/// Гейт конфликтов: refine:true с любым другим аргументом — Usage со списком
-/// конфликтующих ключей ДО всякого обращения к памяти/диску (молча игнорировать
-/// запрещено: промпт при рефайне берётся из памяти, не из args).
+/// Ветка refine:true диспетчера генерации заменена отдельным тулом (2.6):
+/// чужие аргументы в refine_last_video — Usage (схема пустая, но молча
+/// игнорировать лишнее нельзя).
 #[test]
-fn video_refine_refuses_conflicting_args() {
+fn refine_last_video_refuses_any_arguments() {
     let ctx = test_ctx(None);
-    // Один конфликт — prompt_en.
     let err = execute_video_tool(
-        "generate_video",
-        &serde_json::json!({"refine": true, "prompt_en": "a cat runs"}),
+        "refine_last_video",
+        &serde_json::json!({"prompt_en": "a cat runs"}),
         &ctx,
         &[],
     )
-    .expect("generate_video обрабатывается")
+    .expect("refine_last_video обрабатывается")
     .unwrap_err();
     match err {
         ToolError::Usage(msg) => {
-            assert!(msg.contains("prompt_en"), "конфликт назван: {}", msg);
-            assert!(msg.contains("НЕ принимает"), "{}", msg);
+            assert!(msg.contains("не принимает аргументов"), "{}", msg);
+            assert!(msg.contains("prompt_en"), "{}", msg);
         }
         other => panic!("ожидался Usage, получен: {:?}", other),
     }
-    // Несколько конфликтов — все названы.
     let err = execute_video_tool(
-        "generate_video",
-        &serde_json::json!({"refine": true, "seconds": 8, "lora": [{"name": "x"}], "final_quality": true}),
+        "refine_last_video",
+        &serde_json::json!({"seconds": 8, "lora": [{"name": "x"}]}),
         &ctx,
         &[],
     )
-    .expect("generate_video обрабатывается")
+    .expect("refine_last_video обрабатывается")
     .unwrap_err();
     match err {
         ToolError::Usage(msg) => {
             assert!(msg.contains("seconds"), "{}", msg);
             assert!(msg.contains("lora"), "{}", msg);
-            assert!(msg.contains("final_quality"), "{}", msg);
-        }
-        other => panic!("ожидался Usage, получен: {:?}", other),
-    }
-    // source_image_ids (непустой массив) и image_usage тоже конфликтуют.
-    let err = execute_video_tool(
-        "generate_video",
-        &serde_json::json!({"refine": true, "source_image_ids": ["img_1"], "image_usage": "reference", "refmod": "a"}),
-        &ctx,
-        &[],
-    )
-    .expect("generate_video обрабатывается")
-    .unwrap_err();
-    match err {
-        ToolError::Usage(msg) => {
-            assert!(msg.contains("source_image_ids"), "{}", msg);
-            assert!(msg.contains("image_usage"), "{}", msg);
-            assert!(msg.contains("refmod"), "{}", msg);
-        }
-        other => panic!("ожидался Usage, получен: {:?}", other),
-    }
-    // Пустой prompt_en при refine — НЕ конфликт (пустая строка = отсутствие).
-    let err = execute_video_tool(
-        "generate_video",
-        &serde_json::json!({"refine": true, "prompt_en": "  "}),
-        &ctx,
-        &[],
-    )
-    .expect("generate_video обрабатывается")
-    .unwrap_err();
-    match err {
-        ToolError::Usage(msg) => {
-            assert!(
-                !msg.contains("НЕ принимает остальные аргументы"),
-                "пустой prompt_en не конфликт: {}",
-                msg
-            );
-            assert!(msg.contains("Недавнего видео"), "дальше гейт памяти: {}", msg);
         }
         other => panic!("ожидался Usage, получен: {:?}", other),
     }
 }
 
-/// Гейт памяти: refine без последнего видео в сессии — честный Usage
+/// Гейт памяти: рефайн без последнего видео в сессии — честный Usage
 /// (молча генерировать новое видео нельзя). Уникальная сессия = пустая память.
 #[test]
 fn video_refine_without_history_refused() {
     let ctx = test_ctx_for("refine_no_history_session", None);
-    // Гигиена: файл памяти от прошлых прогонов не должен «оживлять» сессию
+    // Гигиена: файл памяти от прошлых прогонов тестов не должен «оживлять» сессию
     // (память персистентна на диске).
     let _ = std::fs::remove_dir_all(video_session_outputs_dir("refine_no_history_session"));
-    let err = execute_video_tool("generate_video", &serde_json::json!({"refine": true}), &ctx, &[])
-        .expect("generate_video обрабатывается")
+    let err = execute_video_tool("refine_last_video", &serde_json::json!({}), &ctx, &[])
+        .expect("refine_last_video обрабатывается")
         .unwrap_err();
     match err {
         ToolError::Usage(msg) => {
@@ -751,6 +738,7 @@ fn video_last_request_memory_roundtrip() {
             init_path: None,
             loras: Vec::new(),
             seed: 111,
+            draft_plan: None,
             refined: false,
         },
     );
@@ -766,6 +754,7 @@ fn video_last_request_memory_roundtrip() {
             init_path: None,
             loras: Vec::new(),
             seed: 222,
+            draft_plan: None,
             refined: false,
         },
     );
@@ -790,6 +779,7 @@ fn video_last_request_memory_roundtrip() {
             init_path: None,
             loras: Vec::new(),
             seed: 333,
+            draft_plan: None,
             refined: true,
         },
     );
@@ -829,6 +819,17 @@ fn video_refine_memory_survives_restart() {
             init_path: None,
             loras: Vec::new(),
             seed: 424242,
+            // План драфта точкой каталога X8b — проверяем сериализацию на диск.
+            draft_plan: Some(VideoSamplingPlan {
+                steps: 6,
+                sample_method: "euler".to_string(),
+                scheduler: "beta".to_string(),
+                flow_shift: Some(12.0),
+                lora: vec![tauri_plugin_image_engine::engine::VideoLoraRef {
+                    path: "minimax_h3_turbo_lora.safetensors".to_string(),
+                    multiplier: 0.8,
+                }],
+            }),
             refined: false,
         },
     );
@@ -843,6 +844,15 @@ fn video_refine_memory_survives_restart() {
     assert_eq!(restored.refmod_slug.as_deref(), Some("vlad_main"));
     assert_eq!(restored.ref_audio_paths, vec!["C:/card/voice.wav"]);
     assert!(!restored.refined);
+    // План драфта переживает диск (2.3 Euler-PRP): рефайн реплеит план,
+    // зафиксированный на момент генерации, а не текущий каталог.
+    let plan = restored.draft_plan.expect("план драфта дочитан с диска");
+    assert_eq!(plan.steps, 6);
+    assert_eq!(plan.sample_method, "euler");
+    assert_eq!(plan.scheduler, "beta");
+    assert_eq!(plan.flow_shift, Some(12.0));
+    assert_eq!(plan.lora.len(), 1, "turbo-лора плана сохранена");
+    assert!((plan.lora[0].multiplier - 0.8).abs() < f32::EPSILON);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
