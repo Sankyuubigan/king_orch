@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import { store } from "../store";
 import { bus } from "../events";
+import { formatDuration } from "../utils/duration";
 import { createMessageElement, createSubcallElement, createToolCallElement, createThoughtElement, createThoughtRow, updateThoughtRowSummary, completeToolRow, TOOL_ICONS, showToast, createProcessingIndicator, createAttachmentCallbacks, materializeNeurosisCases } from "../ui";
 import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks, ProcessingIndicator } from "../ui";
 import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
@@ -553,7 +554,7 @@ export class ChatController {
       author: payload.author,
       summary: payload.thought,
       detail: payload.thought,
-      meta: payload.time_sec > 0 ? `⏱${payload.time_sec.toFixed(1)}с` : undefined,
+      meta: payload.time_sec > 0 ? `⏱${formatDuration(payload.time_sec)}` : undefined,
     });
     this.el.chatHistory.appendChild(row);
     this.scrollToBottomIfNearEnd(this.el.chatHistory);
@@ -1206,7 +1207,7 @@ export class ChatController {
             author: thoughtAuthor,
             summary: content,
             detail: content,
-            meta: msg.time_sec && msg.time_sec > 0 ? `⏱${msg.time_sec.toFixed(1)}с` : undefined,
+            meta: msg.time_sec && msg.time_sec > 0 ? `⏱${formatDuration(msg.time_sec)}` : undefined,
             uid,
             menuCallbacks: this.thoughtMenuCallbacks,
           });
@@ -1232,7 +1233,7 @@ export class ChatController {
         ? (msg.author_name ?? getAgentDisplayName(msg.author))
         : undefined;
       const hasMenu = uid && (role === 'user' || role === 'agent');
-      const timeText = msg.time_sec ? `${msg.time_sec.toFixed(1)} сек` : undefined;
+      const timeText = msg.time_sec ? formatDuration(msg.time_sec) : undefined;
       // Скрываем служебные теги LLM в сохранённых ответах (defence in depth).
       const cleanContent = role === 'agent' ? stripStreamArtifacts(msg.content) : msg.content;
       this.el.chatHistory.appendChild(createMessageElement(role, cleanContent, agentName, timeText, hasMenu ? uid : undefined, hasMenu ? this.menuCallbacks : undefined, msg.attachments, this.translatorMenuLabel(), msg.model, this.imageCallbacks));
@@ -1270,7 +1271,7 @@ export class ChatController {
       const thinkingEl = createThoughtElement(subCall.agent_name, subCall.thinking);
       this.el.subchatHistory.appendChild(thinkingEl);
     }
-    this.appendMessageToContainer(this.el.subchatHistory, 'agent', subCall.response, subCall.agent_name, `${subCall.time_sec.toFixed(1)} сек`);
+    this.appendMessageToContainer(this.el.subchatHistory, 'agent', subCall.response, subCall.agent_name, formatDuration(subCall.time_sec));
   }
 
   private sendReadiness(): { ready: boolean; reason: string } {

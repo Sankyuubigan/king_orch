@@ -1,4 +1,5 @@
 import { renderMarkdown } from "../utils";
+import { formatDuration } from "../utils/duration";
 import { createMessageMenu } from "./message-menu";
 import type { MessageMenuCallbacks } from "./message-menu";
 import { createThoughtRow, completeToolRow, TOOL_ICONS } from "./thought-row";
@@ -98,7 +99,7 @@ export function createThoughtElement(agentName: string, thought: string, timeSec
 export function createSubcallElement(call: any, onSubcallClick: (call: any) => void): HTMLDivElement {
   const row = createThoughtRow({
     kind: "subcall",
-    label: `Отчет от сабагента: ${call.agent_name} (${call.time_sec.toFixed(1)} сек)`,
+    label: `Отчет от сабагента: ${call.agent_name} (${formatDuration(call.time_sec)})`,
   });
   row.addEventListener("click", () => onSubcallClick(call));
   return row;

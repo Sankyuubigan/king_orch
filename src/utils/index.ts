@@ -1,5 +1,6 @@
 // 🚪 ПУБЛИЧНЫЙ КОНТРАКТ утилит
 export { renderMarkdown } from './markdown'
+export { formatDuration } from './duration'
 export { stripStreamArtifacts, extractChannelThought, visibleStreamText } from './stream-filter'
 export { buildChatPage, buildWebviewPage } from './chat-dom'
 export type { ChatPageElements, SharedChatControls } from './chat-dom'
