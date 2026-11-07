@@ -2,7 +2,7 @@ use super::*;
 use crate::domain::agent_manager::AgentProfile;
 use crate::domain::orchestrator::prompt::build_system_prompt;
 use crate::domain::parsers::*; // parse_orchestrator_response, parse_tool_call, strip_tool_call, ParsedOrchestratorResponse
-use crate::domain::signals::{validate_signal_value, SignalContract};
+use crate::domain::signals::{normalize_signal_value, validate_signal_value, SignalContract};
 use crate::infra::*; // LlamaEngine, ChatMessage, LlmMessage, SubCall, ToolCallInfo, ModelParams, GrammarSpec, extract_model_filename, push_report
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -1479,6 +1479,17 @@ where
         let value = val_val.filter(|v| !v.is_null());
 
         if let (Some(key), Some(value)) = (key, value) {
+            // Нормализация вердикт-union полей (06.11.2026, инцидент
+            // маршрутизации): строка «false (пояснение)» — склеенная форма
+            // отказа вместо литерала `false`; канонизируется ДО валидации
+            // и сохранения. Единая точка всех путей сигнала (слоты, конверт,
+            // облако): в messages[] форма `string|false` однозначна (§00.2).
+            let normalized = self
+                .signal_contract
+                .as_ref()
+                .map(|c| normalize_signal_value(&c.value_schema, value))
+                .unwrap_or_else(|| value.clone());
+            let value = &normalized;
             // ЧЕСТНАЯ валидация формы сигнала против контракта (SSOT).
             if let Some(contract) = &self.signal_contract {
                 if let Err(e) = validate_signal_value(contract, value) {
@@ -1530,9 +1541,9 @@ where
             self.signal_saved = true;
             // Сигнал сохраняется КАК ВЫДАН: никакой агент-специфичной механики в
             // общем emit-пути нет (движок агент-агностичен). Доменные вычисления
-            // над сигналом (напр. pattern_type валидатора) — ноды custom_tool_call
+            // над сигналом (напр. floor2_type валидатора) — ноды custom_tool_call
             // в графе команды (compute_pattern → ../tools/compute_pattern_type.ts).
-            let signal_content = serde_json::json!({key: value}).to_string();
+            let signal_content = serde_json::json!({key: normalized}).to_string();
             let signal_msg = ChatMessage {
                 id: Some(format!("msg_{}", self.msg_counter)),
                 msg_type: "signal".to_string(),

@@ -11,11 +11,11 @@
  *   {"report": "<JSON-строка сигнала validator_report или сам объект>"}
  *
  * Выход: ТОЛЬКО JSON в stdout:
- *   {"pattern_type": "1".."9" | "none", "pattern_found": boolean, "reason": "<объяснение>"}
+ *   {"floor2_type": "1".."9" | "none", "pattern_found": boolean, "reason": "<объяснение>"}
  *
  * Функция ТОТАЛЬНА по полю: успех — цифра 1..9; любой отказ (критический
  * элемент e3/e6/e8/e9 не подтверждён, этажи не классифицированы, сцепка не
- * сошлась, сигнал не объект) — явное `pattern_type = "none"` (презумпция
+ * сошлась, сигнал не объект) — явное `floor2_type = "none"` (презумпция
  * дефицита: нет типа лучше неверного). Гейт критических элементов {e3,e6,e8,e9}
  * живёт ЗДЕСЬ (04.11.2026: нода check_critical_elements удалена из графа — её
  * проверка e3 дублировала тул, остаток переехал следом; §00.2 — механический
@@ -52,8 +52,8 @@ const SAFETY_TRANSITIONS: readonly number[] = [0, 7, 4, 6, 1, 8, 9, 5, 2, 3];
 
 export interface PatternVerdict {
   /** Цифра типа 1..9 либо явное "none" (тип не определён → добор данных). */
-  pattern_type: string;
-  /** Производный булев (pattern_type != "none"): читаемое роутером состояние.
+  floor2_type: string;
+  /** Производный булев (floor2_type != "none"): читаемое роутером состояние.
    * check_pattern (condition_check) не имеет доступа к шине и не умеет
    * сравнивать строки — только boolean (nodes.rs: condition_check as_bool). */
   pattern_found: boolean;
@@ -77,10 +77,21 @@ const SURFACE_ELEMENTS: readonly string[] = ["e1", "e2", "e6", "e7"];
  * null, пустая/бельная строка — не подтверждено. Потребители: гейты
  * критических элементов ниже, производный `surface_proven`; та же семантика
  * в пробах движка (flat_validator_probe) и в туле сохранения кейса. Форма
- * сигнала эволюционирует — предикат один. */
+ * сигнала эволюционирует — предикат один.
+ *
+ * Вторая линия нормализации (06.11.2026, инцидент маршрутизации): строка
+ * вида «false (пояснение)» — склеенная форма отказа, а не вердикт о
+ * доказанном. Боевой путь канонизирует её в `false` на границе сохранения
+ * (signals.rs::normalize_signal_value), но облако и исторические сигналы
+ * минуют движок — предикат классифицирует их сам: «false» в начале строки
+ * (без учёта регистра, после trim; за словом не буква/цифра — «falsehood»
+ * остаётся легитимным текстом) = НЕ доказано. */
+const FALSE_TEXT_RE = /^false(?![\p{L}\p{N}])/iu;
+
 export function is_proven(value: unknown): boolean {
   if (value === true) return true;
-  return typeof value === "string" && value.trim() !== "";
+  if (typeof value !== "string") return false;
+  return value.trim() !== "" && !FALSE_TEXT_RE.test(value.trimStart());
 }
 
 /** Критические элементы контура: тип Триады Травмы не объявляется, пока не
@@ -90,7 +101,7 @@ const CRITICAL_ELEMENTS: readonly string[] = ["e6", "e8", "e9"];
 
 function refusal(reason: string): PatternVerdict {
   // Сигнал не разобрать (не JSON / не объект) — ни один элемент не доказан.
-  return { pattern_type: NONE, pattern_found: false, surface_proven: false, reason };
+  return { floor2_type: NONE, pattern_found: false, surface_proven: false, reason };
 }
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -111,7 +122,7 @@ function parseTypeDigit(raw: unknown): number | undefined {
 }
 
 /** Механическая проверка сцепки этажей и вычисление типа ядра Триады Травмы
- * (`pattern_type`, Этаж -2). Принимает сигнал validator_report (объект либо
+ * (`floor2_type`, Этаж -2). Принимает сигнал validator_report (объект либо
  * JSON-строка). Условия выдачи: критические элементы подтверждены
  * (`e3`, `e6`, `e8`, `e9 == true`), этажи классифицированы и SAFETY-сцепка
  * сходится (`SAFETY[T0] == T-1`). Тип 1..9 может проявиться на любом этаже
@@ -133,7 +144,7 @@ export function computePatternType(report: unknown): PatternVerdict {
   // при отказе сцепки (пайплайн читает его независимо от pattern_found).
   const surface_proven = SURFACE_ELEMENTS.every((element) => is_proven(obj[element]));
   const refuse = (reason: string): PatternVerdict => ({
-    pattern_type: NONE,
+    floor2_type: NONE,
     pattern_found: false,
     surface_proven,
     reason,
@@ -167,7 +178,7 @@ export function computePatternType(report: unknown): PatternVerdict {
     );
   }
   return {
-    pattern_type: String(SAFETY_TRANSITIONS[t1]),
+    floor2_type: String(SAFETY_TRANSITIONS[t1]),
     pattern_found: true,
     surface_proven,
     reason: "SAFETY-сцепка этажей сходится",

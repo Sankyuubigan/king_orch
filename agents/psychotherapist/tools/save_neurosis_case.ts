@@ -8,7 +8,7 @@
  * Вход: Deno.args[0] = JSON (значения приходят СТРОКАМИ от движка):
  *   {
  *     "report": "<JSON-строка сигнала validator_report: e1..e9 (строка|false), floor0_type/floor1_type ("1".."9"), target>",
- *     "core_type": "<цифра 1..9 из {{ nodes.compute_pattern.output.pattern_type }}>"
+ *     "core_type": "<цифра 1..9 из {{ nodes.compute_pattern.output.floor2_type }}>"
  *   }
  *
  * Выход (stdout — ТОЛЬКО JSON-объект):
@@ -36,7 +36,7 @@
  * → честная ошибка.
  *
  * Тул НЕ повторяет SAFETY-сцепку и гейт критических элементов — это compute_
- * pattern_type; нода графа вызывается только на ветке pattern_found=true.
+ * floor2_type; нода графа вызывается только на ветке pattern_found=true.
  * Exit(1) — за сломанную инвокацию/невалидную форму (env нет, args не JSON,
  * report не объект, target пуст, мусор в цифрах, e-поле отсутствует/не та
  * форма): форма выхода нарушена — тихий пропуск воскресил бы «кейс не
@@ -102,10 +102,17 @@ function parseTypeDigit(raw: unknown, label: string): number {
 }
 
 /** e-поле сигнала: вердикт-текст (непустая строка) или false. Числа, null,
- * пустые/пустые-после-trim строки — форма контракта нарушена. */
+ * пустые/пустые-после-trim строки — форма контракта нарушена.
+ * «false (…)»-строка — склеенная форма отказа, а не вердикт: канонизируется
+ * в false (боевой путь нормализует сигнал на границе сохранения —
+ * signals.rs::normalize_signal_value; это защита для облака/старых сессий),
+ * в кейс юзера текст отказа не попадает. */
 function parseElement(raw: unknown, key: string): string | false {
   if (raw === false) return false;
-  if (typeof raw === "string" && raw.trim() !== "") return raw;
+  if (typeof raw === "string" && raw.trim() !== "") {
+    if (/^false(?![\p{L}\p{N}])/iu.test(raw.trimStart())) return false;
+    return raw;
+  }
   fail(`${key}: ожидался вердикт-текст или false, получено ${JSON.stringify(raw)}`);
 }
 

@@ -934,15 +934,15 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         )
     }
 
-    /// gate_inner_contour_headings: лечебная база обязана иметь РОВНО
+    /// gate_inner_9_patterns_by_gifts_headings: лечебная база обязана иметь РОВНО
     /// заголовки `## 1`..`## 9` без постфиксов. Регрессия `## 2*`: regex
     /// заголовка требует после номера пробел/конец строки, поэтому при
     /// корректном вызове с "## 2" секция «не находилась» — а нода чтения
     /// базы по номеру от pattern_finder ломалась бы на всём пути паттерна 2.
     #[test]
-    fn gate_inner_contour_headings() {
+    fn gate_inner_9_patterns_by_gifts_headings() {
         let (_, _, team) = psycho_dirs();
-        let path = team.join("database/inner_contour_9_patterns.md");
+        let path = team.join("database/inner_9_patterns_by_gifts.md");
         let text = std::fs::read_to_string(&path).expect("база паттернов читается");
 
         let mut headings: Vec<&str> = text
@@ -974,14 +974,14 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             &tools,
             &transitions,
             &tools.join("read_md_section.ts"),
-            r###"{"file":"psychotherapist/database/inner_contour_9_patterns.md","heading":"## 2"}"###,
+            r###"{"file":"psychotherapist/database/inner_9_patterns_by_gifts.md","heading":"## 2"}"###,
             &[],
         )
         .expect("тул выполнен");
         assert!(status.success(), "exit: {}, stderr: {}", status, String::from_utf8_lossy(&stderr));
         let output: serde_json::Value =
             serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
-        assert_eq!(output["file"], "psychotherapist/database/inner_contour_9_patterns.md");
+        assert_eq!(output["file"], "psychotherapist/database/inner_9_patterns_by_gifts.md");
         assert_eq!(output["heading"], "## 2");
         let content = output["content"].as_str().expect("content — строка");
         assert!(
@@ -1007,7 +1007,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             &tools,
             &transitions,
             &tools.join("read_md_section.ts"),
-            r###"{"file":"psychotherapist/database/inner_contour_9_patterns.md","heading":"## 99"}"###,
+            r###"{"file":"psychotherapist/database/inner_9_patterns_by_gifts.md","heading":"## 99"}"###,
             &[],
         )
         .expect("процесс запущен");
@@ -1049,7 +1049,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         );
     }
 
-    /// gate_tool_contract (реальный Deno): тул вычисления pattern_type
+    /// gate_tool_contract (реальный Deno): тул вычисления floor2_type
     /// (вынос финализации из движка, 03.11.2026) — SAFETY-сцепка выдаёт
     /// цифру Этажа -2; гейт критических элементов {e3,e6,e8,e9} живёт в туле
     /// с 04.11.2026 (нода check_critical_elements удалена из графа); доменный
@@ -1102,7 +1102,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             assert!(status.success(), "exit: {}, stderr: {}", status, String::from_utf8_lossy(&stderr));
             let output: serde_json::Value =
                 serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
-            assert_eq!(output["pattern_type"], expected, "цепь {}", report);
+            assert_eq!(output["floor2_type"], expected, "цепь {}", report);
             assert_eq!(output["pattern_found"], true, "цепь {}", report);
             assert_eq!(output["surface_proven"], expected_surface, "цепь {}", report);
             assert_eq!(output["reason"], "SAFETY-сцепка этажей сходится");
@@ -1142,7 +1142,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             );
             let output: serde_json::Value =
                 serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
-            assert_eq!(output["pattern_type"], "none", "цепь {}", report);
+            assert_eq!(output["floor2_type"], "none", "цепь {}", report);
             assert_eq!(output["pattern_found"], false, "цепь {}", report);
             assert!(
                 output["reason"].as_str().unwrap_or("").contains(reason_part),

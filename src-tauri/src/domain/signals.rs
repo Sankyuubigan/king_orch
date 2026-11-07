@@ -1006,6 +1006,66 @@ fn build_value_grammar(schema: &serde_json::Value) -> String {
     "value-field ::= json-string | json-number | json-bool | \"null\"".to_string()
 }
 
+/// Нормализация вердикт-union полей сигнала (06.11.2026, инцидент
+/// маршрутизации: `surface_proven=true` на неподтверждённых данных).
+///
+/// Модель может склеить отказ с пояснением в строку `"false (пояснение)"`
+/// вместо литерала `false`: контракт `anyOf [string, false]` строку
+/// разрешает, а `is_proven`-потребители (compute_pattern, тул сохранения
+/// кейса, пробы) считают любую непустую строку доказанным элементом —
+/// пайплайн уходил на лечение недоказанных данных. Отказ устраняется
+/// конструктивно (§00.2): неоднозначная форма канонизируется на ГРАНИЦЕ
+/// сохранения сигнала — e-поле контракта, чья строка является склеенной
+/// формой отказа, заменяется на `false` до валидации и записи в messages[].
+/// Единая точка вызова — `handle_emit_signal` (слоты, конверт, облако);
+/// вторая линия — `is_proven` в тулах команды (облако/исторические сигналы
+/// минуют движок).
+///
+/// Возвращает нормализованную копию; не-объекты и схемы без union-полей
+/// проходят без изменений.
+pub fn normalize_signal_value(value_schema: &Value, value: &Value) -> Value {
+    if value_schema.get("type").and_then(Value::as_str) == Some("object") {
+        if let Some(obj) = value.as_object() {
+            let props = value_schema
+                .get("properties")
+                .and_then(Value::as_object);
+            let mut out = obj.clone();
+            if let Some(props) = props {
+                for (pname, pschema) in props {
+                    if matches!(e_field_kind(pschema), Some(EFieldKind::Union { .. })) {
+                        if let Some(Value::String(s)) = out.get(pname) {
+                            if false_text_form(s) {
+                                out.insert(pname.clone(), Value::Bool(false));
+                            }
+                        }
+                    }
+                }
+            }
+            return Value::Object(out);
+        }
+    }
+    value.clone()
+}
+
+/// Склеенная форма отказа «false (пояснение)»: после trim строка начинается
+/// с литерала «false» (без учёта регистра), за которым НЕ идёт буква/цифра
+/// («falsehood» — легитимный вердикт, не форма отказа). Вердикт-тексты —
+/// кириллицей, латинская «false» в начале доказанной строки не встречается.
+pub(crate) fn false_text_form(s: &str) -> bool {
+    let trimmed = s.trim_start();
+    let head = match trimmed.get(..5) {
+        Some(h) => h,
+        None => return false,
+    };
+    if !head.eq_ignore_ascii_case("false") {
+        return false;
+    }
+    match trimmed[5..].chars().next() {
+        None => true,
+        Some(c) => !c.is_alphanumeric(),
+    }
+}
+
 /// ЧЕСТНАЯ валидация значения сигнала против контракта (SSOT).
 ///
 /// Гарантирует, что `value`, присланный эмиттером в `emit_signal`, содержит все
@@ -1017,7 +1077,7 @@ fn build_value_grammar(schema: &serde_json::Value) -> String {
 ///
 /// Проверяется именно `required`, а НЕ все `properties`: properties могут
 /// описывать поля, которых у эмиттера нет по архитектуре (03.11.2026:
-/// pattern_type валидатора вычисляется нодой compute_pattern графа — тул
+/// floor2_type валидатора вычисляется нодой compute_pattern графа — тул
 /// `tools/compute_pattern_type.ts`; в схеме его больше нет). Требовать от
 /// эмиттера поле, которое грамматика контракта выпустить запрещает, —
 /// структурно неразрешимый отказ (инцидент 03.11.2026: валидатор
@@ -1362,14 +1422,14 @@ mod tests {
             Some(EFieldKind::Union { max_chars: 200 })
         );
         // 9 вердикт-полей + классификация двух этажей + target (мишень разбора,
-        // 05.11.2026). pattern_type из схемы УДАЛЁН — модель его не выдаёт,
+        // 05.11.2026). floor2_type из схемы УДАЛЁН — модель его не выдаёт,
         // SAFETY-механика вычисления живёт в туле
         // `agents/psychotherapist/tools/compute_pattern_type.ts` (нода
         // compute_pattern графа); движок агент-агностичен.
         assert_eq!(c.value_schema["required"].as_array().map(|e| e.len()), Some(12));
         assert!(
-            c.value_schema["properties"].get("pattern_type").is_none(),
-            "pattern_type больше не свойство контракта: его вычисляет нода compute_pattern"
+            c.value_schema["properties"].get("floor2_type").is_none(),
+            "floor2_type больше не свойство контракта: его вычисляет нода compute_pattern"
         );
         // target — ПОСЛЕДНИЙ в required (порядок required = порядок слотов
         // грамматики; финальные строковые слоты идут после всех e-слотов).
@@ -1393,8 +1453,8 @@ mod tests {
                 .as_array()
                 .expect("required массив")
                 .iter()
-                .any(|v| v.as_str() == Some("pattern_type")),
-            "pattern_type не в required: модель его не выдаёт, механику считает нода compute_pattern"
+                .any(|v| v.as_str() == Some("floor2_type")),
+            "floor2_type не в required: модель его не выдаёт, механику считает нода compute_pattern"
         );
     }
 
@@ -2003,7 +2063,7 @@ mod tests {
         // Корректная форма проходит.
         assert!(validate_signal_value(&c, &serde_json::json!({ "e1": true, "e2": false })).is_ok());
 
-        // Поле из properties ВНЕ required (кодо-вычислимое, напр. pattern_type
+        // Поле из properties ВНЕ required (кодо-вычислимое, напр. floor2_type
         // валидатора) может отсутствовать: эмиттер не обязан его выдавать, а
         // грамматика контракта его выпустить запрещает. Требование такого поля
         // порождало структурно неразрешимый ретрай-цикл (инцидент 03.11.2026).
@@ -2014,7 +2074,7 @@ mod tests {
                 "additionalProperties": false,
                 "properties": {
                     "e1": { "type": "boolean" },
-                    "pattern_type": { "type": "string" }
+                    "floor2_type": { "type": "string" }
                 },
                 "required": ["e1"]
             }),
@@ -2414,6 +2474,60 @@ mod tests {
         assert!(validate_signal_value(&c, &serde_json::json!({ "e1": 42 })).is_err());
         assert!(validate_signal_value(&c, &serde_json::json!({ "e1": "" })).is_err());
         assert!(validate_signal_value(&c, &serde_json::json!({ "e1": null })).is_err());
+    }
+
+    /// Нормализация вердикт-union (06.11.2026, инцидент маршрутизации:
+    /// «false (…)»-строки дали surface_proven=true на пустых данных и повели
+    /// пайплайн на shadow_worker): склеенная форма отказа канонизируется в
+    /// `false` на границе сохранения сигнала; легитимные вердикты, не-union
+    /// поля и не-объекты проходят без изменений.
+    #[test]
+    fn normalize_signal_value_canonizes_false_text_form() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "e1": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }] },
+                "target": { "type": "string" }
+            },
+            "required": ["e1", "target"]
+        });
+        // Склеенная форма отказа (с лид-пробелами и хвостом) → false.
+        let out = normalize_signal_value(
+            &schema,
+            &serde_json::json!({
+                "e1": "  false (физическая боль без описания ментального тупика).\n\n",
+                "target": "Спазм"
+            }),
+        );
+        assert_eq!(out["e1"], serde_json::json!(false));
+        // Легитимный вердикт-текст проходит без изменений.
+        let out = normalize_signal_value(
+            &schema,
+            &serde_json::json!({ "e1": "  пользователь называл себя обязанным всем помогать" }),
+        );
+        assert_eq!(
+            out["e1"],
+            serde_json::json!("  пользователь называл себя обязанным всем помогать")
+        );
+        // «falsehood …» — латинское слово, не форма отказа.
+        let out = normalize_signal_value(&schema, &serde_json::json!({ "e1": "falsehood фильма" }));
+        assert_eq!(out["e1"], serde_json::json!("falsehood фильма"));
+        // Не-union поле (target) не нормализуется, даже начинаясь с «false».
+        let out = normalize_signal_value(
+            &schema,
+            &serde_json::json!({ "e1": "верлибр", "target": "false (…)" }),
+        );
+        assert_eq!(out["target"], serde_json::json!("false (…)"));
+        // Литерал false не трогается; не-объект проходит насквозь.
+        let out = normalize_signal_value(
+            &schema,
+            &serde_json::json!({ "e1": false, "target": "t" }),
+        );
+        assert_eq!(out["e1"], serde_json::json!(false));
+        assert_eq!(
+            normalize_signal_value(&schema, &serde_json::json!("скаляр")),
+            serde_json::json!("скаляр")
+        );
     }
 
     /// Грамматика боевого контракта валидатора (12 слотов, 05.11.2026):

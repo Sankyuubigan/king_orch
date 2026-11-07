@@ -2883,7 +2883,7 @@ where
             let extract_input = format!("{}\n{}", user_text, ctx.final_response);
             if let Some(value) = extract_signal_value_from_text(contract, &extract_input) {
                 // Сигнал сохраняется КАК ИЗВЛЕЧЁН: агент-специфичной механики в
-                // движке нет — доменные вычисления (напр. pattern_type валидатора)
+                // движке нет — доменные вычисления (напр. floor2_type валидатора)
                 // делают ноды custom_tool_call графа команды.
                 let mut map = serde_json::Map::new();
                 map.insert(contract.key.clone(), value.clone());

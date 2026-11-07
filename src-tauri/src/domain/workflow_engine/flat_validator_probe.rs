@@ -79,7 +79,7 @@ use crate::domain::parsers::extract_think_content;
 use crate::domain::signals::{
     assemble_slot_signal_value,
     build_signal_envelope_grammar_with_think_budget, contract_envelope_tokens,
-    contract_think_budget, load_all_signal_contracts, slot_min_chars,
+    contract_think_budget, false_text_form, load_all_signal_contracts, slot_min_chars,
     required_field_count, think_slot_count, SignalContract,
 };
 use crate::infra::config::load_config_early;
@@ -645,9 +645,9 @@ fn flat_validator_probe() {
 /// Same-case LLM-проба (02.11.2026): боевой валидатор на жалобе реальной сессии
 /// 1793638300847, где старая грамматика (`[^<]` — тотальный запрет «<» в дум-теле)
 /// резала слоты на капе 332 симв посреди слов, верификаций не оставалось вовсе,
-/// а `pattern_type` выходил без вывода. Проба воспроизводит боевой вызов: агент
+/// а `floor2_type` выходил без вывода. Проба воспроизводит боевой вызов: агент
 /// `validator` (INCLUDE резолвятся при загрузке), контракт `validator_report`
-/// (модель классифицирует `floor0_type`/`floor1_type`; `pattern_type` моделью
+/// (модель классифицирует `floor0_type`/`floor1_type`; `floor2_type` моделью
 /// не выдаётся — его вычисляет нода `compute_pattern` графа из тула команды
 /// `agents/psychotherapist/tools/compute_pattern_type.ts`),
 /// грамматика через `build_signal_envelope_grammar_with_think_budget` с авто-бюджетом
@@ -817,7 +817,7 @@ fn real_validator_session_case_probe() {
     // велел писать только удалённый промптовый костыль «вердикт первой
     // строкой». Гейт тел — количество, а не содержимое.
     // Гейт механики 02.11.2026 (зафиксирован ДО прогона): модель
-    // классифицирует этажи (`floor0_type`/`floor1_type`); `pattern_type`
+    // классифицирует этажи (`floor0_type`/`floor1_type`); `floor2_type`
     // моделью НЕ выдаётся и в сигнале не появляется — его вычисляет нода
     // `compute_pattern` графа (тул команды compute_pattern_type.ts, покрыт
     // vitest-гейтом test/compute-pattern-type-tool.test.ts и Deno-гейтом
@@ -830,7 +830,9 @@ fn real_validator_session_case_probe() {
     // КАК ВЫДАН — никаких кодовых вставок в движке.
     let e3 = match value.get("e3") {
         Some(Value::Bool(b)) => Some(*b),
-        Some(Value::String(s)) => Some(!s.trim().is_empty()),
+        // «false (…)»-строка — склеенная форма отказа, не вердикт (06.11.2026;
+        // боевая канонизация — signals.rs::normalize_signal_value).
+        Some(Value::String(s)) => Some(!s.trim().is_empty() && !false_text_form(s)),
         _ => None,
     };
     assert_eq!(
@@ -849,8 +851,8 @@ fn real_validator_session_case_probe() {
         floor1
     );
     assert!(
-        value.get("pattern_type").is_none(),
-        "pattern_type не должен появляться в сигнале: его вычисляет нода compute_pattern графа"
+        value.get("floor2_type").is_none(),
+        "floor2_type не должен появляться в сигнале: его вычисляет нода compute_pattern графа"
     );
     let verdicts: Vec<String> = (1..=slots)
         .map(|n| {
@@ -864,7 +866,7 @@ fn real_validator_session_case_probe() {
         })
         .collect();
     println!(
-        "\n=== ИТОГ: {}, floor0 = {}, floor1 = {} (pattern_type моделью не выдаётся — его вычисляет нода compute_pattern из SAFETY-сцепки) ===",
+        "\n=== ИТОГ: {}, floor0 = {}, floor1 = {} (floor2_type моделью не выдаётся — его вычисляет нода compute_pattern из SAFETY-сцепки) ===",
         verdicts.join(", "),
         floor0.expect("checked above"),
         floor1.expect("checked above")

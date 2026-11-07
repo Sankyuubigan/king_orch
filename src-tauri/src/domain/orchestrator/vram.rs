@@ -45,12 +45,19 @@ pub fn setup_error_fatal(output: &str) -> String {
 /// Ошибка с конкретной причиной в Display (детерминированный отказ или
 /// неверные аргументы): агенту отдаём честный текст, маскировать = ложь
 /// (core §2.2). Обезличенный текст остаётся только для Io/Timeout —
-/// их причины и так пишет лог.
+/// их причины и так пишет лог. Исключение (БАГ-3, 06.11.26): краш движка
+/// рефайна — Io, но плагин вкладывает в текст хвост stderr движка после
+/// маркера ENGINE_LOG_REASON («Причина по логу движка:») — причина в самом
+/// тексте, маскировать = ложь (12-минутная генерация не должна умирать
+/// глухим «внутренняя ошибка media-движка»).
 pub fn is_honest_tool_error(e: &ToolError) -> bool {
-    matches!(
-        e,
-        ToolError::NotFound(_) | ToolError::Usage(_) | ToolError::Forbidden(_)
-    )
+    match e {
+        ToolError::NotFound(_) | ToolError::Usage(_) | ToolError::Forbidden(_) => true,
+        ToolError::Io(msg) => {
+            msg.contains(tauri_plugin_image_engine::engine::ENGINE_LOG_REASON)
+        }
+        _ => false,
+    }
 }
 
 /// Честный финал при ресурсной ошибке: без ретраев, с цифрами из preflight.
@@ -151,5 +158,24 @@ mod tests {
         assert!(is_honest_tool_error(&ToolError::Forbidden("запрещено".to_string())));
         assert!(!is_honest_tool_error(&ToolError::Io("spawn упал".to_string())));
         assert!(!is_honest_tool_error(&ToolError::Timeout("таймаут".to_string())));
+    }
+
+    /// БАГ-3 (06.11.26): краш движка рефайна с хвостом stderr обязан проходить
+    /// как честный — иначе 12-минутная генерация умирает глухим «внутренняя
+    /// ошибка media-движка» (боевой лог: «cannot update model sources during
+    /// execution --- model_manager_files.cpp:80» агенту не дошёл).
+    #[test]
+    fn engine_crash_with_log_tail_is_honest() {
+        use crate::infra::tools::ToolError;
+        let crash = ToolError::Io(format!(
+            "sd-cli (рефайн) завершился с ошибкой (код Some(1)). {}: \
+             [E] cannot update model sources during execution --- model_manager_files.cpp:80 | \
+             [E] generate failed --- main.cpp:926",
+            tauri_plugin_image_engine::engine::ENGINE_LOG_REASON
+        ));
+        assert!(is_honest_tool_error(&crash), "краш с хвостом = честный");
+        assert!(!is_honest_tool_error(&ToolError::Io(
+            "Ошибка ожидания sd-cli: канал закрыт".to_string()
+        )));
     }
 }

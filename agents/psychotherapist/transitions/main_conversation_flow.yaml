@@ -110,36 +110,35 @@ nodes:
   tool_file: ../tools/save_neurosis_case.ts
   args:
     report: '{{ signals.validator_report }}'
-    core_type: '{{ nodes.compute_pattern.output.pattern_type }}'
+    core_type: '{{ nodes.compute_pattern.output.floor2_type }}'
   output_message: true
+  attachments_dir: ../database
 
 - id: read_pattern_section
   type: custom_tool_call
   ui_pos:
     x: 2515
     y: 300
-  tool_file: ../../_shared/tools/read_md_section.ts
+  tool_file: ../tools/read_pattern_sections.ts
   args:
-    heading: '## {{ nodes.compute_pattern.output.pattern_type }}'
     file: psychotherapist/database/inner_9_patterns_by_gifts.md
+    report: '{{ signals.validator_report }}'
+    core: '{{ nodes.compute_pattern.output.floor2_type }}'
 
 - id: call_healer
   type: llm_worker
   agent: neuro_healer
   task: |
     Данные переданы готовыми — вызывать инструменты не требуется.
-    Ниже описание лечебного паттерна из базы знаний (пайплайн прочитал секцию по номеру pattern_type, вычисленному нодой compute_pattern из классификации этажей Валидатора) и профиль валидации элементов.
+    Ниже лечебные паттерны ТРЁХ этажей невроза из базы знаний (пайплайн прочитал секции по типам этажей: Этаж 0 и Этаж -1 — классификация Валидатора, ядро Этажа -2 — вычислено нодой compute_pattern по SAFETY-сцепке) и профиль валидации элементов.
 
-    === НОМЕР ПАТТЕРНА ===
-    {{ nodes.compute_pattern.output.pattern_type }}
-
-    === ОПИСАНИЕ ПАТТЕРНА ИЗ БАЗЫ ===
+    === ЛЕЧЕБНЫЕ ПАТТЕРНЫ ПО ЭТАЖАМ ===
     {{ nodes.read_pattern_section.output.content }}
 
     === ПРОФИЛЬ ВАЛИДАЦИИ ЭЛЕМЕНТОВ (вердикты Валидатора) ===
     {{ signals.validator_report }}
 
-    Переведи описание паттерна на контекст проблемы пользователя, следуя ИНСТРУКЦИИ и формату вывода из системного промпта.
+    Переведи паттерны на контекст проблемы пользователя, следуя ИНСТРУКЦИИ и формату вывода из системного промпта: каждому этажу — своя энергия Дара из его паттерна.
   output_type: frontend
   inject_response:
   - synthesizer
