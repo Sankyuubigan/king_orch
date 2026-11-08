@@ -1585,6 +1585,12 @@ export class ChatController {
       const _p2 = store.currentModelParams;
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value), dry_multiplier: _p2?.dry_multiplier ?? 0.0, dry_base: _p2?.dry_base ?? 1.75, dry_allowed_length: _p2?.dry_allowed_length ?? 2, dry_penalty_last_n: _p2?.dry_penalty_last_n ?? 0, xtc_probability: _p2?.xtc_probability ?? 0.0, xtc_threshold: _p2?.xtc_threshold ?? 0.1 };
       const allHistory = this.state.history.slice();
+      // Граница «новых» сообщений в ответе бэкенда: result.messages = эхо
+      // переданной истории (verbatim: messages_store = history.clone(),
+      // orchestrator/mod.rs) + сообщения этого хода. Штамп времени ставится
+      // ТОЛЬКО новым — иначе каждый ход перезаписывает время всей истории на
+      // длительность последнего хода (кейс сессии 1794163621028: у всех 2:36).
+      const preSendLength = allHistory.length;
       const isCloudRouter = isCloudModelPath(modelPath);
       let mmprojPath: string | null = null;
       if (!isCloudRouter && attachments.length > 0) {
@@ -1618,7 +1624,7 @@ export class ChatController {
       console.log("DBG chat_request -> newMessages.len=", newMessages.length, "newMessages=", JSON.stringify(newMessages.map((m: any) => ({ t: m.type, a: m.author }))), "response.text?", !!response.text);
       // Мысли стриминга: теперь приходят в response.messages от backend.
       if (newMessages.length > 0) {
-        newMessages.forEach((m: any) => {
+        newMessages.slice(preSendLength).forEach((m: any) => {
             if (m.author && m.author !== 'user' && m.author !== 'system') {
                 m.time_sec = dur;
             }
@@ -1639,6 +1645,8 @@ export class ChatController {
           type: "message",
           author: activeAgent,
           content: response.text,
+          // Фолбэк-сообщение принадлежит этому ходу — несёт его время.
+          time_sec: dur,
           sub_calls: (response.sub_calls && response.sub_calls.length) ? response.sub_calls : undefined,
         });
         this.state.uidList.push(this.state.nextUid());

@@ -1137,14 +1137,22 @@ pub fn validate_signal_value(contract: &SignalContract, value: &Value) -> Result
 }
 
 /// Детерминированное извлечение значения сигнала из ТЕКСТА ответа агента по
-/// допустимым значениям контракта. НЕ делает LLM-вызов — просто ищет подстроку
-/// или токен. Используется как fallback, когда агент не вызвал `emit_signal` нативно.
+/// контракту. НЕ делает LLM-вызов. Используется как fallback, когда агент не
+/// вызвал `emit_signal` нативно.
 ///
 /// Поддерживаемые виды `value_schema`:
-/// - `enum` (массив строк) → первая совпавшая строка;
-/// - `object` со свойствами-`enum` → объект из совпавших свойств;
+/// - `enum` (массив строк) → первая совпавшая подстрока (топ-уровневые
+///   контракты продакшеном не используются, семантика сохранена);
+/// - `object` → свойства ТОЛЬКО по привязке к ключу — пара `"имя": значение`
+///   в тексте ответа: enum-свойства сверяются со списком значений, строковые/
+///   bool/anyOf — через [`find_verdict_from`]. Если в schema объявлен непустой
+///   `required`, сигнал собирается ТОЛЬКО из полного набора полей, иначе
+///   `None` — частичный сигнал это изготовление отсутствующей информации
+///   (fallback-путь `validate_signal_value` не проходит: он зовётся только
+///   на нативном пути `dispatch.rs`);
 /// - `pattern` вида `^[1-9]$` → первый символ из набора.
-/// Возвращает `None`, если ничего не нашлось (тогда сигнал не сохраняется).
+/// Возвращает `None`, если честная пара не нашлась (тогда сигнал не
+/// сохраняется — срабатывает ветка «Fallback не смог» в orchestrator).
 pub fn extract_signal_value_from_text(contract: &SignalContract, text: &str) -> Option<Value> {
     let schema = &contract.value_schema;
 
@@ -1160,25 +1168,50 @@ pub fn extract_signal_value_from_text(contract: &SignalContract, text: &str) -> 
         return None;
     }
 
-    // 2) object со свойствами-enum
+    // 2) object: свойства извлекаются ТОЛЬКО по привязке к ключу — пара
+    //    `"имя": значение` в тексте. Голый contains по значениям запрещён:
+    //    он изготовлял сигнал из шума текста (кейс 1794163621028 — «1» из
+    //    «**Element 1:**» сматчилась в floor0_type/floor1_type, а все
+    //    required-поля без enum терялись молча).
     if schema.get("type").and_then(|t| t.as_str()) == Some("object") {
+        let required: Vec<&str> = schema
+            .get("required")
+            .and_then(|r| r.as_array())
+            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
+            .unwrap_or_default();
         if let Some(props) = schema.get("properties").and_then(|p| p.as_object()) {
             let mut obj = serde_json::Map::new();
-            let mut matched = false;
             for (pname, pschema) in props {
                 if let Some(enum_vals) = pschema.get("enum").and_then(|e| e.as_array()) {
-                    for v in enum_vals {
-                        if let Some(s) = v.as_str() {
-                            if !s.is_empty() && text.contains(s) {
-                                obj.insert(pname.clone(), Value::String(s.to_string()));
-                                matched = true;
-                                break;
-                            }
-                        }
+                    if let Some(v) = extract_anchored_enum_value(pname, enum_vals, text) {
+                        obj.insert(pname.clone(), v);
+                    }
+                } else {
+                    // Не-enum свойство: строка / bool / anyOf — SSOT-парсер
+                    // вердиктов (как в слотовой сборке). Числовые и прочие
+                    // формы он не распознаёт — поле просто не попадёт в объект.
+                    let allow_text = pschema.get("type").and_then(Value::as_str) == Some("string")
+                        || pschema
+                            .get("anyOf")
+                            .and_then(Value::as_array)
+                            .map(|a| {
+                                a.iter().any(|s| {
+                                    s.get("type").and_then(Value::as_str) == Some("string")
+                                })
+                            })
+                            .unwrap_or(false);
+                    if let Some((verdict, _)) = find_verdict_from(text, 0, pname, allow_text) {
+                        obj.insert(pname.clone(), verdict.into_value());
                     }
                 }
             }
-            if matched {
+            // Гейт целостности: неполный required-набор — не сигнал
+            // (§00.2: отсутствующая информация не изготавливается).
+            if required.is_empty() {
+                if !obj.is_empty() {
+                    return Some(Value::Object(obj));
+                }
+            } else if required.iter().all(|r| obj.contains_key(*r)) {
                 return Some(Value::Object(obj));
             }
         }
@@ -1209,6 +1242,32 @@ pub fn extract_signal_value_from_text(contract: &SignalContract, text: &str) -> 
         }
     }
 
+    None
+}
+
+/// Ключ-привязанное извлечение enum-свойства объекта: ищет в тексте пару
+/// `"имя": "значение"` (строка с экранированием через [`scan_json_string`]) и
+/// возвращает значение, только если оно входит в enum-список свойства.
+/// Перебор вхождений: не-enum значение после ключа не сматчивается, поиск
+/// продолжается дальше по тексту.
+fn extract_anchored_enum_value(pname: &str, enum_vals: &[Value], text: &str) -> Option<Value> {
+    let needle = format!("\"{}\"", pname);
+    let mut search_from = 0usize;
+    while let Some(rel) = text[search_from..].find(&needle) {
+        let abs = search_from + rel;
+        let after = text[abs + needle.len()..].trim_start();
+        if let Some(rest) = after.strip_prefix(':') {
+            let v = rest.trim_start();
+            if let Some(inner) = v.strip_prefix('"') {
+                if let Some(s) = scan_json_string(inner) {
+                    if enum_vals.iter().any(|e| e.as_str() == Some(s.as_str())) {
+                        return Some(Value::String(s));
+                    }
+                }
+            }
+        }
+        search_from = abs + needle.len();
+    }
     None
 }
 
@@ -2019,11 +2078,85 @@ mod tests {
                 }
             }),
         };
-        // Текст содержит "не найдено" → missing_data извлекается (enum-свойство внутри объекта).
+        // Пара с ключом → извлекается (enum-свойство, значение из списка).
         assert_eq!(
-            extract_signal_value_from_text(&c, "Дефицит: элемент 3 не найдено"),
+            extract_signal_value_from_text(&c, "Вердикт: \"missing_data\": \"не найдено\""),
             Some(serde_json::json!({ "missing_data": "не найдено" }))
         );
+        // Значение в прозе БЕЗ ключа — не извлекается (голый contains
+        // запрещён: изготовлял сигнал из шума текста, кейс 1794163621028).
+        assert_eq!(
+            extract_signal_value_from_text(&c, "Дефицит: элемент 3 не найдено"),
+            None
+        );
+        // Пара с ключом, но значение НЕ из enum — не извлекается.
+        assert_eq!(
+            extract_signal_value_from_text(&c, "\"missing_data\": \"частично\""),
+            None
+        );
+        // bool-свойство по ключу.
+        assert_eq!(
+            extract_signal_value_from_text(&c, "\"e1\": false"),
+            Some(serde_json::json!({ "e1": false }))
+        );
+    }
+
+    #[test]
+    fn fallback_does_not_fabricate_from_noise_text() {
+        // Регресс кейса 1794163621028: модель вернула вердикт-текст
+        // («**Element 1:** …») вместо emit_signal; старый contains ловил
+        // «1» из «Element 1» как floor0_type/floor1_type, а e-поля терялись.
+        // Шум без ключевых пар → None (сигнал не изготавливается).
+        let c = SignalContract {
+            key: "validator_report".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "required": [
+                    "e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9",
+                    "floor0_type", "floor1_type", "target"
+                ],
+                "properties": {
+                    "e1": { "anyOf": [{ "type": "string", "maxLength": 200 }, { "const": false }] },
+                    "e2": { "anyOf": [{ "type": "string", "maxLength": 200 }, { "const": false }] },
+                    "e3": { "anyOf": [{ "type": "string", "maxLength": 200 }, { "const": false }] },
+                    "floor0_type": { "type": "string", "enum": ["1","2","3","4","5","6","7","8","9"] },
+                    "floor1_type": { "type": "string", "enum": ["1","2","3","4","5","6","7","8","9"] },
+                    "target": { "type": "string", "minLength": 1, "maxLength": 160 }
+                }
+            }),
+        };
+        let noise = "**Element 1:** Характеристика 3. Тип 7, глубинный. Этаж 1 — паттерн.";
+        assert_eq!(extract_signal_value_from_text(&c, noise), None);
+    }
+
+    #[test]
+    fn fallback_requires_full_required_set() {
+        let c = SignalContract {
+            key: "validator_report".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "required": ["floor0_type", "floor1_type", "target"],
+                "properties": {
+                    "floor0_type": { "type": "string", "enum": ["1","2","3","4","5","6","7","8","9"] },
+                    "floor1_type": { "type": "string", "enum": ["1","2","3","4","5","6","7","8","9"] },
+                    "target": { "type": "string", "minLength": 1, "maxLength": 160 }
+                }
+            }),
+        };
+        // Полный набор пар → полный сигнал.
+        let full = "Итог: \"floor0_type\": \"7\", \"floor1_type\": \"2\", \"target\": \"потеря контроля\".";
+        assert_eq!(
+            extract_signal_value_from_text(&c, full),
+            Some(serde_json::json!({
+                "floor0_type": "7",
+                "floor1_type": "2",
+                "target": "потеря контроля"
+            }))
+        );
+        // Тот же набор минус одна пара (нет target) → None: частичный
+        // сигнал не изготавливается (§00.2).
+        let partial = "\"floor0_type\": \"7\", \"floor1_type\": \"2\".";
+        assert_eq!(extract_signal_value_from_text(&c, partial), None);
     }
 
     #[test]

@@ -165,8 +165,10 @@ fn create_reports_compression_and_silent_for_aligned() {
     )
     .expect("оверсайз-карточка сохраняется");
     assert!(marker.contains("[REFMOD_SAVED slug=big_char]"), "{}", marker);
+    // SSOT 4906735: бюджет площади вместо лимита длинной стороны →
+    // 1216×1632 (обе стороны кратны 32), тест не обновили в том коммите.
     assert!(
-        marker.contains("⚠ СЖАТИЕ frame_01.png: 3024×4032 → 768×1024"),
+        marker.contains("⚠ СЖАТИЕ frame_01.png: 3024×4032 → 1216×1632"),
         "сжатие названо явно с размерами: {}",
         marker
     );
