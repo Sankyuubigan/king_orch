@@ -195,7 +195,8 @@ pub fn apply_ops(
     Ok(current)
 }
 
-/// Телосложение: горизонтальный масштаб кадра с возвратом на сетку 32px/1024px.
+/// Телосложение: горизонтальный масштаб кадра с возвратом в SSOT-потолок
+/// (бюджет площади главного кадра, сетка 32px).
 pub fn apply_warp(img: image::DynamicImage, factor: f32) -> image::DynamicImage {
     let (w, h) = (img.width(), img.height());
     let new_w = ((w as f32) * factor).round().max(1.0) as u32;
@@ -238,7 +239,7 @@ pub fn splice_sets(
 
 /// Вертикальная склейка двух кадров с альфа-градиентом по шву:
 /// выравниваем по ширине (max из двух), склеиваем, шов B=32px — линейный
-/// переход; итог нормируется SSOT-`normalize_frame` (≤1024px, сетка 32).
+/// переход; итог нормируется SSOT-`normalize_frame` (бюджет площади, сетка 32).
 fn splice_vertical(a: &image::DynamicImage, b: &image::DynamicImage) -> image::DynamicImage {
     let width = a.width().max(b.width());
     let fit = |img: &image::DynamicImage| -> image::DynamicImage {

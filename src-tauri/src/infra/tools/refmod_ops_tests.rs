@@ -3,7 +3,7 @@
 
 use super::*;
 use serde_json::json;
-use crate::infra::tools::refmod::{FRAME_LONG_SIDE_MAX, FRAME_SIZE_MULTIPLE};
+use crate::infra::tools::refmod::{CARD_PX_BUDGET_MAIN, FRAME_SIZE_MULTIPLE};
 
 fn solid(w: u32, h: u32, color: [u8; 3]) -> image::DynamicImage {
     image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(
@@ -85,15 +85,18 @@ fn warp_keeps_grid() {
         let (w, h) = (out.width(), out.height());
         assert_eq!(w % FRAME_SIZE_MULTIPLE, 0, "factor={} ширина {}", factor, w);
         assert_eq!(h % FRAME_SIZE_MULTIPLE, 0, "factor={} высота {}", factor, h);
-        assert!(w <= FRAME_LONG_SIDE_MAX && h <= FRAME_LONG_SIDE_MAX);
+        assert!(
+            w as u64 * h as u64 <= CARD_PX_BUDGET_MAIN,
+            "factor={} кап площади главного нарушен",
+            factor
+        );
     }
-    // Крупный кадр при сжатии возвращается в потолок SSOT (≤1024px).
+    // Крупный кадр при сжатии возвращается в потолок SSOT (бюджет площади).
     let out = apply_warp(solid(2048, 1024, [100, 100, 100]), 0.7);
     let (w, h) = (out.width(), out.height());
     assert_eq!(w % FRAME_SIZE_MULTIPLE, 0);
     assert_eq!(h % FRAME_SIZE_MULTIPLE, 0);
-    assert!(w <= FRAME_LONG_SIDE_MAX);
-    assert!(h <= FRAME_LONG_SIDE_MAX);
+    assert!(w as u64 * h as u64 <= CARD_PX_BUDGET_MAIN);
 }
 
 #[test]

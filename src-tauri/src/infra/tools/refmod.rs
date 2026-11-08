@@ -23,8 +23,8 @@ use crate::infra::tools::{Tool, ToolCtx, ToolError};
 // ── SSOT-реэкспорт (типы и константы без ошибок) ──
 pub use tauri_plugin_image_engine::engine::{
     copy_card_voice_in, engine_ref_paths, normalize_frame, set_card_voice_in,
-    update_voice_desc_in, NormalizeReport, RefModBundle, FRAME_LONG_SIDE_MAX,
-    FRAME_SIZE_MULTIPLE, FRAMES_PER_RUN,
+    update_voice_desc_in, NormalizeReport, RefModBundle, CARD_PX_BUDGET_MAIN,
+    CARD_PX_BUDGET_TOTAL, FRAME_SIZE_MULTIPLE, FRAMES_PER_RUN,
 };
 
 /// Маппинг ошибки SSOT в ошибку тул-слоя (вариант в вариант — семантика честных
