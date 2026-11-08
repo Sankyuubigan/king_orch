@@ -5,12 +5,16 @@ const humanevalpack = require('./coding_bench/humanevalpack.cjs');
 const evalplus = require('./coding_bench/evalplus.cjs');
 const refactor = require('./coding_bench/refactor.cjs');
 const custom_ts = require('./coding_bench/custom_ts.cjs');
+const mcq = require('./coding_bench/mcq.cjs');
+const quixbugs = require('./coding_bench/quixbugs.cjs');
 
 async function main() {
     await humanevalpack.convert();
     await evalplus.convert();
     await refactor.convert();
     await custom_ts.convert();
+    await mcq.convert();
+    await quixbugs.convert();
     console.log('\nГотово. Наборы записаны в tasks_for_test_llm/<suite>/tasks.jsonl');
 }
 

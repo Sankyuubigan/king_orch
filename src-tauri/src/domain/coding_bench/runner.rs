@@ -7,6 +7,7 @@ use crate::infra::{AppConfig, LlamaEngine, LlmMessage};
 
 use super::evaluator::{append_test_to_solution, assemble_solution, run_command, ExecVerdict};
 use super::kv_probe::probe_max_ctx_f16;
+use super::grade_mcq;
 use super::report::{
     write_artifacts, write_report, ModelRunSummary, ReportSummary, TaskResultRecord,
 };
@@ -172,6 +173,10 @@ fn run_single_task(
         };
     }
 
+    if task.run_with == "mcq" {
+        return run_mcq_task(engine, task, opts, model, log_cb, cancel_flag);
+    }
+
     let mut params = opts
         .config
         .model_params
@@ -241,6 +246,87 @@ fn run_single_task(
             // в отчёте, а не тихий skip.
             None => record.error = Some("В задаче нет run_cmd, хотя рантайм активен".to_string()),
         },
+        Err(e) => record.error = Some(e),
+    }
+    record
+}
+
+/// Выполняет mcq-задачу: генерация без песочницы (ответ модели — буква/число),
+/// извлечение ответа и сверка с эталоном через mcq::grade_mcq. Непарсируемый
+/// ответ и битая задача — честные ошибки записи, а не угадывание.
+fn run_mcq_task(
+    engine: &LlamaEngine,
+    task: &CodingTask,
+    opts: &CodingBenchOptions,
+    model: &ModelToRun,
+    log_cb: impl Fn(String) + Clone,
+    cancel_flag: Arc<AtomicBool>,
+) -> TaskResultRecord {
+    let mut params = opts
+        .config
+        .model_params
+        .get(&model.path)
+        .cloned()
+        .unwrap_or_default();
+    params.temperature = task.temperature;
+    let messages = vec![LlmMessage {
+        role: "user".to_string(),
+        content: task.model_prompt.clone(),
+        ..Default::default()
+    }];
+
+    let generation = engine.generate_chat(
+        &messages,
+        task.max_tokens as usize,
+        &params,
+        &opts.config.prompt_format,
+        false,
+        cancel_flag.clone(),
+        "coding_bench",
+        None,
+        |_progress: f32, _msg: &str| {},
+        log_cb.clone(),
+    );
+
+    let (completion, metrics, gen_err) = match generation {
+        Ok(res) => (res.text, Some(res.metrics), None),
+        Err(e) => (String::new(), None, Some(e)),
+    };
+
+    let mut record = TaskResultRecord {
+        task_id: task.id.clone(),
+        suite: task.suite.clone(),
+        category: task.category.clone(),
+        language: task.language.clone(),
+        passed: false,
+        timed_out: false,
+        exit_code: None,
+        error: gen_err,
+        prompt_tokens: metrics.as_ref().map(|m| m.prompt_tokens).unwrap_or(0),
+        generated_tokens: metrics.as_ref().map(|m| m.generated_tokens).unwrap_or(0),
+        prompt_tok_per_sec: metrics.as_ref().map(|m| m.prompt_per_second).unwrap_or(0.0),
+        gen_tok_per_sec: metrics
+            .as_ref()
+            .map(|m| m.predicted_per_second)
+            .unwrap_or(0.0),
+        ttft_sec: metrics.as_ref().map(|m| m.ttft_sec).unwrap_or(0.0),
+        gen_elapsed_sec: metrics.as_ref().map(|m| m.elapsed_sec).unwrap_or(0.0),
+        run_elapsed_ms: 0,
+        stdout: String::new(),
+        stderr: String::new(),
+        solution_code: completion.clone(),
+    };
+
+    if record.error.is_some() {
+        return record;
+    }
+
+    match grade_mcq(task, &completion) {
+        Ok((passed, detail)) => {
+            record.passed = passed;
+            // Деталь («Извлечено: X; верно: Y») видна в артефактах отчёта.
+            record.stdout = detail;
+        }
         Err(e) => record.error = Some(e),
     }
     record

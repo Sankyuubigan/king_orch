@@ -17,9 +17,10 @@ pub struct CodingTask {
     pub id: String,
     pub suite: String,
     pub language: String,
-    /// codegen | bugfix | refactor
+    /// codegen | bugfix | refactor | mcq
     pub category: String,
-    /// python | deno | node | rust | skip
+    /// python | deno | node | rust | skip | mcq (mcq — оценка без песочницы,
+    /// извлечение буквы/числа из ответа модели, см. mcq.rs)
     pub run_with: String,
     /// Текст, который отправляется модели как user-сообщение.
     pub model_prompt: String,
@@ -42,6 +43,17 @@ pub struct CodingTask {
     /// cpp/go/java писали `null` и роняли парсер структуры со `String`).
     #[serde(default)]
     pub run_cmd: Option<String>,
+    /// Варианты ответа (mcq, mode letter). None у задач с песочницей.
+    /// Явный null валиден (урок инцидента 05.11.2026: default срабатывает
+    /// только на отсутствие поля, поэтому Option + null-толерантность обязательны).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub choices: Option<Vec<String>>,
+    /// Каноничный ответ (mcq): буква ("B") или число ("42").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer: Option<String>,
+    /// Режим оценки mcq: "letter" | "number". None = letter (требует choices).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcq_mode: Option<String>,
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
     #[serde(default)]
@@ -210,6 +222,35 @@ mod tests {
             "test": ""
         }"#).unwrap();
         assert_eq!(t.run_cmd, None);
+    }
+
+    /// mcq-задача: choices/answer/mcq_mode парсятся; у обычной задачи (ниже)
+    /// новые поля отсутствуют — serde default даёт None без ошибки.
+    #[test]
+    fn parses_mcq_task() {
+        let t: CodingTask = serde_json::from_str(r#"{
+            "id": "m_0",
+            "suite": "mmlu_subset",
+            "language": "en",
+            "category": "mcq",
+            "run_with": "mcq",
+            "model_prompt": "...",
+            "solution_name": "answer.txt",
+            "choices": ["a", "b", "c", "d"],
+            "answer": "B",
+            "mcq_mode": "letter"
+        }"#).unwrap();
+        assert_eq!(t.choices.as_deref().map(|c| c.len()), Some(4));
+        assert_eq!(t.answer.as_deref(), Some("B"));
+        assert_eq!(t.mcq_mode.as_deref(), Some("letter"));
+    }
+
+    #[test]
+    fn non_mcq_task_has_no_mcq_fields() {
+        let t = sample_task();
+        assert_eq!(t.choices, None);
+        assert_eq!(t.answer, None);
+        assert_eq!(t.mcq_mode, None);
     }
 
     #[test]
