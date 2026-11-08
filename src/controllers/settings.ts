@@ -163,6 +163,41 @@ export class SettingsController {
     bus.emit("model-catalog-changed");
   }
 
+  /// Перечитывает комбо КАСТОМНОГО ШЛЮЗА и пишет в store.cloudRouterCombos.
+  ///
+  /// Дёшево и всегда актуально: плагин отдаёт список шлюза ИЗ КОНФИГА НА
+  /// ДИСКЕ, без старта сервера (commands.rs read_combos_from_config), а
+  /// дашборд при каждом PATCH видимости моделей пишет диск сразу. Поэтому
+  /// вызывается на каждое открытие чат-вкладки и на фокус окна: прежняя
+  /// схема — единственная подгрузка при config:loaded (флаг
+  /// cloudRouterCombosRequested) + живой мост дашборда (postMessage,
+  /// работает только пока настройки открыты) — застревала: правки видимости
+  /// из дашборда не доезжали до дропдауна чата (репорт юзера 08.11.26).
+  ///
+  /// Node-роутеры (9router/extremerouter/omniroute) здесь НЕ перечитываются:
+  /// их get_combos при остановленном сервере ПОДНИМАЕТ его (commands.rs:447)
+  /// — долбить этим каждое переключение вкладки нельзя; их каталог живёт
+  /// по старой схеме (config:loaded + мост).
+  private async refreshGatewayCombos() {
+    let combos: ComboInfo[];
+    try {
+      combos = await getCloudRouterCombos("gateway" as any);
+    } catch (_) {
+      // Шлюз не установлен/недоступен — оставляем последний известный
+      // список: молча опустошать его при рестарте шлюза — ложный сигнал
+      // «облако пропало»; недоступность выбранной модели честно ловит
+      // sendReadiness чата.
+      return;
+    }
+    const next = combos.map(c => ({ name: c.name, models: c.models || [] }));
+    const changed =
+      JSON.stringify(store.cloudRouterCombos["gateway"] || []) !== JSON.stringify(next);
+    store.cloudRouterCombos["gateway"] = next;
+    // Перерисовка селектов — только при реальном изменении каталога:
+    // чтение с диска при каждом фокусе окна не должно дёргать весь UI.
+    if (changed) bus.emit("model-catalog-changed");
+  }
+
   /// Заполняет выпадающий список модели-переводчика из store.models (тот же
   /// каталог, что у основного селекта). Вызов обязателен при загрузке конфига
   /// и при каждом изменении каталога — иначе список остаётся пустым навсегда.
@@ -411,5 +446,17 @@ export class SettingsController {
     // Каталог моделей изменился (добавили/удалили модель) — перерисовываем и
     // селект переводчика, как это делают чат-вкладки.
     bus.on("model-catalog-changed", () => this.updateTranslatorModelSelect());
+    // Открытие чат-вкладки / возврат фокуса в окно — момент, когда список
+    // моделей реально нужен: перечитываем каталог кастомного шлюза ИЗ КОНФИГА
+    // НА ДИСКЕ (дёшево: read_combos_from_config, без старта сервера; PATCH
+    // видимости из дашборда пишет диск сразу). Живой мост дашборда
+    // (postMessage) работает только пока настройки открыты — без этого
+    // правки видимости из дашборда не доезжали до дропдауна чата
+    // (репорт юзера 08.11.26). Node-роутеры не трогаем: их get_combos
+    // при остановленном сервере ПОДНИМАЕТ его (commands.rs:447).
+    bus.on("tab:activated", (tab: { type?: string }) => {
+      if (tab?.type === "chat" || tab?.type === "main") void this.refreshGatewayCombos();
+    });
+    window.addEventListener("focus", () => void this.refreshGatewayCombos());
   }
 }

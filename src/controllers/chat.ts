@@ -680,7 +680,11 @@ export class ChatController {
     if (!this.catalogCache) {
       try { this.catalogCache = await getModelsCatalog(); } catch (_) { this.catalogCache = []; }
     }
-    const catalogModel = (this.catalogCache || []).find((m: CatalogEntry) => modelPath.includes(m.name) || m.name === modelPath);
+    // Гвард внешнего контракта (§00.2): `|| []` не ловит truthy-не-массив
+    // (битый ответ плагина/мока), Array.isArray отрезает весь класс отказов —
+    // не-массив до .find дойти не может.
+    const catalog: CatalogEntry[] = Array.isArray(this.catalogCache) ? this.catalogCache : [];
+    const catalogModel = catalog.find((m: CatalogEntry) => modelPath.includes(m.name) || m.name === modelPath);
     if (catalogModel && catalogModel.tokenizer_id) {
         tokenizerId = catalogModel.tokenizer_id;
     }
