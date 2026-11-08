@@ -370,10 +370,19 @@ impl CloudEngine {
                 arguments: call.arguments,
             })
             .collect();
-        let text = if result.reasoning.trim().is_empty() {
-            result.content
+        // Каналы не смешиваются (PRP 08.11.2026, сессия 1794147772526): по
+        // контракту GenerationResult `text` — только видимый ответ, думатель
+        // живёт отдельным полем `reasoning`. Прежняя безусловная склейка
+        // «reasoning + content» уводила размышления в сообщение юзеру —
+        // clean_thought_tags срезает только тегированные блоки, у склейки
+        // тегов нет. Исключение — deepseek-класс, спрятавший ответ ЦЕЛИКОМ
+        // в reasoning_content при пустом content (см. workflow_engine/nodes.rs):
+        // тогда ответом считается reasoning, иначе downstream получает
+        // пустой text.
+        let text = if result.content.trim().is_empty() {
+            result.reasoning.clone()
         } else {
-            format!("{}{}", &result.reasoning, &result.content)
+            result.content
         };
         Ok(GenerationResult {
             text,
@@ -990,6 +999,49 @@ mod tests {
             3,
             "обмен состоялся — засчитан ровно один запрос"
         );
+    }
+
+    /// Каналы reasoning и content не смешиваются (PRP 08.11.2026, сессия
+    /// 1794147772526): `text` — только видимый ответ, думатель живёт в
+    /// отдельном поле `reasoning` (контракт GenerationResult). Склейка
+    /// «reasoning + content» в text уводила размышления прямо в сообщение
+    /// юзеру — clean_thought_tags тегированный блок не находит.
+    #[test]
+    fn cloud_reasoning_channel_stays_out_of_text() {
+        let (addr, server) = serve_cloud_body(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"мысль модели\"}}]}\n\n\
+             data: {\"choices\":[{\"delta\":{\"content\":\"видимый ответ\"}}]}\n\n\
+             data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+             data: [DONE]\n\n",
+        );
+        let counter = Arc::new(AtomicU64::new(0));
+        let engine = cloud_with_counter(&format!("http://{}", addr), counter.clone());
+        let result = run_cloud(&engine);
+        server.join().ok();
+
+        let gen = result.expect("обоих каналов стрим обязан вернуть результат");
+        assert_eq!(gen.text, "видимый ответ", "text — только content, без думателя");
+        assert_eq!(gen.reasoning, "мысль модели", "думатель — отдельным полем");
+    }
+
+    /// Fallback-кейс (deepseek-класс, см. nodes.rs «JSON целиком в блоке
+    /// размышлений»): content пуст, весь ответ — в reasoning_content. Тогда
+    /// ответом считается reasoning — иначе downstream получает пустой text.
+    #[test]
+    fn cloud_empty_content_falls_back_to_reasoning() {
+        let (addr, server) = serve_cloud_body(
+            "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"ответ целиком в думателе\"}}]}\n\n\
+             data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+             data: [DONE]\n\n",
+        );
+        let counter = Arc::new(AtomicU64::new(0));
+        let engine = cloud_with_counter(&format!("http://{}", addr), counter.clone());
+        let result = run_cloud(&engine);
+        server.join().ok();
+
+        let gen = result.expect("стрим с reasoning обязан вернуть результат");
+        assert_eq!(gen.text, "ответ целиком в думателе", "пустой content → ответ из reasoning");
+        assert_eq!(gen.reasoning, "ответ целиком в думателе");
     }
 
     /// Error-кадр внутри 200 — это отказ провайдера: счётчик НЕ растёт
