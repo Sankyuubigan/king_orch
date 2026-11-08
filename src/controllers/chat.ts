@@ -8,7 +8,7 @@ import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks, ProcessingIn
 import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, getModelContextSize, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
-import { renderMarkdown, stripStreamArtifacts, extractChannelThought, visibleStreamText, CLOUD_ROUTER_PREFIXES, isCloudModelPath, fillModelSelect, fillAgentSelect, getAgentDisplayName, getSelectedAgentName, isGraphAgent, hasFusableGroups } from "../utils";
+import { renderMarkdown, stripStreamArtifacts, extractChannelThought, visibleStreamText, CLOUD_ROUTER_PREFIXES, isCloudModelPath, fillModelSelect, syncModelSelectTitle, fillAgentSelect, getAgentDisplayName, getSelectedAgentName, isGraphAgent, hasFusableGroups } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError, trackEvent } from "../telemetry";
 
@@ -1412,6 +1412,7 @@ export class ChatController {
       if (this.hasOption(this.el.modelSelect, model)) {
         this.el.modelSelect.value = model;
         this.el.modelSelect.dataset.modelExplicit = "true";
+        syncModelSelectTitle(this.el.modelSelect);
         bus.emit("model:changed", model);
       } else {
         this.pendingSessionModel = model;
@@ -1433,6 +1434,7 @@ export class ChatController {
     if (model && this.hasOption(this.el.modelSelect, model)) {
       this.el.modelSelect.value = model;
       this.el.modelSelect.dataset.modelExplicit = "true";
+      syncModelSelectTitle(this.el.modelSelect);
       this.pendingSessionModel = null;
       modelRestored = true;
     }
@@ -1912,6 +1914,7 @@ export class ChatController {
     this.el.modelSelect?.addEventListener("change", () => {
       this.el.modelSelect.dataset.modelExplicit = "true";
       this.pendingSessionModel = null;
+      syncModelSelectTitle(this.el.modelSelect);
       bus.emit("model:changed", this.el.modelSelect.value);
       this.applyIndicatorVisibility();
       this.updateAttachButtonState(); this.triggerTokenCount(); this.refreshSendAvailability();

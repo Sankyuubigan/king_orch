@@ -139,7 +139,7 @@ export function buildChatPage(main: boolean, shared: SharedChatControls): ChatPa
   btnAgentSettings.dataset.action = "open-agent-picker";
   const modelSelect = document.createElement("select");
   modelSelect.className = "model-select";
-  modelSelect.title = "Выбор модели GGUF";
+  modelSelect.title = "Выбор модели";
   const tokenCounter = py("div", "token-counter") as HTMLDivElement;
   // Стартовый placeholder до config:loaded (лимит ещё не известен) — «0 / 8192»
   // было ложью, если конфиг задаёт другой лимит или модель облачная.

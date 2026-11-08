@@ -13,6 +13,7 @@ export {
   CLOUD_ROUTER_PREFIXES,
   isCloudModelPath,
   fillModelSelect,
+  syncModelSelectTitle,
   fillAgentSelect,
   renderCloudRouterOptions,
   getAgentDisplayName,

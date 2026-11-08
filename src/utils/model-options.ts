@@ -47,12 +47,22 @@ export function fillModelSelect(select: HTMLSelectElement | null) {
     const fileName = m.split(/[/\\]/).pop() || m;
     const badges = m ? capabilityIcons(store.capabilities[m]) : "";
     o.text = fileName + (badges ? `  ${badges}` : "");
+    o.title = fileName;
     select.appendChild(o);
   }
   renderCloudRouterOptions(select);
   if (select.dataset.modelExplicit !== "true" && store.lastModel) {
     applyModelValue(select, store.lastModel);
   }
+  syncModelSelectTitle(select);
+}
+
+/// Хинт селекта = полное имя выбранной модели (title выбранной опции);
+/// пока ничего не выбрано — нейтральный «Выбор модели».
+export function syncModelSelectTitle(select: HTMLSelectElement | null) {
+  if (!select) return;
+  const selected = Array.from(select.options).find(o => o.value === select.value);
+  select.title = selected?.title || "Выбор модели";
 }
 
 /// Рисует optgroup «Облачные роутеры» поверх локальных моделей.
@@ -65,7 +75,11 @@ export function renderCloudRouterOptions(select: HTMLSelectElement | null) {
   const allCombos = Object.entries(store.cloudRouterCombos).flatMap(([router, combos]) =>
     combos.map(c => ({ ...c, router }))
   );
-  if (!allCombos.length) return;
+  if (!allCombos.length) {
+    // Группа уже удалена выше — выбор мог молча упасть на локальную модель.
+    syncModelSelectTitle(select);
+    return;
+  }
   
   const group = document.createElement("optgroup");
   group.label = "Облачные роутеры";
@@ -73,11 +87,13 @@ export function renderCloudRouterOptions(select: HTMLSelectElement | null) {
     const o = document.createElement("option");
     o.value = `${CLOUD_ROUTER_PREFIXES[c.router]}${c.name}`;
     o.text = `☁️ [${c.router}] ${c.name}`;
+    o.title = c.name;
     group.appendChild(o);
   }
   select.appendChild(group);
   if (explicit) applyModelValue(select, current);
   else if (store.lastModel) applyModelValue(select, store.lastModel);
+  syncModelSelectTitle(select);
 }
 
 /// Заполняет select агентов по выбору пользователя (`store.agentVisibility`).
