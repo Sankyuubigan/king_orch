@@ -715,7 +715,9 @@ where
                     content: content.clone(),
                     sub_calls: None,
                     author: Some("system".to_string()),
-                    model: None,
+                    // Ошибка подписывается моделью, на которой шёл прогон (как
+                    // ответы агентов) — владелец видит, где именно сорвался.
+                    model: Some(extract_model_filename(engine.model_path())),
                     time_sec: None,
                     attachments: None,
                     phase: None,

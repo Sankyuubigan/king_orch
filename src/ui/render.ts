@@ -57,7 +57,9 @@ export function createMessageElement(
     msgDiv.appendChild(attDiv);
   }
 
-  if (timeText && role === 'agent') {
+  // Модель подписывается у ответов агентов (с временем) и у системных ошибок
+  // (timeText отсутствует — рисуется только подпись модели, проставленная бэкендом).
+  if ((timeText && role === 'agent') || (role === 'system' && modelName)) {
     const timeDiv = document.createElement("div");
     timeDiv.className = "msg-time";
     if (modelName) {
@@ -66,10 +68,12 @@ export function createMessageElement(
       modelSpan.innerText = modelName;
       timeDiv.appendChild(modelSpan);
     }
-    const timeSpan = document.createElement("span");
-    timeSpan.className = "msg-time-value";
-    timeSpan.innerText = timeText;
-    timeDiv.appendChild(timeSpan);
+    if (timeText) {
+      const timeSpan = document.createElement("span");
+      timeSpan.className = "msg-time-value";
+      timeSpan.innerText = timeText;
+      timeDiv.appendChild(timeSpan);
+    }
     msgDiv.appendChild(timeDiv);
   }
 
