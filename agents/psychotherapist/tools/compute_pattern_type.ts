@@ -1,66 +1,23 @@
 /**
- * compute_pattern_type — тул команды «Психотерапевт»: механическое вычисление
- * типа Триады Травмы (Этаж -2) из классификации этажей Валидатора.
- *
- * Живёт в папке команды (не в движке): движок остаётся агент-агностиком,
- * SAFETY-механика валидатора — бизнес-логика команды (§00.2). Вызывается из
- * графа нодой `custom_tool_call` (tool_file: ../tools/compute_pattern_type.ts),
- * прецедент — `agents/_shared/tools/read_md_section.ts`.
+ * compute_pattern_type — тул команды «Психотерапевт»: механическая верификация
+ * сквозной SAFETY-цепи всех трёх этажей (T0 -> T-1 -> T-2) и готовности
+ * критических элементов Ядра.
  *
  * Вход: Deno.args[0] = JSON (значения приходят СТРОКАМИ от движка):
  *   {"report": "<JSON-строка сигнала validator_report или сам объект>"}
  *
  * Выход: ТОЛЬКО JSON в stdout:
- *   {"floor2_type": "1".."9" | "none", "pattern_found": boolean, "reason": "<объяснение>"}
- *
- * Функция ТОТАЛЬНА по полю: успех — цифра 1..9; любой отказ (критический
- * элемент e3/e6/e8/e9 не подтверждён, этажи не классифицированы, сцепка не
- * сошлась, сигнал не объект) — явное `floor2_type = "none"` (презумпция
- * дефицита: нет типа лучше неверного). Гейт критических элементов {e3,e6,e8,e9}
- * живёт ЗДЕСЬ (04.11.2026: нода check_critical_elements удалена из графа — её
- * проверка e3 дублировала тул, остаток переехал следом; §00.2 — механический
- * гейт в тотальной функции, а не отдельной нодой). Предикат «элемент
- * подтверждён» — `is_proven` (SSOT, 05.11.2026): `true` или непустая
- * строка-вердикт (сигнал валидатора перешёл на вердикт-тексты). Маршрутизация
- * графа читает производные булевы `pattern_found` и `surface_proven`
- * (check_elements1) — состояния, которые condition_check способен прочитать:
- * у condition_check нет доступа к шине, а condition_router не читает output
- * тула (мёртвое условие 03.11.2026). Exit(1) — только за сломанную инвокацию
- * (не-JSON вход, нет поля report): это ошибка узла движка, а не доменный отказ.
- *
- * Разделение труда (§00.2): классификация «какой тип проявляется на этаже» —
- * эпистемия, её делает модель по эталонам базы; переход по таблице — табличная
- * операция, её делает код (прогоны 02.11.2026: модельному переходу доверять
- * нельзя — «Тип 1 → Безопасность → Тип 8» при SAFETY[1] = 7).
+ *   {"floor2_type": "1".."9" | "none", "pattern_found": boolean, "surface_proven": boolean, "reason": "<объяснение>"}
  */
 
-/** SAFETY-переходы этажей (SSOT: `conversions_patterns.md`, таблица
- * «переходы типов»). Индекс = тип источника, значение = тип на один шаг
- * Безопасности вниз (Спуск причины: T0 → Безопасность → T-1 → T-2).
- * Нулевая ячейка служебная (типы 1..9).
- *
- * Внимание (разбор 02.11.2026): множества `{1,4,7}/{2,5,8}/{3,6,9}` в SSOT —
- * это множества НОМЕРОВ ЭЛЕМЕНТОВ по этажам (1,4,7 — соматика/Я-концепция/
- * страсть; 3,6,9 — Дыра/Триггер/Идол), а НЕ множества типов: у каждого типа
- * в `patterns_9_types_detailed.md` есть секции всех трёх этажей, тип 1..9
- * может проявиться на любом этаже. Проверка принадлежности типа «множеству
- * этажа» невозможна ни для одного реального сигнала (циклы SAFETY (1 7 5 8 2 4)
- * и (3 6 9) не пересекаются) — она бы отбраковала всё и заставляла модель
- * галлюцинировать сходимость (кейс «1 → Безопасность → 8»). Поэтому
- * механически проверяется только сходимость цепи. */
 const SAFETY_TRANSITIONS: readonly number[] = [0, 7, 4, 6, 1, 8, 9, 5, 2, 3];
 
 export interface PatternVerdict {
   /** Цифра типа 1..9 либо явное "none" (тип не определён → добор данных). */
   floor2_type: string;
-  /** Производный булев (floor2_type != "none"): читаемое роутером состояние.
-   * check_pattern (condition_check) не имеет доступа к шине и не умеет
-   * сравнивать строки — только boolean (nodes.rs: condition_check as_bool). */
+  /** Производный булев (floor2_type != "none"): читаемое роутером состояние. */
   pattern_found: boolean;
-  /** Производный булев (05.11.2026): ВСЕ элементы поверхностного контура
-   * {e1, e2, e6, e7} подтверждены — состояние для ноды check_elements1
-   * (condition_check читает только boolean; равенство строк/union-форм
-   * ему недоступно). Считается из сигнала даже при отказе сцепки. */
+  /** Производный булев: ВСЕ элементы поверхностного контура {e1, e2, e6, e7} подтверждены. */
   surface_proven: boolean;
   /** Честное объяснение исхода (для логов и диагностики пайплайна). */
   reason: string;
@@ -69,23 +26,9 @@ export interface PatternVerdict {
 const NONE = "none";
 
 /** Элементы поверхностного контура для производного surface_proven:
- * соматика (e1), автоматизм (e2), триггер (e6), эмоция-повторитель (e7). */
+ * сопротивление (e1), автоматизм (e2), триггер (e6), эмоция-повторитель (e7). */
 const SURFACE_ELEMENTS: readonly string[] = ["e1", "e2", "e6", "e7"];
 
-/** SSOT-предикат «элемент подтверждён»: старая форма — `true`; новая
- * (вердикт-тексты, 05.11.2026) — непустая строка-вердикт. `false`, число,
- * null, пустая/бельная строка — не подтверждено. Потребители: гейты
- * критических элементов ниже, производный `surface_proven`; та же семантика
- * в пробах движка (flat_validator_probe) и в туле сохранения кейса. Форма
- * сигнала эволюционирует — предикат один.
- *
- * Вторая линия нормализации (06.11.2026, инцидент маршрутизации): строка
- * вида «false (пояснение)» — склеенная форма отказа, а не вердикт о
- * доказанном. Боевой путь канонизирует её в `false` на границе сохранения
- * (signals.rs::normalize_signal_value), но облако и исторические сигналы
- * минуют движок — предикат классифицирует их сам: «false» в начале строки
- * (без учёта регистра, после trim; за словом не буква/цифра — «falsehood»
- * остаётся легитимным текстом) = НЕ доказано. */
 const FALSE_TEXT_RE = /^false(?![\p{L}\p{N}])/iu;
 
 export function is_proven(value: unknown): boolean {
@@ -95,12 +38,10 @@ export function is_proven(value: unknown): boolean {
 }
 
 /** Критические элементы контура: тип Триады Травмы не объявляется, пока не
- * подтверждены все (SSOT — бывшая нода check_critical_elements, 04.11.2026
- * перенесена сюда). e3 проверяется отдельной причиной (ядро). */
+ * подтверждены все (e3 проверяется отдельно первым). */
 const CRITICAL_ELEMENTS: readonly string[] = ["e6", "e8", "e9"];
 
 function refusal(reason: string): PatternVerdict {
-  // Сигнал не разобрать (не JSON / не объект) — ни один элемент не доказан.
   return {
     floor2_type: NONE,
     pattern_found: false,
@@ -116,8 +57,7 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
-/** Парсит цифру типа: непустая строка из десятичных цифр, значение 1..9.
- * Возвращает undefined на мусоре/вне диапазона (виновен при отказе). */
+/** Парсит цифру типа: непустая строка из десятичных цифр, значение 1..9. */
 function parseTypeDigit(raw: unknown): number | undefined {
   if (typeof raw !== "string") return undefined;
   const text = raw.trim();
@@ -126,12 +66,10 @@ function parseTypeDigit(raw: unknown): number | undefined {
   return parsed >= 1 && parsed <= 9 ? parsed : undefined;
 }
 
-/** Механическая проверка сцепки этажей и вычисление типа ядра Триады Травмы
- * (`floor2_type`, Этаж -2). Принимает сигнал validator_report (объект либо
- * JSON-строка). Условия выдачи: критические элементы подтверждены
- * (`e3`, `e6`, `e8`, `e9 == true`), этажи классифицированы и SAFETY-сцепка
- * сходится (`SAFETY[T0] == T-1`). Тип 1..9 может проявиться на любом этаже
- * (см. док SAFETY_TRANSITIONS), принадлежность «множеству этажа» не проверяется. */
+/** Механическая проверка сцепки всех трёх этажей (T0 -> T-1 -> T-2) и
+ * подтверждённости критических элементов (`e3`, `e6`, `e8`, `e9`).
+ * Если Валидатор передал `floor2_type`, проверяется двойное условие:
+ * `SAFETY[T0] === T-1` и `SAFETY[T-1] === T-2`. */
 export function computePatternType(report: unknown): PatternVerdict {
   let value: unknown = report;
   if (typeof value === "string") {
@@ -145,8 +83,6 @@ export function computePatternType(report: unknown): PatternVerdict {
   if (!obj) {
     return refusal("значение сигнала не объект");
   }
-  // Производное состояние поверхностного контура — считается из сигнала даже
-  // при отказе сцепки (пайплайн читает его независимо от pattern_found).
   const surface_proven = SURFACE_ELEMENTS.every((element) => is_proven(obj[element]));
   const refuse = (reason: string): PatternVerdict => ({
     floor2_type: NONE,
@@ -156,6 +92,7 @@ export function computePatternType(report: unknown): PatternVerdict {
   });
   const floor0 = typeof obj["floor0_type"] === "string" ? obj["floor0_type"].trim() : undefined;
   const floor1 = typeof obj["floor1_type"] === "string" ? obj["floor1_type"].trim() : undefined;
+  const floor2 = typeof obj["floor2_type"] === "string" ? obj["floor2_type"].trim() : undefined;
   if (floor0 === undefined || floor1 === undefined) {
     return refuse("этажи не классифицированы (floor0_type/floor1_type отсутствуют)");
   }
@@ -179,11 +116,23 @@ export function computePatternType(report: unknown): PatternVerdict {
   }
   if (SAFETY_TRANSITIONS[t0] !== t1) {
     return refuse(
-      `SAFETY-сцепка этажей не сходится: Тип ${t0} -> Безопасность -> не Тип ${t1}`,
+      `SAFETY-сцепка этажей 0 и -1 не сходится: Тип ${t0} -> Безопасность -> Тип ${SAFETY_TRANSITIONS[t0]}, а не Тип ${t1}`,
     );
   }
+  const expectedT2 = SAFETY_TRANSITIONS[t1];
+  if (floor2 !== undefined && floor2 !== "") {
+    const t2 = parseTypeDigit(floor2);
+    if (t2 === undefined) {
+      return refuse(`мусор вместо цифры Этажа -2: ${floor2}`);
+    }
+    if (t2 !== expectedT2) {
+      return refuse(
+        `SAFETY-сцепка этажей -1 и -2 (Ядро) не сходится: Тип ${t1} -> Безопасность -> Тип ${expectedT2}, а классифицирован Тип ${t2}`,
+      );
+    }
+  }
   return {
-    floor2_type: String(SAFETY_TRANSITIONS[t1]),
+    floor2_type: String(expectedT2),
     pattern_found: true,
     surface_proven,
     reason: "SAFETY-сцепка этажей сходится",

@@ -4,43 +4,6 @@
  * Заменяет агента case_packer (удалён 05.11.2026 — лишний LLM-вызов для
  * механической перекомпоновки): сборка плоского JSON из сигнала валидатора —
  * детерминированная операция кода, а не эпистемия модели (§00.2).
- *
- * Вход: Deno.args[0] = JSON (значения приходят СТРОКАМИ от движка):
- *   {
- *     "report": "<JSON-строка сигнала validator_report: e1..e9 (строка|false), floor0_type/floor1_type ("1".."9"), target>",
- *     "core_type": "<цифра 1..9 из {{ nodes.compute_pattern.output.floor2_type }}>"
- *   }
- *
- * Выход (stdout — ТОЛЬКО JSON-объект):
- *   {
- *     "saved_path": "<абсолютный путь файла>",
- *     "file_name": "<имя файла>",
- *     "is_new": true|false,          // false — идентичный кейс уже лежит (skip)
- *     "case_json": {…13 полей…},     // распарсенный кейс (для шаблонов графа)
- *     "case_json_text": "{\n  …}"    // pretty-текст (фенс ```neurosis_case в чат)
- *   }
- *
- * Формат файла — эталон владельца «3тип - ….json»: РОВНО 13 полей в порядке
- * target, core_type, floor1_type, floor0_type, e1..e9; типы этажей и ядро —
- * ЧИСЛА (сигнал отдаёт строками "1".."9" — конвертация здесь); e-поля —
- * вердикт-текст или false; target — строка. Pretty: одно поле на строку.
- *
- * Хранение: `<KO_TOOL_WRITE_DIR>/психо кейсы/` (env задаёт раннер движка,
- * прод = %APPDATA%\com.kingorch.app — NSIS-обновления appdata не трогают).
- * Имя файла: `<core>тип - <slug(target)>.json`.
- *
- * Никогда не перезаписывать кейс юзера (данные владельца): идемпотентный save
- * через writeTextFile{createNew:true} — если файл уже существует с ИДЕНТИЧНЫМ
- * содержимым → skip (is_new:false); если содержимое изменилось (юзер уточнил
- * данные) → новый файл `<stem> (2..99).json` (история ревизий); все 99 заняты
- * → честная ошибка.
- *
- * Тул НЕ повторяет SAFETY-сцепку и гейт критических элементов — это compute_
- * floor2_type; нода графа вызывается только на ветке pattern_found=true.
- * Exit(1) — за сломанную инвокацию/невалидную форму (env нет, args не JSON,
- * report не объект, target пуст, мусор в цифрах, e-поле отсутствует/не та
- * форма): форма выхода нарушена — тихий пропуск воскресил бы «кейс не
- * сохраняется» без диагностики.
  */
 
 /** Кейс в каноническом порядке полей (эталон владельца). */
@@ -76,7 +39,7 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
-/** JSON.parse с честным отказом тула (uncaught SyntaxError не объясняет форму). */
+/** JSON.parse с честным отказом тула. */
 function parseJsonOr(raw: string, what: string): unknown {
   try {
     return JSON.parse(raw);
@@ -101,25 +64,50 @@ function parseTypeDigit(raw: unknown, label: string): number {
   return parsed;
 }
 
-/** e-поле сигнала: вердикт-текст (непустая строка) или false. Числа, null,
- * пустые/пустые-после-trim строки — форма контракта нарушена.
- * «false (…)»-строка — склеенная форма отказа, а не вердикт: канонизируется
- * в false (боевой путь нормализует сигнал на границе сохранения —
- * signals.rs::normalize_signal_value; это защита для облака/старых сессий),
- * в кейс юзера текст отказа не попадает. */
+/** Санитизация текста вердикта на случай, если LLM всё же вставила канцелярский
+ * оборот 3-го лица («пользователь фиксирует…», «из контекста вытекает…») или
+ * академический термин («онтологическая», «императив»). */
+export function sanitizeVerdictText(text: string): string {
+  let cleaned = text.trim();
+
+  const metaPrefixes: readonly RegExp[] = [
+    /^из\s+контекста\s+(?:вытекает|следует|считывается|видно)\s*(?:убеждение|требование|императив|правило|страх|боязнь|ощущение)?\s*(?:,\s*что|:\s*|\s+)/iu,
+    /^(?:пользователь|клиент|человек)\s+(?:указывает\s+на\s+(?:конкретный\s+)?(?:пусковой\s+момент|триггер|стимул|ситуацию)\s*:\s*)/iu,
+    /^(?:пользователь|клиент|человек)\s+(?:описывает\s+(?:хроническую\s+|повторяющуюся\s+)?эмоцию\s*:?\s*)/iu,
+    /^(?:пользователь|клиент|человек)\s+(?:фиксирует|описывает|указывает|отмечает|испытывает|ощущает|чувствует|проявляет)\s*(?:,\s*что\s+|\s+)/iu,
+    /^(?:пользователь|клиент|человек)\s+оценивает\s+себя\s+как\s+/iu,
+  ];
+  for (const re of metaPrefixes) {
+    cleaned = cleaned.replace(re, "");
+  }
+
+  cleaned = cleaned
+    .replace(/онтологическ(?:ая|ой|ую|ий|ого|ому|им|ом|ие|их)\s+/giu, "")
+    .replace(/экзистенциальн(?:ая|ой|ую|ый|ого|ому|ым|ом|ые|ых)\s+/giu, "")
+    .replace(/категорический\s+императив\s*:?\s*/giu, "жёсткое правило: ")
+    .replace(/\bимператив\s*:?\s*/giu, "правило: ")
+    .replace(/конкретный\s+пусковой\s+(?:момент|стимул)\s*:\s*/giu, "")
+    .replace(/пусковой\s+(?:момент|стимул)\s*:\s*/giu, "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (cleaned.length > 0) {
+    cleaned = cleaned[0].toUpperCase() + cleaned.slice(1);
+  }
+  return cleaned;
+}
+
+/** e-поле сигнала: вердикт-текст (непустая строка) или false. */
 function parseElement(raw: unknown, key: string): string | false {
   if (raw === false) return false;
   if (typeof raw === "string" && raw.trim() !== "") {
     if (/^false(?![\p{L}\p{N}])/iu.test(raw.trimStart())) return false;
-    return raw;
+    return sanitizeVerdictText(raw);
   }
   fail(`${key}: ожидался вердикт-текст или false, получено ${JSON.stringify(raw)}`);
 }
 
-/** Имя файла из target: `<core>тип - <slug>.json` (пример владельца
- * «3тип - Спазм лба и висков + ….json»). Slug: вырезаем запрещённые в
- * Windows символы и control-символы, сжимаем пробелы, обрезаем до 80,
- * снимаем хвостовые точки/пробелы, защищаемся от зарезервированных имён. */
+/** Имя файла из target: `<core>тип - <slug>.json`. */
 export function caseFileName(coreType: number, target: string): string {
   const slug = target
     .replace(/[\\/:*?"<>|\u0000-\u001f\u007f]/g, " ")
@@ -135,14 +123,13 @@ export function caseFileName(coreType: number, target: string): string {
   return `${coreType}тип - ${safe}.json`;
 }
 
-/** Канонический порядок полей — эталон: target, core, f1, f0, e1..e9.
- * Вставка в этом порядке фиксирует и порядок в файле (JSON.stringify идёт
- * по порядку вставки строковых ключей). */
+/** Канонический порядок полей — эталон: target, core, f1, f0, e1..e9. */
 export function buildCaseJson(report: Record<string, unknown>, coreType: number): CaseJson {
-  const target = typeof report["target"] === "string" ? report["target"].trim() : "";
-  if (target === "") {
+  const rawTarget = typeof report["target"] === "string" ? report["target"].trim() : "";
+  if (rawTarget === "") {
     fail("target: обязана быть непустая строка (мишень разбора)");
   }
+  const target = sanitizeVerdictText(rawTarget);
   const floor1 = parseTypeDigit(report["floor1_type"], "floor1_type");
   const floor0 = parseTypeDigit(report["floor0_type"], "floor0_type");
   const elements = Object.fromEntries(
@@ -157,9 +144,7 @@ export function buildCaseJson(report: Record<string, unknown>, coreType: number)
   } as CaseJson;
 }
 
-/** Идемпотентный never-overwrite save: createNew:true + дедуп ревизий.
- * Идентичное содержимое → skip (is_new:false, путь существующего файла);
- * изменённое → новая ревизия ` (N)`; все заняты → честная ошибка. */
+/** Идемпотентный never-overwrite save: createNew:true + дедуп ревизий. */
 export async function saveNeverOverwrite(
   dir: string,
   fileName: string,
@@ -181,7 +166,6 @@ export async function saveNeverOverwrite(
       if (existing === text) {
         return { savedPath: path, fileName: name, isNew: false };
       }
-      // Содержимое изменилось — пробуем следующую ревизию.
     }
   }
   fail(`все ${MAX_REVISIONS} ревизий заняты другим содержимым: ${fileName}`);
@@ -202,8 +186,6 @@ if (import.meta.main) {
     fail("поля report и core_type обязательны");
   }
 
-  // report приходит JSON-строкой из {{ signals.validator_report }}; объект
-  // тоже принимаем (облачная ветка может отдать разобранный объект).
   let report: unknown = args["report"];
   if (typeof report === "string") {
     report = parseJsonOr(report, "report");
