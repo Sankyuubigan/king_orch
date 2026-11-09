@@ -3,7 +3,7 @@
  * Вся логика изолирована в модулях-контроллерах.
  * Импорты идут через двери (index.ts) — модули не лезут в кишки друг друга.
  */
-import { initConfirmDialog, initImageViewer, initPermissionDialog, showToast } from "./ui";
+import { initConfirmDialog, initImageViewer, initSchemeRegistry, initPermissionDialog, showToast } from "./ui";
 // Регистрирует Web Component <about-updates-panel>, <logs-panel> и <llama-*-panel> из переиспользуемых плагинов.
 import "@my-tauri-plugins/plugin-about-updates";
 import "@my-tauri-plugins/plugin-logs";
@@ -64,6 +64,10 @@ async function initApp() {
   await initTelemetry();
   initConfirmDialog();
   initImageViewer();
+  // Регистрация фенс-типов схем (КЕЙС психотерапевта и др.) ДО первого
+  // renderMarkdown: без неё pre.scheme-fence не создаётся и карточки схем
+  // не появляются в чате (регресс 09.11.26).
+  initSchemeRegistry();
   initPermissionDialog();
   // Плотная упаковка карточек в разделах (Настройки/Движки/тесты).
   // До старта сетки работают в запасном режиме — разметка не зависит от JS.

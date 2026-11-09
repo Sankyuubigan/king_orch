@@ -22,6 +22,11 @@ export { initPermissionDialog, showPermissionRequest } from './permission'
 export { createMessageMenu, setActiveDropdown } from './message-menu'
 export type { MessageMenuCallbacks } from './message-menu'
 
+export { materializeSchemeCards } from './scheme-card'
+export type { MaterializeSchemeCardsOptions } from './scheme-card'
+export { ensureSchemesRegistered, initSchemeRegistry } from './scheme-registry'
+export { attachMermaidSchemeOpen, openSchemeViewer } from './scheme-viewer'
+export type { SchemeViewerRequest } from './scheme-viewer'
 export { initImageViewer, openImageViewer } from './image-viewer'
 
 export { createImageAttachmentElement } from './image-attachment'
@@ -36,5 +41,3 @@ export { extractVideoFirstFrame, extractVideoFirstFrameFromDataUrl, extractVideo
 
 export { createWorkspaceMenu } from './workspace-menu'
 export type { WorkspaceMenuAction, WorkspaceMenuController } from './workspace-menu'
-
-export { materializeNeurosisCases } from './neurosis-view'

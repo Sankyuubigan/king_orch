@@ -1,3 +1,5 @@
+import { customJsonFenceTypes } from "./custom-fences";
+
 export function renderMarkdown(text: string): string {
   if (!text) return "";
   
@@ -31,12 +33,19 @@ export function renderMarkdown(text: string): string {
     return `__MERMAID_BLOCK_${mermaidBlocks.length - 1}__`;
   });
 
-  // Вырезаем блоки кейса психотерапевта до экранирования — плоский JSON кейса
-  // должен дойти до materializeNeurosisCases без markdown-мутаций (прецедент mermaid)
-  const neurosisBlocks: string[] = [];
-  html = html.replace(/```neurosis_case\s*([\s\S]*?)```/gim, (_, code) => {
-    neurosisBlocks.push(code.trim());
-    return `__NEUROSIS_BLOCK_${neurosisBlocks.length - 1}__`;
+  // Вырезаем custom JSON-фенсы до экранирования — содержимое должно дойти до
+  // materializeSchemeCards без markdown-мутаций (прецедент mermaid). Типы
+  // подаёт реестр схем (src/ui/scheme-registry.ts) — имён агентов здесь нет.
+  const customBlocks: Array<{ type: string; code: string }> = [];
+  customJsonFenceTypes().forEach((fenceType) => {
+    const re = new RegExp(
+      "```" + fenceType.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "\\s*([\\s\\S]*?)```",
+      "gim",
+    );
+    html = html.replace(re, (_, code) => {
+      customBlocks.push({ type: fenceType, code: code.trim() });
+      return `__SCHEME_BLOCK_${customBlocks.length - 1}__`;
+    });
   });
 
   // Фикс для стрелок из синтаксиса LaTeX (в обычном тексте, не в mermaid)
@@ -53,7 +62,7 @@ export function renderMarkdown(text: string): string {
   html = html.replace(/(<li>.*?<\/li>(\s*<li>.*?<\/li>)*)/gims, '<ul>$1</ul>');
 
   html = html.split('\n').map(line => {
-    if (line.trim() === '' || line.startsWith('<h') || line.startsWith('<ul') || line.startsWith('<li') || line.startsWith('</ul') || line.startsWith('__MERMAID_BLOCK_') || line.startsWith('__NEUROSIS_BLOCK_')) {
+    if (line.trim() === '' || line.startsWith('<h') || line.startsWith('<ul') || line.startsWith('<li') || line.startsWith('</ul') || line.startsWith('__MERMAID_BLOCK_') || line.startsWith('__SCHEME_BLOCK_')) {
       return line;
     }
     return `${line}<br>`;
@@ -64,11 +73,14 @@ export function renderMarkdown(text: string): string {
     html = html.replace(`__MERMAID_BLOCK_${index}__`, `<pre class="mermaid">${code}</pre>`);
   });
 
-  // Возвращаем блоки кейса: JSON экранируем (контент недоверенный) — textContent
-  // pre.neurosis-case вернёт исходный JSON для materializeNeurosisCases.
-  neurosisBlocks.forEach((code, index) => {
+  // Возвращаем custom-фенсы: JSON экранируем (контент недоверенный) — textContent
+  // pre.scheme-fence вернёт исходные данные для materializeSchemeCards.
+  customBlocks.forEach(({ type, code }, index) => {
     const escaped = code.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    html = html.replace(`__NEUROSIS_BLOCK_${index}__`, `<pre class="neurosis-case">${escaped}</pre>`);
+    html = html.replace(
+      `__SCHEME_BLOCK_${index}__`,
+      `<pre class="scheme-fence" data-fence-type="${type}">${escaped}</pre>`,
+    );
   });
 
   return `<div class="markdown-body">${html}</div>`;

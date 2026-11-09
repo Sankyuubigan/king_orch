@@ -1,16 +1,29 @@
 /**
- * neurosis-view — визуальный отчёт кейса психотерапевта в чате (05.11.2026).
+ * neurosis-case — визуальный отчёт кейса психотерапевта (бизнес-логика агента).
+ *
+ * Перенесено 09.11.2026 из `src/ui/neurosis-view.ts`: схемы в чате — общий
+ * механизм для всех агентов, а рендеры конкретного агента живут рядом с его
+ * тулами (прецедент `agents/<агент>/tools/*.ts`). DOM здесь отсутствует —
+ * только чистые билдеры строк; показ (карточка/модалка) — generic-механика
+ * `src/ui/scheme-card.ts` + `src/ui/scheme-viewer.ts` через реестр схем
+ * (`src/ui/scheme-registry.ts`).
  *
  * Порт сырых билдеров владельца (buildNeurosisSVG.js / buildMermaidScheme.js,
  * сырой коммит 45b5469): foreignObject-карточки, SMIL-анимации, flowchart BT.
- * Билдеры — чистые функции; состояние переключателя SVG/Схема — локальное
- * замыкание карточки.
  *
- * Данные приходят из system_message ноды save_neurosis_case: фенс
- * neurosis_case с плоским JSON (13 полей) renderMarkdown извлекает в
- * `<pre class="neurosis-case">`, карточку собирает materializeNeurosisCases
- * (хук chat.ts рядом с renderMermaid). Дефолт — SVG (решение владельца).
+ * Формат носителя: fence-тип ниже — зеркальная копия имени фенса из ноды
+ * `save_neurosis_case` (`agents/psychotherapist/transitions/
+ * main_conversation_flow.yaml`, блок ```neurosis_case): шаблоны YAML не умеют
+ * ссылаться на константы — при переименовании менять ОБА места.
+ *
+ * Данные: system_message ноды save_neurosis_case кладёт в чат фенс с плоским
+ * JSON (13 полей); renderMarkdown отдаёт его в `<pre class="scheme-fence"
+ * data-fence-type="neurosis_case">`, карточку собирает generic-механика чата.
  */
+
+import type { SchemeRenderer } from "../../../src/utils/custom-fences";
+
+export const SCHEME_FENCE_TYPE = "neurosis_case";
 
 export interface NeurosisCase {
   target: string;
@@ -221,70 +234,13 @@ export function buildMermaidScheme(caseData: NeurosisCase): string {
     E2 ==> E4`;
 }
 
-/** Карточка визуального отчёта на месте фенса neurosis_case.
- * Дефолт — SVG; кнопка «Схема»/«SVG» переключает режимы, схема рендерится
- * существующим mermaid-механизмом чата (переданный renderMermaid). */
-export function materializeNeurosisCases(
-  container: HTMLElement,
-  renderMermaid?: () => Promise<void>,
-): void {
-  const blocks = container.querySelectorAll<HTMLElement>("pre.neurosis-case");
-  blocks.forEach((pre) => {
-    if (pre.dataset.materialized === "1") return; // идемпотентность
-    pre.dataset.materialized = "1";
-
-    const raw = (pre.textContent || "").trim();
-    const caseData = parseCaseJson(raw);
-    const card = document.createElement("div");
-    card.className = "neurosis-card";
-
-    if (!caseData) {
-      // Битый JSON — честная ошибка вместо тихого пропуска (§00.3).
-      const err = document.createElement("div");
-      err.className = "neurosis-card-error";
-      err.textContent = "⚠️ Кейс повреждён: не удалось разобрать JSON визуального отчёта";
-      err.style.cssText =
-        "padding:8px 12px;color:#fca5a5;background:#2a1215;border:1px solid #7f1d1d;border-radius:8px;font-size:13px;";
-      card.appendChild(err);
-      pre.replaceWith(card);
-      return;
-    }
-
-    card.style.cssText =
-      "border:1px solid #2d3748;border-radius:12px;padding:10px;margin:6px 0;background:#0d1117;";
-
-    let mode: "svg" | "scheme" = "svg";
-    const view = document.createElement("div");
-    view.className = "neurosis-card-view";
-    view.innerHTML = buildNeurosisSVG(caseData);
-
-    const btn = document.createElement("button");
-    btn.className = "neurosis-card-toggle";
-    btn.type = "button";
-    btn.textContent = "Схема";
-    btn.style.cssText =
-      "display:block;margin-left:auto;margin-bottom:6px;background:#283593;color:#ffffff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;";
-
-    btn.addEventListener("click", () => {
-      if (mode === "svg") {
-        mode = "scheme";
-        // Экранируем разметку, чтобы textContent pre.mermaid содержал исходник
-        // (mermaid.run читает textContent; htmlLabels отрисует <b>/<br/>).
-        const scheme = buildMermaidScheme(caseData)
-          .replace(/&/g, "&amp;")
-          .replace(/</g, "&lt;");
-        view.innerHTML = `<pre class="mermaid">${scheme}</pre>`;
-        btn.textContent = "SVG";
-        if (renderMermaid) void renderMermaid();
-      } else {
-        mode = "svg";
-        view.innerHTML = buildNeurosisSVG(caseData);
-        btn.textContent = "Схема";
-      }
-    });
-
-    card.appendChild(btn);
-    card.appendChild(view);
-    pre.replaceWith(card);
-  });
-}
+/**
+ * Renderer для реестра схем чата (`src/ui/scheme-registry.ts`): контент —
+ * агентский, механика показа (карточка/модалка/тумблер) — generic.
+ */
+export const neurosisCaseRenderer: SchemeRenderer = {
+  parse: (raw) => parseCaseJson(raw),
+  buildSvg: (parsed) => buildNeurosisSVG(parsed as NeurosisCase),
+  buildMermaid: (parsed) => buildMermaidScheme(parsed as NeurosisCase),
+  caption: (parsed) => (parsed as NeurosisCase).target || "Кейс нейроза",
+};

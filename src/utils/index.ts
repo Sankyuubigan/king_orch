@@ -6,6 +6,14 @@ export { buildChatPage, buildWebviewPage } from './chat-dom'
 export type { ChatPageElements, SharedChatControls } from './chat-dom'
 export { buildSessionMarkdown, copyMarkdownToClipboard } from './session-clipboard'
 
+// Generic-механика custom JSON-фенсов (имена подаёт реестр схем, ui-слой):
+// контракт SchemeRenderer — форма рендера агентов.
+export {
+  registerCustomJsonFence,
+  customJsonFenceTypes,
+} from './custom-fences'
+export type { SchemeMode, SchemeRenderer } from './custom-fences'
+
 // Константа и заполнители селектов моделей/агентов перенесены в
 // ./model-options (чтобы не тянуть store в leaf-утилиту), ре-экспортируются
 // отсюда для обратной совместимости.

@@ -1,58 +1,39 @@
-const initializedOverlays = new WeakSet<HTMLElement>();
-let opener: HTMLElement | null = null;
-let focusTimer: number | undefined;
+import { bindOverlayViewer } from "./viewer-overlay-core";
 
-function getViewerElements() {
-  return {
-    overlay: document.getElementById("image-viewer-overlay"),
-    image: document.getElementById("image-viewer-image") as HTMLImageElement | null,
-    caption: document.getElementById("image-viewer-caption"),
-    close: document.getElementById("image-viewer-close") as HTMLButtonElement | null,
-  };
-}
+/**
+ * Полноэкранный просмотр изображений-вложений чата (img.src + подпись).
+ * Механика оверлея — общий core (src/ui/viewer-overlay-core.ts, 09.11.2026):
+ * поведение В ТОЧНОСТИ прежнее — openImageViewer(dataUrl, fileName) ставит
+ * картинку/подпись, закрытие по ×/Esc/фону, возврат фокуса, очистка src при
+ * закрытии. Публичное API не менялось (main.ts + attachment-actions.ts).
+ */
 
-function closeViewer() {
-  const { overlay, image } = getViewerElements();
-  if (focusTimer !== undefined) {
-    window.clearTimeout(focusTimer);
-    focusTimer = undefined;
-  }
-  overlay?.classList.remove("show");
-  overlay?.setAttribute("aria-hidden", "true");
-  if (image) image.removeAttribute("src");
-  if (opener?.isConnected) opener.focus();
-  opener = null;
+let viewerApi: ReturnType<typeof bindOverlayViewer> | undefined;
+
+function getViewerApi(): ReturnType<typeof bindOverlayViewer> {
+  viewerApi ??= bindOverlayViewer("image-viewer-overlay", {
+    closeId: "image-viewer-close",
+    onClosed: () => {
+      const image = document.getElementById("image-viewer-image") as HTMLImageElement | null;
+      image?.removeAttribute("src");
+    },
+  });
+  return viewerApi;
 }
 
 export function initImageViewer() {
-  const { overlay, close } = getViewerElements();
-  if (!(overlay instanceof HTMLElement) || initializedOverlays.has(overlay)) return;
-  initializedOverlays.add(overlay);
-
-  close?.addEventListener("click", closeViewer);
-  overlay.addEventListener("click", (event) => {
-    if (event.target === overlay) closeViewer();
-  });
-  document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && overlay.classList.contains("show")) closeViewer();
-  });
+  getViewerApi();
 }
 
 export function openImageViewer(dataUrl: string, fileName: string) {
-  initImageViewer();
-  const { overlay, image, caption, close } = getViewerElements();
+  const overlay = document.getElementById("image-viewer-overlay");
+  const image = document.getElementById("image-viewer-image") as HTMLImageElement | null;
+  const caption = document.getElementById("image-viewer-caption");
   if (!overlay || !image || !caption) return;
 
-  opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+  getViewerApi().open();
   image.src = dataUrl;
   image.alt = fileName || "изображение";
   caption.textContent = fileName;
   caption.hidden = !fileName;
-  overlay.classList.add("show");
-  overlay.setAttribute("aria-hidden", "false");
-  if (focusTimer !== undefined) window.clearTimeout(focusTimer);
-  focusTimer = window.setTimeout(() => {
-    close?.focus();
-    focusTimer = undefined;
-  }, 0);
 }
