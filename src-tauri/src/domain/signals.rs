@@ -1076,12 +1076,13 @@ pub(crate) fn false_text_form(s: &str) -> bool {
 /// не дойдя до `message`-узла (см. docs/SIGNAL_CONTRACTS.md).
 ///
 /// Проверяется именно `required`, а НЕ все `properties`: properties могут
-/// описывать поля, которых у эмиттера нет по архитектуре (03.11.2026:
-/// floor2_type валидатора вычисляется нодой compute_pattern графа — тул
-/// `tools/compute_pattern_type.ts`; в схеме его больше нет). Требовать от
+/// описывать поля, которых у эмиттера нет по архитектуре (03.11.2026 таким
+/// был floor2_type валидатора — его вычисляла нода compute_pattern, в схеме
+/// его не было; инцидент с перегенерациями 16+ раз по ~26 с. 326c605,
+/// 09.11.2026 вернул floor2_type в схему: тип Ядра выдаёт модель, нода
+/// ВЕРИФИЦИРУЕТ цепь SAFETY в `tools/compute_pattern_type.ts`). Требовать от
 /// эмиттера поле, которое грамматика контракта выпустить запрещает, —
-/// структурно неразрешимый отказ (инцидент 03.11.2026: валидатор
-/// перегенерировался 16+ раз по ~26 с). Отсутствие кодо-вычислимых полей
+/// структурно неразрешимый отказ. Отсутствие кодо-вычислимых полей
 /// маршрутизируется графом как дефицит данных (check_pattern → добор).
 /// Если у контракта `required` не объявлен — консервативный фолбэк: проверяем
 /// все properties (форма не сужается незаметно для автора схемы).
@@ -1287,30 +1288,81 @@ fn extract_anchored_enum_value(pname: &str, enum_vals: &[Value], text: &str) -> 
 /// У облачных ответов think-тегов нет — вердикт ищется прямо от метки.
 /// Если хоть один слот не собран — `None`: сигнал не собран, и штатные
 /// ретраи формата работают как раньше.
-pub fn assemble_slot_signal_value(schema: &Value, text: &str) -> Option<Value> {
-    let plan = slot_verdict_plan(schema)?;
+/// Результат слотовой сборки с диагностикой провала (P0, 09.11.2026): провал
+/// был тихим (`None` без причин) — guard ретраил вслепую, а какие слоты модели
+/// не написали, нигде не сохранялось. Теперь каждый пропуск виден в логе.
+#[derive(Debug, Default)]
+pub struct SlotAssemblyDiag {
+    /// Собранное значение: `Some` ⇔ `missing` пуст (провал атомарен, как и было).
+    pub value: Option<Value>,
+    /// Причины провала: «e1: нет якоря "Element 1: "», «e2: якорь есть, вердикт не распознан».
+    pub missing: Vec<String>,
+}
+
+/// То же, что [`assemble_slot_signal_value`], но вместо тихого `None` возвращает
+/// список причин провала по каждому слоту. Обход зеркалит сборку; на пропуске
+/// не останавливается, а собирает ВСЕ причины (диагностика), при этом `value`
+/// остаётся `None`, если хоть один слот не собран (семантика атомарности — SSOT).
+pub fn assemble_slot_signal_value_diag(schema: &Value, text: &str) -> SlotAssemblyDiag {
+    let mut diag = SlotAssemblyDiag::default();
+    let Some(plan) = slot_verdict_plan(schema) else {
+        return diag; // не слотовый контракт — сборки нет и причин нет
+    };
     let mut obj = serde_json::Map::new();
     let mut cursor = 0usize;
     for (label, key, verdict_cap) in &plan.e_slots {
-        let label_pos = text[cursor..].find(label.as_str())? + cursor;
-        let after_label = label_pos + label.len();
-        // Якорь вердикта: конец думы слота (грамматика) или сама метка (облако).
-        let anchor = match text[after_label..].find("</think>") {
-            Some(rel) => after_label + rel + "</think>".len(),
-            None => after_label,
-        };
-        let (verdict, past_key) = find_verdict_from(text, anchor, key, verdict_cap.is_some())?;
-        obj.insert(key.clone(), verdict.into_value());
-        cursor = past_key;
+        match text[cursor..].find(label.as_str()) {
+            Some(rel) => {
+                let after_label = cursor + rel + label.len();
+                // Якорь вердикта: конец думы слота (грамматика) или сама метка (облако).
+                let anchor = match text[after_label..].find("</think>") {
+                    Some(r) => after_label + r + "</think>".len(),
+                    None => after_label,
+                };
+                match find_verdict_from(text, anchor, key, verdict_cap.is_some()) {
+                    Some((verdict, past_key)) => {
+                        obj.insert(key.clone(), verdict.into_value());
+                        cursor = past_key;
+                    }
+                    None => diag
+                        .missing
+                        .push(format!("{key}: якорь есть, вердикт \"{key}\": … после него не распознан")),
+                }
+            }
+            None => diag
+                .missing
+                .push(format!("{key}: нет якоря «{label}»")),
+        }
     }
     for (label, key) in &plan.trailing {
-        let label_pos = text[cursor..].find(label.as_str())? + cursor;
-        let after_label = label_pos + label.len();
-        let (verdict, past_key) = find_verdict_from(text, after_label, key, true)?;
-        obj.insert(key.clone(), verdict.into_value());
-        cursor = past_key;
+        match text[cursor..].find(label.as_str()) {
+            Some(rel) => {
+                let after_label = cursor + rel + label.len();
+                match find_verdict_from(text, after_label, key, true) {
+                    Some((verdict, past_key)) => {
+                        obj.insert(key.clone(), verdict.into_value());
+                        cursor = past_key;
+                    }
+                    None => diag
+                        .missing
+                        .push(format!("{key}: якорь есть, вердикт \"{key}\": … после него не распознан")),
+                }
+            }
+            None => diag
+                .missing
+                .push(format!("{key}: нет якоря «{label}»")),
+        }
     }
-    Some(Value::Object(obj))
+    diag.value = if diag.missing.is_empty() {
+        Some(Value::Object(obj))
+    } else {
+        None
+    };
+    diag
+}
+
+pub fn assemble_slot_signal_value(schema: &Value, text: &str) -> Option<Value> {
+    assemble_slot_signal_value_diag(schema, text).value
 }
 
 /// Форма вердикта e-поля: булев литерал или вердикт-текст (union
@@ -1480,15 +1532,15 @@ mod tests {
             e_field_kind(&c.value_schema["properties"]["e1"]),
             Some(EFieldKind::Union { max_chars: 200 })
         );
-        // 9 вердикт-полей + классификация двух этажей + target (мишень разбора,
-        // 05.11.2026). floor2_type из схемы УДАЛЁН — модель его не выдаёт,
-        // SAFETY-механика вычисления живёт в туле
-        // `agents/psychotherapist/tools/compute_pattern_type.ts` (нода
-        // compute_pattern графа); движок агент-агностичен.
-        assert_eq!(c.value_schema["required"].as_array().map(|e| e.len()), Some(12));
+        // 9 вердикт-полей + классификация ТРЁХ этажей + target (мишень разбора).
+        // floor2_type вернулся в контракт (326c605, 09.11.2026): тип Ядра
+        // выдаёт модель, а нода compute_pattern (`compute_pattern_type.ts`)
+        // ВЕРИФИЦИРУЕТ его механически — цепь SAFETY: SAFETY[T0] === T-1 и
+        // SAFETY[T-1] === T-2. Движок агент-агностичен.
+        assert_eq!(c.value_schema["required"].as_array().map(|e| e.len()), Some(13));
         assert!(
-            c.value_schema["properties"].get("floor2_type").is_none(),
-            "floor2_type больше не свойство контракта: его вычисляет нода compute_pattern"
+            c.value_schema["properties"].get("floor2_type").is_some(),
+            "floor2_type — свойство контракта: модель выдаёт тип Ядра, верификация цепи SAFETY в compute_pattern_type.ts"
         );
         // target — ПОСЛЕДНИЙ в required (порядок required = порядок слотов
         // грамматики; финальные строковые слоты идут после всех e-слотов).
@@ -1500,20 +1552,25 @@ mod tests {
             Some("target"),
             "target обязан быть последним слотом контракта"
         );
-        for field in ["floor0_type", "floor1_type"] {
+        for field in ["floor0_type", "floor1_type", "floor2_type"] {
             assert_eq!(
                 c.value_schema["properties"][field]["enum"].as_array().map(|e| e.len()),
                 Some(9),
                 "enum {field} — 9 типов (SSOT для грамматики финального слота)"
             );
         }
-        assert!(
-            !c.value_schema["required"]
-                .as_array()
-                .expect("required массив")
-                .iter()
-                .any(|v| v.as_str() == Some("floor2_type")),
-            "floor2_type не в required: модель его не выдаёт, механику считает нода compute_pattern"
+        // Хвост required = порядок финальных слотов грамматики (после e9):
+        // три классификации этажей, затем target — мишень разбора.
+        let required_tail: Vec<&str> = c.value_schema["required"]
+            .as_array()
+            .expect("required массив")
+            .iter()
+            .filter_map(Value::as_str)
+            .collect();
+        assert_eq!(
+            required_tail[9..],
+            ["floor0_type", "floor1_type", "floor2_type", "target"],
+            "порядок required после e-полей = порядок финальных слотов грамматики (target — последний)"
         );
     }
 
@@ -2459,6 +2516,54 @@ mod tests {
         );
     }
 
+    /// Diag-ядро (P0, 09.11.2026): провал слотовой сборки возвращает ПРИЧИНЫ по
+    /// каждому слоту (нет якоря / вердикт не распознан), а `value` остаётся None —
+    /// семантика атомарности прежняя. Раньше провал был тихим `None`: guard
+    /// ретраил вслепую, недостающие слоты нигде не сохранялись.
+    #[test]
+    fn assemble_slot_signal_value_diag_reports_missing_slots() {
+        let schema = serde_json::json!({
+            "type": "object",
+            "properties": {
+                "e1": { "type": "boolean" },
+                "e2": { "type": "boolean" },
+                "target": { "type": "string", "minLength": 1, "maxLength": 160 }
+            },
+            "required": ["e1", "e2", "target"]
+        });
+
+        // Полный ответ: value собран, причин нет; обёртка согласована с ядром.
+        let full = "Element 1: разбор, \"e1\": true\nElement 2: разбор, \"e2\": false\nTarget: \"target\": \"тупик\"";
+        let diag_full = assemble_slot_signal_value_diag(&schema, full);
+        assert!(diag_full.missing.is_empty(), "{:?}", diag_full.missing);
+        assert_eq!(
+            diag_full.value,
+            Some(serde_json::json!({ "e1": true, "e2": false, "target": "тупик" }))
+        );
+        assert_eq!(assemble_slot_signal_value(&schema, full), diag_full.value);
+
+        // Попытка-1 (кейс dots, 09.11.2026): проза с якорями, но БЕЗ
+        // машиночитаемых пар «ключ»: вердикт — названы ВСЕ причины, value=None.
+        let prose = "Element 1: Проверка подтверждена\nElement 2: не вижу подтверждений";
+        let diag = assemble_slot_signal_value_diag(&schema, prose);
+        assert_eq!(diag.value, None);
+        assert!(
+            diag.missing.iter().any(|m| m.contains("e1") && m.contains("вердикт")),
+            "{:?}",
+            diag.missing
+        );
+        assert!(
+            diag.missing.iter().any(|m| m.contains("e2") && m.contains("вердикт")),
+            "{:?}",
+            diag.missing
+        );
+        assert!(
+            diag.missing.iter().any(|m| m.contains("target") && m.contains("нет якоря")),
+            "{:?}",
+            diag.missing
+        );
+    }
+
     /// Финальные слоты (floor0_type/floor1_type, 02.11.2026): строковые
     /// вердикты собираются ПОСЛЕ якорей меток `Floor0 type: `/`Floor1 type: ` —
     /// дум-тело, цитирующее формат `"floor0_type": "…"`, не должно
@@ -2663,13 +2768,14 @@ mod tests {
         );
     }
 
-    /// Грамматика боевого контракта валидатора (12 слотов, 05.11.2026):
-    /// 9 think-слотов с вердиктами-текстами e1..e9 (union `string{1..200} |
-    /// false` — потолок из maxLength схемы) + финальные `Floor0 type: `/`Floor1
-    /// type: ` (enum из схемы) и `Target: ` (свободная строка, целевой якорь
-    /// разбора); конверта с булями нет (Вариант B).
+    /// Грамматика боевого контракта валидатора (13 слотов; floor2_type вернул
+    /// 326c605, 09.11.2026): 9 think-слотов с вердиктами-текстами e1..e9 (union
+    /// `string{1..200} | false` — потолок из maxLength схемы) + финальные
+    /// `Floor0 type: `/`Floor1 type: `/`Floor2 type: ` (enum из схемы) и
+    /// `Target: ` (свободная строка, целевой якорь разбора); конверта с булями
+    /// нет (Вариант B).
     #[test]
-    fn validator_contract_builds_twelve_slot_grammar() {
+    fn validator_contract_builds_thirteen_slot_grammar() {
         let path = schema_path();
         let dir = path.parent().expect("папка signals");
         let c = load_signal_contract(dir, "validator").expect("контракт валидатора");
@@ -2716,7 +2822,12 @@ mod tests {
             grammar
         );
         assert!(
-            grammar.contains(r#"trail-2 ::= "Target: " "\"target\": " json-string"#),
+            grammar.contains(r#"trail-2 ::= "Floor2 type: " "\"floor2_type\": " trail-2-value"#),
+            "финальный слот Floor2 type потерян (326c605: модель выдаёт тип Ядра), grammar:\n{}",
+            grammar
+        );
+        assert!(
+            grammar.contains(r#"trail-3 ::= "Target: " "\"target\": " json-string"#),
             "финальный слот Target (свободная строка) потерян, grammar:\n{}",
             grammar
         );
@@ -2738,10 +2849,10 @@ mod tests {
         assert!(!grammar.contains("envelope-json"), "Вариант B не должен выпускать конверт, grammar:\n{}", grammar);
         assert!(grammar.contains("draft-1 ::=") && grammar.contains("<think>"), "дум-слоты обязаны нести think-тело, grammar:\n{}", grammar);
 
-        // Числа слотов: всего 12, дум-слотов 9 (бюджет делится по дум-слотам).
-        assert_eq!(draft_count_for_contract(&c.value_schema), 12);
+        // Числа слотов: всего 13, дум-слотов 9 (бюджет делится по дум-слотам).
+        assert_eq!(draft_count_for_contract(&c.value_schema), 13);
         assert_eq!(think_slot_count(&c.value_schema), 9);
-        assert_eq!(slot_anchor_labels(&c.value_schema, 12).map(|l| l.len()), Some(9));
+        assert_eq!(slot_anchor_labels(&c.value_schema, 13).map(|l| l.len()), Some(9));
     }
 
     /// Защита от продолжения идентификатора: `trueish`/`true_x`/`falsehood` —

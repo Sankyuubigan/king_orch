@@ -43,7 +43,7 @@ use crate::domain::parsers::{
     parse_tool_call, parse_tool_call_detailed, split_thinking_and_answer, ToolCallParse,
 };
 use crate::domain::signals::{
-    assemble_slot_signal_value,
+    assemble_slot_signal_value, assemble_slot_signal_value_diag,
     build_signal_envelope_grammar_with_think_budget, build_signal_envelope_json_only_grammar,
     contract_envelope_tokens, draft_count_for_contract, slot_anchor_labels, load_signal_contract,
     think_slot_count, SignalContract,
@@ -2356,41 +2356,71 @@ where
                 DispatchCtl::Break => break,
                 DispatchCtl::Return(v) => return Ok(v),
             }
-        } else if ctx.has_tools_for_prompt {
-            log_cb(format!("⚠️ parse_tool_call: не удалось распознать tool call в ответе агента '{}' (первые 200 симв.): {}", agent.name, safe_truncate(&parse_target, 200)));
-            // Feedback-loop: модель явно пыталась вызвать инструмент (виден
-            // конверт name/tool + arguments), но JSON сломан (неэкранированные
-            // кавычки в content и т.п.). Возвращаем конкретную ошибку модели
-            // вместо «параметр path обязателен» — она перепишет конверт в том же
-            // ходе (паттерн «ошибка как tool-результат», deepseek-harness). Валидные
-            // конверты сюда не попадают (их подхватил parse_tool_call выше).
-            if looks_like_broken_tool_call(&parse_target) {
-                ctx.consecutive_failed_tools += 1;
-                if ctx.consecutive_failed_tools >= 3 {
-                    ctx.final_response = format!("{} Агент '{}' трижды выдал сломанный JSON-конверт инструмента. Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
-                    break;
+        } else {
+            // P0-диагностика (09.11.2026): провал слотовой сборки сигнала — не тихий.
+            // Раньше guard ретраил вслепую, а какие слоты модель не написала, нигде
+            // не сохранялось (полные тексты попыток терялись, причину не назвать).
+            if let Some(contract) = signal_contract.as_ref() {
+                let diag = assemble_slot_signal_value_diag(&contract.value_schema, &parse_target);
+                if !diag.missing.is_empty() {
+                    log_cb(format!(
+                        "🧩 [{}] слоты сигнала '{}' не собраны из ответа: {}",
+                        agent.name,
+                        contract.key,
+                        diag.missing.join("; ")
+                    ));
                 }
-                ctx.llm_messages.push(LlmMessage {
-                    role: "assistant".to_string(),
-                    content: if is_continuation {
-                        combined.to_string()
-                    } else {
-                        raw_response.to_string()
-                    },
-                    ..Default::default()
-                });
-                ctx.continuation_raw.clear();
-                ctx.continuation_mark = None;
-                ctx.llm_messages.push(LlmMessage {
-                    role: "user".to_string(),
-                    content: "⚠️ Твой JSON-конверт инструмента сломан: аргументы не распарсились (скорее всего неэкранированные кавычки или переносы строк внутри \"content\"). Перепиши вызов заново: ВАЖНО, чтобы аргументы были ВАЛИДНЫМ JSON — экранируй кавычки как \\\", а переносы строк как \\n.".to_string(),
-                    ..Default::default()
-                });
-                continue;
+            }
+            if ctx.has_tools_for_prompt {
+                log_cb(format!("⚠️ parse_tool_call: не удалось распознать tool call в ответе агента '{}' (первые 200 симв.): {}", agent.name, safe_truncate(&parse_target, 200)));
+                // Feedback-loop: модель явно пыталась вызвать инструмент (виден
+                // конверт name/tool + arguments), но JSON сломан (неэкранированные
+                // кавычки в content и т.п.). Возвращаем конкретную ошибку модели
+                // вместо «параметр path обязателен» — она перепишет конверт в том же
+                // ходе (паттерн «ошибка как tool-результат», deepseek-harness). Валидные
+                // конверты сюда не попадают (их подхватил parse_tool_call выше).
+                if looks_like_broken_tool_call(&parse_target) {
+                    ctx.consecutive_failed_tools += 1;
+                    if ctx.consecutive_failed_tools >= 3 {
+                        ctx.final_response = format!("{} Агент '{}' трижды выдал сломанный JSON-конверт инструмента. Невозможно продолжить.", AGENT_ERROR_PREFIX, agent.id);
+                        break;
+                    }
+                    ctx.llm_messages.push(LlmMessage {
+                        role: "assistant".to_string(),
+                        content: if is_continuation {
+                            combined.to_string()
+                        } else {
+                            raw_response.to_string()
+                        },
+                        ..Default::default()
+                    });
+                    ctx.continuation_raw.clear();
+                    ctx.continuation_mark = None;
+                    ctx.llm_messages.push(LlmMessage {
+                        role: "user".to_string(),
+                        content: "⚠️ Твой JSON-конверт инструмента сломан: аргументы не распарсились (скорее всего неэкранированные кавычки или переносы строк внутри \"content\"). Перепиши вызов заново: ВАЖНО, чтобы аргументы были ВАЛИДНЫМ JSON — экранируй кавычки как \\\", а переносы строк как \\n.".to_string(),
+                        ..Default::default()
+                    });
+                    continue;
+                }
             }
         }
 
-        if let Some(parsed) = parse_orchestrator_response(&parse_target) {
+        // Легаси-маршрутизация ({target: ...}) — только для агентов БЕЗ сигнального
+        // контракта. У сигнального агента JSON в ответе — это VALUE сигнала, а не
+        // конверт маршрутизации: поле `target` контракта валидатора (root.schema.json)
+        // коллизировало с легаси-полем `target` и уводило value-JSON в
+        // handle_subagent_call как «несуществующий сабагент» — workflow убивался
+        // ложной AGENT_ERROR (инцидент 09.11.2026, dots: value с target-строкой
+        // «Тупик при анализе вкладок...»). §00.2: двойное толкование одной структуры
+        // устранено конструктивно; финал сигнального агента обслуживают слотовая
+        // сборка / try_fallback_signal + guard.
+        let legacy_parsed = if signal_contract.is_none() {
+            parse_orchestrator_response(&parse_target)
+        } else {
+            None
+        };
+        if let Some(parsed) = legacy_parsed {
             ctx.action_found = true;
             ctx.consecutive_incomplete = 0;
 

@@ -523,7 +523,62 @@ fn parse_tool_call_from_json(json_str: &str) -> ToolCallParse {
     ToolCallParse::None
 }
 
+/// AntML/vendor XML-диалект tool call'ов (`<invoke name="...">` + `<parameter>`),
+/// привычный для части сторонних облачных моделей (инцидент 09.11.2026: dots
+/// оборачивал emit_signal в `<dots_function_call><invoke name="emit_signal">…`).
+/// `parse_tool_call_from_json` этот диалект не понимает, а `extract_json_block`
+/// на таком ответе хватал вложенный value-JSON параметра (фиктивные
+/// «несуществующие сабагенты» через target-коллизию). Содержимое parameter
+/// трактуем как JSON (object/array/number/bool/null), иначе — сырая строка.
+/// Возвращается ПЕРВЫЙ invoke в тексте (та же семантика «первого конверта»,
+/// что у JSON-пути).
+fn parse_tool_call_from_xml_invoke(text: &str) -> ToolCallParse {
+    let invoke_re =
+        regex::Regex::new(r#"(?is)<invoke\s+name\s*=\s*"([^"]+)"\s*>(.*?)</invoke"#).ok();
+    let param_re =
+        regex::Regex::new(r#"(?is)<parameter\s+name\s*=\s*"([^"]+)"\s*>(.*?)</parameter"#).ok();
+    let (Some(invoke_re), Some(param_re)) = (invoke_re, param_re) else {
+        return ToolCallParse::None;
+    };
+    let Some(caps) = invoke_re.captures(text) else {
+        return ToolCallParse::None;
+    };
+    let tool = caps[1].trim().to_string();
+    if !is_valid_tool_name(&tool) {
+        return ToolCallParse::None;
+    }
+    let body = caps.get(2).map(|m| m.as_str()).unwrap_or_default();
+    let mut arguments = serde_json::Map::new();
+    for p in param_re.captures_iter(body) {
+        let pname = p[1].trim().to_string();
+        let raw = p[2].trim();
+        let value = parse_json_tolerant_block(raw)
+            .unwrap_or_else(|| serde_json::Value::String(raw.to_string()));
+        arguments.insert(pname, value);
+    }
+    let arguments = if arguments.is_empty() {
+        // invoke без параметров ≈ легаси-конверт {"tool": ...} без arguments —
+        // диспетчеризация с Null-аргументами (семантика parse_tool_call_from_json).
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::Object(arguments)
+    };
+    ToolCallParse::Call {
+        tool,
+        arguments,
+        thought: String::new(),
+    }
+}
+
 pub fn parse_tool_call_detailed(text: &str) -> ToolCallParse {
+    // XML-диалект проверяем ДО JSON-конверта: ответ dots-класса содержит и
+    // вложенный value-JSON, extract_json_block схватил бы его и вернул None,
+    // не дойдя до invoke. JSON-конверт с <invoke> внутри строки — редкий
+    // вырожденный случай, им жертвуем в пользу работающего диалекта.
+    let xml = parse_tool_call_from_xml_invoke(text);
+    if !matches!(xml, ToolCallParse::None) {
+        return xml;
+    }
     if let Some(json_str) = extract_json_block(text) {
         return parse_tool_call_from_json(&json_str);
     }
@@ -566,7 +621,32 @@ pub fn strip_tool_call(text: &str) -> (String, Option<(String, serde_json::Value
             return (analysis, Some((tool, arguments, thought)));
         }
     }
+    // XML-диалект (AntML/vendor, 09.11.2026): invoke-блок тоже вырезаем из
+    // видимого отчёта — иначе разметка <dots_function_call><invoke>… утекает
+    // в анализ (dispatch.rs строит отчёт агента этой функцией).
+    if let ToolCallParse::Call { tool, arguments, thought } = parse_tool_call_from_xml_invoke(text) {
+        let cleaned = remove_invoke_xml_blocks(text);
+        let analysis = if cleaned.trim().is_empty() {
+            String::new()
+        } else {
+            cleaned
+        };
+        return (analysis, Some((tool, arguments, thought)));
+    }
     (text.to_string(), None)
+}
+
+fn remove_invoke_xml_blocks(text: &str) -> String {
+    let mut cleaned = text.to_string();
+    // Vendor-обёртка вида <dots_function_call><invoke …>…</invoke></dots_function_call>.
+    if let Ok(re) = regex::Regex::new(r"(?is)<[\w-]*function_call>\s*<invoke\b.*?</invoke>\s*</[\w-]*function_call>") {
+        cleaned = re.replace_all(&cleaned, "").to_string();
+    }
+    // Голый invoke без vendor-обёртки.
+    if let Ok(re) = regex::Regex::new(r"(?is)<invoke\b.*?</invoke>") {
+        cleaned = re.replace_all(&cleaned, "").to_string();
+    }
+    cleaned.trim().to_string()
 }
 
 fn remove_fenced_json_blocks(text: &str) -> String {
@@ -1105,5 +1185,98 @@ mod tests {
         let text = "слова\n```json\n{\"tool\": \"write\", \"arguments\": {}}\n```\nконец {мусор}";
         let blk = extract_json_block(text).expect("fenced-блок приоритетнее");
         assert!(blk.contains("\"tool\""));
+    }
+
+    #[test]
+    fn parse_tool_call_recognizes_vendor_xml_invoke_dialect() {
+        // dots (09.11.2026): сторонние модели оборачивают tool call в свой
+        // XML-диалект <dots_function_call><invoke name=...>. JSON-путь на таком
+        // ответе хватал вложенный value-JSON (с полем target) и возвращал None —
+        // вызов терялся, value уходил в легаси-маршрутизацию.
+        let raw = "<think>нужно передать вердикт</think>\n\
+                   <dots_function_call>\n\
+                   <invoke name=\"emit_signal\">\n\
+                   <parameter name=\"key\">validator_report</parameter>\n\
+                   <parameter name=\"value\">\n\
+                   {\"e1\": \"Ступор перед вкладками\", \"target\": \"Тупик при анализе вкладок браузера\"}\n\
+                   </parameter>\n\
+                   </invoke>\n\
+                   </dots_function_call>";
+        match parse_tool_call_detailed(raw) {
+            ToolCallParse::Call { tool, arguments, .. } => {
+                assert_eq!(tool, "emit_signal");
+                assert_eq!(arguments["key"], "validator_report");
+                // value-JSON с top-level `target` распознан как ОБЪЕКТ value,
+                // а не как легаси-маршрутизация (target-коллизия, §00.2):
+                assert_eq!(arguments["value"]["target"], "Тупик при анализе вкладок браузера");
+                assert_eq!(arguments["value"]["e1"], "Ступор перед вкладками");
+            }
+            other => panic!("XML-диалект обязан распознаваться как Call: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_xml_invoke_plain_and_scalar_params() {
+        // Голый invoke без vendor-обёртки + скаляры: JSON-массив, число, сырая строка.
+        let raw = "<invoke name=\"excel_apply\">\n\
+                   <parameter name=\"ops\">[{\"op\": \"read\"}, 2]</parameter>\n\
+                   <parameter name=\"count\">7</parameter>\n\
+                   <parameter name=\"note\">просто текст без JSON</parameter>\n\
+                   </invoke>";
+        match parse_tool_call_detailed(raw) {
+            ToolCallParse::Call { tool, arguments, .. } => {
+                assert_eq!(tool, "excel_apply");
+                assert_eq!(arguments["ops"][1], 2);
+                assert_eq!(arguments["count"], 7);
+                assert_eq!(arguments["note"], "просто текст без JSON");
+            }
+            other => panic!("plain invoke обязан распознаваться: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_xml_invoke_invalid_name_is_none() {
+        // Валидация имени та же, что у JSON-конверта: routing-слова («reply» и
+        // пр.) тулами не являются.
+        assert!(matches!(
+            parse_tool_call_detailed("<invoke name=\"reply\"><parameter name=\"x\">1</parameter></invoke>"),
+            ToolCallParse::None
+        ));
+        assert!(matches!(
+            parse_tool_call_detailed("обычная проза без invoke"),
+            ToolCallParse::None
+        ));
+    }
+
+    #[test]
+    fn parse_tool_call_json_envelope_still_works_alongside_xml() {
+        // JSON-конверт не сломан XML-приоритетом (в JSON-конверте invoke нет —
+        // XML-парсер возвращает None, работает прежний путь).
+        match parse_tool_call_detailed(
+            "{\"tool\": \"emit_signal\", \"arguments\": {\"key\": \"focus_keeper\", \"value\": \"Кластер\"}}",
+        ) {
+            ToolCallParse::Call { tool, arguments, .. } => {
+                assert_eq!(tool, "emit_signal");
+                assert_eq!(arguments["value"], "Кластер");
+            }
+            other => panic!("JSON-конверт обязан парситься как раньше: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn strip_tool_call_removes_vendor_xml_invoke_block() {
+        // Отчёт агента строится strip_tool_call (dispatch.rs): invoke-разметка
+        // не должна утекать в видимый анализ.
+        let raw = "Аналитический отчёт по элементам.\n\
+                   <dots_function_call>\n\
+                   <invoke name=\"emit_signal\">\n\
+                   <parameter name=\"key\">validator_report</parameter>\n\
+                   <parameter name=\"value\">{\"e1\": false}</parameter>\n\
+                   </invoke>\n\
+                   </dots_function_call>";
+        let (analysis, call) = strip_tool_call(raw);
+        assert_eq!(call.as_ref().map(|c| c.0.as_str()), Some("emit_signal"));
+        assert_eq!(analysis, "Аналитический отчёт по элементам.");
+        assert!(!analysis.contains("invoke"), "разметка не утекает в отчёт: {analysis}");
     }
 }

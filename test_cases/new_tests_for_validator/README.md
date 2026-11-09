@@ -25,7 +25,8 @@
 проверяем без чтения `.rs` (core rules §1.11), а гейты обязаны быть объявлены до
 прогона (AGENTS.md §00.3.1).
 
-Формат файла разбирает `src-tauri/src/domain/workflow_engine/probe_acceptance.rs`:
+Формат файла разбирает `src-tauri/test/laya_probe/experiments/probe_acceptance.rs`
+(модуль крейса подключён `#[cfg(test)] #[path=...]` из `workflow_engine/mod.rs`):
 битая книга (нет границы шума, нет базы, система без гейтов) — ошибка, а не пустой
 набор гейтов.
 

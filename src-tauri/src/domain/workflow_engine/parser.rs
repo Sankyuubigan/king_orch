@@ -1113,9 +1113,10 @@ edges: []
         );
 
         // llm_worker: нодовые поля удалены, фрейм наследуется из дефолта.
-        // (call_grounder и call_pattern_finder сняты с графа 02.11.2026:
-        // floor2_type вычисляет код из floor0_type/floor1_type — финальных
-        // слотов контракта; модель этажи только классифицирует.)
+        // (call_grounder и call_pattern_finder сняты с графа 02.11.2026, когда
+        // floor2_type вычислялся кодом из floor0_type/floor1_type; с 326c605
+        // модель выдаёт floor2_type сама, нода compute_pattern верифицирует
+        // цепь SAFETY.)
         for node_id in [
             "call_validator",
             "call_collector",

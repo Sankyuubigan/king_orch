@@ -78,7 +78,7 @@ json-object ::= "{" ... "}" # тут правила вашего JSON
 > структурой грамматики. Побочный эффект: при JSON-ответе в канале `reasoning_content`
 > нода читает оба канала, а при полном провале повторяет запрос и **останавливает
 > workflow**. Конструктивная защита (граница think в грамматике) описана в
-> `workflow_engine/verdict_contract.rs` (`DEFAULT_THINK_BUDGET_CHARS`), но в бою
+> `test/laya_probe/experiments/verdict_contract.rs` (`DEFAULT_THINK_BUDGET_CHARS`), но в бою
 > не применена — см. `tasks/08.10.26 …md` §2.5.
 
 Вы можете написать простую обертку в вашем проекте. Логика такая:

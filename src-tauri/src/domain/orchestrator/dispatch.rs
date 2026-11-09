@@ -3,7 +3,8 @@ use crate::domain::agent_manager::AgentProfile;
 use crate::domain::orchestrator::prompt::build_system_prompt;
 use crate::domain::parsers::*; // parse_orchestrator_response, parse_tool_call, strip_tool_call, ParsedOrchestratorResponse
 use crate::domain::signals::{
-    extract_signal_value_from_text, normalize_signal_value, validate_signal_value, SignalContract,
+    build_cloud_signal_prompt_block, extract_signal_value_from_text, is_slot_verdict_contract,
+    normalize_signal_value, validate_signal_value, SignalContract,
 };
 use crate::infra::*; // LlamaEngine, ChatMessage, LlmMessage, SubCall, ToolCallInfo, ModelParams, GrammarSpec, extract_model_filename, push_report
 use serde_json::Value;
@@ -100,6 +101,41 @@ pub(crate) fn final_guard_decision(input: FinalGuardInput) -> FinalGuardVerdict 
         ))
     } else {
         FinalGuardVerdict::Accept
+    }
+}
+
+/// Тексты guard-ретрая за недоставленный обязательный сигнал: маркер в цепочку
+/// действий (юзеру) + подсказка модели (llm_messages). Чистая функция —
+/// тестируется без движка.
+///
+/// Слотовый контракт (Вариант B): подсказка — SSOT-блок
+/// [`build_cloud_signal_prompt_block`] (те же якоря, что в попытке 1), БЕЗ
+/// требования emit_signal — промпт попытки 1 сам говорит «emit_signal вызывать
+/// НЕ нужно», противоречивый фидбек устранён (инцидент 09.11.2026: dots по
+/// слотовому промпту писала прозу, guard же требовал конверт). Конвертный
+/// контракт — прежние тексты дословно.
+fn signal_retry_texts(contract: &SignalContract, attempt: usize) -> (String, String) {
+    if is_slot_verdict_contract(&contract.value_schema) {
+        let marker = format!(
+            "⚠️ СИГНАЛ НЕ СОБРАН (попытка {}): в ответе нет машиночитаемых слотовых вердиктов контракта \"{}\" — вердикт не получен. Ответ возвращён модели на доработку.",
+            attempt, contract.key
+        );
+        let hint = format!(
+            "⚠️ Твой предыдущий ответ (выше) не содержал машиночитаемых слотовых вердиктов — сигнал из него собрать не удалось, это ОШИБКА. Повтори ответ строго по формату ниже; после КАЖДОЙ строки-якоря обязана идти пара \"имя_поля\": <вердикт>.\n{}",
+            build_cloud_signal_prompt_block(contract)
+        );
+        (marker, hint)
+    } else {
+        (
+            format!(
+                "⚠️ СИГНАЛ НЕ ДОСТАВЛЕН (попытка {}): ответ модели не содержал обязательного вызова emit_signal (\"{}\") — вердикт не получен. Ответ возвращён модели на доработку.",
+                attempt, contract.key
+            ),
+            format!(
+                "⚠️ Твой предыдущий ответ (выше) НЕ содержал обязательного вызова инструмента emit_signal с ключом \"{}\" — результат не доставлен, это ОШИБКА. Прозаический вердикт вместо вызова инструмента не принимается. Выдай ВЕСЬ результат ТОЛЬКО вызовом emit_signal: {{\"tool\": \"emit_signal\", \"arguments\": {{\"key\": \"{}\", \"value\": <результат по контракту>}}}}.",
+                contract.key, contract.key
+            ),
+        )
     }
 }
 
@@ -385,18 +421,26 @@ where
                 });
                 if signal_violation {
                     self.signal_final_retries += 1;
+                    let attempt = self.signal_final_retries;
                     let key = self
                         .signal_contract
                         .as_ref()
                         .map_or(String::new(), |c| c.key.clone());
+                    let slot_mode = self
+                        .signal_contract
+                        .as_ref()
+                        .is_some_and(|c| is_slot_verdict_contract(&c.value_schema));
+                    // Тексты — чистой функцией ДО мутаций self (borrowck: иммутабельный
+                    // заём контракта не пересекается с push'ами ниже).
+                    let (marker, hint) = match self.signal_contract.as_ref() {
+                        Some(contract) => signal_retry_texts(contract, attempt),
+                        None => (String::new(), String::new()),
+                    };
                     // Маркер в цепочку действий: юзер видит отказ модели.
                     self.messages.push(ChatMessage {
                         id: Some(format!("msg_{}", *self.msg_counter)),
                         msg_type: "thought".to_string(),
-                        content: format!(
-                            "⚠️ СИГНАЛ НЕ ДОСТАВЛЕН (попытка {}): ответ модели не содержал обязательного вызова emit_signal (\"{}\") — вердикт не получен. Ответ возвращён модели на доработку.",
-                            self.signal_final_retries, key
-                        ),
+                        content: marker,
                         sub_calls: None,
                         author: Some(self.agent.id.clone()),
                         model: Some(extract_model_filename(self.engine.model_path())),
@@ -408,13 +452,21 @@ where
                     *self.msg_counter += 1;
                     self.llm_messages.push(LlmMessage {
                         role: "user".to_string(),
-                        content: format!(
-                            "⚠️ Твой предыдущий ответ (выше) НЕ содержал обязательного вызова инструмента emit_signal с ключом \"{}\" — результат не доставлен, это ОШИБКА. Прозаический вердикт вместо вызова инструмента не принимается. Выдай ВЕСЬ результат ТОЛЬКО вызовом emit_signal: {{\"tool\": \"emit_signal\", \"arguments\": {{\"key\": \"{}\", \"value\": <результат по контракту>}}}}.",
-                            key, key
-                        ),
+                        content: hint,
                         ..Default::default()
                     });
-                    (self.log_cb)(format!("🧤 [{}] GUARD: финал без обязательного сигнала '{}' ({}/{}) — ретрай с требованием выдать emit_signal", self.agent.name, key, self.signal_final_retries, SIGNAL_FINAL_RETRIES_MAX));
+                    (self.log_cb)(format!(
+                        "🧤 [{}] GUARD: финал без обязательного сигнала '{}' ({}/{}) — ретрай {}",
+                        self.agent.name,
+                        key,
+                        attempt,
+                        SIGNAL_FINAL_RETRIES_MAX,
+                        if slot_mode {
+                            "с требованием достроить слотовые вердикты"
+                        } else {
+                            "с требованием выдать emit_signal"
+                        }
+                    ));
                 } else {
                     self.native_final_retries += 1;
                     self.llm_messages.push(LlmMessage {
@@ -1919,5 +1971,59 @@ mod guard_tests {
         i.has_tools_for_prompt = true;
         i.prompt_tool_used = true;
         assert!(matches!(final_guard_decision(i), FinalGuardVerdict::Retry));
+    }
+
+    /// Слотовый контракт: guard-подсказка — тот же SSOT-слотовый блок, что в
+    /// попытке 1, и НЕ требует emit_signal (промпт попытки 1 сам говорит
+    /// «вызывать НЕ нужно» — противоречие guard↔промпт устранено, 09.11.2026).
+    #[test]
+    fn signal_retry_texts_slot_mode_matches_prompt_and_never_demands_emit_signal() {
+        let contract = SignalContract {
+            key: "validator_report".to_string(),
+            value_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "e1": { "anyOf": [{ "type": "string", "minLength": 1, "maxLength": 200 }, { "const": false }] },
+                    "target": { "type": "string", "minLength": 1, "maxLength": 160 }
+                },
+                "required": ["e1", "target"]
+            }),
+        };
+        let (marker, hint) = signal_retry_texts(&contract, 1);
+        assert!(marker.contains("СИГНАЛ НЕ СОБРАН"), "{marker}");
+        assert!(marker.contains("validator_report"), "{marker}");
+        assert!(
+            !marker.contains("emit_signal"),
+            "слотовый маркер не должен звать emit_signal: {marker}"
+        );
+        assert!(hint.contains("Element 1: "), "подсказка обязана нести слотовый SSOT-блок: {hint}");
+        assert!(hint.contains("Target: "), "финальные слоты тоже в блоке: {hint}");
+        assert!(
+            hint.contains("вызывать НЕ нужно"),
+            "подсказка обязана совпадать с промптом попытки 1: {hint}"
+        );
+    }
+
+    /// Конвертный контракт: прежние тексты дословно (регрессия формулировок
+    /// запрещена — юзер и модель привыкали к «СИГНАЛ НЕ ДОСТАВЛЕН»).
+    #[test]
+    fn signal_retry_texts_envelope_mode_preserves_legacy_wording() {
+        let contract = SignalContract {
+            key: "focus_keeper".to_string(),
+            value_schema: serde_json::json!({ "type": "string", "enum": ["Конкретная проблема", "Кластер"] }),
+        };
+        let (marker, hint) = signal_retry_texts(&contract, 2);
+        assert_eq!(
+            marker,
+            "⚠️ СИГНАЛ НЕ ДОСТАВЛЕН (попытка 2): ответ модели не содержал обязательного вызова emit_signal (\"focus_keeper\") — вердикт не получен. Ответ возвращён модели на доработку."
+        );
+        assert!(
+            hint.contains("Выдай ВЕСЬ результат ТОЛЬКО вызовом emit_signal"),
+            "{hint}"
+        );
+        assert!(
+            hint.contains("{\"tool\": \"emit_signal\", \"arguments\": {\"key\": \"focus_keeper\""),
+            "{hint}"
+        );
     }
 }

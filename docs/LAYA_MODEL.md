@@ -196,8 +196,8 @@ AGENTS.md §00.3.1 её нельзя подгонять под уже измер
 | Порядок слоёв и «чей результат видит слой» | `database/validator_layers.yaml` |
 | Форма выхода слоя (ключи + `boolean`) | `signals/root.schema.json`, Method 3 → гибридная GBNF |
 | Сбор инжекта `inject_response` | `workflow_engine/reports.rs` (узлы и стенд — одна функция) |
-| Состав слоёв ↔ контракты сигналов | `workflow_engine/validator_layers.rs` (ошибка при расхождении) |
-| Стенд 63 кейсов | `workflow_engine/layered_validator_probe.rs` (`#[ignore]`) |
+| Состав слоёв ↔ контракты сигналов | `test/laya_probe/experiments/validator_layers.rs` (ошибка при расхождении) |
+| Стенд 63 кейсов | `test/laya_probe/experiments/layered_validator_probe.rs` (`#[ignore]`) |
 
 **Почему у e3 нет жёсткого гейта.** По методологии (`element_validation_rules.yaml`,
 элемент 3) катастрофа обнажается при падении правил (5) и идола (9). Золото

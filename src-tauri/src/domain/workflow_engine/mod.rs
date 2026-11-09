@@ -47,38 +47,51 @@ pub mod step_output;
 // в `docs/LAYA_MODEL.md` и `tasks/`, а сами прогоны больше не нужны —
 // `gold_rescore` пересчитывает их результаты прямо из артефактов.
 //
-// ИСКЛЮЧЕНИЕ — стенд гейта фактов: его артефакт
-// `test/laya_probe/results/fact_extractor_mental_<model>.json` — живой вход
-// `mental_gate`, по которому стенды flat/layered берут маршрут кейса. 02.11.26
-// генератор был вынесен наружу вместе с отклонёнными стендами, артефакт
-// устарел (замер 09.10, 63 кейса), и оба стенда упали на новом кейсе
-// владельца ещё до вызова модели («кейса … нет в замере гейта»). Генератор
-// возвращён в крейс через `#[path]`, чтобы обновление артефакта оставалось
-// одной командой и новые кейсы больше не ломали стенды.
+// 09.11.26 — ВСЕ стендовые модули валидатора перенесены в
+// `test/laya_probe/experiments/` (решение владельца: стендам не место в домене).
+// Модульное дерево крейса НЕ меняется: декларации остались здесь под `#[cfg(test)]`,
+// исходники резолвятся через `#[path]` — `super::mental_gate`, `super::verdict_contract`
+// и прочие внутренние ссылки продолжают работать, в релиз стенды по-прежнему не входят.
+//
+// fact_extractor_probe — прежнее ИСКЛЮЧЕНИЕ (см. историю выше): генератор артефакта
+// `test/laya_probe/results/fact_extractor_mental_<model>.json` (живой вход `mental_gate`),
+// возвращён в крейс 02.11.26 через `#[path]`, чтобы обновление замера оставалось одной
+// командой; 09.11.26 физически переехал в ту же папку test/.
 #[cfg(test)]
 #[path = "../../../../test/laya_probe/experiments/fact_extractor_probe.rs"]
 mod fact_extractor_probe;
 #[cfg(test)]
+#[path = "../../../../test/laya_probe/experiments/flat_validator_probe.rs"]
 mod flat_validator_probe;
 #[cfg(test)]
+#[path = "../../../../test/laya_probe/experiments/gold_rescore.rs"]
 mod gold_rescore;
 #[cfg(test)]
+#[path = "../../../../test/laya_probe/experiments/layered_validator_probe.rs"]
 mod layered_validator_probe;
 #[cfg(test)]
+#[path = "../../../../test/laya_probe/experiments/mental_gate.rs"]
 mod mental_gate;
 #[cfg(test)]
+#[path = "../../../../test/laya_probe/experiments/probe_acceptance.rs"]
 mod probe_acceptance;
 #[cfg(test)]
+#[path = "../../../../test/laya_probe/experiments/probe_call.rs"]
 mod probe_call;
 #[cfg(test)]
+#[path = "../../../../test/laya_probe/experiments/probe_cases.rs"]
 mod probe_cases;
 #[cfg(test)]
+#[path = "../../../../test/laya_probe/experiments/probe_report.rs"]
 mod probe_report;
 #[cfg(test)]
+#[path = "../../../../test/laya_probe/experiments/quote_gate.rs"]
 mod quote_gate;
 #[cfg(test)]
+#[path = "../../../../test/laya_probe/experiments/validator_layers.rs"]
 mod validator_layers;
 #[cfg(test)]
+#[path = "../../../../test/laya_probe/experiments/verdict_contract.rs"]
 mod verdict_contract;
 
 pub use context::WorkflowContext;
