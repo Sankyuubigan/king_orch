@@ -3,7 +3,7 @@
  *
  * Заменяет агент-специфичную карточку (src/ui-файл, удалён 09.11.2026;
  * бизнес-логика рендера — `agents/<агент>/views/*.ts`). Материализует `<pre class="scheme-fence" data-fence-type="...">` (продукт
- * renderMarkdown) в карточку: inline SVG-превью, тумблер «Схема»/«SVG» при
+ * renderMarkdown) в карточку: inline SVG-превью, тумблер «Меркмайнд»/«SVG» при
  * наличии buildMermaid у renderer'а, честная карточка-ошибка (§2.2) при
  * null-parse. Клик по view открывает полноэкранную модалку схем
  * (src/ui/scheme-viewer.ts, Шаг 2 PRP).
@@ -78,7 +78,7 @@ function materializeOne(pre: HTMLElement, opts: MaterializeSchemeCardsOptions): 
   }
 
   const modeText = (mode: SchemeMode): string =>
-    `Режим отображения: ${mode === "svg" ? "SVG" : "Схема"}`;
+    `Режим отображения: ${mode === "svg" ? "SVG" : "Меркмайнд"}`;
 
   const modeLabel = document.createElement("div");
   modeLabel.className = "scheme-card-mode-label";
@@ -91,7 +91,7 @@ function materializeOne(pre: HTMLElement, opts: MaterializeSchemeCardsOptions): 
   const btn = document.createElement("button");
   btn.className = "scheme-card-toggle";
   btn.type = "button";
-  btn.textContent = "Схема";
+  btn.textContent = "Меркмайнд";
   btn.style.cssText =
     "display:block;margin-left:auto;margin-bottom:6px;background:#283593;color:#ffffff;border:none;border-radius:6px;padding:4px 12px;font-size:12px;cursor:pointer;";
   // Тумблер только когда у renderer'а есть альтернативная схема (SSOT честных
@@ -101,7 +101,7 @@ function materializeOne(pre: HTMLElement, opts: MaterializeSchemeCardsOptions): 
     const applyMode = (m: SchemeMode): void => {
       mode = m;
       applySchemeModeInto(view, renderer, parsed, mode, opts.renderMermaid);
-      btn.textContent = mode === "svg" ? "Схема" : "SVG";
+      btn.textContent = mode === "svg" ? "Меркмайнд" : "SVG";
       modeLabel.textContent = modeText(mode);
     };
     applyMode("svg");

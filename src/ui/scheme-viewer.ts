@@ -4,16 +4,20 @@
  * карточку схемы (src/ui/scheme-card.ts), и по клику на любую mermaid-схему
  * чата (attachMermaidSchemeOpen из chat.ts::renderMermaid).
  *
- * Режимы: renderer-путь (тумблер «Схема»/«SVG» внутри модалки, открытие в
+ * Режимы: renderer-путь (тумблер «Меркмайнд»/«SVG» внутри модалки, открытие в
  * режиме карточки в момент клика) и staticNode-путь (клон готового svg из
- * mermaid, без тумблера — переключать нечего, combo «Схема» уже на экране в
+ * mermaid, без тумблера — переключать нечего, меркмайнд уже на экране в
  * натуральном размере). Механика оверлея — общий core
  * (src/ui/viewer-overlay-core.ts), mirror image-viewer.ts.
  *
- * Размер: SVG показывается в нативном масштабе (viewBox → px), stage прокручи-
- * вается в обе стороны — «крупно и можно рассмотреть» без зум-контролов (YAGNI).
- * Mermaid рисует svg с max-width (useMaxWidth); в модалке потолок снимается
- * (naturalizeMermaidSize) — схема идёт в натуральном размере.
+ * Размер (09.11.26, проба в реальном браузере): SVG показывается в нативном
+ * масштабе (viewBox → px), ограниченном шириной stage — «крупно и можно
+ * рассмотреть» без зум-контролов (YAGNI). Определённая ширина stage задаётся
+ * CSS-ом (width: 80vw в styles.css — по 10% отступов слева/справа, решение
+ * владельца 09.11.26), а width-атрибуты и
+ * inline-потолки SVG снимает naturalizeMermaidSize в ЛЮБОМ режиме: без этого
+ * fit-content collapse давал кейс-SVG 300×460, а меркмайнд/staticNode 0×0
+ * (регресс a8bd805).
  */
 
 import type { SchemeMode, SchemeRenderer } from "../utils";
@@ -41,7 +45,7 @@ let active: ActiveScheme | null = null;
 const boundToggles = new WeakSet<HTMLElement>();
 
 export interface SchemeViewerRequest {
-  /** Вариант A: renderer из реестра схем (тумблер SVG/Схема доступен при
+  /** Вариант A: renderer из реестра схем (тумблер SVG/Меркмайнд доступен при
    * наличии buildMermaid в renderer'е). */
   renderer?: SchemeRenderer;
   parsed?: unknown;
@@ -73,11 +77,11 @@ function lookup(): {
 }
 
 /** Ставит подпись режима сверху модалки: пользователь всегда видит, что
- * показано (решение владельца 09.11.26). staticNode — всегда «Схема». */
+ * показано (решение владельца 09.11.26). staticNode — всегда «Меркмайнд». */
 function setModeLabel(mode: SchemeMode): void {
   const { modeLabel } = lookup();
   if (!modeLabel) return;
-  modeLabel.textContent = `Режим отображения: ${mode === "svg" ? "SVG" : "Схема"}`;
+  modeLabel.textContent = `Режим отображения: ${mode === "svg" ? "SVG" : "Меркмайнд"}`;
 }
 
 function applyContent(): void {
@@ -105,14 +109,23 @@ function applyContent(): void {
     active.renderMermaid,
   );
   if (done && active.mode === "scheme") {
+    // Меркмайнд рисуется асинхронно — натурализуем после рендера.
     void done.then(() => naturalizeMermaidSize(view));
+  } else {
+    // SVG-режим (и scheme без renderMermaid): натурализуем сразу. Регресс
+    // a8bd805: кейс-SVG с width="100%" и inline max-width:900px против
+    // fit-content stage рендерился 300×460 вместо натуральных 900×1380.
+    naturalizeMermaidSize(view);
   }
 }
 
-/** Мер попарный потолок (useMaxWidth) и width-атрибут: SVG обязан помещаться
- * по ширине модалки ЦЕЛИКОМ (регресс 09.11.26: width=naturalWidth давал
- * горизонтальный ползунок). Отказ «схема шире окна» структурно невозможен:
- * max-width:100% при height:auto держит пропорции viewBox. */
+/** Снимает потолки рендера чата — mermaid useMaxWidth, width-атрибут, inline
+ * max-width SVG-кейса: SVG обязан помещаться по ширине модалки ЦЕЛИКОМ
+ * (регресс 09.11.26: width=naturalWidth давал горизонтальный ползунок;
+ * регресс a8bd805: width="100%" против fit-content stage давал 300×460,
+ * mermaid против него же — 0×0 «пусто»). Отказ «схема шире окна» структурно
+ * невозможен: max-width:100% при height:auto держит пропорции viewBox —
+ * SVG рендерится в натуральном размере viewBox, ограниченном модалкой. */
 function naturalizeMermaidSize(view: HTMLElement): void {
   const svg = view.querySelector("svg");
   if (!svg) return; // renderMermaid упал → fallback-код внутри view: потолка нет
@@ -139,7 +152,7 @@ function ensureBound(): void {
     if (!active?.renderer) return; // тумблер живёт только при renderer-пути
     const nextMode: SchemeMode = active.mode === "svg" ? "scheme" : "svg";
     active.mode = nextMode;
-    toggle.textContent = nextMode === "svg" ? "Схема" : "SVG";
+    toggle.textContent = nextMode === "svg" ? "Меркмайнд" : "SVG";
     setModeLabel(nextMode);
     applyContent();
   });
@@ -160,8 +173,8 @@ export function openSchemeViewer(req: SchemeViewerRequest): void {
 
   const hasModes = !req.staticNode && typeof req.renderer?.buildMermaid === "function";
   toggle.style.display = hasModes ? "" : "none";
-  toggle.textContent = active.mode === "svg" ? "Схема" : "SVG";
-  // Подпись режима сверху: staticNode — клон mermaid-схемы, режим всегда «Схема»
+  toggle.textContent = active.mode === "svg" ? "Меркмайнд" : "SVG";
+  // Подпись режима сверху: staticNode — клон mermaid-схемы, режим всегда «Меркмайнд»
   setModeLabel(req.staticNode ? "scheme" : active.mode);
 
   const captionText =

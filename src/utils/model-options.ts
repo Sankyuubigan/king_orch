@@ -37,9 +37,18 @@ function applyModelValue(select: HTMLSelectElement, value: string): boolean {
 }
 
 /// Заполняет select моделей (локальные .gguf + optgroup «Облачные роутеры»)
-/// из общих каталогов Store. Сохраняет текущий выбор, если он ещё валиден.
+/// из общих каталогов Store. ЕДИНСТВЕННЫЙ владелец выбора: захватывает его
+/// ДО уничтожения опций и восстанавливает после сборки списка — перерисовка
+/// каталога (model-catalog-changed) не подменяет выбранное юзером.
 export function fillModelSelect(select: HTMLSelectElement | null) {
   if (!select) return;
+  // Захват ДО innerHTML="": позже select.value — уже первый опшен,
+  // выбор юзера уничтожен. Регресс 09.11.26: current читался после
+  // пересоздания опций, и явный выбор молча подменялся первой локальной
+  // моделью (репорт: обновил модели провайдера в дашборде шлюза —
+  // выбранные в чате модели поменялись сами).
+  const current = select.value;
+  const explicit = select.dataset.modelExplicit === "true";
   select.innerHTML = "";
   for (const m of store.models) {
     const o = document.createElement("option");
@@ -51,9 +60,11 @@ export function fillModelSelect(select: HTMLSelectElement | null) {
     select.appendChild(o);
   }
   renderCloudRouterOptions(select);
-  if (select.dataset.modelExplicit !== "true" && store.lastModel) {
-    applyModelValue(select, store.lastModel);
-  }
+  // Восстановление — только здесь (SSOT): явный выбор юзера важнее lastModel.
+  // applyModelValue валиден по наличию опции: модель, исчезнувшая из каталога
+  // (например, после refresh моделей провайдера), честно падает на первый пункт.
+  if (explicit && current) applyModelValue(select, current);
+  else if (store.lastModel) applyModelValue(select, store.lastModel);
   syncModelSelectTitle(select);
 }
 
@@ -65,11 +76,13 @@ export function syncModelSelectTitle(select: HTMLSelectElement | null) {
   select.title = selected?.title || "Выбор модели";
 }
 
-/// Рисует optgroup «Облачные роутеры» поверх локальных моделей.
+/// Рисует optgroup «Облачные роутеры» поверх локальных моделей. Чистая
+/// дорисовка списка: select.value не трогает — политика выбора живёт только
+/// в fillModelSelect (SSOT). Прежнее восстановление здесь читало current
+/// уже ПОСЛЕ пересоздания опций fillModelSelect и подменяло выбор первой
+/// локальной моделью (баг потери выбора 09.11.26) — потому изъято.
 export function renderCloudRouterOptions(select: HTMLSelectElement | null) {
   if (!select) return;
-  const explicit = select.dataset.modelExplicit === "true";
-  const current = select.value;
   select.querySelector('optgroup[label="Облачные роутеры"]')?.remove();
   
   const allCombos = Object.entries(store.cloudRouterCombos).flatMap(([router, combos]) =>
@@ -91,8 +104,6 @@ export function renderCloudRouterOptions(select: HTMLSelectElement | null) {
     group.appendChild(o);
   }
   select.appendChild(group);
-  if (explicit) applyModelValue(select, current);
-  else if (store.lastModel) applyModelValue(select, store.lastModel);
   syncModelSelectTitle(select);
 }
 
