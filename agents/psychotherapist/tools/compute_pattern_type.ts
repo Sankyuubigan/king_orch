@@ -31,10 +31,22 @@ const SURFACE_ELEMENTS: readonly string[] = ["e1", "e2", "e6", "e7"];
 
 const FALSE_TEXT_RE = /^false(?![\p{L}\p{N}])/iu;
 
+/** Маркеры того, что Валидатор сам смоделировал гипотезу в уме или списал
+ * книжные штампы из справочника `patterns_9_types_detailed.md` в обход
+ * `shadow_worker` (например: «Если защита … рухнет — откроется черная дыра…»,
+ * «При крушении защиты…», «из контекста вытекает…»). Такие строки механически
+ * отбраковываются как НЕ доказанные (`false`), чтобы гарантированно вызывался
+ * `shadow_worker`. */
+const UNVERIFIED_HYPOTHESIS_RE =
+  /(?:^если\s+(?:защита|идол|правило|контроль|система|маска|броня).*?(?:рухн|пад| провал|не\s+сработа|исчезн)|^при\s+крушении\s+(?:защит|идол|правил)|из\s+контекста\s+(?:вытекает|следует|считывается)|черная\s+дыра|экзистенциальн(?:ая|ой)\s+бездн|непоколебимый\s+тотем|онтологическ(?:ий|ая|ого)\s+(?:вакуум|дыра|крах|ужас)|утробное\s+небытие|протез\s+бытия|цитадель\s+разума|выкидыш\s+бытия)/iu;
+
 export function is_proven(value: unknown): boolean {
   if (value === true) return true;
   if (typeof value !== "string") return false;
-  return value.trim() !== "" && !FALSE_TEXT_RE.test(value.trimStart());
+  const trimmed = value.trim();
+  if (trimmed === "" || FALSE_TEXT_RE.test(trimmed)) return false;
+  if (UNVERIFIED_HYPOTHESIS_RE.test(trimmed)) return false;
+  return true;
 }
 
 /** Критические элементы контура: тип Триады Травмы не объявляется, пока не
@@ -97,7 +109,7 @@ export function computePatternType(report: unknown): PatternVerdict {
     return refuse("этажи не классифицированы (floor0_type/floor1_type отсутствуют)");
   }
   if (!is_proven(obj["e3"])) {
-    return refuse("ядро не подтверждено (e3 — false или пустой вердикт) — тип Триады Травмы не объявляется");
+    return refuse("ядро не подтверждено (e3 — false или не проверенная с юзером гипотеза) — вызываем shadow_worker");
   }
   for (const element of CRITICAL_ELEMENTS) {
     if (!is_proven(obj[element])) {
