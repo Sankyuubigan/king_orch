@@ -45,8 +45,8 @@ use crate::domain::parsers::{
 use crate::domain::signals::{
     assemble_slot_signal_value,
     build_signal_envelope_grammar_with_think_budget, build_signal_envelope_json_only_grammar,
-    contract_envelope_tokens, draft_count_for_contract, slot_anchor_labels,
-    extract_signal_value_from_text, load_signal_contract, think_slot_count, SignalContract,
+    contract_envelope_tokens, draft_count_for_contract, slot_anchor_labels, load_signal_contract,
+    think_slot_count, SignalContract,
 };
 use crate::domain::workflow_engine::{
     find_workflow_by_stem, load_workflows, NodeType, WorkflowContext, WorkflowDef, WorkflowRunner,
@@ -1623,6 +1623,7 @@ where
         native_used: false,
         prompt_tool_used: false,
         native_final_retries: 0,
+        signal_final_retries: 0,
         hybrid_gbnf,
     };
 
@@ -2600,9 +2601,25 @@ where
         }
 
         let preview = safe_truncate(&response, 300).replace('\n', " ");
-        // GUARD «финал без тулов»: финал обычным текстом без ЕДИНОГО тула —
-        // ретрай с требованием использовать инструмент (макс. NATIVE_FINAL_RETRIES_MAX);
-        // исчерпание для require_tool-оператора — честная ошибка вместо финала.
+        // Фолбэк-экстракция на кандидате-финале: прежде чем GUARD ретраит
+        // сигнального агента за «молчание», честно пробуем извлечь сигнал из
+        // его текста (ключ-привязка + required-гейт — мусор не изготавливается,
+        // signals.rs). Извлечено → сигнал доставлен, финал принимается как есть.
+        if !ctx.signal_saved {
+            if let Some(contract) = &signal_contract {
+                let candidate = if is_continuation {
+                    extract_answer_from_combined(&combined, &response)
+                } else {
+                    response.clone()
+                };
+                ctx.try_fallback_signal(contract, &candidate);
+            }
+        }
+        // GUARD «финал без действия»: финал обычным текстом без целевого
+        // действия (единого тула либо обязательного сигнала) — ретрай с честным
+        // хинтом (макс. NATIVE_FINAL_RETRIES_MAX / SIGNAL_FINAL_RETRIES_MAX);
+        // исчерпание для require_tool-оператора и сигнального агента — честная
+        // ошибка вместо финала.
         match ctx.final_without_tools_verdict(&raw_response) {
             FinalGuardVerdict::Retry => continue,
             FinalGuardVerdict::HonestError(err) => {
@@ -2871,46 +2888,12 @@ where
     // контракт сигнала — пытаемся извлечь значение из текста ответа по допустимым
     // значениям контракта. Это держит маршрутизаторы (в т.ч. без default) в безопасности
     // и исключает пере-вывод значения отдельным вызовом (который терял контекст).
+    // (Сборка signal-сообщения — SSOT в RunContext::try_fallback_signal; этот блок
+    // добивает пути, минующие GUARD-финал: native-эмит через Break, пустые ответы.)
     if !ctx.signal_saved {
         if let Some(contract) = &signal_contract {
-            let user_text: String = ctx
-                .messages
-                .iter()
-                .filter(|m| m.msg_type == "message" && m.author.as_deref() == Some("user"))
-                .map(|m| m.content.clone())
-                .collect::<Vec<_>>()
-                .join("\n");
-            let extract_input = format!("{}\n{}", user_text, ctx.final_response);
-            if let Some(value) = extract_signal_value_from_text(contract, &extract_input) {
-                // Сигнал сохраняется КАК ИЗВЛЕЧЁН: агент-специфичной механики в
-                // движке нет — доменные вычисления (напр. floor2_type валидатора)
-                // делают ноды custom_tool_call графа команды.
-                let mut map = serde_json::Map::new();
-                map.insert(contract.key.clone(), value.clone());
-                let signal_msg = ChatMessage {
-                    id: Some(format!("msg_{}", ctx.msg_counter)),
-                    msg_type: "signal".to_string(),
-                    content: serde_json::Value::Object(map).to_string(),
-                    sub_calls: None,
-                    author: Some(agent.id.clone()),
-                    model: None,
-                    time_sec: None,
-                    attachments: None,
-                    phase: Some(2),
-                    author_name: Some(agent.name.clone()),
-                };
-                // Сигнал отдаём через pending_signal — единый канал доставки в
-                // signal bus + messages[] (nodes.rs:518 для воркера, dispatch.rs:887
-                // для сабагента). Прямой push в messages оставлял сигнал невидимым
-                // для SignalRouter/ConditionRouter (баг «тихий обрыв графа»).
-                *ctx.msg_counter += 1;
-                ctx.pending_signal = Some(signal_msg);
-                ctx.signal_saved = true;
-                log_cb(format!(
-                    "📡 Сигнал '{}' извлечён из текста ответа (fallback): {}",
-                    contract.key, value
-                ));
-            } else {
+            let final_text = ctx.final_response.clone();
+            if !ctx.try_fallback_signal(contract, &final_text) {
                 log_cb(format!("⚠️ Fallback не смог извлечь сигнал '{}' из текста ответа агента '{}' (тип контракта: проверь supporting enum/bool extraction)", contract.key, agent.id));
             }
         }

@@ -11,3 +11,7 @@ pub(crate) const MAX_STALLED_CONTINUATIONS: usize = 3; // докачек под�
 pub(crate) const MIN_THINKING_GROWTH_CHARS: isize = 128; // порог «размышления растут» за одну докачку
 pub(crate) const SPILL_THRESHOLD: usize = 8000;
 pub(crate) const NATIVE_FINAL_RETRIES_MAX: usize = 2; // GUARD «финал без тулов»: макс. ретраев native-агента
+/// GUARD «финал без обязательного сигнала»: макс. ретраев сигнального агента
+/// (решение владельца 09.11.2026 — «2 ретрая можно сделать»: невалидный ответ
+/// возвращается модели с пометкой ошибки, чтобы она попробовала снова).
+pub(crate) const SIGNAL_FINAL_RETRIES_MAX: usize = 2;

@@ -2,7 +2,9 @@ use super::*;
 use crate::domain::agent_manager::AgentProfile;
 use crate::domain::orchestrator::prompt::build_system_prompt;
 use crate::domain::parsers::*; // parse_orchestrator_response, parse_tool_call, strip_tool_call, ParsedOrchestratorResponse
-use crate::domain::signals::{normalize_signal_value, validate_signal_value, SignalContract};
+use crate::domain::signals::{
+    extract_signal_value_from_text, normalize_signal_value, validate_signal_value, SignalContract,
+};
 use crate::infra::*; // LlamaEngine, ChatMessage, LlmMessage, SubCall, ToolCallInfo, ModelParams, GrammarSpec, extract_model_filename, push_report
 use serde_json::Value;
 use std::path::{Path, PathBuf};
@@ -22,15 +24,17 @@ fn is_media_tool(tool: &str) -> bool {
     matches!(tool, "generate_image" | "edit_image" | "upscale_image" | "generate_video")
 }
 
-/// Вердикт GUARD «финал без тулов» для текущего ответа агента.
+/// Вердикт GUARD «финал без действия» для текущего ответа агента.
 pub(crate) enum FinalGuardVerdict {
-    /// Ретрай: ответ не принят, хинт «вызови инструмент» уже в истории.
+    /// Ретрай: ответ не принят, честный хинт уже в истории (тул / сигнал).
     Retry,
-    /// Ретраи исчерпаны, контракт оператора требует тул — текст НЕ принимается.
-    /// Несёт готовый честный `AGENT_ERROR_PREFIX`-текст для `final_response`.
+    /// Ретраи исчерпаны, контракт требует тула или обязательного сигнала —
+    /// текст НЕ принимается. Несёт готовый честный `AGENT_ERROR_PREFIX`-текст
+    /// для `final_response`.
     HonestError(String),
-    /// Нарушения нет (инструменты использовались / тулов нет / контракт не
-    /// объявлен) либо native-fallback после исчерпания — текст принимается.
+    /// Нарушения нет (инструменты использовались / сигнал доставлен / тулов
+    /// нет / контракты не объявлены) либо native-fallback после исчерпания —
+    /// текст принимается.
     Accept,
 }
 
@@ -45,19 +49,41 @@ pub(crate) struct FinalGuardInput {
     pub retries_used: usize,
     pub agent_id: String,
     pub agent_tools: String,
+    // ── контракт сигнала (emit_signal) — приоритетнее тул-контрактов ──
+    pub signal_contract_present: bool,
+    pub signal_saved: bool,
+    pub signal_key: String,
+    pub signal_retries_used: usize,
 }
 
-/// Решение GUARD «финал без тулов».
+/// Решение GUARD «финал без действия».
 ///
-/// Нарушение — «ответ текстом, ни один инструмент не вызван успешно» —
-/// одинаково для двух контрактов: native-агент с тулами на wire и агент
-/// с `require_tool_call: true` (состояние «инструмент вызван» единое —
-/// `native_used || prompt_tool_used`, канал не важен). Ретраи ограничены
-/// `NATIVE_FINAL_RETRIES_MAX`; после исчерпания native принимает текст
-/// (исторический fallback), а require_tool-оператор получает честную
-/// ошибку: у оператора текст без тула означает «артефакт не создан»,
-/// принимать его как успех = тихая подмена.
+/// Три контракта, одно состояние нарушения — «ответ текстом, целевое действие
+/// не выполнено»: (а) у сигнального агента не доставлен обязательный сигнал
+/// (`emit_signal`), (б) native-агент с тулами на wire, (в) агент с
+/// `require_tool_call: true` (состояние «инструмент вызван» единое —
+/// `native_used || prompt_tool_used`, канал не важен). Сигнальная ветка
+/// приоритетнее: сигнал — целевой результат агента, его отсутствие нельзя
+/// «принять текстом» (вердикта не было вовсе; §00.2 — отсутствующая
+/// информация не принимается за успех). Ретраи ограничены
+/// (`SIGNAL_FINAL_RETRIES_MAX` / `NATIVE_FINAL_RETRIES_MAX`); после исчерпания
+/// native принимает текст (исторический fallback), а сигнальный и
+/// require_tool-оператор получают честную ошибку: принимать молчание как
+/// успех = тихая подмена.
 pub(crate) fn final_guard_decision(input: FinalGuardInput) -> FinalGuardVerdict {
+    let signal_violation = input.signal_contract_present && !input.signal_saved;
+    if signal_violation {
+        if input.signal_retries_used < SIGNAL_FINAL_RETRIES_MAX {
+            return FinalGuardVerdict::Retry;
+        }
+        return FinalGuardVerdict::HonestError(format!(
+            "{} Агент '{}' завершил работу без обязательного сигнала '{}' — вердикта не было ни в одной из {} попыток (ответы не содержали доставляемого результата). Задача не выполнена.",
+            AGENT_ERROR_PREFIX,
+            input.agent_id,
+            input.signal_key,
+            input.signal_retries_used + 1
+        ));
+    }
     let any_tool_used = input.native_used || input.prompt_tool_used;
     let native_violation = input.native_tools_present && !any_tool_used;
     let prompt_violation = input.require_tool_call && input.has_tools_for_prompt && !any_tool_used;
@@ -187,6 +213,8 @@ where
     /// Сколько раз GUARD уже попросил модель вызвать инструмент вместо финального текста
     /// (макс. 2 — потом финальный текст принимается как есть).
     pub(crate) native_final_retries: usize,
+    /// Ретраи GUARD за недоставленный обязательный сигнал (контракт emit_signal).
+    pub(crate) signal_final_retries: usize,
     /// Per-agent GBNF (строка) для ГИБРИДНЫХ агентов (qa_diagnost/arch_reviewer):
     /// применяется ТОЛЬКО в финальном вердиктном grammar-пассе после цикла.
     /// В цикле strict-GBNF не применяется (блокирует нативные tool_calls).
@@ -264,16 +292,73 @@ where
         true
     }
 
-    /// GUARD «финал без тулов»: вердикт для текущего ответа.
+    /// Детерминированная fallback-экстракция сигнала из текста (БЕЗ LLM-вызова):
+    /// агент должен звать emit_signal нативно, но если он этого не сделал, а
+    /// контракт есть — экстракция по допустимым значениям контракта (ключ-
+    /// привязка + required-гейт, signals.rs — мусор не изготавливается). Успех:
+    /// pending_signal (единый канал доставки в signal bus + messages[]) +
+    /// signal_saved = true. Возвращает true, если сигнал извлечён.
+    pub(crate) fn try_fallback_signal(&mut self, contract: &SignalContract, candidate: &str) -> bool {
+        let user_text: String = self
+            .messages
+            .iter()
+            .filter(|m| m.msg_type == "message" && m.author.as_deref() == Some("user"))
+            .map(|m| m.content.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let extract_input = format!("{}\n{}", user_text, candidate);
+        let Some(value) = extract_signal_value_from_text(contract, &extract_input) else {
+            return false;
+        };
+        // Сигнал сохраняется КАК ИЗВЛЕЧЁН: агент-специфичной механики в движке
+        // нет — доменные вычисления (напр. floor2_type валидатора) делают ноды
+        // custom_tool_call графа команды.
+        let mut map = serde_json::Map::new();
+        map.insert(contract.key.clone(), value.clone());
+        let signal_msg = ChatMessage {
+            id: Some(format!("msg_{}", *self.msg_counter)),
+            msg_type: "signal".to_string(),
+            content: serde_json::Value::Object(map).to_string(),
+            sub_calls: None,
+            author: Some(self.agent.id.clone()),
+            model: None,
+            time_sec: None,
+            attachments: None,
+            phase: Some(2),
+            author_name: Some(self.agent.name.clone()),
+        };
+        // Сигнал отдаём через pending_signal — единый канал доставки в
+        // signal bus + messages[] (nodes.rs:518 для воркера, dispatch.rs:887
+        // для сабагента). Прямой push в messages оставлял сигнал невидимым
+        // для SignalRouter/ConditionRouter (баг «тихий обрыв графа»).
+        *self.msg_counter += 1;
+        self.pending_signal = Some(signal_msg);
+        self.signal_saved = true;
+        (self.log_cb)(format!(
+            "📡 Сигнал '{}' извлечён из текста ответа (fallback): {}",
+            contract.key, value
+        ));
+        true
+    }
+
+    /// GUARD «финал без действия»: вердикт для текущего ответа.
     ///
-    /// Два контракта нарушаются одинаково — «ответ текстом, ни один инструмент
-    /// не вызван»: (а) native-агент с тулами на wire, (б) агент, объявивший
-    /// `require_tool_call: true` (тул-оператор). Единая точка: ретрай с хинтом
-    /// пока не исчерпаны `NATIVE_FINAL_RETRIES_MAX`; после исчерпания native
-    /// принимает текст (исторический fallback), require_tool-оператор получает
-    /// честную `AGENT_ERROR_PREFIX`-ошибку — «тихий успех» без артефакта
-    /// для оператора невозможен.
+    /// Три контракта, одно нарушение — «ответ текстом, целевое действие не
+    /// выполнено»: (а) сигнальный агент не доставил обязательный сигнал
+    /// (emit_signal), (б) native-агент с тулами на wire, (в) агент, объявивший
+    /// `require_tool_call: true` (тул-оператор). Единая точка: ретрай с честным
+    /// хинтом, пока не исчерпаны `SIGNAL_FINAL_RETRIES_MAX` /
+    /// `NATIVE_FINAL_RETRIES_MAX`; после исчерпания native принимает текст
+    /// (исторический fallback), сигнальный и require_tool-операторы получают
+    /// честную `AGENT_ERROR_PREFIX`-ошибку — «тихий успех» без целевого
+    /// результата невозможен. Каждый ретрай кладёт маркер-«мысль» в
+    /// messages[]: владелец видит отказ модели в цепочке действий (09.11.2026).
     pub(crate) fn final_without_tools_verdict(&mut self, raw_response: &str) -> FinalGuardVerdict {
+        let signal_violation = self.signal_contract.is_some() && !self.signal_saved;
+        let signal_key = self
+            .signal_contract
+            .as_ref()
+            .map_or(String::new(), |c| c.key.clone());
         let decision = final_guard_decision(FinalGuardInput {
             native_tools_present: self.native_tools.as_ref().is_some_and(|t| !t.is_empty()),
             native_used: self.native_used,
@@ -283,26 +368,68 @@ where
             retries_used: self.native_final_retries,
             agent_id: self.agent.id.clone(),
             agent_tools: self.agent.tools.join(", "),
+            signal_contract_present: self.signal_contract.is_some(),
+            signal_saved: self.signal_saved,
+            signal_retries_used: self.signal_final_retries,
+            signal_key,
         });
         match decision {
             FinalGuardVerdict::Retry => {
-                self.native_final_retries += 1;
                 self.action_found = true;
+                self.continuation_raw.clear();
+                self.continuation_mark = None;
                 self.llm_messages.push(LlmMessage {
                     role: "assistant".to_string(),
                     content: raw_response.to_string(),
                     ..Default::default()
                 });
-                self.continuation_raw.clear();
-                self.continuation_mark = None;
-                self.llm_messages.push(LlmMessage {
-                    role: "user".to_string(),
-                    content: "⚠️ Ты не использовал НИ ОДИН доступный инструмент, а задача требует их применения. Изучи задачу и вызови ПОДХОДЯЩИЙ ИНСТРУМЕНТ из списка (аргументы — валидный JSON). Сначала фактический результат инструмента, потом итоговый ответ.".to_string(),
-                 ..Default::default()});
-                (self.log_cb)(format!("🧤 [{}] GUARD: финал без единого вызова инструмента ({}/{}) — ретрай с требованием вызвать тул", self.agent.name, self.native_final_retries, NATIVE_FINAL_RETRIES_MAX));
+                if signal_violation {
+                    self.signal_final_retries += 1;
+                    let key = self
+                        .signal_contract
+                        .as_ref()
+                        .map_or(String::new(), |c| c.key.clone());
+                    // Маркер в цепочку действий: юзер видит отказ модели.
+                    self.messages.push(ChatMessage {
+                        id: Some(format!("msg_{}", *self.msg_counter)),
+                        msg_type: "thought".to_string(),
+                        content: format!(
+                            "⚠️ СИГНАЛ НЕ ДОСТАВЛЕН (попытка {}): ответ модели не содержал обязательного вызова emit_signal (\"{}\") — вердикт не получен. Ответ возвращён модели на доработку.",
+                            self.signal_final_retries, key
+                        ),
+                        sub_calls: None,
+                        author: Some(self.agent.id.clone()),
+                        model: Some(extract_model_filename(self.engine.model_path())),
+                        time_sec: None,
+                        attachments: None,
+                        phase: Some(1),
+                        author_name: Some(self.agent.name.clone()),
+                    });
+                    *self.msg_counter += 1;
+                    self.llm_messages.push(LlmMessage {
+                        role: "user".to_string(),
+                        content: format!(
+                            "⚠️ Твой предыдущий ответ (выше) НЕ содержал обязательного вызова инструмента emit_signal с ключом \"{}\" — результат не доставлен, это ОШИБКА. Прозаический вердикт вместо вызова инструмента не принимается. Выдай ВЕСЬ результат ТОЛЬКО вызовом emit_signal: {{\"tool\": \"emit_signal\", \"arguments\": {{\"key\": \"{}\", \"value\": <результат по контракту>}}}}.",
+                            key, key
+                        ),
+                        ..Default::default()
+                    });
+                    (self.log_cb)(format!("🧤 [{}] GUARD: финал без обязательного сигнала '{}' ({}/{}) — ретрай с требованием выдать emit_signal", self.agent.name, key, self.signal_final_retries, SIGNAL_FINAL_RETRIES_MAX));
+                } else {
+                    self.native_final_retries += 1;
+                    self.llm_messages.push(LlmMessage {
+                        role: "user".to_string(),
+                        content: "⚠️ Ты не использовал НИ ОДИН доступный инструмент, а задача требует их применения. Изучи задачу и вызови ПОДХОДЯЩИЙ ИНСТРУМЕНТ из списка (аргументы — валидный JSON). Сначала фактический результат инструмента, потом итоговый ответ.".to_string(),
+                     ..Default::default()});
+                    (self.log_cb)(format!("🧤 [{}] GUARD: финал без единого вызова инструмента ({}/{}) — ретрай с требованием вызвать тул", self.agent.name, self.native_final_retries, NATIVE_FINAL_RETRIES_MAX));
+                }
             }
             FinalGuardVerdict::HonestError(ref msg) => {
-                (self.log_cb)(format!("🧤 [{}] GUARD: ретраи исчерпаны, инструмент так и не вызван — честная ошибка вместо финала", self.agent.name));
+                if signal_violation {
+                    (self.log_cb)(format!("🧤 [{}] GUARD: ретраи исчерпаны, сигнал '{}' так и не доставлен — вердикта не было, честная ошибка вместо финала", self.agent.name, self.signal_contract.as_ref().map_or(String::new(), |c| c.key.clone())));
+                } else {
+                    (self.log_cb)(format!("🧤 [{}] GUARD: ретраи исчерпаны, инструмент так и не вызван — честная ошибка вместо финала", self.agent.name));
+                }
                 log::error!("{}", msg);
             }
             FinalGuardVerdict::Accept => {}
@@ -1665,6 +1792,10 @@ mod guard_tests {
             retries_used: 0,
             agent_id: "video_maker".to_string(),
             agent_tools: "generate_video".to_string(),
+            signal_contract_present: false,
+            signal_saved: false,
+            signal_key: String::new(),
+            signal_retries_used: 0,
         }
     }
 
@@ -1739,5 +1870,54 @@ mod guard_tests {
     #[test]
     fn chat_agent_unaffected() {
         assert!(matches!(final_guard_decision(input()), FinalGuardVerdict::Accept));
+    }
+
+    /// Сигнальный агент без доставленного сигнала: 2 ретрая с фидбэком →
+    /// исчерпание → ЧЕСТНАЯ ошибка «вердикта не было» (решение владельца
+    /// 09.11.2026: принимать прозу за вердикт = ложь).
+    #[test]
+    fn signal_agent_without_signal_retries_then_honest_error() {
+        let mut i = input();
+        i.signal_contract_present = true;
+        i.signal_key = "validator_report".to_string();
+
+        assert!(matches!(final_guard_decision(i.clone()), FinalGuardVerdict::Retry));
+        assert!(matches!(final_guard_decision(i.clone()), FinalGuardVerdict::Retry));
+
+        i.signal_retries_used = SIGNAL_FINAL_RETRIES_MAX;
+        match final_guard_decision(i) {
+            FinalGuardVerdict::HonestError(msg) => {
+                assert!(msg.contains(AGENT_ERROR_PREFIX), "честная ошибка обязана нести префикс: {msg}");
+                assert!(msg.contains("validator_report"), "ошибка обязана называть ключ сигнала: {msg}");
+                assert!(msg.contains("вердикта не было"), "{msg}");
+                assert!(msg.contains("Задача не выполнена"), "{msg}");
+            }
+            other => panic!("ожидалась HonestError, получено: {:?}", matches!(other, FinalGuardVerdict::Accept)),
+        }
+    }
+
+    /// Доставленный сигнал снимает нарушение: финал текстом ПОСЛЕ emit_signal
+    /// легитимен (агент завершил ответом после вызова тула).
+    #[test]
+    fn delivered_signal_disarms_signal_guard() {
+        let mut i = input();
+        i.signal_contract_present = true;
+        i.signal_saved = true;
+        assert!(matches!(final_guard_decision(i), FinalGuardVerdict::Accept));
+    }
+
+    /// Сигнальное нарушение приоритетнее тул-контрактов: сигнальный агент,
+    /// вызвавший тулы, но не доставивший сигнал, всё равно ретраится —
+    /// сигнал есть целевой результат (§00.2).
+    #[test]
+    fn signal_violation_takes_precedence_over_tool_contracts() {
+        let mut i = input();
+        i.signal_contract_present = true;
+        i.native_tools_present = true;
+        i.native_used = true;
+        i.require_tool_call = true;
+        i.has_tools_for_prompt = true;
+        i.prompt_tool_used = true;
+        assert!(matches!(final_guard_decision(i), FinalGuardVerdict::Retry));
     }
 }

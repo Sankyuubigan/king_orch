@@ -101,7 +101,12 @@ const CRITICAL_ELEMENTS: readonly string[] = ["e6", "e8", "e9"];
 
 function refusal(reason: string): PatternVerdict {
   // Сигнал не разобрать (не JSON / не объект) — ни один элемент не доказан.
-  return { floor2_type: NONE, pattern_found: false, surface_proven: false, reason };
+  return {
+    floor2_type: NONE,
+    pattern_found: false,
+    surface_proven: false,
+    reason,
+  };
 }
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
