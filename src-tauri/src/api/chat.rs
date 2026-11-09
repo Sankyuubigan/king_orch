@@ -303,6 +303,9 @@ pub async fn chat_request(
         Some(CloudEndpoint {
             base_url: config.base_url(router_id),
             api_key: config.api_key,
+            // SSOT имён — `RouterId::label()` плагина: имя фактического роутера
+            // резолвится ОДИН РАЗ здесь и разносится в статус/логи/бейдж.
+            router_label: router_id.label().to_string(),
         })
     } else {
         if !infra::llamacpp_installer::has_any_installed(&engine_dir) {
@@ -515,7 +518,13 @@ pub async fn chat_request(
             prompt_tokens + max_gen_tokens,
             context_size
         ));
-        log_cb("☁️ 9Router: VRAM приложения не используется".to_string());
+        let router_label = cloud_endpoint
+            .as_ref()
+            .map(|endpoint| endpoint.router_label.as_str())
+            .unwrap_or("облачный роутер");
+        log_cb(format!(
+            "☁️ {router_label}: VRAM приложения не используется"
+        ));
     } else {
         let file_mb = std::fs::metadata(&model_path)
             .map(|m| m.len() as f64 / (1024.0 * 1024.0))

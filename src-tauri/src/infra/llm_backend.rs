@@ -16,6 +16,11 @@ use tauri_plugin_llama_engine::engine::{
 pub struct CloudEndpoint {
     pub base_url: String,
     pub api_key: Option<String>,
+    /// Фактическое имя облачного роутера для показа человеку (SSOT —
+    /// `RouterId::label()` плагина cloud-routers: «9Router», «ExtremeRouter»,
+    /// «OmniRoute», «Gateway»). Вместо хардкода «9Router» — который лгал
+    /// при подключении через любой другой роутер (жалоба владельца 10.11.26).
+    pub router_label: String,
 }
 
 /// Распознавание класса «облако вернуло пустой успех» (HTTP 200 без данных).
@@ -146,7 +151,12 @@ impl CloudEngine {
                     .into_iter()
                     .map(serde_json::to_value)
                     .collect::<Result<Vec<_>, _>>()
-                    .map_err(|e| format!("Не удалось сериализовать tools 9Router: {}", e))?,
+                    .map_err(|e| {
+                        format!(
+                            "Не удалось сериализовать tools {}: {}",
+                            self.endpoint.router_label, e
+                        )
+                    })?,
             ),
             None => None,
         };
@@ -220,7 +230,10 @@ impl CloudEngine {
             tool_choice: tool_choice.map(str::to_string),
             stream: true,
         };
-        log_cb(format!("☁️ 9Router: один вызов модели «{}»", self.model));
+        log_cb(format!(
+            "☁️ {}: один вызов модели «{}»",
+            self.endpoint.router_label, self.model
+        ));
         let stream_cb = self.stream_cb.clone();
         // Гейт обрыва по длине (инцидент 24.10.2026): провайдер может вернуть
         // finish_reason=length (дефолтный кап/фильтр). Тихо отдавать обрезанный
@@ -250,7 +263,8 @@ impl CloudEngine {
             ) {
                 Ok(result) => {
                     log_cb(format!(
-                        "☁️ 9Router: ответ целиком получен за {:.0} с",
+                        "☁️ {}: ответ целиком получен за {:.0} с",
+                        self.endpoint.router_label,
                         started.elapsed().as_secs_f32()
                     ));
                     result
@@ -495,7 +509,7 @@ impl LlmEngine {
     pub fn engine_mode_detail(&self) -> String {
         match &self.backend {
             LlmBackend::Local(engine) => engine.engine_mode_detail(),
-            LlmBackend::Cloud(_) => "9Router".to_string(),
+            LlmBackend::Cloud(engine) => engine.endpoint.router_label.clone(),
         }
     }
 
@@ -535,7 +549,7 @@ impl LlmEngine {
         match &self.backend {
             LlmBackend::Local(engine) => engine.set_tools(tools),
             LlmBackend::Cloud(engine) => {
-                *engine.pending_tools.lock().expect("9Router tools lock poisoned") = tools;
+                *engine.pending_tools.lock().expect("cloud tools lock poisoned") = tools;
             }
         }
     }
@@ -577,7 +591,7 @@ impl LlmEngine {
                 let tools = engine
                     .pending_tools
                     .lock()
-                    .expect("9Router tools lock poisoned")
+                    .expect("cloud tools lock poisoned")
                     .take();
                 engine.generate(
                     messages,
@@ -690,7 +704,7 @@ impl LlmEngine {
                 let tools = engine
                     .pending_tools
                     .lock()
-                    .expect("9Router tools lock poisoned")
+                    .expect("cloud tools lock poisoned")
                     .take();
                 engine.generate(
                     _messages,
@@ -732,6 +746,7 @@ mod tests {
             CloudEndpoint {
                 base_url: "http://127.0.0.1:20128".to_string(),
                 api_key: None,
+                router_label: "Gateway".to_string(),
             },
             "combo".to_string(),
             Arc::new(|_| {}),
@@ -744,8 +759,25 @@ mod tests {
         assert!(!engine.supports_grammar());
         assert!(!engine.is_multimodal());
         assert_eq!(engine.engine_mode(), "cloud");
-        assert_eq!(engine.engine_mode_detail(), "9Router");
+        assert_eq!(engine.engine_mode_detail(), "Gateway");
         assert_eq!(engine.tok_per_sec(), 0.0);
+    }
+
+    /// Бейдж движка в чате обязан показывать ФАКТИЧЕСКОЕ имя роутера
+    /// (жалоба владельца 10.11.26: было «9Router» при подключении через Gateway).
+    #[test]
+    fn engine_mode_detail_shows_actual_router_label() {
+        let engine = LlmEngine::cloud(
+            CloudEndpoint {
+                base_url: "http://127.0.0.1:20128".to_string(),
+                api_key: None,
+                router_label: "OmniRoute".to_string(),
+            },
+            "combo".to_string(),
+            Arc::new(|_| {}),
+            Arc::new(AtomicU64::new(0)),
+        );
+        assert_eq!(engine.engine_mode_detail(), "OmniRoute");
     }
 
     /// Конструктор облачного движка для тестов счётчика: считает только то,
@@ -755,6 +787,7 @@ mod tests {
             CloudEndpoint {
                 base_url: base_url.to_string(),
                 api_key: None,
+                router_label: "9Router".to_string(),
             },
             "combo".to_string(),
             Arc::new(|_| {}),

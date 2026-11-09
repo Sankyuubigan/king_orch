@@ -359,14 +359,11 @@ where
     ST: Fn(String) + Clone + Send + Sync + 'static,
     RT: Fn(String) + Clone + Send + Sync + 'static,
 {
-    status_cb(
-        if cloud_endpoint.is_some() {
-            "Подключение к 9Router...".to_string()
-        } else {
-            "Загрузка модели в память...".to_string()
-        },
-        10,
-    );
+    let status = match cloud_endpoint.as_ref() {
+        Some(endpoint) => format!("Подключение к {}...", endpoint.router_label),
+        None => "Загрузка модели в память...".to_string(),
+    };
+    status_cb(status, 10);
     let agents = load_agents(&agents_dir)?;
     let max_gen_usize = max_gen_tokens as usize;
     let recent_history: Vec<ChatMessage> = history
