@@ -297,6 +297,8 @@ pub fn build_worst_agent_prompt(
             tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
             tools.extend(crate::infra::refmod_tool_schemas(&agent.tools));
             tools.extend(crate::infra::diag_tool_schemas(&agent.tools));
+            tools.extend(crate::infra::web_tool_schemas(&agent.tools));
+            tools.extend(crate::infra::youtube_tool_schemas(&agent.tools));
             let has_tools = !agent.tools.is_empty() || !agent.mcp_servers.is_empty();
             let mut sp =
                 build_system_prompt(agent, history, has_tools, &tools, 2048, None, false, false, false);
@@ -1112,7 +1114,7 @@ where
     all_tools.extend(crate::infra::video_tool_schemas(&agent.tools));
 
     // 📊 Capability Excel: `tools: {excel_inspect: true, ...}` в .md → схемы
-    // excel-тулов (мета-имя "excel"). Исполнение — нативно через ko-excel-tools
+    // excel-тулов (мета-имя "excel"). Исполнение — нативно через excel-tools
     // (umya + LibreOffice), источники — allow-read вложения и outputs сессии.
     all_tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
 
@@ -1123,8 +1125,18 @@ where
 
     // 🩺 Capability Diag: `tools: {diag_snapshot: true, ...}` в .md → схемы
     // диагностических тулов (мета-имя "diag"). Исполнение — нативно через
-    // ko-diag-tools (sysinfo/реестр/PowerShell + «чёрный ящик» рекордера).
+    // diag-tools (sysinfo/реестр/PowerShell + «чёрный ящик» рекордера).
     all_tools.extend(crate::infra::diag_tool_schemas(&agent.tools));
+
+    // 🌐 Capability веб-поиска: `tools: {WebSearch: true}` в .md → схема тула
+    // (мета-имя "web"). Исполнение — нативно через web-tools (SSOT-ядро),
+    // замена MCP web_search.ts; кеш/статистика движков — в bins_dir.
+    all_tools.extend(crate::infra::web_tool_schemas(&agent.tools));
+
+    // 📺 Capability YouTube: `tools: {prepare_video: true, get_chunk: true}` в .md
+    // → схемы тулов (мета-имя "youtube"). Исполнение — нативно через плагин
+    // tauri-plugin-ytdlp (engine::subtitles), замена MCP youtube_mcp.ts.
+    all_tools.extend(crate::infra::youtube_tool_schemas(&agent.tools));
 
     let has_real_tools = !all_tools.is_empty() || !agent.tools.is_empty();
 
@@ -3358,7 +3370,7 @@ mod tests {
     #[test]
     fn legacy_agent_with_mcp_servers_gets_tools_in_prompt() {
         let mut agent = make_agent("search", "ты поисковик");
-        agent.mcp_servers = vec!["web_search".to_string()];
+        agent.mcp_servers = vec!["docs_fetcher".to_string()];
         let tools = runtime::builtin_tools();
         let sp = build_system_prompt(&agent, &[], true, &tools, 2048, None, false, false, false);
         assert!(
@@ -3442,7 +3454,7 @@ mod tests {
     #[test]
     fn worst_agent_prompt_marks_tools_when_worker_has_mcp_servers() {
         let mut agent = make_agent("search", "промпт поисковика");
-        agent.mcp_servers = vec!["web_search".to_string(), "docs_fetcher".to_string()];
+        agent.mcp_servers = vec!["docs_fetcher".to_string(), "knowledge_api".to_string()];
         let wf = parse_wf(
             "name: test\nnodes:\n  - id: n1\n    type: llm_worker\n    agent: search\nedges: []\n",
         );
@@ -3531,7 +3543,7 @@ mod tests {
         }
 
         let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
-        all_tools.extend(tools_of_server_as_all_tools("web_search"));
+        all_tools.extend(crate::infra::web_tool_schemas(&agent.tools));
         all_tools.extend(runtime::builtin_tools());
         let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048, None, false, false, false);
 
@@ -3560,7 +3572,7 @@ mod tests {
             agent.mcp_servers
         );
         let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
-        all_tools.extend(tools_of_server_as_all_tools("web_search"));
+        all_tools.extend(crate::infra::web_tool_schemas(&agent.tools));
         all_tools.extend(runtime::builtin_tools());
         let sp = build_system_prompt(&agent, &[], true, &all_tools, 2048, None, false, false, false);
         assert!(
@@ -3581,7 +3593,7 @@ mod tests {
             std::env::var("TEST_MODEL_PATH").expect("Set TEST_MODEL_PATH to a GGUF file path");
         let agent = real_agent("docs_researcher");
         let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
-        all_tools.extend(tools_of_server_as_all_tools("web_search"));
+        all_tools.extend(crate::infra::web_tool_schemas(&agent.tools));
         all_tools.extend(runtime::builtin_tools());
         let mut system_prompt =
             build_system_prompt(&agent, &[], true, &all_tools, 2048, None, false, false, false);

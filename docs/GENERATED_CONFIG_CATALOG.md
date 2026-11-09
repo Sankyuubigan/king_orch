@@ -38,4 +38,5 @@
 - `sdcpp_dir`: `Option<String>`
 - `image_bundle_dir`: `Option<String>`
 - `video_bundle_dir`: `Option<String>`
+- `libreoffice_path`: `Option<String>`
 

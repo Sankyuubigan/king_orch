@@ -200,7 +200,7 @@ visible: false  # опционально: не предлагать агента
 
 ### Параметр `tools` (код-тулы из Rust-ядра `infra/tools/`)
 
-Код-инструменты: SSOT-реализация в крейте `ko-code-tools` (репозиторий `my-tauri-plugins`), реестр/адаптеры — `src-tauri/src/infra/tools/`. Не в MCP-серверах. Укажи в `tools`:
+Код-инструменты: SSOT-реализация в крейте `code-tools` (репозиторий `my-tauri-plugins`), реестр/адаптеры — `src-tauri/src/infra/tools/`. Не в MCP-серверах. Укажи в `tools`:
 
 - `code_read` — мета-набор **read-only** тулов: `read_file`, `read_many_files`, `grep`, `glob`, `list_directory`. Выполняются автоматически, без плашки, по любым путям.
 - `code_write` — полный набор (**чтение + запись**): всё из `code_read` плюс мутаторы `write_file`, `edit_file`, `bash`, `run_tests`. Запись **внутри корня проекта** — автоматически разрешена и логируется; запись **вне корня** — плашка в UI с выбором: «Запретить / Разрешить 1 раз / Разрешить в этом чате».
@@ -208,7 +208,7 @@ visible: false  # опционально: не предлагать агента
 
 Запуск тестов идёт только через безопасный `run_tests` (белый список команд: `npm_test`, `npm_build`, `npm_lint`, `npm_typecheck`, `cargo_test`, `cargo_check`) — без плашки.
 
-> **Defense-in-depth:** диспетчер `dispatch.rs` проверяет, что тул реально выдан агенту в промпт (`is_tool_granted`). Агент с `code_read` **не сможет** вызвать `write_file`/`edit_file`/`bash`, даже если модель «угадает» имя. MCP-серверы `fs_read`/`fs_write` существуют в репо, но отвязаны от coder-команды.
+> **Defense-in-depth:** диспетчер `dispatch.rs` проверяет, что тул реально выдан агенту в промпт (`is_tool_granted`). Агент с `code_read` **не сможет** вызвать `write_file`/`edit_file`/`bash`, даже если модель «угадает» имя. Мёртвые MCP-серверы `fs_read`/`fs_write` (дубль этих тулов) удалены 09.11.26 — карта слоёв и правила: [TOOL_ARCHITECTURE.md](TOOL_ARCHITECTURE.md).
 
 ### Параметр `replace_report` (экономия контекста в сессии)
 

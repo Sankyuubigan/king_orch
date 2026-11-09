@@ -85,13 +85,13 @@ function buildToolCatalog() {
       md += `- \`${m[1]}\` — ${m[2]}\n`;
     }
   }
-  md += "\n## Инструменты кодинга (SSOT-ядро ko-code-tools, my-tauri-plugins)\n\n";
+  md += "\n## Инструменты кодинга (SSOT-ядро code-tools, my-tauri-plugins)\n\n";
   // С 20.10.2026 реализации файловых/поисковых/shell-тулов перенесены в крейт
-  // `ko-code-tools` (repo my-tauri-plugins) — единственный источник правды
+  // `code-tools` (repo my-tauri-plugins) — единственный источник правды
   // (тот же код использует CLI agent-tools). Хост содержит только тонкие
   // адаптеры (макрос `adapter_tool!`), их текст в его mod.rs не парсится.
   // Само ядро описывает тула через `impl CodeTool for X { ... }` — парсим его.
-  const coreDir = "D:\\Projects\\my-tauri-plugins\\ko-code-tools\\src";
+  const coreDir = "D:\\Projects\\my-tauri-plugins\\code-tools\\src";
   // С 21.10.2026 fs.rs разбит на facade + fs/{read,write,edit,lint}.rs,
   // search.rs держит grep, а glob/list_directory переехали в search/listing.rs.
   for (const f of ["fs/fs_read.rs", "fs/fs_write.rs", "fs/fs_edit.rs", "search.rs", "search/listing.rs", "shell.rs"]) {
@@ -137,7 +137,7 @@ function buildToolCatalog() {
     md += `- \`${tool.name}\` [${ready ? "на месте" : "ОТСУТСТВУЕТ"}] — ${tool.purpose}. `
       + `Путь: \`${full}\`. Запуск из корня проекта: \`${full} codemap map --path . --tokens 2048\`. `
       + (ready
-        ? `Команды — в \`my-tauri-plugins/agent-tools/README.md\`.`
+        ? `Команды — в \`my-tauri-plugins/tools/agent-tools/README.md\`.`
         : `Собрать: \`scripts\\\\build_binaries.cmd\` в \`${tool.repo}\`.`);
     md += "\n";
   }
@@ -168,6 +168,28 @@ function buildToolCatalog() {
       while ((m = tr.exec(src))) names.add(m[1]);
       const toolList = [...names].sort().join("`, `") || "_(инструменты не распознаны статически)_";
       md += `- **${s}** — инструменты: \`${toolList}\`\n`;
+    }
+  }
+  md += "\n## Инструменты агентов (TS, нода `tool` — agents/<agent>/tools/)\n\n";
+  // Бизнес-математика агентов: чистые TS-функции, исполняются нодой `tool`
+  // графа через Deno-сабпроцесс (workflow_engine/custom_tool.rs). vendor/ —
+  // сторонние библиотеки, не тула: в каталог не попадают.
+  const agentsRoot = path.join(ROOT, "agents");
+  const agentToolFiles = walk(agentsRoot, ".ts").filter(
+    (f) => /[\\/]tools[\\/]/.test(f) && !f.includes("vendor")
+  );
+  if (agentToolFiles.length === 0) {
+    md += "_TS-тулов агентов не найдено._\n";
+  } else {
+    for (const f of agentToolFiles.sort()) {
+      const rel = path.relative(agentsRoot, f).replace(/\\/g, "/");
+      const agent = rel.split("/")[0];
+      const src = fs.readFileSync(f, "utf8");
+      const jsdoc = (src.match(/\/\*([\s\S]*?)\*\//) || [])[1];
+      const head = jsdoc
+        ? jsdoc.split("\n").map((s) => s.trim().replace(/^\*+\s*/, "")).filter(Boolean).join(" ")
+        : (src.match(/^\s*\/\/\s*(.+)$/m) || [])[1] || "_(описание не распознано)_";
+      md += `- \`${rel}\` (агент \`${agent}\`) — ${head}\n`;
     }
   }
   md += "\n";

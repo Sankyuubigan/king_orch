@@ -189,7 +189,7 @@ async fn main() {
             {
                 let data_root = infra::storage::app_data_root();
                 for dir in [data_root.clone(), data_root.join("sessions")] {
-                    if let Err(e) = ko_json_store::sweep_stale_locks(&dir) {
+                    if let Err(e) = json_store::sweep_stale_locks(&dir) {
                         // Не фатально: хвосты безвредны, повторим на следующем старте.
                         log::warn!("санитария хвостов {} не прошла: {}", dir.display(), e);
                     }

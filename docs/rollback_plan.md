@@ -70,7 +70,7 @@ cmd /c "start \"\" /wait \"<installer>\" /S & start \"\" \"<app.exe>\""
 
 1. **До запуска** инсталлера пишется `app_data_dir/install_report.json`
    (`kind`, `target_version`, `previous_version`, `installer`, размер, аргументы NSIS,
-   `started_at`, `state: pending`) — атомарно, через `ko-json-store`.
+   `started_at`, `state: pending`) — атомарно, через `json-store`.
 2. **На старте следующей сессии** плагин в фоновой задаче сверяет отчёт с
    **фактически установленной** версией (`app.package_info().version`):
    - совпало → `state: done` + `log::info!("... откат завершён: версия 26.9.177")`;

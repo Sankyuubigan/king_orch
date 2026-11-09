@@ -934,7 +934,7 @@ where
                 }
             }
         } else if crate::infra::is_excel_tool(tool_name) {
-            // 📊 Excel-тулы (SSOT в ko-excel-tools): inspect/read (readonly) +
+            // 📊 Excel-тулы (SSOT в excel-tools): inspect/read (readonly) +
             // apply/audit/render/convert. Источники — allow-read вложения юзера
             // и outputs сессии (гейт внутри execute_excel_tool). VRAM-suspend
             // не нужен: soffice — CPU-процесс, с движком не конфликтует.
@@ -994,6 +994,115 @@ where
                                 tool_name
                             ));
                         }
+                    }
+                    None => {
+                        tool_output = Some(format!("Ошибка: Инструмент '{}' не найден.", tool_name));
+                    }
+                }
+            }
+        } else if crate::infra::is_web_tool(tool_name) {
+            // 🌐 Веб-поиск (SSOT-ядро — крейт web-tools): нативная замена MCP
+            // web_search.ts, контракт модели прежний (имя/schema/формат вывода).
+            // Кеш и статистика движков — в bins_dir (преемственность с TS).
+            // VRAM-suspend не нужен: HTTP-запросы, с движком не конфликтуют.
+            tool_found = true;
+            let granted = self
+                .all_tools
+                .iter()
+                .any(|(meta, name, _)| meta == "web" && name == tool_name);
+            if !granted {
+                tool_output = Some(format!(
+                    "Ошибка '{}': инструмент недоступен агенту '{}'",
+                    tool_name, self.agent.id
+                ));
+            } else {
+                let web_ctx = crate::infra::ToolCtx {
+                    workspace_root: &self.workspace_root,
+                    write_root: &self.write_root,
+                    write_outside: self.write_outside,
+                    session_id: &self.session_id,
+                    approver: &self.approver,
+                    agent_id: &self.agent.id,
+                    bins_dir: self.bins_dir,
+                    image_artifacts: None,
+                };
+                match crate::infra::execute_web_tool(tool_name, arguments, &web_ctx) {
+                    Some(Ok(result)) => {
+                        tool_output = Some(result);
+                        tool_succeeded = true;
+                        crate::infra::event_bus::global_bus().publish(
+                            crate::infra::event_bus::AgentEvent::ToolCall {
+                                agent: self.agent.id.clone(),
+                                tool: tool_name.to_string(),
+                            },
+                        );
+                    }
+                    Some(Err(error)) => {
+                        log::error!(
+                            "Ошибка web-тула '{}' (агент '{}'): {}",
+                            tool_name,
+                            self.agent.id,
+                            error
+                        );
+                        // Честный текст (core §2.2): обе ошибки web-tools
+                        // (Usage из Input, Io из Network) несут конкретную
+                        // причину для модели — отдаём текст как есть.
+                        tool_output = Some(error.to_string());
+                    }
+                    None => {
+                        tool_output = Some(format!("Ошибка: Инструмент '{}' не найден.", tool_name));
+                    }
+                }
+            }
+        } else if crate::infra::is_youtube_tool(tool_name) {
+            // 📺 Субтитры YouTube (SSOT-механика — плагин tauri-plugin-ytdlp,
+            // engine::subtitles): нативная замена MCP youtube_mcp.ts, контракт
+            // модели прежний (имя/schema/формат вывода). Каталог движка и cookies
+            // резолвит адаптер из конфига плагина; VRAM-suspend не нужен: HTTP +
+            // yt-dlp во временный каталог, с движком LLM не конфликтуют.
+            tool_found = true;
+            let granted = self
+                .all_tools
+                .iter()
+                .any(|(meta, name, _)| meta == "youtube" && name == tool_name);
+            if !granted {
+                tool_output = Some(format!(
+                    "Ошибка '{}': инструмент недоступен агенту '{}'",
+                    tool_name, self.agent.id
+                ));
+            } else {
+                let yt_ctx = crate::infra::ToolCtx {
+                    workspace_root: &self.workspace_root,
+                    write_root: &self.write_root,
+                    write_outside: self.write_outside,
+                    session_id: &self.session_id,
+                    approver: &self.approver,
+                    agent_id: &self.agent.id,
+                    bins_dir: self.bins_dir,
+                    image_artifacts: None,
+                };
+                match crate::infra::execute_youtube_tool(tool_name, arguments, &yt_ctx) {
+                    Some(Ok(result)) => {
+                        tool_output = Some(result);
+                        tool_succeeded = true;
+                        crate::infra::event_bus::global_bus().publish(
+                            crate::infra::event_bus::AgentEvent::ToolCall {
+                                agent: self.agent.id.clone(),
+                                tool: tool_name.to_string(),
+                            },
+                        );
+                    }
+                    Some(Err(error)) => {
+                        log::error!(
+                            "Ошибка youtube-тула '{}' (агент '{}'): {}",
+                            tool_name,
+                            self.agent.id,
+                            error
+                        );
+                        // Честный текст (core §2.2): Usage/NotFound несут конкретную
+                        // причину для модели (нет prepare, нет субтитров, yt-dlp не
+                        // установлен) — отдаём текст как есть.
+                        tool_output = Some(error.to_string());
                     }
                     None => {
                         tool_output = Some(format!("Ошибка: Инструмент '{}' не найден.", tool_name));
@@ -1127,7 +1236,7 @@ where
                 }
             }
         } else if crate::infra::is_diag_tool(tool_name) {
-            // 🩺 Diag-тулы (SSOT в ko-diag-tools): snapshot (readonly) +
+            // 🩺 Diag-тулы (SSOT в diag-tools): snapshot (readonly) +
             // recorder start/stop («чёрный ящик», фоновый поток хоста).
             // Источники/записи только в <exe>/diag_outputs/<session_id>/ —
             // excel-гейт источников не нужен (чужих файлов diag не читает).

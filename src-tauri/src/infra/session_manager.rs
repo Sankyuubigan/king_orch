@@ -57,11 +57,11 @@ pub fn sessions_dir(_app: &AppHandle) -> PathBuf {
 
 /// Reads a session file, deserializes to ChatSession.
 ///
-/// Чтение идёт через `ko-json-store`, а не `fs::read_to_string`: зафиксированная,
+/// Чтение идёт через `json-store`, а не `fs::read_to_string`: зафиксированная,
 /// но не дописанная на диск сессия лежит в журнале, и прямой `fs` её не видит —
 /// последнее сообщение пользователя молча пропадало бы.
 fn load_session(path: &PathBuf) -> Result<(Value, ChatSession), String> {
-    let content = ko_json_store::read_text(path)
+    let content = json_store::read_text(path)
         .map_err(|e| format!("Ошибка чтения сессии {}: {}", path.display(), e))?
         .ok_or_else(|| format!("Сессия не найдена: {}", path.display()))?;
     let value: Value = serde_json::from_str(&content)
@@ -179,7 +179,7 @@ pub fn delete_session(app: &AppHandle, id: &str) -> Result<(), String> {
 fn save_session_raw(path: &PathBuf, session: &ChatSession) -> Result<(), String> {
     let content =
         serde_json::to_string_pretty(&session).map_err(|e| e.to_string())?;
-    ko_json_store::write_atomic(path, &content)
+    json_store::write_atomic(path, &content)
         .map_err(|e| format!("Ошибка сохранения сессии: {}", e))
 }
 
@@ -188,7 +188,7 @@ pub fn rename_session(app: &AppHandle, id: &str, new_title: &str) -> Result<(), 
     if !path.exists() {
         return Err("Сессия не найдена".to_string());
     }
-    ko_json_store::update_json(&path, |value: &mut serde_json::Value| {
+    json_store::update_json(&path, |value: &mut serde_json::Value| {
         if let Some(obj) = value.as_object_mut() {
             obj.insert("title".to_string(), Value::String(new_title.to_string()));
             // Пользователь поставил имя вручную — авто-переименование больше

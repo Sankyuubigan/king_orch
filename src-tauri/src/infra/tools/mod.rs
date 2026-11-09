@@ -1,7 +1,7 @@
-//! 🧰 Инструменты кодинга и файлов (SSOT в крейте `ko-code-tools`).
+//! 🧰 Инструменты кодинга и файлов (SSOT в крейте `code-tools`).
 //!
 //! Реализации ВСЕХ кодовых тулов (файлы/поиск/shell) живут в крейте
-//! `ko-code-tools` (репозиторий my-tauri-plugins) — тем же ядром пользуется
+//! `code-tools` (репозиторий my-tauri-plugins) — тем же ядром пользуется
 //! CLI `agent-tools`. Хост держит только:
 //!  - публичные [`Tool`] / [`ToolError`] / [`ToolCtx`] (контракт King Orch);
 //!  - политику записи хоста (`PermissionApprover` / `WriteOutside` / `authorize_write`);
@@ -21,14 +21,16 @@ pub mod media;
 pub mod refmod;
 pub mod refmod_ops;
 pub mod video;
+pub mod websearch;
+pub mod youtube;
 
 /// Хелперы ядра: ними пользуется media.rs через `super::` (имена прежние).
-pub use ko_code_tools::{is_within_root, resolve_path};
+pub use code_tools::{is_within_root, resolve_path};
 
 /// Ошибка тула — единый тип с ядром (варианты и Display-тексты 1:1, конверсий нет).
-pub use ko_code_tools::ToolError;
+pub use code_tools::ToolError;
 /// Трейт ядра нужен в scope: макрос вызывает его методы на конкретных типах.
-use ko_code_tools::CodeTool;
+use code_tools::CodeTool;
 
 /// Мета-имя в `agent.tools` — набор только для чтения (read-only).
 pub const TOOLSET_READ: &str = "code_read";
@@ -121,7 +123,7 @@ struct CoreAuthorizer<'a> {
     ctx: &'a ToolCtx<'a>,
 }
 
-impl ko_code_tools::WriteAuthorizer for CoreAuthorizer<'_> {
+impl code_tools::WriteAuthorizer for CoreAuthorizer<'_> {
     fn authorize(&self, abs_path: &Path, tool: &str) -> Result<(), ToolError> {
         authorize_write(abs_path, self.ctx, tool)
     }
@@ -154,25 +156,25 @@ macro_rules! adapter_tool {
                 // такие правки как «без автопроверки» (NoGate-путь в fs.rs).
                 // Проверка синтаксиса — задача агента: `code check` (CLI
                 // agent-tools) либо `code call run_tests cargo_check`.
-                let ko_ctx = ko_code_tools::ToolCtx::new(ctx.workspace_root, &ko_auth);
+                let ko_ctx = code_tools::ToolCtx::new(ctx.workspace_root, &ko_auth);
                 $core_ty.execute(args, &ko_ctx)
             }
         }
     };
 }
 
-// Файловые тулы (SSOT: ko-code-tools::fs).
-adapter_tool!(ReadFile, ko_code_tools::fs::ReadFile);
-adapter_tool!(ReadManyFiles, ko_code_tools::fs::ReadManyFiles);
-adapter_tool!(WriteFile, ko_code_tools::fs::WriteFile);
-adapter_tool!(EditFile, ko_code_tools::fs::EditFile);
-// Поисковые тулы (SSOT: ko-code-tools::search).
-adapter_tool!(Grep, ko_code_tools::search::Grep);
-adapter_tool!(Glob, ko_code_tools::search::Glob);
-adapter_tool!(ListDirectory, ko_code_tools::search::ListDirectory);
-// Shell-тулы (SSOT: ko-code-tools::shell).
-adapter_tool!(Bash, ko_code_tools::shell::Bash);
-adapter_tool!(RunTests, ko_code_tools::shell::RunTests);
+// Файловые тулы (SSOT: code-tools::fs).
+adapter_tool!(ReadFile, code_tools::fs::ReadFile);
+adapter_tool!(ReadManyFiles, code_tools::fs::ReadManyFiles);
+adapter_tool!(WriteFile, code_tools::fs::WriteFile);
+adapter_tool!(EditFile, code_tools::fs::EditFile);
+// Поисковые тулы (SSOT: code-tools::search).
+adapter_tool!(Grep, code_tools::search::Grep);
+adapter_tool!(Glob, code_tools::search::Glob);
+adapter_tool!(ListDirectory, code_tools::search::ListDirectory);
+// Shell-тулы (SSOT: code-tools::shell).
+adapter_tool!(Bash, code_tools::shell::Bash);
+adapter_tool!(RunTests, code_tools::shell::RunTests);
 
 /// SSOT-реестр: ВСЕ тулы кодинга (полностью ядерные — fs/search/shell).
 /// `code_read`/`code_write` — фильтры по `is_readonly()` над этим списком.
@@ -300,17 +302,17 @@ mod tests {
     // ── Гейт паритета адаптеров: адаптер — зеркало ядра (имя/описание/схема/флаг) ──
 
     /// Пары (хост-адаптер, ядерный CodeTool) — реестр один-в-один с ядерным.
-    fn adapter_core_pairs() -> Vec<(Box<dyn Tool>, Box<dyn ko_code_tools::CodeTool>)> {
+    fn adapter_core_pairs() -> Vec<(Box<dyn Tool>, Box<dyn code_tools::CodeTool>)> {
         vec![
-            (Box::new(ReadFile), Box::new(ko_code_tools::fs::ReadFile)),
-            (Box::new(ReadManyFiles), Box::new(ko_code_tools::fs::ReadManyFiles)),
-            (Box::new(WriteFile), Box::new(ko_code_tools::fs::WriteFile)),
-            (Box::new(EditFile), Box::new(ko_code_tools::fs::EditFile)),
-            (Box::new(Grep), Box::new(ko_code_tools::search::Grep)),
-            (Box::new(Glob), Box::new(ko_code_tools::search::Glob)),
-            (Box::new(ListDirectory), Box::new(ko_code_tools::search::ListDirectory)),
-            (Box::new(Bash), Box::new(ko_code_tools::shell::Bash)),
-            (Box::new(RunTests), Box::new(ko_code_tools::shell::RunTests)),
+            (Box::new(ReadFile), Box::new(code_tools::fs::ReadFile)),
+            (Box::new(ReadManyFiles), Box::new(code_tools::fs::ReadManyFiles)),
+            (Box::new(WriteFile), Box::new(code_tools::fs::WriteFile)),
+            (Box::new(EditFile), Box::new(code_tools::fs::EditFile)),
+            (Box::new(Grep), Box::new(code_tools::search::Grep)),
+            (Box::new(Glob), Box::new(code_tools::search::Glob)),
+            (Box::new(ListDirectory), Box::new(code_tools::search::ListDirectory)),
+            (Box::new(Bash), Box::new(code_tools::shell::Bash)),
+            (Box::new(RunTests), Box::new(code_tools::shell::RunTests)),
         ]
     }
 
@@ -338,7 +340,7 @@ mod tests {
     fn host_registry_matches_core_registry_order() {
         // 9 кодовых тулов в реестре хоста — в том же порядке, что и в ядерном реестре.
         let core_names: Vec<String> =
-            ko_code_tools::all_code_tools().iter().map(|t| t.name().to_string()).collect();
+            code_tools::all_code_tools().iter().map(|t| t.name().to_string()).collect();
         let host_names: Vec<String> =
             all_tools().iter().map(|t| t.name().to_string()).collect();
         assert_eq!(

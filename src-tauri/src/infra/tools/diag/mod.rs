@@ -1,7 +1,7 @@
 //! 🩺 Диагностические тулы (`diag_snapshot`, `diag_recorder_start`,
 //! `diag_recorder_stop`).
 //!
-//! Тонкий исполняющий слой поверх SSOT-ядра `ko-diag-tools` (аудит системы
+//! Тонкий исполняющий слой поверх SSOT-ядра `diag-tools` (аудит системы
 //! через sysinfo/реестр/PowerShell, криминалистика дампов и журнала Windows,
 //! рекордер «чёрного ящика» с принудительным сбросом каждой строки на диск).
 //! По образцу excel-адаптера: схемы агентов — через `diag_tool_schemas`
@@ -45,7 +45,7 @@ pub fn diag_session_outputs_dir(session_id: &str) -> PathBuf {
 
 // ─────────── Реестр живущих рекордеров (единственный static фичи) ───────────
 
-type RecorderRegistry = Mutex<HashMap<String, ko_diag_tools::recorder::RecorderControl>>;
+type RecorderRegistry = Mutex<HashMap<String, diag_tools::recorder::RecorderControl>>;
 
 /// См. док модуля: сознательный модульный static, ключ — session_id.
 static RECORDER_REGISTRY: OnceLock<RecorderRegistry> = OnceLock::new();
@@ -63,7 +63,7 @@ fn run_snapshot(session_id: &str) -> Result<String, ToolError> {
     let dir = diag_session_outputs_dir(session_id);
     std::fs::create_dir_all(&dir)
         .map_err(|e| ToolError::Io(format!("создание каталога diag_outputs: {e}")))?;
-    let diag = ko_diag_tools::snapshot::run_snapshot(Some(&dir));
+    let diag = diag_tools::snapshot::run_snapshot(Some(&dir));
     Ok(diag.render())
 }
 
@@ -71,7 +71,7 @@ fn run_snapshot(session_id: &str) -> Result<String, ToolError> {
 /// той же сессии — замена: живой рекордер останавливается (его итог честно
 /// упоминается в ответе), стартует новый. Один рекордер на сессию.
 fn run_recorder_start(args: &Value, ctx: &ToolCtx) -> Result<String, ToolError> {
-    let interval_default = ko_diag_tools::recorder::RecorderConfig::default().interval;
+    let interval_default = diag_tools::recorder::RecorderConfig::default().interval;
     let interval_ms = args
         .get("interval_ms")
         .and_then(|v| v.as_u64())
@@ -81,7 +81,7 @@ fn run_recorder_start(args: &Value, ctx: &ToolCtx) -> Result<String, ToolError> 
             "interval_ms допускается 200..5000 (минимум 200 — sysinfo::MINIMUM_CPU_UPDATE_INTERVAL, ниже статистика ЦП не обновляется; получено: {interval_ms})"
         )));
     }
-    let cfg = ko_diag_tools::recorder::RecorderConfig {
+    let cfg = diag_tools::recorder::RecorderConfig {
         interval: Duration::from_millis(interval_ms),
         ..Default::default()
     };
@@ -93,9 +93,9 @@ fn run_recorder_start(args: &Value, ctx: &ToolCtx) -> Result<String, ToolError> 
         .unwrap()
         .remove(ctx.session_id);
     let replaced_note = previous.map(|control| {
-        let summary = ko_diag_tools::recorder::stop_recording(
+        let summary = diag_tools::recorder::stop_recording(
             control,
-            &ko_diag_tools::recorder::RecorderConfig::default(),
+            &diag_tools::recorder::RecorderConfig::default(),
         );
         format!(
             "Прежний рекордер сессии остановлен ({} тиков, файл {}); стартует новый.",
@@ -104,7 +104,7 @@ fn run_recorder_start(args: &Value, ctx: &ToolCtx) -> Result<String, ToolError> 
         )
     });
 
-    let control = ko_diag_tools::recorder::start_recording(&dir, cfg)
+    let control = diag_tools::recorder::start_recording(&dir, cfg)
         .map_err(|e| ToolError::Io(format!("рекордер не запущен: {e}")))?;
     // Путь читается ДО move в реестр (RecorderControl не Copy).
     let path = control.path().display().to_string();
@@ -150,7 +150,7 @@ fn capped_tail_lines(args: &Value) -> usize {
 
 /// Текстовый блок стоп-итога — формат для LLM-анализа и юзера.
 fn format_stop_summary(
-    summary: &ko_diag_tools::recorder::StopSummary,
+    summary: &diag_tools::recorder::StopSummary,
     header: &str,
 ) -> String {
     let mut lines = vec![
@@ -187,11 +187,11 @@ fn run_recorder_stop(args: &Value, ctx: &ToolCtx) -> Result<String, ToolError> {
         .unwrap()
         .remove(ctx.session_id);
     if let Some(control) = control {
-        let cfg = ko_diag_tools::recorder::RecorderConfig {
+        let cfg = diag_tools::recorder::RecorderConfig {
             tail_lines,
             ..Default::default()
         };
-        let summary = ko_diag_tools::recorder::stop_recording(control, &cfg);
+        let summary = diag_tools::recorder::stop_recording(control, &cfg);
         log::info!(
             "[DIAG] recorder stopped (agent {}, ticks {}): {}",
             ctx.agent_id,
@@ -204,9 +204,9 @@ fn run_recorder_stop(args: &Value, ctx: &ToolCtx) -> Result<String, ToolError> {
     }
 
     // Режим B: реестр пуст — ищем лог прошлой жизни (зависание + перезапуск).
-    match ko_diag_tools::recorder::latest_log(&dir) {
+    match diag_tools::recorder::latest_log(&dir) {
         Some(path) => {
-            let tail = ko_diag_tools::recorder::read_log_tail(&path, tail_lines);
+            let tail = diag_tools::recorder::read_log_tail(&path, tail_lines);
             log::info!(
                 "[DIAG] recorder stop в пустом реестре: найден лог прошлой жизни {}",
                 path.display()
@@ -535,7 +535,7 @@ mod tests {
         let dir = diag_session_outputs_dir(session);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let log = dir.join(format!("{}1.log", ko_diag_tools::recorder::FILE_PREFIX));
+        let log = dir.join(format!("{}1.log", diag_tools::recorder::FILE_PREFIX));
         std::fs::write(&log, "12:00:00.1 ЦП 41% | ОЗУ ...\n12:00:00.5 ЦП 42% | ОЗУ ...\n").unwrap();
         let args = serde_json::json!({"tail_lines": 2});
         let result = execute_diag_tool("diag_recorder_stop", &args, &ctx(session))

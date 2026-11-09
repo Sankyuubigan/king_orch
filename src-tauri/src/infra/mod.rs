@@ -74,4 +74,6 @@ pub use tools::excel::{
 pub use tools::diag::{
     attach_saved_diag_from_sub_calls, diag_tool_schemas, execute_diag_tool, is_diag_tool,
 };
+pub use tools::websearch::{execute_web_tool, is_web_tool, web_tool_schemas};
+pub use tools::youtube::{execute_youtube_tool, is_youtube_tool, youtube_tool_schemas};
 pub use tools::refmod::{execute_refmod_tool, refmod_tool_schemas, is_refmod_tool};

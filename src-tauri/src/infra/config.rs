@@ -167,7 +167,7 @@ pub struct AppConfig {
     pub video_bundle_dir: Option<String>,
     /// Путь к soffice.exe (LibreOffice) для Excel-тулов: пересчёт формул и
     /// PDF-рендер. None = авто-детект (PATH → стандартные пути установки,
-    /// см. ko_excel_tools::soffice::detect_soffice). Пересчёт опционален:
+    /// см. excel_tools::soffice::detect_soffice). Пересчёт опционален:
     /// статические гейты формул работают и без него.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub libreoffice_path: Option<String>,
@@ -265,17 +265,17 @@ pub fn app_data_dir_early() -> PathBuf {
 /// принимается до регистрации плагина). Если файла нет — default (анонимные
 /// отчёты включены).
 ///
-/// Чтение идёт через `ko-json-store`, а не `fs::read_to_string`: если запись
+/// Чтение идёт через `json-store`, а не `fs::read_to_string`: если запись
 /// оборвалась на середине, значение лежит в журнале, и прямой `fs` его не видит
 /// — пользователь получил бы настройки по умолчанию вместо своих.
 pub fn load_config_early() -> AppConfig {
-    let mut cfg = parse_config(ko_json_store::read_text(&app_data_dir_early().join("app_config.json")));
+    let mut cfg = parse_config(json_store::read_text(&app_data_dir_early().join("app_config.json")));
     apply_engine_keys(&mut cfg, &engine_config::load_config_early());
     cfg
 }
 
 pub fn load_config(app: &AppHandle) -> AppConfig {
-    let mut cfg = parse_config(ko_json_store::read_text(&get_config_path(app)));
+    let mut cfg = parse_config(json_store::read_text(&get_config_path(app)));
     apply_engine_keys(&mut cfg, &engine_config::load_config(app));
     cfg
 }
@@ -335,7 +335,7 @@ pub fn save_config(app: &AppHandle, config: &AppConfig) -> Result<(), String> {
 
 pub fn save_config_file(path: &Path, config: &AppConfig) -> Result<(), String> {
     let host_value = serde_json::to_value(config).map_err(|e| e.to_string())?;
-    ko_json_store::update_json(path, move |root: &mut serde_json::Value| {
+    json_store::update_json(path, move |root: &mut serde_json::Value| {
         if !root.is_object() {
             *root = serde_json::json!({});
         }

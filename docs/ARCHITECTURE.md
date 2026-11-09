@@ -223,7 +223,7 @@ heartbeat сторожа (проценты больше не отображаю�
 | `mcp_client.rs` | JSON-RPC клиент для MCP-серверов через stdin/stdout |
 | `downloader.rs` | Скачивание .gguf файлов с прогрессом |
 | `bin_downloader.rs` | Скачивание sidecar-бинарников (deno, yt-dlp) с распаковкой zip |
-| `tools/` | **Нативные инструменты.** Кодинг: трейт `Tool` + реестр `all_tools()`: тонкие адаптеры (макрос `adapter_tool!`) над ядром `ko-code-tools` (SSOT-реализация в `my-tauri-plugins`; чтение/поиск/shell). `code_read`/`code_write` — фильтры по `is_readonly()`, explicit-имена добавляются к базе. Диспетчер только исполняет. Excel: `tools/excel/` — 6 тулов (`excel_inspect/read/apply/audit/render/convert`) над ядром `ko-excel-tools` (SSOT в `my-tauri-plugins`): правка .xlsx живыми формулами (umya-spreadsheet), QA-гейты формул, пересчёт/PDF через LibreOffice (опционально, ключ `libreoffice_path` в конфиге), артефакты в `<exe>/excel_outputs/<session_id>/`, allow-read гейт — только вложения пользователя и файлы своей сессии |
+| `tools/` | **Нативные инструменты.** Кодинг: трейт `Tool` + реестр `all_tools()`: тонкие адаптеры (макрос `adapter_tool!`) над ядром `code-tools` (SSOT-реализация в `my-tauri-plugins`; чтение/поиск/shell). `code_read`/`code_write` — фильтры по `is_readonly()`, explicit-имена добавляются к базе. Диспетчер только исполняет. Excel: `tools/excel/` — 6 тулов (`excel_inspect/read/apply/audit/render/convert`) над ядром `excel-tools` (SSOT в `my-tauri-plugins`): правка .xlsx живыми формулами (umya-spreadsheet), QA-гейты формул, пересчёт/PDF через LibreOffice (опционально, ключ `libreoffice_path` в конфиге), артефакты в `<exe>/excel_outputs/<session_id>/`, allow-read гейт — только вложения пользователя и файлы своей сессии |
 | `permissions.rs` | Система разрешений: `PermissionApprover` (auto-allow в корне для мутаторов, read-only авто везде, session-grants, pending-запросы). Тул-события → плашка в UI |
 
 ---
@@ -246,7 +246,7 @@ main.rs
         │    ├→ parsers.rs
         │    └→ agent_manager.rs       — загрузка .md + YAML, load_entry_points()
         └→ infra/ (дверь: infra/mod.rs)
-            ├→ tools/                   — адаптеры код-тулов (SSOT: ko-code-tools)
+            ├→ tools/                   — адаптеры код-тулов (SSOT: code-tools)
             ├→ permissions.rs           — PermissionApprover, плашка
             ├→ mcp_client.rs            — JSON-RPC клиент MCP
             ├→ bin_downloader.rs        — sidecar-бинарники (deno, yt-dlp)

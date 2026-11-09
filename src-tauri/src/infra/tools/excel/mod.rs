@@ -1,6 +1,6 @@
 //! 📊 Инструменты Excel (`excel_inspect/read/apply/audit/render/convert`).
 //!
-//! Тонкие схемы + исполнение поверх SSOT-ядра `ko-excel-tools` (umya-операции,
+//! Тонкие схемы + исполнение поверх SSOT-ядра `excel-tools` (umya-операции,
 //! QA-гейты, recalc/PDF через LibreOffice). По образцу `video.rs`, но: тулов
 //! шесть, источник — путь файла (политика видимости 28.10.2026: пути вложений
 //! видны модели), артефакты прикрепляются к ответу ПО ПУТИ (xlsx/pdf в base64
@@ -135,7 +135,7 @@ fn register_artifact(path: &str, tool_name: &str, ctx: &ToolCtx) -> Result<Strin
 fn sequenced_stem(stem: &str) -> String {
     format!(
         "{}-{}",
-        ko_excel_tools::pipeline::sanitize_stem(stem),
+        excel_tools::pipeline::sanitize_stem(stem),
         EXCEL_OUTPUT_SEQUENCE.fetch_add(1, Ordering::Relaxed)
     )
 }
@@ -144,7 +144,7 @@ fn sequenced_stem(stem: &str) -> String {
 /// (PATH → стандартные пути). None — честные статусы без пересчёта.
 fn soffice_for_tools() -> Option<PathBuf> {
     let custom = crate::infra::load_config_early().libreoffice_path;
-    ko_excel_tools::soffice::detect_soffice(custom.as_deref())
+    excel_tools::soffice::detect_soffice(custom.as_deref())
 }
 
 fn output_dir(ctx: &ToolCtx) -> Result<PathBuf, ToolError> {
@@ -159,7 +159,7 @@ fn output_dir(ctx: &ToolCtx) -> Result<PathBuf, ToolError> {
 fn run_inspect(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, ToolError> {
     let path = arg_path(args)?;
     let path = ensure_allowed_source(&path, ctx, allowed)?;
-    ko_excel_tools::inspect::structure(&path).map_err(tool_error).map(|v| v.to_string())
+    excel_tools::inspect::structure(&path).map_err(tool_error).map(|v| v.to_string())
 }
 
 fn run_read(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, ToolError> {
@@ -167,7 +167,7 @@ fn run_read(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, T
     let path = ensure_allowed_source(&path, ctx, allowed)?;
     let sheet = args.get("sheet").and_then(|v| v.as_str());
     let range = args.get("range").and_then(|v| v.as_str());
-    ko_excel_tools::inspect::read_range(&path, sheet, range).map_err(tool_error).map(|v| v.to_string())
+    excel_tools::inspect::read_range(&path, sheet, range).map_err(tool_error).map(|v| v.to_string())
 }
 
 /// Механический потолок payload'а set_rows в одном excel_apply (в ячейках).
@@ -236,7 +236,7 @@ fn run_apply(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, 
         Some(s) if !s.trim().is_empty() => sequenced_stem(s),
         _ => sequenced_stem(&auto_stem),
     });
-    let request = ko_excel_tools::pipeline::ApplyRequest {
+    let request = excel_tools::pipeline::ApplyRequest {
         source: source.as_deref(),
         output_dir: &out_dir,
         output_stem: stem.as_deref(),
@@ -247,7 +247,7 @@ fn run_apply(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, 
             .unwrap_or(false),
     };
     let result =
-        ko_excel_tools::pipeline::apply(&request, soffice_for_tools().as_deref(), ko_excel_tools::soffice::DEFAULT_TIMEOUT)
+        excel_tools::pipeline::apply(&request, soffice_for_tools().as_deref(), excel_tools::soffice::DEFAULT_TIMEOUT)
             .map_err(tool_error)?;
     // Артефакт регистрируется ТОЛЬКО когда файл прошёл гейты (output_path
     // не null): файл с проваленной валидацией удалён и прикрепить его нельзя.
@@ -266,11 +266,11 @@ fn run_audit(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, 
     let temp = out_dir.join("audit_tmp");
     // Cleanup ДО `?`: Err не должен покидать функцию с живой аудиторской
     // копией на диске (раньше ранний выход оставлял файл в audit_tmp).
-    let result = ko_excel_tools::pipeline::audit(
+    let result = excel_tools::pipeline::audit(
         &path,
         &temp,
         soffice_for_tools().as_deref(),
-        ko_excel_tools::soffice::DEFAULT_TIMEOUT,
+        excel_tools::soffice::DEFAULT_TIMEOUT,
     );
     let _ = std::fs::remove_dir_all(&temp);
     result.map_err(tool_error).map(|v| v.to_string())
@@ -279,7 +279,7 @@ fn run_audit(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, 
 fn run_render(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, ToolError> {
     let path = arg_path(args)?;
     let path = ensure_allowed_source(&path, ctx, allowed)?;
-    let soffice = soffice_for_tools().ok_or_else(|| ToolError::NotFound(ko_excel_tools::ExcelError::SofficeNotDetected.to_string()))?;
+    let soffice = soffice_for_tools().ok_or_else(|| ToolError::NotFound(excel_tools::ExcelError::SofficeNotDetected.to_string()))?;
     let out_dir = output_dir(ctx)?;
     let stem = sequenced_stem(
         &path
@@ -287,13 +287,13 @@ fn run_render(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String,
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_else(|| "таблица".to_string()),
     );
-    let pdf = ko_excel_tools::soffice::render_pdf(&soffice, &path, &out_dir, ko_excel_tools::soffice::DEFAULT_TIMEOUT)
+    let pdf = excel_tools::soffice::render_pdf(&soffice, &path, &out_dir, excel_tools::soffice::DEFAULT_TIMEOUT)
         .map_err(tool_error)?;
     // render_pdf возвращает <stem из исходника>.pdf — переименование в
     // уникальное имя SSOT-нейминга lib (seq + эпоха): эпоха закрывает
     // перезапись PDF после рестарта приложения (seq process-global сбрасывается,
     // а rename на Windows молча заменяет существующий файл).
-    let unique = ko_excel_tools::pipeline::unique_pdf_path(&out_dir, &stem);
+    let unique = excel_tools::pipeline::unique_pdf_path(&out_dir, &stem);
     if pdf != unique {
         std::fs::rename(&pdf, &unique)
             .map_err(|e| ToolError::Io(format!("переименование PDF: {e}")))?;
@@ -338,12 +338,12 @@ fn run_convert(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String
     let summary = match to.as_str() {
         "xlsx" => {
             let out = out_dir.join(format!("{stem}.xlsx"));
-            ko_excel_tools::convert::csv_to_xlsx(&path, &out, sheet, delimiter).map_err(tool_error)?
+            excel_tools::convert::csv_to_xlsx(&path, &out, sheet, delimiter).map_err(tool_error)?
         }
         other => {
             let out = out_dir.join(format!("{stem}.{other}"));
             let delimiter = delimiter.unwrap_or(if other == "tsv" { '\t' } else { ',' });
-            ko_excel_tools::convert::xlsx_to_csv(&path, &out, sheet, delimiter).map_err(tool_error)?
+            excel_tools::convert::xlsx_to_csv(&path, &out, sheet, delimiter).map_err(tool_error)?
         }
     };
     let summary_json = summary.to_json();
@@ -372,18 +372,18 @@ fn parse_delimiter(raw: &str) -> Option<char> {
 }
 
 /// Мост ExcelError → ToolError (Display-текст честный, ready-to-show).
-fn tool_error(e: ko_excel_tools::ExcelError) -> ToolError {
+fn tool_error(e: excel_tools::ExcelError) -> ToolError {
     match e {
-        ko_excel_tools::ExcelError::FileNotFound(_) => ToolError::NotFound(e.to_string()),
-        ko_excel_tools::ExcelError::SofficeNotDetected => ToolError::NotFound(e.to_string()),
-        ko_excel_tools::ExcelError::Usage(_) => ToolError::Usage(e.to_string()),
-        ko_excel_tools::ExcelError::UnsupportedFormat(..) => ToolError::Usage(e.to_string()),
+        excel_tools::ExcelError::FileNotFound(_) => ToolError::NotFound(e.to_string()),
+        excel_tools::ExcelError::SofficeNotDetected => ToolError::NotFound(e.to_string()),
+        excel_tools::ExcelError::Usage(_) => ToolError::Usage(e.to_string()),
+        excel_tools::ExcelError::UnsupportedFormat(..) => ToolError::Usage(e.to_string()),
         // Детерминированный отказ пер-операции (лист не найден, не последний
         // лист, «БЕЗ ведущего '='»…): Display готов к показу — агент обязан
         // видеть причину (core §2.2). Кейс 04.11.26: OpFailed проваливался в
         // Io-маску → модели уходила «внутренняя ошибка excel-обработки» →
         // слепой аборт по лимиту неудач.
-        ko_excel_tools::ExcelError::OpFailed { .. } => ToolError::Usage(e.to_string()),
+        excel_tools::ExcelError::OpFailed { .. } => ToolError::Usage(e.to_string()),
         _ => ToolError::Io(e.to_string()),
     }
 }
@@ -701,14 +701,14 @@ mod tests {
             {"op": "set_cell", "sheet": "Sheet1", "addr": "A2", "value": "запись"},
             {"op": "set_cell", "sheet": "Sheet1", "addr": "B2", "value": 12.5}
         ]);
-        let request = ko_excel_tools::pipeline::ApplyRequest {
+        let request = excel_tools::pipeline::ApplyRequest {
             source: None,
             output_dir: &tmp,
             output_stem: Some("sample"),
             ops: &ops,
             allow_issues: false,
         };
-        let result = ko_excel_tools::pipeline::apply(&request, None, std::time::Duration::from_secs(30))
+        let result = excel_tools::pipeline::apply(&request, None, std::time::Duration::from_secs(30))
             .expect("создание примера книги");
         let produced = result["output_path"].as_str().expect("output_path");
         std::fs::copy(produced, path).unwrap();
@@ -752,7 +752,7 @@ mod tests {
         // «внутренняя ошибка excel-обработки» и не мог исправить ops → аборт
         // по лимиту неудач. Контракт: детерминированный отказ пер-операции —
         // Usage-класс (is_honest_tool_error в vram.rs пропускает Usage как есть).
-        let mapped = tool_error(ko_excel_tools::ExcelError::OpFailed {
+        let mapped = tool_error(excel_tools::ExcelError::OpFailed {
             op: "set_rows (#0)".to_string(),
             msg: "Некорректные аргументы: Лист 'Продажи' не найден".to_string(),
         });
@@ -901,7 +901,7 @@ mod tests {
             "честный статус доставки: {result}"
         );
         // Формула реально в файле: читаем через публичный API ядра.
-        let read = ko_excel_tools::inspect::read_range(Path::new(&path), Some("Sheet1"), Some("A1:B3"))
+        let read = excel_tools::inspect::read_range(Path::new(&path), Some("Sheet1"), Some("A1:B3"))
             .expect("чтение созданной книги");
         assert!(read.to_string().contains("B2*2"), "формула живая в файле: {read}");
         let _ = std::fs::remove_dir_all(&out);

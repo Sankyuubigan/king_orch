@@ -1,6 +1,6 @@
 //! Выбор корней приложения: **единственное** место, где решается, куда писать.
 //!
-//! Вся механика — в [`ko_json_store::roots`]. Этот модуль отвечает только за
+//! Вся механика — в [`json_store::roots`]. Этот модуль отвечает только за
 //! две вещи, которых крейт не знать может: превратить `AppHandle` и `%APPDATA%`
 //! в кандидатов и один раз разнести данные из прежнего корня в новый.
 //!
@@ -37,7 +37,7 @@ use std::path::PathBuf;
 
 use tauri::{AppHandle, Manager};
 
-use ko_json_store::roots::{
+use json_store::roots::{
     self, Candidate, LABEL_APP_DATA, LABEL_APP_SHARED, LABEL_SCRATCH,
 };
 
@@ -78,7 +78,7 @@ fn app_data_dir_env() -> PathBuf {
     user_base_dir().join(APP_DATA_DIR_NAME)
 }
 
-/// Лестницы кандидатов. `KING_ORCH_DATA_ROOT` идёт первым везде: это явное
+/// Лестницы кандидатов. `JSON_STORE_DATA_ROOT` идёт первым везде: это явное
 /// указание пользователя, и оно не должно перебиваться догадками о том, что
 /// «на этом диске больше свободного места».
 fn app_data_candidates() -> Vec<Candidate> {
@@ -156,7 +156,7 @@ pub fn init(app: &AppHandle) {
     // Журналы: значение, зафиксированное, но не дошедшее до файла, накладывается
     // на диск до того, как приложение начнёт читать данные.
     if let Some(root) = roots::root(LABEL_APP_DATA) {
-        ko_json_store::journal::recover_tree(&root);
+        json_store::journal::recover_tree(&root);
     }
     report_roots();
 }

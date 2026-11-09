@@ -3,7 +3,6 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 const DENO_URL: &str = "https://github.com/denoland/deno/releases/download/v2.9.5/deno-x86_64-pc-windows-msvc.zip";
-const YT_DLP_URL: &str = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe";
 const CHROME_JSON_URL: &str = "https://googlechromelabs.github.io/chrome-for-testing/last-known-good-versions-with-downloads.json";
 // CloakBrowser (stealth-Chromium): бесплатный релиз v146 без лицензионного ключа
 const CLOAK_RELEASE_VERSION: &str = "chromium-v146.0.7680.177.5";
@@ -26,7 +25,8 @@ fn bin_filename(name: &str) -> String {
 fn bin_url(name: &str) -> Result<&'static str, String> {
     match name {
         "deno" => Ok(DENO_URL),
-        "yt-dlp" => Ok(YT_DLP_URL),
+        // yt-dlp НЕ здесь: бинарь управляется плагином tauri-plugin-ytdlp
+        // (<exe>/ytdlp, установка/обновление с GitHub) — см. infra/tools/youtube.rs.
         _ => Err(format!("Неизвестный бинарник: {}", name)),
     }
 }

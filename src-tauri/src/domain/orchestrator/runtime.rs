@@ -211,14 +211,12 @@ fn deno_permissions(mcp_name: &str, bins_dir: &Path) -> Vec<String> {
         // time — без прав (только вычисления)
         "time" => vec![],
         // Только чтение файлов
-        "fs_read" | "local_rag" | "markdown_section_reader" | "ast_analyzer" => {
+        "markdown_section_reader" | "ast_analyzer" => {
             vec!["--allow-read".to_string()]
         }
-        // Только запись файлов
-        "fs_write" => vec!["--allow-write".to_string()],
         // Сеть + чтение env (node:https читает NODE_EXTRA_CA_CERTS и proxy-переменные через node-compat)
-        // web_search: кеш результатов (search_cache.json) и статистика отказов (search_stats.json) в bins_dir
-        "web_search" | "docs_fetcher" | "knowledge_api" => vec![
+        // docs_fetcher/knowledge_api: чтение env для node-compat
+        "docs_fetcher" | "knowledge_api" => vec![
             "--allow-net".to_string(),
             "--allow-env".to_string(),
             format!("--allow-read={}", bins),
@@ -235,14 +233,8 @@ fn deno_permissions(mcp_name: &str, bins_dir: &Path) -> Vec<String> {
         "github_search" | "academic_search" | "youtube_search" => {
             vec!["--allow-net".to_string(), "--allow-env".to_string()]
         }
-        // Сеть + запуск yt-dlp + temp-файлы + env (bins_dir)
-        "youtube_mcp" => vec![
-            "--allow-net".to_string(),
-            "--allow-run".to_string(),
-            "--allow-read".to_string(),
-            "--allow-write".to_string(),
-            "--allow-env".to_string(),
-        ],
+        // youtube_mcp мигрировал в нативные тула prepare_video/get_chunk
+        // (infra/tools/youtube.rs, 10.11.26) — Deno-сервер удалён.
         // Браузер: запуск Chrome + CDP (localhost) + npm-пакеты + профили/PDF в bins_dir
         "browser" => vec![
             "--allow-net".to_string(),
@@ -325,16 +317,13 @@ fn ensure_mcp_deps<L: Fn(String) + Clone + Send + Sync>(
         }
         return envs;
     }
-    if mcp_name == "youtube_mcp" {
-        if let Ok(_yt_path) = bin_downloader::ensure_runtime_bin("yt-dlp", bins_dir, log_cb.clone())
-        {
-            if let Some(bins_str) = bins_dir.to_str() {
-                return vec![("KING_ORCH_BINS_DIR", bins_str.to_string())];
-            }
-        }
-    }
-    // web_search (search_cache/search_stats) и searxng_search (searxng_cache) хранят свои файлы в bins_dir.
-    if mcp_name == "searxng_search" || mcp_name == "web_search" {
+    // youtube_mcp мигрировал в нативные тула prepare_video/get_chunk
+    // (infra/tools/youtube.rs, 10.11.26): каталог движка резолвится адаптером
+    // из конфига плагина ytdlp, env серверу больше не нужен.
+    // searxng_search (searxng_cache) хранит свои файлы в bins_dir.
+    // web_search мигрировал в нативный тул (infra/tools/websearch.rs, 09.11.26):
+    // его кеш/статистика — bins_dir через ToolCtx, env серверу больше не нужен.
+    if mcp_name == "searxng_search" {
         if let Some(bins_str) = bins_dir.to_str() {
             return vec![("KING_ORCH_BINS_DIR", bins_str.to_string())];
         }
@@ -453,10 +442,10 @@ mod tests {
 
     #[test]
     fn agent_capabilities_lists_declared_and_builtin() {
-        let a = make_agent(&["custom_tool"], &["fs_read"], &["helper"]);
+        let a = make_agent(&["custom_tool"], &["ast_analyzer"], &["helper"]);
         let caps = agent_capabilities(&a);
         assert!(caps.iter().any(|c| c == "tool:custom_tool"));
-        assert!(caps.iter().any(|c| c == "mcp:fs_read"));
+        assert!(caps.iter().any(|c| c == "mcp:ast_analyzer"));
         assert!(caps.iter().any(|c| c == "subagent:helper"));
         // Встроенные инструменты доступны всем агентам через шов.
         assert!(caps.iter().any(|c| c == "builtin:emit_signal"));
@@ -465,7 +454,7 @@ mod tests {
 
     #[test]
     fn agent_capabilities_summary_is_readable() {
-        let a = make_agent(&["custom_tool"], &["fs_read"], &[]);
+        let a = make_agent(&["custom_tool"], &["ast_analyzer"], &[]);
         let s = agent_capabilities_summary(&a);
         assert!(s.contains("agent_x"));
         assert!(s.contains("tool:custom_tool"));
