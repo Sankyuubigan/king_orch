@@ -71,6 +71,11 @@ pub struct WorkflowContext {
     /// запроса и истории с абсолютными путями — источники ffmpeg-тулов.
     /// Заполняется при создании контекста (orchestrator) из RequestMedia.
     pub video_files: String,
+    /// Каталог JSON-вложений (`{{ json_files }}`): прикреплённые .json
+    /// (текущий запрос + история) как JSON-массив {file_name, file_path,
+    /// origin} — источник тулов-импортёров графа (напр. кейс психотерапевта).
+    /// Заполняется при создании контекста (orchestrator) из RequestMedia.
+    pub json_files: String,
     pub request_media: Arc<RequestMedia>,
 }
 
@@ -99,6 +104,7 @@ impl WorkflowContext {
             image_loras: String::new(),
             spreadsheet_files: String::new(),
             video_files: String::new(),
+            json_files: String::new(),
             request_media: Arc::new(RequestMedia::empty()),
         }
     }
@@ -148,6 +154,11 @@ impl WorkflowContext {
         self
     }
 
+    pub fn with_json_files(mut self, block: String) -> Self {
+        self.json_files = block;
+        self
+    }
+
     pub fn with_request_media(mut self, rm: Arc<RequestMedia>) -> Self {
         self.request_media = rm;
         self
@@ -177,6 +188,7 @@ impl WorkflowContext {
         result = result.replace("{{ image_loras }}", &self.image_loras);
         result = result.replace("{{ spreadsheet_files }}", &self.spreadsheet_files);
         result = result.replace("{{ video_files }}", &self.video_files);
+        result = result.replace("{{ json_files }}", &self.json_files);
 
         // {{ signals }} — JSON-объект из signal bus (ключ → значение)
         if result.contains("{{ signals }}") {
@@ -391,6 +403,22 @@ mod tests {
         assert!(
             resolved.contains("- alice — Алиса — тест"),
             "{{{{ video_refmods }}}} обязан резолвиться: {}",
+            resolved
+        );
+        assert!(!resolved.contains("{{"), "литералов не осталось: {}", resolved);
+    }
+
+    /// Каталог JSON-вложений (`{{ json_files }}`) резолвится шаблоном — зеркало
+    /// spreadsheet/video-каталогов: args ноды-импортёра обязаны получать список
+    /// файлов, а не литерал-плейсхолдер.
+    #[test]
+    fn json_files_template_resolves() {
+        let mut context = WorkflowContext::new("test".to_string(), vec![], vec![]);
+        context.json_files = r#"[{"file_name":"case.json","file_path":"C:\\t\\case.json","origin":"current"}]"#.to_string();
+        let resolved = context.resolve_template("Список: {{ json_files }}");
+        assert!(
+            resolved.contains("case.json"),
+            "{{{{ json_files }}}} обязан резолвиться: {}",
             resolved
         );
         assert!(!resolved.contains("{{"), "литералов не осталось: {}", resolved);

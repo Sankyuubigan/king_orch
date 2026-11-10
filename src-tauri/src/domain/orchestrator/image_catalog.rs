@@ -645,6 +645,43 @@ impl RequestMedia {
         out
     }
 
+    /// Каталог JSON-вложений (`{{ json_files }}`): прикреплённые .json
+    /// (текущий запрос + история) как JSON-массив {file_name, file_path,
+    /// origin} — источник для тулов-импортёров графа (напр. кейс
+    /// психотерапевта). Директории и вложения без пути на диске исключаются —
+    /// прочитать их файл тулом невозможно. Формат — JSON, а не текст-каталог:
+    /// args ноды уходят тулу одним argv-токеном, и тул разбирает их
+    /// JSON.parse'ом, а не парсингом форматированных строк.
+    pub fn json_files_catalog(&self) -> String {
+        let refs: Vec<serde_json::Value> = self
+            .attachment_refs
+            .iter()
+            .filter(|r| {
+                let name = r.get("file_name").and_then(|v| v.as_str()).unwrap_or("");
+                let path = r.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+                let is_dir = r.get("is_dir").and_then(|v| v.as_bool()).unwrap_or(false);
+                !is_dir
+                    && !path.is_empty()
+                    && name
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or("")
+                        .eq_ignore_ascii_case("json")
+            })
+            .map(|r| {
+                serde_json::json!({
+                    "file_name": r.get("file_name").and_then(|v| v.as_str()).unwrap_or(""),
+                    "file_path": r.get("file_path").and_then(|v| v.as_str()).unwrap_or(""),
+                    "origin": r.get("origin").and_then(|v| v.as_str()).unwrap_or(""),
+                })
+            })
+            .collect();
+        if refs.is_empty() {
+            return String::new();
+        }
+        serde_json::to_string(&refs).unwrap_or_default()
+    }
+
     /// Каталог видео для ffmpeg-агента (`{{ video_files }}`): вложения-
     /// контейнеры текущего запроса и истории с абсолютными путями —
     /// источники ffmpeg_probe/ffmpeg_run (гейт allow-read тот же, что у
@@ -1271,6 +1308,66 @@ mod tests {
 
         // Пустой набор — пустой блок (без мусорных заголовков).
         assert_eq!(RequestMedia::empty().spreadsheet_files_prompt(), "");
+    }
+
+    /// Каталог JSON-вложений: только .json-файлы с путём на диске; директории
+    /// и не-json исключаются; пустой набор — пустая строка (не "[]").
+    #[test]
+    fn json_files_catalog_lists_only_json_file_attachments() {
+        let case = ChatAttachment {
+            file_name: "7тип - проверка.json".to_string(),
+            mime_type: "application/json".to_string(),
+            data_base64: String::new(),
+            file_path: Some("C:\\Users\\user\\Desktop\\7тип - проверка.json".to_string()),
+            is_dir: Some(false),
+        };
+        let upper_ext = ChatAttachment {
+            file_name: "ARCHIVE.JSON".to_string(),
+            mime_type: "application/json".to_string(),
+            data_base64: String::new(),
+            file_path: Some("C:\\Downloads\\ARCHIVE.JSON".to_string()),
+            is_dir: Some(false),
+        };
+        let dir = ChatAttachment {
+            file_name: "папка.json".to_string(),
+            mime_type: String::new(),
+            data_base64: String::new(),
+            file_path: Some("C:\\Downloads\\папка.json".to_string()),
+            is_dir: Some(true),
+        };
+        let no_path = ChatAttachment {
+            file_name: "внедрённый.json".to_string(),
+            mime_type: "application/json".to_string(),
+            data_base64: "e30=".to_string(),
+            file_path: None,
+            is_dir: Some(false),
+        };
+        let png = attachment("картинка.png", "img");
+        let all = vec![case, upper_ext, dir, no_path, png];
+        let current = message("msg_1", "user", "ход", all.clone());
+
+        let media = RequestMedia::build(&all, &[current]);
+        let catalog = media.json_files_catalog();
+        assert!(
+            catalog.contains("7тип - проверка.json"),
+            "json-файл попадает в каталог: {catalog}"
+        );
+        assert!(
+            catalog.contains("ARCHIVE.JSON"),
+            "расширение без учёта регистра: {catalog}"
+        );
+        assert!(
+            !catalog.contains("папка.json"),
+            "директория исключается: {catalog}"
+        );
+        assert!(
+            !catalog.contains("внедрённый.json"),
+            "вложение без пути на диске исключается: {catalog}"
+        );
+        assert!(!catalog.contains("картинка.png"), "не-json исключается: {catalog}");
+
+        // Пустой набор — пустая строка (тул трактует как «вложений нет»).
+        assert_eq!(RequestMedia::empty().json_files_catalog(), "");
     }
 
     /// Уникальная temp-подпапка теста (паттерн media_lora_tests: pid + метка

@@ -637,6 +637,9 @@ where
         // Каталог видео (`{{ video_files }}`): вложения-контейнеры текущего
         // запроса и истории с путями — источники ffmpeg-тулов.
         .with_video_files(request_media.video_files_prompt())
+        // Каталог JSON-вложений (`{{ json_files }}`): прикреплённые .json —
+        // источники тулов-импортёров графа (напр. кейс психотерапевта).
+        .with_json_files(request_media.json_files_catalog())
         .with_request_media(request_media.clone());
         // Переопределение режима из чата. Разбирается ОДИН раз здесь, чтобы
         // невалидное значение упало до прогона, а не внутри цикла нод.

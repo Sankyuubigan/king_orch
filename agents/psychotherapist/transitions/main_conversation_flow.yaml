@@ -68,6 +68,11 @@ nodes:
   type: llm_worker
   group: group_1
   agent: decomposer
+  task: |-
+    Разбери кластер пользователя на мишени по своей инструкции.
+    Если ниже есть секция «ИМПОРТИРОВАННЫЙ КЕЙС» — пользователь прикрепил экспорт кейса прошлой сессии: это продолжение работы, а не новая декомпозиция с нуля (правила работы с кейсом — в твоей инструкции). Если секции нет — работай по общим правилам.
+
+    {{ nodes.import_cases.output.imported_cases_text }}
   ui_pos:
     x: 240
     y: 486
@@ -75,6 +80,11 @@ nodes:
 - id: call_validator
   type: llm_worker
   agent: validator
+  task: |-
+    Проверь элементы проблемы пользователя по своей инструкции.
+    Если ниже есть секция «ИМПОРТИРОВАННЫЙ КЕЙС» — её непустые элементы доказаны в прошлой сессии (экспорт кейса): переноси их в свой отчёт как доказанные данные пользователя (правило — в твоей инструкции). Если секции нет — работай по общим правилам.
+
+    {{ nodes.import_cases.output.imported_cases_text }}
   inject_response:
   - synthesizer
   - decomposer
@@ -167,6 +177,15 @@ nodes:
   ui_pos:
     x: -1215
     y: 255
+
+- id: import_cases
+  type: custom_tool_call
+  ui_pos:
+    x: -1010
+    y: 236
+  tool_file: ../tools/import_neurosis_case.ts
+  args:
+    files: '{{ json_files }}'
 
 - id: note_1782220193985
   type: note
@@ -274,6 +293,11 @@ nodes:
   type: llm_worker
   group: group_1
   agent: synthesizer
+  task: |-
+    Выбери стартовую мишень по своей инструкции.
+    Если ниже есть секция «ИМПОРТИРОВАННЫЙ КЕЙС» — это продолжение работы над кейсом прошлой сессии: его мишень (target) — полноправный кандидат наряду с новыми мишенями декомпозитора (правила — в твоей инструкции). Если секции нет — работай по общим правилам.
+
+    {{ nodes.import_cases.output.imported_cases_text }}
   output_type: frontend
   inject_response:
   - decomposer
@@ -306,6 +330,9 @@ edges:
   to: check_pattern
 
 - from: note_1782221436115
+  to: import_cases
+
+- from: import_cases
   to: check_somatic
 
 - from: call_soma_translator
