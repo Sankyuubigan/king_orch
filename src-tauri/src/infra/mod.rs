@@ -71,6 +71,7 @@ pub use tools::video::{
 pub use tools::excel::{
     attach_saved_excel_from_sub_calls, execute_excel_tool, excel_tool_schemas, is_excel_tool,
 };
+pub use tools::ffmpeg::{execute_ffmpeg_tool, ffmpeg_tool_schemas, is_ffmpeg_tool};
 pub use tools::diag::{
     attach_saved_diag_from_sub_calls, diag_tool_schemas, execute_diag_tool, is_diag_tool,
 };

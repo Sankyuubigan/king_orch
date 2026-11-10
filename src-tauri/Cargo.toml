@@ -58,6 +58,10 @@ web-tools = { path = "../../my-tauri-plugins/tools/web-tools" }
 # (VTT-парсер/спонсорские/чанки). Нативные тула prepare_video/get_chunk
 # (infra/tools/youtube.rs) — замена MCP youtube_mcp.ts.
 tauri-plugin-ytdlp = { path = "../../my-tauri-plugins/tauri-plugin-ytdlp" }
+# Движок FFmpeg (SSOT): автоскачивание официальной сборки в хранилище +
+# запуск ffmpeg/ffprobe subprocess без shell. Нативные тула ffmpeg_probe/
+# ffmpeg_run (infra/tools/ffmpeg.rs) — агент видеомонтажа.
+tauri-plugin-ffmpeg = { path = "../../my-tauri-plugins/tauri-plugin-ffmpeg" }
 # RefMod-карточки (tasks/04.11.26): декод/ресайз кадров персонажа при сохранении
 # в карточку (кратность 32px, длинная сторона ≤1024px) — png/jpeg/webp фото юзера.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

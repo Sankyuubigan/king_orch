@@ -295,6 +295,7 @@ pub fn build_worst_agent_prompt(
             tools.extend(crate::infra::image_tool_schemas(&agent.tools));
             tools.extend(crate::infra::video_tool_schemas(&agent.tools));
             tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
+            tools.extend(crate::infra::ffmpeg_tool_schemas(&agent.tools));
             tools.extend(crate::infra::refmod_tool_schemas(&agent.tools));
             tools.extend(crate::infra::diag_tool_schemas(&agent.tools));
             tools.extend(crate::infra::web_tool_schemas(&agent.tools));
@@ -633,6 +634,9 @@ where
         // Каталог таблиц (`{{ spreadsheet_files }}`): вложения .xlsx/.csv/.tsv
         // текущего запроса и истории с путями — источники excel-тулов.
         .with_spreadsheet_files(request_media.spreadsheet_files_prompt())
+        // Каталог видео (`{{ video_files }}`): вложения-контейнеры текущего
+        // запроса и истории с путями — источники ffmpeg-тулов.
+        .with_video_files(request_media.video_files_prompt())
         .with_request_media(request_media.clone());
         // Переопределение режима из чата. Разбирается ОДИН раз здесь, чтобы
         // невалидное значение упало до прогона, а не внутри цикла нод.
@@ -1116,6 +1120,12 @@ where
     // excel-тулов (мета-имя "excel"). Исполнение — нативно через excel-tools
     // (umya + LibreOffice), источники — allow-read вложения и outputs сессии.
     all_tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
+
+    // 🎬 Capability FFmpeg: `tools: {ffmpeg_probe: true, ffmpeg_run: true}` в .md
+    // → схемы ffmpeg-тулов (мета-имя "ffmpeg"). Исполнение — нативно через
+    // плагин tauri-plugin-ffmpeg (движок автоскачивается в хранилище),
+    // источники — allow-read вложения и артефакты сессии.
+    all_tools.extend(crate::infra::ffmpeg_tool_schemas(&agent.tools));
 
     // 🧩 Capability RefMod: `tools: {refmod_create: true, refmod_edit: true}` в .md
     // → схемы refmod-тулов (мета-имя "refmod"). Исполнение — нативно (SSOT формата

@@ -67,6 +67,10 @@ pub struct WorkflowContext {
     /// текущего запроса и истории с абсолютными путями — источники excel-тулов.
     /// Заполняется при создании контекста (orchestrator) из RequestMedia.
     pub spreadsheet_files: String,
+    /// Каталог видео (`{{ video_files }}`): вложения-контейнеры текущего
+    /// запроса и истории с абсолютными путями — источники ffmpeg-тулов.
+    /// Заполняется при создании контекста (orchestrator) из RequestMedia.
+    pub video_files: String,
     pub request_media: Arc<RequestMedia>,
 }
 
@@ -94,6 +98,7 @@ impl WorkflowContext {
             audio_candidates: String::new(),
             image_loras: String::new(),
             spreadsheet_files: String::new(),
+            video_files: String::new(),
             request_media: Arc::new(RequestMedia::empty()),
         }
     }
@@ -138,6 +143,11 @@ impl WorkflowContext {
         self
     }
 
+    pub fn with_video_files(mut self, block: String) -> Self {
+        self.video_files = block;
+        self
+    }
+
     pub fn with_request_media(mut self, rm: Arc<RequestMedia>) -> Self {
         self.request_media = rm;
         self
@@ -166,6 +176,7 @@ impl WorkflowContext {
         result = result.replace("{{ audio_candidates }}", &self.audio_candidates);
         result = result.replace("{{ image_loras }}", &self.image_loras);
         result = result.replace("{{ spreadsheet_files }}", &self.spreadsheet_files);
+        result = result.replace("{{ video_files }}", &self.video_files);
 
         // {{ signals }} — JSON-объект из signal bus (ключ → значение)
         if result.contains("{{ signals }}") {

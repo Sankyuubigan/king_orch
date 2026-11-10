@@ -645,6 +645,46 @@ impl RequestMedia {
         out
     }
 
+    /// Каталог видео для ffmpeg-агента (`{{ video_files }}`): вложения-
+    /// контейнеры текущего запроса и истории с абсолютными путями —
+    /// источники ffmpeg_probe/ffmpeg_run (гейт allow-read тот же, что у
+    /// excel-тулов: `current_attachment_paths()`).
+    pub fn video_files_prompt(&self) -> String {
+        let video_exts = [
+            "mp4", "mkv", "mov", "m4v", "ts", "flv", "wmv", "avi", "webm", "mpg", "mpeg", "3gp",
+            "ogv",
+        ];
+        let mut rows = String::new();
+        for r in &self.attachment_refs {
+            let name = r.get("file_name").and_then(|v| v.as_str()).unwrap_or("");
+            let ext = name
+                .rsplit('.')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if !video_exts.contains(&ext.as_str()) {
+                continue;
+            }
+            let origin = match r.get("origin").and_then(|v| v.as_str()) {
+                Some("current") => "текущий запрос",
+                _ => "история чата",
+            };
+            let path = r.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+            rows.push_str(&format!("- file=\"{}\"; path={}; origin={}\n", name, path, origin));
+        }
+        if rows.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from("[ВИДЕО ЗАПРОСА]\n");
+        out.push_str(&rows);
+        out.push_str(
+            "Передавай path из этого списка в аргумент `path` ffmpeg_probe/ffmpeg_run. \
+             Файлы истории тоже доступны: юзер уже отдавал их в чат. Сначала вызови \
+             ffmpeg_probe, чтобы знать длительность и дорожки.\n",
+        );
+        out
+    }
+
     /// Каталог аудио для voice-фн refmod-тулов (`{{ audio_candidates }}`,
     /// Этап 3): сэмплы голоса, прикладываемые к refmod_create/refmod_edit.
     pub fn audio_candidates_prompt(&self) -> String {

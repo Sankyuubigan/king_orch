@@ -847,6 +847,7 @@ where
             .with_audio_candidates(context.audio_candidates.clone())
             .with_image_loras(context.image_loras.clone())
             .with_spreadsheet_files(context.spreadsheet_files.clone())
+            .with_video_files(context.video_files.clone())
             .with_request_media(context.request_media.clone());
 
             let sub_result = match super::run_workflow(sub_wf, &mut sub_ctx, runner) {

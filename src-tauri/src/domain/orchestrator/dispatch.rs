@@ -1000,6 +1000,75 @@ where
                     }
                 }
             }
+        } else if crate::infra::is_ffmpeg_tool(tool_name) {
+            // 🎬 FFmpeg-тулы (SSOT-ядро — плагин tauri-plugin-ffmpeg): probe
+            // (ffprobe) + run (монтаж, результат рядом с исходником с
+            // суффиксом). Гейт источников — внутри execute_ffmpeg_tool
+            // (вложения юзера + артефакты сессии). VRAM-suspend не нужен:
+            // ffmpeg — CPU-процесс, с движком не конфликтует.
+            tool_found = true;
+            let granted = self
+                .all_tools
+                .iter()
+                .any(|(meta, name, _)| meta == "ffmpeg" && name == tool_name);
+            if !granted {
+                tool_output = Some(format!(
+                    "Ошибка '{}': инструмент недоступен агенту '{}'",
+                    tool_name, self.agent.id
+                ));
+            } else {
+                let media_ctx = crate::infra::ToolCtx {
+                    workspace_root: &self.workspace_root,
+                    write_root: &self.write_root,
+                    write_outside: self.write_outside,
+                    session_id: &self.session_id,
+                    approver: &self.approver,
+                    agent_id: &self.agent.id,
+                    bins_dir: self.bins_dir,
+                    image_artifacts: Some(&self.image_artifacts),
+                };
+                let allowed_sources = self.request_media.current_attachment_paths();
+                match crate::infra::execute_ffmpeg_tool(tool_name, arguments, &media_ctx, &allowed_sources)
+                {
+                    Some(Ok(result)) => {
+                        tool_output = Some(result);
+                        tool_succeeded = true;
+                        crate::infra::event_bus::global_bus().publish(
+                            crate::infra::event_bus::AgentEvent::ToolCall {
+                                agent: self.agent.id.clone(),
+                                tool: tool_name.to_string(),
+                            },
+                        );
+                    }
+                    Some(Err(error)) => {
+                        let raw_error = error.to_string();
+                        log::error!(
+                            "Ошибка ffmpeg-тула '{}' (агент '{}'): {}",
+                            tool_name,
+                            self.agent.id,
+                            raw_error
+                        );
+                        // Честный текст (core §2.2): Usage/NotFound/Forbidden несут
+                        // конкретную причину (включая stderr ffmpeg) — маскировать
+                        // её «внутренней ошибкой» нельзя, иначе агент не исправит
+                        // команду.
+                        if super::vram::is_resource_error(&raw_error)
+                            || super::vram::is_honest_tool_error(&error)
+                        {
+                            tool_output =
+                                Some(super::vram::tool_error_to_output(tool_name, error));
+                        } else {
+                            tool_output = Some(format!(
+                                "Ошибка '{}': внутренняя ошибка ffmpeg-обработки",
+                                tool_name
+                            ));
+                        }
+                    }
+                    None => {
+                        tool_output = Some(format!("Ошибка: Инструмент '{}' не найден.", tool_name));
+                    }
+                }
+            }
         } else if crate::infra::is_web_tool(tool_name) {
             // 🌐 Веб-поиск (SSOT-ядро — крейт web-tools): нативная замена MCP
             // web_search.ts, контракт модели прежний (имя/schema/формат вывода).

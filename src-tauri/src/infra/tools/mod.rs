@@ -17,6 +17,7 @@ use crate::infra::permissions::PermissionApprover;
 
 pub mod diag;
 pub mod excel;
+pub mod ffmpeg;
 pub mod media;
 pub mod refmod;
 pub mod refmod_ops;

@@ -114,6 +114,9 @@ async fn main() {
         // Движок изображений stable-diffusion.cpp (SSOT). Регистрирует
         // команды движка/бандла/генерации, owns процесс sd-server (kill на выходе).
         .plugin(tauri_plugin_image_engine::init())
+        // Движок FFmpeg (SSOT): статус установки для UI/диагностики; сами
+        // тулы монтажа идут нативно через infra/tools/ffmpeg.rs (без команд).
+        .plugin(tauri_plugin_ffmpeg::init())
 
         .manage(AppState::new())
         .setup(move |app| {

@@ -160,6 +160,18 @@ fn mime_for_ext(path: &str) -> &'static str {
     match ext.as_str() {
         "webp" => "image/webp",
         "avi" => "video/x-msvideo",
+        "mp4" | "m4v" | "mov" => "video/mp4",
+        "mkv" => "video/x-matroska",
+        "ts" => "video/mp2t",
+        "flv" => "video/x-flv",
+        "wmv" => "video/x-ms-wmv",
+        // ffmpeg_run умеет извлекать аудио-дорожку в файл — карточка должна
+        // нести честный mime аудио, а не дефолтный video/webm.
+        "mp3" => "audio/mpeg",
+        "m4a" | "aac" => "audio/mp4",
+        "wav" => "audio/wav",
+        "flac" => "audio/flac",
+        "ogg" | "opus" => "audio/ogg",
         _ => "video/webm",
     }
 }
@@ -522,30 +534,33 @@ fn format_video_result(
 }
 
 /// Пост-проход run_chat: маркер [VIDEO_SAVED] в результатах tool_calls →
-/// цепляет клип к финальному сообщению агента по `file_path` (webm в base64
-/// не энкодится — клипы десятки МБ, messages[] не резины). Возвращает число
-/// прицепленных видео (частичная ошибка одного артефакта не валит остальные).
+/// цепляет клип к финальному сообщению агента по `file_path` (webm/mp4 в
+/// base64 не энкодятся — клипы десятки МБ, messages[] не резины). Маркер
+/// ставят и media-тулы (`generate_video`), и ffmpeg-тулы (`ffmpeg_run` —
+/// результат монтажа рядом с исходником). Возвращает число прицепленных
+/// видео (частичная ошибка одного артефакта не валит остальные).
 pub fn attach_saved_videos_from_sub_calls(
     message: &mut crate::infra::ChatMessage,
     sub_calls: &[crate::infra::SubCall],
     registry: &ImageArtifactRegistry,
 ) -> Result<usize, String> {
-    let mut artifacts: Vec<String> = Vec::new();
+    let mut artifacts: Vec<(String, String)> = Vec::new(); // (id, tool_name)
     for sub_call in sub_calls {
         for tool_call in &sub_call.tool_calls {
-            if tool_call.tool_name != "generate_video" {
+            if tool_call.tool_name != "generate_video" && tool_call.tool_name != "ffmpeg_run" {
                 continue;
             }
             if let Some(id) = extract_saved_video_id(&tool_call.result) {
-                if !artifacts.contains(&id) {
-                    artifacts.push(id);
+                let key = (id, tool_call.tool_name.clone());
+                if !artifacts.contains(&key) {
+                    artifacts.push(key);
                 }
             }
         }
     }
     let mut attached = 0;
-    for id in artifacts {
-        let path = registry.resolve(&id, "generate_video")?;
+    for (id, tool_name) in artifacts {
+        let path = registry.resolve(&id, &tool_name)?;
         match video_path_to_attachment(&path) {
             Ok(attachment) => {
                 match &mut message.attachments {

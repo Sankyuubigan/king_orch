@@ -76,6 +76,21 @@ impl ImageArtifactRegistry {
         }
         Ok(path)
     }
+
+    /// Есть ли в реестре артефакт с таким путём (сравнение нормализованное:
+    /// сепаратор и регистр не значимы)? Гейт источника ffmpeg-тулов — сценарий
+    /// «почини свой же клип»: результат предыдущего ffmpeg_run в том же ходе
+    /// читается без повторного прикрепления.
+    pub fn contains_path(&self, path: &str) -> bool {
+        let needle = path.replace('/', "\\").to_ascii_lowercase();
+        self.paths
+            .lock()
+            .map(|g| {
+                g.values()
+                    .any(|(p, _)| p.replace('/', "\\").to_ascii_lowercase() == needle)
+            })
+            .unwrap_or(false)
+    }
 }
 
 /// Сохранить base64-аттачменты во временные файлы (порядок Vec = порядок -r).

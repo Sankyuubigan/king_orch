@@ -959,6 +959,7 @@ mod tests {
         "agents/diagnostics/transitions/diagnostics-flow.yaml",
         "agents/tarot-master/transitions/tarot_master.yaml",
         "agents/astrologist/transitions/astrologist.yaml",
+        "agents/video-editor/transitions/video-edit-flow.yaml",
     ];
 
     #[test]
@@ -1688,9 +1689,9 @@ edges: []
 
     /// Настоящий граф обязан распознаваться как граф и грузиться.
     ///
-    /// На 04.11.26 в `agents/` живёт 11 графов (день добавил excel-flow,
-    /// diagnostics-flow и refmod-flow — команда «RefMod-карточки персонажей»,
-    /// refmod_maker/refmod_helper). Вариант психотерапевта из `experiments/`
+    /// На 10.11.26 в `agents/` живёт 12 графов (день добавил video-edit-flow —
+    /// команда «Видеомонтаж», video_editor/video_helper; SSOT движка — плагин
+    /// tauri-plugin-ffmpeg). Вариант психотерапевта из `experiments/`
     /// удалён коммитом `83e37f9` вместе с нодой System-1.
     #[test]
     fn real_graphs_are_still_discovered() {
@@ -1714,6 +1715,7 @@ edges: []
                 "refmod-flow",
                 "search-specialist",
                 "tarot_master",
+                "video-edit-flow",
                 "video-gen-flow",
             ],
             "фильтр не должен терять или подменять реальные графы"
