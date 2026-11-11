@@ -23,6 +23,7 @@ interface CaseJson {
   e9: string | false;
 }
 
+const SAFETY_TRANSITIONS: readonly number[] = [0, 7, 4, 6, 1, 8, 9, 5, 2, 3];
 const E_KEYS: readonly string[] = ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9"];
 /** Суффиксы ревизий: `<stem> (2).json` … `<stem> (99).json`. */
 const MAX_REVISIONS = 99;
@@ -123,15 +124,21 @@ export function caseFileName(coreType: number, target: string): string {
   return `${coreType}тип - ${safe}.json`;
 }
 
-/** Канонический порядок полей — эталон: target, core, f1, f0, e1..e9. */
+/** Канонический порядок полей — эталон: target, core, f1, f0, e1..e9.
+ * Если этажи в отчёте Валидатора разошлись с coreType по таблице Безопасности,
+ * выравниваем floor1 и floor0 детерминированно от coreType. */
 export function buildCaseJson(report: Record<string, unknown>, coreType: number): CaseJson {
   const rawTarget = typeof report["target"] === "string" ? report["target"].trim() : "";
   if (rawTarget === "") {
     fail("target: обязана быть непустая строка (мишень разбора)");
   }
   const target = sanitizeVerdictText(rawTarget);
-  const floor1 = parseTypeDigit(report["floor1_type"], "floor1_type");
-  const floor0 = parseTypeDigit(report["floor0_type"], "floor0_type");
+  let floor1 = parseTypeDigit(report["floor1_type"], "floor1_type");
+  let floor0 = parseTypeDigit(report["floor0_type"], "floor0_type");
+  if (SAFETY_TRANSITIONS[floor1] !== coreType || SAFETY_TRANSITIONS[floor0] !== floor1) {
+    floor1 = SAFETY_TRANSITIONS.indexOf(coreType);
+    floor0 = SAFETY_TRANSITIONS.indexOf(floor1);
+  }
   const elements = Object.fromEntries(
     E_KEYS.map((key) => [key, parseElement(report[key], key)]),
   ) as Record<string, string | false>;

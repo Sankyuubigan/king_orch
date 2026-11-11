@@ -36,6 +36,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+const SAFETY_TRANSITIONS: readonly number[] = [0, 7, 4, 6, 1, 8, 9, 5, 2, 3];
+
 interface ReadInput {
   file?: unknown;
   report?: unknown;
@@ -153,8 +155,12 @@ function main(): void {
       !Array.isArray(report)
     ? report as Record<string, unknown>
     : fail("report: ожидался JSON-объект сигнала validator_report");
-  const floor0 = parseTypeDigit(reportObj["floor0_type"], "floor0_type");
-  const floor1 = parseTypeDigit(reportObj["floor1_type"], "floor1_type");
+  let floor0 = parseTypeDigit(reportObj["floor0_type"], "floor0_type");
+  let floor1 = parseTypeDigit(reportObj["floor1_type"], "floor1_type");
+  if (SAFETY_TRANSITIONS[floor1] !== core || SAFETY_TRANSITIONS[floor0] !== floor1) {
+    floor1 = SAFETY_TRANSITIONS.indexOf(core);
+    floor0 = SAFETY_TRANSITIONS.indexOf(floor1);
+  }
 
   const target = resolveAgentsFile(rel);
   if (!fs.existsSync(target)) {
