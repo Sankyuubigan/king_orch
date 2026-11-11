@@ -91,21 +91,6 @@
         "enum": ["Конкретная проблема", "Кластер", "НУЖЕН ВЫБОР МИШЕНИ"],
         "description": "Вердикт стража направления: «Конкретная проблема» — направление определено, пайплайн продолжает работу; «Кластер» — направление сменилось, нужна новая декомпозиция; «НУЖЕН ВЫБОР МИШЕНИ» — мишень не выбрана, юзера нужно переспросить."
       }
-    },
-    "destructor_detector": {
-      "key": "diagnostic_report",
-      "value": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "idol": { "type": "string" },
-          "threat": { "type": "string" },
-          "destructor": { "type": "string" },
-          "pleasure_ban": { "type": "string" },
-          "paradoxical_loop": { "type": "string" }
-        },
-        "required": ["idol", "threat", "destructor", "pleasure_ban", "paradoxical_loop"]
-      }
     }
   }
 }

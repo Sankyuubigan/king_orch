@@ -204,11 +204,13 @@ pub fn build_signal_envelope_grammar_with_think_budget(
     // декоративно и угадать всё в конце» закрыт грамматически, а значение
     // сигнала собирается из слотов единственным парсером
     // ([`assemble_slot_signal_value`], SSOT: один источник вердикта).
-    // После think-слотов допустимы ФИНАЛЬНЫЕ строковые слоты (напр.
-    // `floor0_type`/`floor1_type` у валидатора) БЕЗ дум-тела: мышление о типе
-    // уже сделано в think-слотах элементов, think-бюджет на них не делится
-    // (см. [`think_slot_count`]). Неслотовая схема (см. [`slot_verdict_plan`])
-    // тихо падает в обычный конвертный путь ниже.
+    // После think-слотов допустимы ФИНАЛЬНЫЕ слоты (напр. `floor0_type`/
+    // `floor1_type` у валидатора). Слоты С ENUM (выбор литерала = решение)
+    // несут дум-тело (требование владельца 11.11.2026: «у floor-типов
+    // обязательно должны быть мысли») — то же, что у e-слотов; слот со
+    // свободной строкой (напр. `target`) дум-тела не имеет: это вердикт-текст,
+    // а не выбор (см. [`think_slot_count`]). Неслотовая схема (см.
+    // [`slot_verdict_plan`]) тихо падает в обычный конвертный путь ниже.
     if let Some(plan) = slot_verdict_plan(schema) {
         let body = &draft_rule["draft ::= ".len()..];
         let mut rule = String::from("root ::= drafts-block\ndrafts-block ::=");
@@ -252,10 +254,19 @@ pub fn build_signal_envelope_grammar_with_think_budget(
                 needs_string_rules = true;
                 "json-string".to_string()
             };
-            rule.push_str(&format!(
-                "\ntrail-{} ::= \"{}\" \"\\\"{}\\\": \" {}",
-                idx, label, key, value_rule
-            ));
+            // Дум-тело слота с enum — то же, что у e-слотов (уже с мин-телом
+            // и потолком); свободная строка — без дум-тела.
+            if enum_vals.is_some() {
+                rule.push_str(&format!(
+                    "\ntrail-{} ::= \"{}\" {} \"\\\"{}\\\": \" {}",
+                    idx, label, body, key, value_rule
+                ));
+            } else {
+                rule.push_str(&format!(
+                    "\ntrail-{} ::= \"{}\" \"\\\"{}\\\": \" {}",
+                    idx, label, key, value_rule
+                ));
+            }
             if let Some(vals) = enum_vals {
                 let alternatives: Vec<String> = vals
                     .iter()
@@ -371,13 +382,28 @@ pub fn draft_count_for_contract(schema: &serde_json::Value) -> usize {
 
 /// Число ДУМ-слотов (think-блоков) в грамматике контракта.
 ///
-/// Для слотовых контрактов (Вариант B) дум-тела есть только у e-пар; финальные
-/// строковые слоты (напр. `floor0_type`/`floor1_type` у валидатора) дум-тела
-/// не имеют, и делить think-бюджет на них нельзя — иначе потолок занижается
-/// всем элементам без причины. Для неслотовых контрактов — [`draft_count_for_contract`].
+/// Для слотовых контрактов (Вариант B) дум-тела есть у e-пар И у финальных
+/// слотов с enum (требование владельца 11.11.2026: выбор литерала — решение,
+/// оно обязано иметь мысль; у валидатора 9+3=12). Финальный слот со свободной
+/// строкой (напр. `target` валидатора) дум-тела не имеет — вердикт-текст, а не
+/// выбор; в делении think-бюджета не участвует. Для неслотовых контрактов —
+/// [`draft_count_for_contract`].
 pub fn think_slot_count(schema: &serde_json::Value) -> usize {
     slot_verdict_plan(schema)
-        .map(|p| p.e_slots.len().max(1))
+        .map(|p| {
+            let enum_trailing = p
+                .trailing
+                .iter()
+                .filter(|(_, key)| {
+                    schema
+                        .get("properties")
+                        .and_then(|props| props.get(key.as_str()))
+                        .and_then(|prop| prop.get("enum"))
+                        .is_some()
+                })
+                .count();
+            p.e_slots.len().max(1) + enum_trailing
+        })
         .unwrap_or_else(|| draft_count_for_contract(schema))
 }
 
@@ -387,9 +413,9 @@ pub fn think_slot_count(schema: &serde_json::Value) -> usize {
 /// ([`slot_verdict_plan`]): think-слот k обязан начаться с `Element <N>: `,
 /// где N — номер из имени e-поля (слои воронки наследуют те же якоря: у
 /// `validator_surface` required = e1,e2,e6,e7 → слоты Element 1/2/6/7).
-/// Финальные строковые слоты (без дум-тела) в списке якорей НЕ участвуют —
-/// у валидатора (9 e-слотов + `floor0_type`/`floor1_type`/`target`) якорей
-/// 9 при 12 слотах. Поля другого вида
+/// Финальные слоты со свободной строкой (без дум-тела, напр. `target`) в
+/// списке якорей НЕ участвуют — у валидатора (9 e-слотов + 4 финальных) якорей
+/// 9 при 13 слотах. Поля другого вида
 /// (`idol`, enum-строки, pattern) — прежний свободный черновик (`None`):
 /// им текстуальный якорь не соответствует по смыслу.
 ///
@@ -574,11 +600,18 @@ pub fn build_cloud_signal_prompt_block(contract: &SignalContract) -> String {
                         .collect::<Vec<_>>()
                         .join(", ");
                     format!(" (одно из: {list})")
-                })
-                .unwrap_or_default();
-            block.push_str(&format!(
-                "- финальный слот БЕЗ размышления: `{label}` сразу `\"{key}\": \"…\"{enum_note}.\n"
-            ));
+                });
+            if let Some(note) = enum_note {
+                // Выбор из enum — решение: слот обязан иметь размышление
+                // (зеркало локальной грамматики, решение владельца 11.11.2026).
+                block.push_str(&format!(
+                    "- строка-якорь `{label}`, затем размышление, затем вердикт `\"{key}\": \"…\"{note}.\n"
+                ));
+            } else {
+                block.push_str(&format!(
+                    "- финальный слот БЕЗ размышления: `{label}` сразу `\"{key}\": \"…\".\n"
+                ));
+            }
         }
         block.push_str(
             "Без слотовых вердиктов сигнал не соберётся, и работа графа будет остановлена с ошибкой.",
@@ -1299,6 +1332,17 @@ pub struct SlotAssemblyDiag {
     pub missing: Vec<String>,
 }
 
+/// Якорь вердикта слота: конец думы слота (грамматика) или сама метка (облако —
+/// тегов think в ответе нет). Дума собственного слота исключается якорем
+/// `</think>`: тело думы запрещает `</think` ([`crate::infra::THINK_BODY_RULE`]),
+/// поэтому первое закрытие после метки — конец думы этого слота.
+fn slot_verdict_anchor(text: &str, after_label: usize) -> usize {
+    match text[after_label..].find("</think>") {
+        Some(r) => after_label + r + "</think>".len(),
+        None => after_label,
+    }
+}
+
 /// То же, что [`assemble_slot_signal_value`], но вместо тихого `None` возвращает
 /// список причин провала по каждому слоту. Обход зеркалит сборку; на пропуске
 /// не останавливается, а собирает ВСЕ причины (диагностика), при этом `value`
@@ -1314,11 +1358,7 @@ pub fn assemble_slot_signal_value_diag(schema: &Value, text: &str) -> SlotAssemb
         match text[cursor..].find(label.as_str()) {
             Some(rel) => {
                 let after_label = cursor + rel + label.len();
-                // Якорь вердикта: конец думы слота (грамматика) или сама метка (облако).
-                let anchor = match text[after_label..].find("</think>") {
-                    Some(r) => after_label + r + "</think>".len(),
-                    None => after_label,
-                };
+                let anchor = slot_verdict_anchor(text, after_label);
                 match find_verdict_from(text, anchor, key, verdict_cap.is_some()) {
                     Some((verdict, past_key)) => {
                         obj.insert(key.clone(), verdict.into_value());
@@ -1338,7 +1378,12 @@ pub fn assemble_slot_signal_value_diag(schema: &Value, text: &str) -> SlotAssemb
         match text[cursor..].find(label.as_str()) {
             Some(rel) => {
                 let after_label = cursor + rel + label.len();
-                match find_verdict_from(text, after_label, key, true) {
+                // Слоты с enum несут дум-тело (как e-слоты) — якорь тот же;
+                // слот со свободной строкой думы не имеет и попадёт на «метку»
+                // (тегов `</think>` после неё нет). Облачный ответ без тегов —
+                // тоже якорь-метка.
+                let anchor = slot_verdict_anchor(text, after_label);
+                match find_verdict_from(text, anchor, key, true) {
                     Some((verdict, past_key)) => {
                         obj.insert(key.clone(), verdict.into_value());
                         cursor = past_key;
@@ -2047,14 +2092,17 @@ mod tests {
                 agent.think_budget_chars
             );
         }
-        // Плоский валидатор боя не трогаем этой правкой.
-        let plain = agents.iter().find(|agent| agent.id == "validator");
-        if let Some(plain) = plain {
-            assert_eq!(
-                plain.think_budget_chars, None,
-                "think_budget у плоского валидатора не менялся этой правкой"
-            );
-        }
+        // Плоский валидатор: явный потолок 350 (решение владельца 11.11.2026 —
+        // у floor-типов обязаны быть мысли; дум-слотов стало 12, авто-деление
+        // от бюджета генерации выдало бы ~142 символа и резало все тела).
+        let plain = agents
+            .iter()
+            .find(|agent| agent.id == "validator")
+            .expect("плоский валидатор не найден");
+        assert_eq!(
+            plain.think_budget_chars, Some(350),
+            "think_budget плоского валидатора съехал от требуемых 350"
+        );
     }
 
     #[test]
@@ -2090,7 +2138,8 @@ mod tests {
             "focus_keeper",
             // soma_translator исключён 03.11.2026: пользовательский агент
             // (расшифровка в чат), рукость — факт handedness, не сигнал.
-            "destructor_detector",
+            // destructor_detector исключён 11.11.2026: архивный агент, контракт
+            // удалён из root.schema.json (владелец).
         ] {
             assert!(
                 map.contains_key(agent),
@@ -2565,9 +2614,12 @@ mod tests {
     }
 
     /// Финальные слоты (floor0_type/floor1_type, 02.11.2026): строковые
-    /// вердикты собираются ПОСЛЕ якорей меток `Floor0 type: `/`Floor1 type: ` —
-    /// дум-тело, цитирующее формат `"floor0_type": "…"`, не должно
-    /// перехватывать парсер. Пропуск вердикта (грамматика не применялась) → None.
+    /// вердикты собираются ПОСЛЕ якорей меток `Floor0 type: `/`Floor1 type: `.
+    /// С 11.11.2026 enum-слоты несут дум-тело — сборка берёт вердикт после
+    /// `</think>` своего слота; цитата формата `"floor0_type": "…"` в думе
+    /// перехватчике не помогает (тело запрещает `</think` внутри). Облачный
+    /// ответ без think-тегов собирается от самой метки. Пропуск вердикта
+    /// (грамматика не применялась) → None.
     #[test]
     fn assemble_slot_signal_value_with_trailing_floor_types() {
         let schema = serde_json::json!({
@@ -2581,17 +2633,30 @@ mod tests {
             },
             "required": ["e1", "e2", "floor0_type", "floor1_type"]
         });
-        let text = "Element 1: разбор, цитата найдена, \"e1\": true\n\
-                    Element 2: разбор, \"e2\": false\n\
+        let text = "Element 1: <think>разбор, цитата найдена</think> \"e1\": true\n\
+                    Element 2: <think>повтора нет</think> \"e2\": false\n\
                     Шаг 2: думаю про floor1_type, вот формат: \"floor1_type\": \"9\"\n\
-                    Floor0 type: \"floor0_type\": \"1\"\n\
-                    Floor1 type: \"floor1_type\": \"7\"";
+                    Floor0 type: <think>это не Ядро-3, а Ядро-1; формат: \"floor0_type\": \"9\" — так НЕ отвечать</think> \"floor0_type\": \"1\"\n\
+                    Floor1 type: <think>Защита-2 по элементам 2/5/8</think> \"floor1_type\": \"7\"";
         assert_eq!(
             assemble_slot_signal_value(&schema, text),
             Some(serde_json::json!(
                 { "e1": true, "e2": false, "floor0_type": "1", "floor1_type": "7" }
             )),
-            "вердикты берутся из финальных слотов по своим меткам, а не из цитат в дум-теле"
+            "вердикты берутся из финальных слотов ПОСЛЕ закрытия их думы, а не из цитат формата в дум-теле"
+        );
+
+        // Облачный ответ: think-тегов нет — вердикт ищется от самой метки.
+        let cloud = "Element 1: разбор \"e1\": true\n\
+                     Element 2: разбор \"e2\": false\n\
+                     Floor0 type: \"floor0_type\": \"1\"\n\
+                     Floor1 type: \"floor1_type\": \"7\"";
+        assert_eq!(
+            assemble_slot_signal_value(&schema, cloud),
+            Some(serde_json::json!(
+                { "e1": true, "e2": false, "floor0_type": "1", "floor1_type": "7" }
+            )),
+            "ответ без think-тегов (облако) собирается от меток"
         );
 
         // Вердикта финального слота нет → None (штатный ретрай формата).
@@ -2771,8 +2836,9 @@ mod tests {
     /// Грамматика боевого контракта валидатора (13 слотов; floor2_type вернул
     /// 326c605, 09.11.2026): 9 think-слотов с вердиктами-текстами e1..e9 (union
     /// `string{1..200} | false` — потолок из maxLength схемы) + финальные
-    /// `Floor0 type: `/`Floor1 type: `/`Floor2 type: ` (enum из схемы) и
-    /// `Target: ` (свободная строка, целевой якорь разбора); конверта с булями
+    /// `Floor0 type: `/`Floor1 type: `/`Floor2 type: ` (enum из схемы, с
+    /// дум-телом — выбор = решение, 11.11.2026) и `Target: ` (свободная
+    /// строка, без дум-тела, целевой якорь разбора); конверта с булями
     /// нет (Вариант B).
     #[test]
     fn validator_contract_builds_thirteen_slot_grammar() {
@@ -2810,26 +2876,38 @@ mod tests {
                 grammar
             );
         }
-        // Финальные слоты без дум-тела: метка + ключ + enum/строка из схемы (SSOT).
+        // Финальные слоты с enum несут дум-тело (11.11.2026: выбор = решение) —
+        // тело то же, что у e-слотов непрерывной формы (мин 24 + неограниченный
+        // хвост); вердикт — enum из схемы (SSOT).
         assert!(
-            grammar.contains(r#"trail-0 ::= "Floor0 type: " "\"floor0_type\": " trail-0-value"#),
-            "финальный слот Floor0 type потерян, grammar:\n{}",
+            grammar.contains(r#"trail-0 ::= "Floor0 type: " "<think>" think-char{24} think-char* "</think>" "\"floor0_type\": " trail-0-value"#),
+            "финальный слот Floor0 type потерян или без дум-тела, grammar:\n{}",
             grammar
         );
         assert!(
-            grammar.contains(r#"trail-1 ::= "Floor1 type: " "\"floor1_type\": " trail-1-value"#),
-            "финальный слот Floor1 type потерян, grammar:\n{}",
+            grammar.contains(r#"trail-1 ::= "Floor1 type: " "<think>" think-char{24} think-char* "</think>" "\"floor1_type\": " trail-1-value"#),
+            "финальный слот Floor1 type потерян или без дум-тела, grammar:\n{}",
             grammar
         );
         assert!(
-            grammar.contains(r#"trail-2 ::= "Floor2 type: " "\"floor2_type\": " trail-2-value"#),
-            "финальный слот Floor2 type потерян (326c605: модель выдаёт тип Ядра), grammar:\n{}",
+            grammar.contains(r#"trail-2 ::= "Floor2 type: " "<think>" think-char{24} think-char* "</think>" "\"floor2_type\": " trail-2-value"#),
+            "финальный слот Floor2 type потерян или без дум-тела (326c605: модель выдаёт тип Ядра), grammar:\n{}",
             grammar
         );
         assert!(
             grammar.contains(r#"trail-3 ::= "Target: " "\"target\": " json-string"#),
             "финальный слот Target (свободная строка) потерян, grammar:\n{}",
             grammar
+        );
+        // У Target дум-тела нет (свободная строка — вердикт-текст, не выбор).
+        let target_line = grammar
+            .lines()
+            .find(|line| line.starts_with("trail-3 ::="))
+            .unwrap_or_default();
+        assert!(
+            !target_line.contains("<think>"),
+            "Target обязан остаться без дум-тела: {}",
+            target_line
         );
         for v in 1..=9 {
             assert!(
@@ -2849,9 +2927,10 @@ mod tests {
         assert!(!grammar.contains("envelope-json"), "Вариант B не должен выпускать конверт, grammar:\n{}", grammar);
         assert!(grammar.contains("draft-1 ::=") && grammar.contains("<think>"), "дум-слоты обязаны нести think-тело, grammar:\n{}", grammar);
 
-        // Числа слотов: всего 13, дум-слотов 9 (бюджет делится по дум-слотам).
+        // Числа слотов: всего 13, дум-слотов 12 (9 e-слотов + 3 floor-enum);
+        // Target — не дум-слот, в делении бюджета не участвует.
         assert_eq!(draft_count_for_contract(&c.value_schema), 13);
-        assert_eq!(think_slot_count(&c.value_schema), 9);
+        assert_eq!(think_slot_count(&c.value_schema), 12);
         assert_eq!(slot_anchor_labels(&c.value_schema, 13).map(|l| l.len()), Some(9));
     }
 

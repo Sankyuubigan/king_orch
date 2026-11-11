@@ -2,6 +2,7 @@
 name: Валидатор данных
 replace_report: true
 tools: ["emit_signal"]
+think_budget: 350
 ---
 
 <<INCLUDE: ../database/neurosis_architecture.md>>
