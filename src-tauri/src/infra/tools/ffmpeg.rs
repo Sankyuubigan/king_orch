@@ -3,11 +3,12 @@
 //! запуск subprocess БЕЗ shell).
 //!
 //! Архитектурные гейты (§00.2 — структурные, не промптовые):
-//! - вход — ТОЛЬКО вложения юзера (allow-read) или артефакт этой же сессии
+//! - входы — ТОЛЬКО вложения юзера (allow-read) или артефакты этой же сессии
 //!   (сценарий «почини свой же клип»); произвольные пути диска недоступны;
-//! - `-i` и `-y` в аргументах модели запрещены: источник строит хост
-//!   (ровно один вход — гейтнутый путь), перезапись невозможна (выход
-//!   существует → честная ошибка ДО спавна, без `-y` байпаса);
+//! - `-i` и `-y` в аргументах модели запрещены: входы строит хост (основной
+//!   `path` + опциональные `extra_inputs` для замены аудио/склейки — каждый
+//!   через тот же гейт), перезапись невозможна (выход существует → честная
+//!   ошибка ДО спавна, без `-y` байпаса);
 //! - выход всегда `<dir>/<stem><suffix>.<ext>` рядом с исходником —
 //!   модель не выбирает путь результата.
 
@@ -137,8 +138,9 @@ fn sanitize_ext(raw: Option<&str>, source: &Path) -> Result<String, ToolError> {
     Ok(ext)
 }
 
-/// Запрещённые токены в аргументах модели: `-i` (второй вход — источник
-/// строит хост, ровно один) и `-y` (байпас гейта «выход уже существует»).
+/// Запрещённые токены в аргументах модели: `-i` (входы строит хост — path +
+/// extra_inputs, минуя гейты вход не проходит) и `-y` (байпас гейта «выход
+/// уже существует»).
 fn forbidden_token(args: &[String]) -> Option<&'static str> {
     for token in args {
         let lower = token.trim().to_ascii_lowercase();
@@ -150,6 +152,55 @@ fn forbidden_token(args: &[String]) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// Максимум дополнительных входов (замена аудио — 1; склейка видео+аудио+субтитры — 3).
+const EXTRA_INPUTS_MAX: usize = 4;
+
+/// Разбор `extra_inputs` (опциональный массив ≤4 абсолютных путей): каждый путь
+/// проходит ТОТ ЖЕ гейт `ensure_allowed_source` (allow-read + артефакты сессии),
+/// дубль основного `path` — честная Usage-ошибка (не silent-дубль входа).
+fn parse_extra_inputs(
+    args: &Value,
+    source: &Path,
+    ctx: &ToolCtx,
+    allowed: &[String],
+) -> Result<Vec<PathBuf>, ToolError> {
+    let raw = match args.get("extra_inputs") {
+        None | Some(Value::Null) => return Ok(Vec::new()),
+        Some(Value::Array(items)) => items,
+        Some(other) => {
+            return Err(ToolError::Usage(format!(
+                "extra_inputs должен быть массивом абсолютных путей (замена аудио — \
+                 второй вход; склейка — несколько входов), получено: {other}"
+            )))
+        }
+    };
+    if raw.len() > EXTRA_INPUTS_MAX {
+        return Err(ToolError::Usage(format!(
+            "extra_inputs: максимум {EXTRA_INPUTS_MAX} дополнительных входов, получено {}",
+            raw.len()
+        )));
+    }
+    let mut out = Vec::with_capacity(raw.len());
+    for item in raw {
+        let raw_path = item.as_str().ok_or_else(|| {
+            ToolError::Usage(format!(
+                "extra_inputs должен быть массивом строк-путей, получен элемент: {item}"
+            ))
+        })?;
+        let gated = ensure_allowed_source(raw_path, ctx, allowed)?;
+        if normalized_path(&gated.to_string_lossy())
+            == normalized_path(&source.to_string_lossy())
+        {
+            return Err(ToolError::Usage(format!(
+                "extra_inputs дублирует path ('{raw_path}') — вход уже подключён основным; \
+                 дубль входа ничего к результату не добавляет"
+            )));
+        }
+        out.push(gated);
+    }
+    Ok(out)
 }
 
 /// Разбор списка аргументов из JSON: absent/пусто → Ok(vec![]); массив строк
@@ -190,6 +241,29 @@ fn build_output_path(source: &Path, suffix: &str, ext: &str) -> PathBuf {
     source.with_file_name(format!("{stem}{suffix}.{ext}"))
 }
 
+/// argv монтажа: `[input_args] -i <path> [-i <extra1> … -i <extraN>]
+/// [output_args] <output>`. Чистая функция — гейты уже прошли; входы строит
+/// только хост (модель не отдаёт `-i`).
+fn build_edit_argv(
+    input_args: Vec<String>,
+    source: &Path,
+    extra_sources: &[PathBuf],
+    output_args: Vec<String>,
+    output: &Path,
+) -> Vec<String> {
+    let mut argv: Vec<String> = vec!["-hide_banner".to_string()];
+    argv.extend(input_args);
+    argv.push("-i".to_string());
+    argv.push(source.to_string_lossy().to_string());
+    for extra in extra_sources {
+        argv.push("-i".to_string());
+        argv.push(extra.to_string_lossy().to_string());
+    }
+    argv.extend(output_args);
+    argv.push(output.to_string_lossy().to_string());
+    argv
+}
+
 // ─────────────────────────── Исполнение тулов ───────────────────────────
 
 /// Единая точка «есть ли движок»: ensure плагина (Mutex + re-check + докачка
@@ -225,10 +299,14 @@ fn run_edit(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, T
     let output_args = parse_args_list(args, "output_args")?;
     if let Some(token) = forbidden_token(&input_args).or_else(|| forbidden_token(&output_args)) {
         return Err(ToolError::Usage(format!(
-            "аргумент '{token}' запрещён: источник передаётся в path (один вход строит \
-             хост), результат сохраняется автоматически рядом с исходником"
+            "аргумент '{token}' запрещён: входы строит хост (основной — path, \
+             дополнительные — extra_inputs), результат сохраняется автоматически \
+             рядом с исходником"
         )));
     }
+    // Дополнительные входы — тот же гейт источников; после запрещённых токенов,
+    // ДО ensure_engine (тестовая среда движка не содержит).
+    let extra_sources = parse_extra_inputs(args, &source, ctx, allowed)?;
     let suffix = sanitize_suffix(args.get("suffix").and_then(Value::as_str))?;
     let ext = sanitize_ext(args.get("output_ext").and_then(Value::as_str), &source)?;
     let output = build_output_path(&source, &suffix, &ext);
@@ -242,12 +320,7 @@ fn run_edit(args: &Value, ctx: &ToolCtx, allowed: &[String]) -> Result<String, T
     }
 
     let dir = ensure_engine()?;
-    let mut argv: Vec<String> = vec!["-hide_banner".to_string()];
-    argv.extend(input_args);
-    argv.push("-i".to_string());
-    argv.push(source.to_string_lossy().to_string());
-    argv.extend(output_args);
-    argv.push(output.to_string_lossy().to_string());
+    let argv = build_edit_argv(input_args, &source, &extra_sources, output_args, &output);
 
     log::info!("[FFMPEG] запуск: {} {}", engine::ffmpeg_exe(&dir).display(), argv.join(" "));
     let result = engine::run_tool(&engine::ffmpeg_exe(&dir), &argv, engine::DEFAULT_RUN_TIMEOUT)
@@ -319,22 +392,26 @@ struct FfmpegRunTool;
 impl Tool for FfmpegRunTool {
     fn name(&self) -> &str { "ffmpeg_run" }
     fn description(&self) -> &str {
-        "Монтаж видео через ffmpeg. Источник один — path (вход строится хостом, '-i' \
-         запрещён). Команда собирается так: ffmpeg [input_args] -i <path> [output_args] \
-         <результат рядом с исходником, имя = исходник + suffix>. Примеры: вырезать \
-         фрагмент быстро — input_args=[\"-ss\",\"10\",\"-to\",\"20\"], output_args=[\"-c\",\"copy\"] \
+        "Монтаж видео через ffmpeg. Основной источник — path; для замены аудио или \
+         склейки задай дополнительные входы в extra_inputs (входы строит хост, '-i' \
+         запрещён). Команда собирается так: ffmpeg [input_args] -i <path> \
+         [-i <extra_inputs>…] [output_args] <результат рядом с исходником, \
+         имя = исходник + suffix>. Примеры: вырезать фрагмент быстро — \
+         input_args=[\"-ss\",\"10\",\"-to\",\"20\"], output_args=[\"-c\",\"copy\"] \
          (рез по ключевым кадрам); точная обрезка — input_args=[\"-ss\",\"10\"], \
          output_args=[\"-t\",\"10\",\"-c:v\",\"libx264\",\"-crf\",\"20\",\"-c:a\",\"aac\"] \
-         (покадрово, 10 секунд с 10-й); снять звук — output_args=[\"-an\",\"-c:v\",\"copy\"]. \
-         Если файл результата уже существует — выбери другой suffix."
+         (покадрово, 10 секунд с 10-й); снять звук — output_args=[\"-an\",\"-c:v\",\"copy\"]; \
+         заменить аудио на файл из extra_inputs — output_args=[\"-map\",\"0:v\",\"-map\",\"1:a\", \
+         \"-c\",\"copy\"]. Если файл результата уже существует — выбери другой suffix."
     }
     fn parameters(&self) -> Value {
         serde_json::json!({
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Абсолютный путь исходного видео (из [ВИДЕО ЗАПРОСА] или результата предыдущего ffmpeg_run)."},
+                "extra_inputs": {"type": "array", "items": {"type": "string"}, "maxItems": 4, "description": "Дополнительные входы (абсолютные пути из каталога вложений или результата ffmpeg_run): замена аудио — второй вход; склейка видео+аудио — несколько входов. Каждый проходит тот же гейт источников; дублировать path нельзя."},
                 "input_args": {"type": "array", "items": {"type": "string"}, "description": "Аргументы ДО источника (входные опции: -ss, -to, -t…). Каждый аргумент — отдельный элемент массива."},
-                "output_args": {"type": "array", "items": {"type": "string"}, "description": "Аргументы ПОСЛЕ источника (кодеки, фильтры -vf/-af, -an/-vn, -t…). '-i' и '-y' запрещены."},
+                "output_args": {"type": "array", "items": {"type": "string"}, "description": "Аргументы ПОСЛЕ источников (кодеки, фильтры -vf/-af, -map, -an/-vn, -t…). '-i' и '-y' запрещены."},
                 "suffix": {"type": "string", "description": "Суффикс имени результата (латиница/цифры/_/-, дефолт '_edited'). Пример: suffix='_cut' → clip_cut.mp4."},
                 "output_ext": {"type": "string", "description": "Расширение результата без точки (буквы/цифры; дефолт — расширение исходника)."}
             },

@@ -55,6 +55,10 @@ fn schemas_filter_by_grant_and_meta() {
     assert_eq!(all[0].1, "ffmpeg_probe");
     assert_eq!(all[1].1, "ffmpeg_run");
     assert!(all[1].2["inputSchema"]["properties"]["input_args"].is_object());
+    assert!(
+        all[1].2["inputSchema"]["properties"]["extra_inputs"].is_object(),
+        "схема ffmpeg_run обязана объявлять extra_inputs (мульти-вход)"
+    );
 
     // Без гранта в frontmatter агента схем нет; чужие тула не подтягиваются.
     assert!(ffmpeg_tool_schemas(&[]).is_empty());
@@ -245,4 +249,172 @@ fn registry_contains_path_normalized() {
     assert!(!registry.contains_path("D:\\V\\other.mp4"));
     // Чужой тул не открывает путь через реестр другого артефакта-типа.
     assert!(!registry.contains_path("D:\\несуществующий\\путь.xlsx"));
+}
+
+// ─────────────────────── extra_inputs (мульти-вход) ───────────────────────
+
+#[test]
+fn extra_inputs_duplicate_of_path_is_usage() {
+    let (ctx, _reg) = ctx_with_registry();
+    let dir = sandbox("ffmpeg_extra_dup");
+    let video = write_stub_video(&dir, "clip.mp4");
+    let allowed = vec![video.to_string_lossy().to_string()];
+    // Гейт пройден (вложение юзера), затем дубль-проверка — Usage ДО ensure_engine.
+    let err = parse_extra_inputs(
+        &serde_json::json!({"extra_inputs": [video.to_string_lossy()]}),
+        &video,
+        &ctx,
+        &allowed,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ToolError::Usage(_)), "{err}");
+    assert!(err.to_string().contains("дублирует path"), "сообщение: {err}");
+}
+
+#[test]
+fn extra_inputs_outside_is_forbidden() {
+    let (ctx, _reg) = ctx_with_registry();
+    let dir = sandbox("ffmpeg_extra_gate");
+    let video = write_stub_video(&dir, "clip.mp4");
+    let allowed = vec![video.to_string_lossy().to_string()];
+    let err = parse_extra_inputs(
+        &serde_json::json!({"extra_inputs": ["C:\\Windows\\notepad.exe"]}),
+        &video,
+        &ctx,
+        &allowed,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ToolError::Forbidden(_)), "{err}");
+}
+
+#[test]
+fn extra_inputs_gated_but_missing_is_not_found() {
+    let (ctx, _reg) = ctx_with_registry();
+    let dir = sandbox("ffmpeg_extra_missing");
+    let video = write_stub_video(&dir, "clip.mp4");
+    let ghost = dir.join("ghost.mp3");
+    // Путь в allow-списке (гейт пройден), файла нет — честный NotFound.
+    let allowed = vec![video.to_string_lossy().to_string(), ghost.to_string_lossy().to_string()];
+    let err = parse_extra_inputs(
+        &serde_json::json!({"extra_inputs": [ghost.to_string_lossy()]}),
+        &video,
+        &ctx,
+        &allowed,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ToolError::NotFound(_)), "{err}");
+}
+
+#[test]
+fn extra_inputs_attachment_and_session_artifact_pass_gate() {
+    let (ctx, registry) = ctx_with_registry();
+    let dir = sandbox("ffmpeg_extra_ok");
+    let video = write_stub_video(&dir, "clip.mp4");
+    let audio = write_stub_video(&dir, "voice.mp3");
+    let allowed = vec![video.to_string_lossy().to_string(), audio.to_string_lossy().to_string()];
+    // Наблюдаемая точка: выход «уже существует» наступает ПОСЛЕ гейта
+    // extra_inputs, но ДО ensure_engine — значит этот Usage доказывает,
+    // что оба допвхода гейт пройден, и докачки движка в тесте нет.
+    std::fs::write(dir.join("clip_edited.mp4"), b"EXISTS").unwrap();
+    let args = serde_json::json!({
+        "path": video.to_string_lossy(),
+        "extra_inputs": [audio.to_string_lossy()],
+    });
+    let err = execute_ffmpeg_tool("ffmpeg_run", &args, &ctx, &allowed)
+        .expect("ffmpeg_run резолвится")
+        .unwrap_err();
+    assert!(matches!(err, ToolError::Usage(_)), "{err}");
+    assert!(err.to_string().contains("уже существует"), "сообщение: {err}");
+
+    // Артефакт сессии (не в allow-read) — тот же проход гейта.
+    let artifact = dir.join("clip_recut.mp4");
+    std::fs::write(&artifact, b"FAKE").unwrap();
+    registry.register(artifact.to_string_lossy().to_string(), "ffmpeg_run").unwrap();
+    let args2 = serde_json::json!({
+        "path": video.to_string_lossy(),
+        "extra_inputs": [artifact.to_string_lossy()],
+    });
+    let err2 = execute_ffmpeg_tool("ffmpeg_run", &args2, &ctx, &allowed)
+        .expect("ffmpeg_run резолвится")
+        .unwrap_err();
+    assert!(err2.to_string().contains("уже существует"), "сообщение: {err2}");
+}
+
+#[test]
+fn extra_inputs_type_and_limit_errors() {
+    let (ctx, _reg) = ctx_with_registry();
+    let dir = sandbox("ffmpeg_extra_types");
+    let video = write_stub_video(&dir, "clip.mp4");
+    let allowed: Vec<String> = vec![];
+
+    // Склеенная строка вместо массива — Usage (спавн идёт args-массивом).
+    let err = parse_extra_inputs(
+        &serde_json::json!({"extra_inputs": "D:\\v\\audio.mp3"}),
+        &video,
+        &ctx,
+        &allowed,
+    )
+    .unwrap_err();
+    assert!(matches!(err, ToolError::Usage(_)), "{err}");
+
+    // Элемент не строка — Usage.
+    let err2 = parse_extra_inputs(
+        &serde_json::json!({"extra_inputs": [3]}),
+        &video,
+        &ctx,
+        &allowed,
+    )
+    .unwrap_err();
+    assert!(matches!(err2, ToolError::Usage(_)), "{err2}");
+
+    // Больше лимита — Usage.
+    let five = [1, 2, 3, 4, 5].iter().map(|i| format!("D:\\v\\a{i}.mp3")).collect::<Vec<_>>();
+    let err3 = parse_extra_inputs(
+        &serde_json::json!({"extra_inputs": five}),
+        &video,
+        &ctx,
+        &allowed,
+    )
+    .unwrap_err();
+    assert!(matches!(err3, ToolError::Usage(_)), "{err3}");
+    assert!(err3.to_string().contains("максимум 4"), "сообщение: {err3}");
+
+    // absent/null — пустой список (обратная совместимость: старые вызовы как раньше).
+    assert!(parse_extra_inputs(&serde_json::json!({}), &video, &ctx, &allowed).unwrap().is_empty());
+    assert!(
+        parse_extra_inputs(&serde_json::json!({"extra_inputs": null}), &video, &ctx, &allowed)
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn build_edit_argv_places_extras_between_inputs_and_outputs() {
+    let argv = build_edit_argv(
+        vec!["-ss".to_string(), "25".to_string()],
+        Path::new("D:\\v\\clip.mp4"),
+        &[PathBuf::from("D:\\v\\valkiria.mp3"), PathBuf::from("D:\\v\\subs.srt")],
+        vec!["-map".to_string(), "0:v".to_string(), "-map".to_string(), "1:a".to_string()],
+        Path::new("D:\\v\\clip_edited.mp4"),
+    );
+    let i_positions: Vec<usize> = argv
+        .iter()
+        .enumerate()
+        .filter(|(_, a)| a.as_str() == "-i")
+        .map(|(i, _)| i)
+        .collect();
+    assert_eq!(
+        argv.iter().map(String::as_str).collect::<Vec<_>>(),
+        vec![
+            "-hide_banner",
+            "-ss", "25",
+            "-i", "D:\\v\\clip.mp4",
+            "-i", "D:\\v\\valkiria.mp3",
+            "-i", "D:\\v\\subs.srt",
+            "-map", "0:v", "-map", "1:a",
+            "D:\\v\\clip_edited.mp4",
+        ],
+        "порядок: [input_args] -i path -i extras… [output_args] output"
+    );
+    assert_eq!(i_positions, vec![3, 5, 7], "все -i строит хост между входными и выходными опциями");
 }
