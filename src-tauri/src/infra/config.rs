@@ -2,20 +2,22 @@
 //!
 //! ## Разделение с движковым плагином (два файла, один SSOT на ключ)
 //! Плагин `tauri-plugin-llama-engine` владеет движковыми ключами (models,
-//! last_model, models_dir, model_params, mmproj_files, model_meta,
-//! llamacpp_dir, engine_source, engine_variant) в СОБСТВЕННОМ общем файле
+//! models_dir, model_params, mmproj_files, model_meta, llamacpp_dir,
+//! engine_source, engine_variant) в СОБСТВЕННОМ общем файле
 //! `%APPDATA%/llama-engine/app_config.json` (SSOT для всех хостов плагина).
-//! Хост хранит только хостовые ключи (theme, context_size, tabs, …) в своём
-//! `%APPDATA%/com.kingorch.app/app_config.json`.
+//! Хост хранит хостовые ключи (last_model — выбор модели в чате, theme,
+//! context_size, tabs, …) в своём `%APPDATA%/com.kingorch.app/app_config.json`.
 //!
 //! Стык: [`load_config`] читает хостовый файл и накатывает движковые ключи
 //! из файла плагина (оверлей тем же лоадером, что читает панель моделей —
 //! чат и плашка видят один список), а [`save_config_file`] вырезает
 //! движковые ключи из хостового файла, чтобы вторая копия правды не могла
 //! возникнуть снова. Запись движковых ключей хостом — только через
-//! [`set_engine_last_model`] / [`set_engine_dirs`] (инцидент 25.10.26:
-//! добавленная в панели модель не появлялась в выпадашке чата, потому что
-//! хост читал устаревшую копию из своего файла).
+//! [`set_engine_dirs`]. Выбор модели (`last_model`) в движковом файле НЕ
+//! участвует: он хостовый от и до — общий ключ плагина затирался другими
+//! проектами (инцидент 13.11.26: KingOrch записал туда `gateway:...`, и
+//! перевод в deedub молча умирал; 25.10.26: добавленная в панели модель
+//! не появлялась в выпадашке чата из-за устаревшей хостовой копии).
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -34,9 +36,10 @@ use tauri_plugin_llama_engine::engine::config::{
 
 /// Движковые ключи `EngineConfig` плагина — имена полей в JSON. Владелец —
 /// общий файл плагина; в хостовом файле их быть не должно (strip на записи).
+/// Выбора модели (`last_model`) в списке НЕТ — он хостовый от и до
+/// (инцидент 13.11.26, см. доку модуля).
 pub const ENGINE_KEYS: &[&str] = &[
     "models",
-    "last_model",
     "models_dir",
     "model_params",
     "mmproj_files",
@@ -282,10 +285,10 @@ pub fn load_config(app: &AppHandle) -> AppConfig {
 
 /// Накатывает движковые ключи из конфига плагина поверх хостовых значений.
 /// Копии движковых ключей в хостовом файле — остатки старой схемы (до переезда
-/// плагина в собственный каталог) и выигрывать никогда не должны.
+/// плагина в собственный каталог) и выигрывать никогда не должны. Выбор модели
+/// (`last_model`) не накатывается — он хостовый (инцидент 13.11.26).
 fn apply_engine_keys(cfg: &mut AppConfig, eng: &EngineConfig) {
     cfg.models = eng.models.clone();
-    cfg.last_model = eng.last_model.clone();
     cfg.models_dir = eng.models_dir.clone();
     cfg.model_params = eng.model_params.clone();
     cfg.mmproj_files = eng.mmproj_files.clone();
@@ -354,14 +357,6 @@ pub fn save_config_file(path: &Path, config: &AppConfig) -> Result<(), String> {
             }
         }
     })
-}
-
-/// Записывает `last_model` (выбор модели в выпадашке чата) в общий конфиг
-/// движка — единый источник правды, который читает и панель моделей.
-pub fn set_engine_last_model(app: &AppHandle, path: &str) -> Result<(), String> {
-    let mut eng = engine_config::load_config(app);
-    eng.last_model = Some(path.to_string());
-    engine_config::save_config(app, &eng)
 }
 
 /// Записывает движковые пути (`llamacpp_dir`, `models_dir`) в общий конфиг
@@ -597,18 +592,19 @@ mod tests {
     }
 
     /// Оверлей движковых ключей: файл плагина — SSOT, хостовые (устаревшие)
-    /// значения проигрывают по всем девяти ключам.
+    /// значения проигрывают по всем восьми движковым ключам. Исключение —
+    /// `last_model`: выбор модели это собственность ХОСТА (инцидент 13.11.26),
+    /// оверлей его не трогает, хостовое значение выживает.
     #[test]
     fn test_apply_engine_keys_overrides_host_values() {
         let mut cfg = AppConfig::default();
         cfg.models = vec!["D:\\host\\stale.gguf".to_string()];
-        cfg.last_model = Some("D:\\host\\stale.gguf".to_string());
+        cfg.last_model = Some("D:\\host\\mine.gguf".to_string());
         cfg.engine_variant = Some("cpu".to_string());
 
         let params = ModelParams::default();
         let mut eng = EngineConfig::default();
         eng.models = vec!["D:\\plugin\\fresh.gguf".to_string()];
-        eng.last_model = Some("D:\\plugin\\fresh.gguf".to_string());
         eng.models_dir = Some("D:\\KingOrchData\\models".to_string());
         eng.model_params.insert("D:\\plugin\\fresh.gguf".to_string(), params);
         eng.mmproj_files.insert(
@@ -626,7 +622,8 @@ mod tests {
         apply_engine_keys(&mut cfg, &eng);
 
         assert_eq!(cfg.models, eng.models);
-        assert_eq!(cfg.last_model, eng.last_model);
+        // last_model — хостовый: оверлей из общего файла плагина его НЕ затирает.
+        assert_eq!(cfg.last_model.as_deref(), Some("D:\\host\\mine.gguf"));
         assert_eq!(cfg.models_dir, eng.models_dir);
         assert_eq!(cfg.model_params.len(), 1);
         assert!(cfg.model_params.contains_key("D:\\plugin\\fresh.gguf"));
@@ -644,7 +641,7 @@ mod tests {
     }
 
     /// Регрессия конфиг-ресета (26.10.26): `save_config_file` вырезает engine-ключи
-    /// (`models`, `last_model`, …) из хостового файла — это задумано (они живут в
+    /// (`models`, `models_dir`, …) из хостового файла — это задумано (они живут в
     /// SSOT-файле плагина). Десериализатор `AppConfig` обязан пережить их отсутствие:
     /// иначе `serde_json::from_str` падает с `missing field models`, `parse_config`
     /// возвращает `AppConfig::default()` и теряются вкладки + `agent_visibility`.

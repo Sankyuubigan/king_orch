@@ -143,11 +143,16 @@ pub fn set_last_model(app: AppHandle, path: String) {
         log::warn!("set_last_model: отклонён выбор mmproj «{}»", path);
         return;
     }
-    // last_model — движковый ключ: владелец — общий конфиг плагина
-    // llama-engine (его же читает панель моделей), не хостовый файл.
-    if let Err(e) = infra::set_engine_last_model(&app, &path) {
-        log::error!("set_last_model: ошибка сохранения конфига движка: {}", e);
+    // Выбор модели — собственность хоста: пишем в СВОЙ конфиг. Общий конфиг
+    // плагина не трогаем — им пользуются другие проекты, и запись туда
+    // затирала их выбор (инцидент 13.11.26: `gateway:...` в общем last_model
+    // уронил перевод в deedub).
+    let mut cfg = infra::load_config(&app);
+    cfg.last_model = Some(path.clone());
+    if let Err(e) = infra::save_config(&app, &cfg) {
+        log::error!("set_last_model: ошибка сохранения конфига: {}", e);
     }
+    log::info!("set_last_model: активная модель — {path}");
 }
 
 #[tauri::command]
