@@ -38,7 +38,7 @@ pub use runtime::builtin_tools;
 use crate::domain::agent_manager::{load_agents, AgentProfile};
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
-    has_incomplete_json_action, has_unclosed_json_fence, is_thinking_truncated,
+    has_incomplete_json_action, is_thinking_truncated,
     looks_like_broken_tool_call, needs_cutoff_continuation, parse_orchestrator_response,
     parse_tool_call, parse_tool_call_detailed, split_thinking_and_answer, ToolCallParse,
 };
@@ -104,6 +104,7 @@ fn push_continuation_for_cutoff(
     ctx_label: &str,
     stream_meta: Arc<Mutex<StreamMeta>>,
     raw_response: &str,
+    is_answer_kind: bool,
     llm_messages: &mut Vec<LlmMessage>,
     continuation_raw: &mut String,
     continuation_mark: &mut Option<usize>,
@@ -117,15 +118,27 @@ fn push_continuation_for_cutoff(
     if continuation_mark.is_none() {
         *continuation_mark = Some(llm_messages.len());
     }
-    // Накопливаем сырой текст — он нужен для финального вырезания ответа из размышлений
+    // Накопливаем сырой текст — он нужен для финального вырезания ответа из размышлений.
+    // Thinking-ветка клеит через '\n' (куски — независимые фрагменты думателя);
+    // answer-ветка — ПРЯМОЙ склейкой: токены продолжения несут собственный ведущий
+    // пробел (проба 13.04, 14.11.26: первый токен докачки — « жизни»), форсированный
+    // '\n' ломал бы шов посреди предложения и попадал в опубликованный ответ.
     *continuation_raw = if continuation_raw.is_empty() {
         raw_response.to_string()
+    } else if is_answer_kind {
+        format!("{}{}", continuation_raw, raw_response)
     } else {
         format!("{}\n{}", continuation_raw, raw_response)
     };
 
     // ── Сжатие накопленных размышлений в тезисы (малый отдельный LLM-вызов) ──
-    if let Some(mark) = *continuation_mark {
+    // ТОЛЬКО thinking-ветка (is_answer_kind=false): в answer-ветке continuation_raw —
+    // это ОТВЕТ юзеру, а не мысли; компакт «в тезисы» стирал бы данные. acc_chars
+    // учитывает ответ дважды (assistant-куски после mark + continuation_raw), piece1
+    // ≤ 2048 ток ≈ 3-4.5к симв кириллицы → порог COMPACT_THRESHOLD_CHARS=6000
+    // пробивался уже на докачке #2 (латентная потеря данных, ревизия плана 14.11.26).
+    // Answer-ветка = чистый prefill без компакта (граница №3 ревью специалиста).
+    if let (false, Some(mark)) = (is_answer_kind, *continuation_mark) {
         // Текущий оборванный кусок ещё НЕ запушен в llm_messages (пуш в конце
         // функции), поэтому учитываем и его — иначе компакт всегда запаздывает
         // на одну докачку и думатель успевает раздуться (потеря начала ответа,
@@ -240,19 +253,23 @@ fn push_continuation_for_cutoff(
 }
 
 /// Докачка оборванного ВИДИМОГО ответа по лимиту токенов — SSOT-предикат условия входа.
-/// MAX_TOKENS + невалидный JSON + механический признак незавершённости:
-/// либо последний символ не финальная пунктуация, либо открыт ```json-конверт.
+/// MAX_TOKENS — механический факт «EOS не испущен»: модель не завершила ход, и никакая
+/// эвристика по последнему символу («ответ кончился на . ! ?») не может это опровергнуть —
+/// точка на месте обреза не означает «ответ закончен». Раньше пунктуационная эвристика
+/// is_final_text входила в предикат и пропускала докачку для ответов, обрезанных на
+/// финальной пунктуации (кейс synthesizer 14.11.26: msg_17 оборван на «...желание
+/// „закрыться“.» — 543 ток. ответа из max_gen=2048, докачка не вызвана, обрывок
+/// опубликован юзеру). Для ```json-конверта эвристику раньше отдельно прикрывал
+/// envelope_truncated — теперь это покрывается строгой JSON-полнотой.
+/// «Невалидный JSON» здесь — СТРОГАЯ полнота (parsers::is_complete_json_response):
+/// рыхлая is_valid_json_action вытаскивает {...} из прозы, случайный объект в
+/// середине обрезанного текста закрывал бы докачку (граница №1 ревью специалиста).
 /// Сопряжённое правило: докачка этого типа идёт с выключенным думателем
 /// (force_no_thinking в run_agent_node) — think к этому моменту уже завершён,
 /// решение лежит в истории, повторная генерация мыслей жгла большую часть
 /// бюджета каждой докачки (кейс excel_operator 03.11.26).
-fn cutoff_continuation_conditions(
-    stop_reason: &str,
-    is_valid_json: bool,
-    is_final_text: bool,
-    envelope_truncated: bool,
-) -> bool {
-    stop_reason == "MAX_TOKENS" && !is_valid_json && (!is_final_text || envelope_truncated)
+fn cutoff_continuation_conditions(stop_reason: &str, is_valid_json: bool) -> bool {
+    stop_reason == "MAX_TOKENS" && !is_valid_json
 }
 
 /// SSOT-предикат резолва mmproj оркестратором (PRP 04.11.26, Шаг 3):
@@ -1639,6 +1656,7 @@ where
         restart_regens: 0,
         continuation_raw: String::new(),
         continuation_mark: None,
+        continuation_is_answer: false,
         action_found: false,
         thought_logged: false,
         agent_grammar: agent_grammar.clone(),
@@ -1993,8 +2011,16 @@ where
         // Вычисляется ДО native/dispatch-веток: извлечение think-тел ниже должно
         // покрыть ЛЮБОЙ выход из итерации, включая их DispatchCtl::Break.
         let is_continuation = ctx.continuation_mark.is_some();
+        // Склейка кусков по виду докачки: thinking-ветка — через '\n' (фрагменты
+        // думателя), answer-ветка — прямой склейкой: токены продолжения несут
+        // собственный ведущий пробел (проба 13.04, 14.11.26), форсированный '\n'
+        // ломал бы шов посреди предложения опубликованного ответа.
         let combined = if is_continuation {
-            format!("{}\n{}", ctx.continuation_raw, raw_response)
+            if ctx.continuation_is_answer {
+                format!("{}{}", ctx.continuation_raw, raw_response)
+            } else {
+                format!("{}\n{}", ctx.continuation_raw, raw_response)
+            }
         } else {
             raw_response.clone()
         };
@@ -2068,7 +2094,9 @@ where
             }
         }
 
-        let response = clean_thought_tags(&raw_response);
+        // mut: ветка финализации докачки ответа (ниже) подменяет пустой кусок
+        // извлечённым из combined ответом — дальше идёт штатный путь финала.
+        let mut response = clean_thought_tags(&raw_response);
         ctx.action_found = false;
         ctx.thought_logged = false;
 
@@ -2079,11 +2107,36 @@ where
         };
 
         if response.trim().is_empty() {
+            // ── Инвариант успешного завершения докачки ОТВЕТА (граница №2 ревью
+            // специалиста 14.11.26): при активной answer-докачке пустой кусок с
+            // EOS — «дописывать нечего», т.е. УСПЕШНОЕ завершение, а не пустая
+            // генерация. Раньше такой пустой EOS проваливался в ретрай «пустого
+            // ответа» ниже: consecutive_incomplete++, готовый ответ из combined
+            // выбрасывался, юзеру уходила ошибка «3 пустых попытки». STOP_WORD —
+            // та же механика: модель отдала ход (стоп-последовательность), не
+            // дописав ни токена — ответ полон. «Оборванность» combined оценивает
+            // SSOT needs_cutoff_continuation: открытый думатель / незакрытый JSON
+            // → не успех (докачка/честная ошибка дальше).
+            if ctx.continuation_is_answer
+                && is_continuation
+                && (stop_reason == "EOS" || stop_reason == "STOP_WORD")
+                && !needs_cutoff_continuation(&combined, &stop_reason)
+            {
+                log_cb(format!(
+                    "✅ [{}] докачка ответа завершена (пустой кусок, {}) — финализирую накопленный ответ ({} симв.)",
+                    agent.name,
+                    stop_reason,
+                    combined.chars().count()
+                ));
+                response = extract_answer_from_combined(&combined, "");
+                // НЕ continue: проваливаемся в штатный путь (гейт → парсер →
+                // финальная сборка), который для continuation соберёт финал из
+                // combined через extract_answer_from_combined.
+            } else if needs_cutoff_continuation(&combined, &stop_reason) {
             // Обрыв ВНУТРИ размышлений (thinking-модель): продолжаем с места обрыва,
             // а не считаем «пустой попыткой» и не просим генерировать ЗАНОВО.
             // Критерий входа — СОДЕРЖИМОЕ ответа (незакрытый думатель), а не причина
             // остановки: обрыв случается и по лимиту токенов, и по стоп-слову, и по EOS.
-            if needs_cutoff_continuation(&combined, &stop_reason) {
                 // Умное завершение: серия докачек без прогресса (видимого текста нет,
                 // думание перестало расти) = модель зациклилась в думателе — докачку
                 // прекращаем и уходим в перегенерацию с хинтом-запретом думателей.
@@ -2107,6 +2160,7 @@ where
                     let thinking_len = combined.chars().count() as isize;
                     let grew = thinking_len - ctx.last_thinking_len;
                     let raw_before = ctx.continuation_raw.len();
+                    ctx.continuation_is_answer = false;
                     let exhausted = push_continuation_for_cutoff(
                         &log_cb,
                         &agent.id,
@@ -2117,6 +2171,7 @@ where
                         &ctx_label,
                         stream_meta.clone(),
                         &raw_response,
+                        false,
                         &mut ctx.llm_messages,
                         &mut ctx.continuation_raw,
                         &mut ctx.continuation_mark,
@@ -2142,7 +2197,11 @@ where
                     continue;
                 }
             }
-            if stop_reason == "STOP_WORD" || stop_reason == "MAX_TOKENS" {
+            // response-гвард: после финализации докачки выше response непуст —
+            // ретрай «пустого ответа» затирал бы готовый ответ (STOP_WORD-кейс).
+            if (stop_reason == "STOP_WORD" || stop_reason == "MAX_TOKENS")
+                && response.trim().is_empty()
+            {
                 // Думатель без ответа: размышления НЕ попадают в историю (они уже
                 // выброшены движком в отдельное поле), докачки бессмысленны — модель
                 // исчерпала лимит на думатель. Повторный вызов с требованием ответа.
@@ -2201,31 +2260,14 @@ where
             }
         }
 
-        // Внедряем архитектурную проверку на обрыв (MAX_TOKENS)
-        let mut is_valid_json = false;
-        if parse_target.contains('{') {
-            is_valid_json = crate::domain::parsers::is_valid_json_action(&parse_target);
-        }
+        // Внедряем архитектурную проверку на обрыв (MAX_TOKENS): JSON-полнота —
+        // СТРОГАЯ (is_complete_json_response). Рыхлая is_valid_json_action
+        // вытаскивает {...} из прозы — случайный объект в середине обрезанного
+        // ответа закрывал бы докачку (граница №1 ревью специалиста 14.11.26).
+        let is_valid_json = parse_target.contains('{')
+            && crate::domain::parsers::is_complete_json_response(&parse_target);
 
-        let resp_trim = parse_target.trim();
-        let is_final_text = resp_trim.ends_with('.')
-            || resp_trim.ends_with('!')
-            || resp_trim.ends_with('?')
-            || resp_trim.ends_with('"')
-            || resp_trim.ends_with('\'')
-            || resp_trim.ends_with('`');
-        // МЕХАНИЧЕСКИЙ признак незавершённости: ```json-конверт открыт и не
-        // закрыт — модель отрезана посреди конверта. Приоритет над пунктуацией:
-        // обрывок конверта заканчивается кавычкой так же, как цитата.
-        let envelope_truncated = has_unclosed_json_fence(&parse_target);
-        if envelope_truncated && is_final_text {
-            log_cb(format!(
-                "⚠️ [{}] обрыв внутри ```json-конверта + невалидный JSON — докачка обязательна (эвристика по последнему символу её пропустила бы)",
-                agent.id
-            ));
-        }
-
-        if cutoff_continuation_conditions(&stop_reason, is_valid_json, is_final_text, envelope_truncated) {
+        if cutoff_continuation_conditions(&stop_reason, is_valid_json) {
             // Обрыв по лимиту: докачиваем с места обрыва вместо перегенерации.
             // Думатель в этом вызове УЖЕ отработал (обрыв — в видимом ответе;
             // обрыв в мыслях уходит в ветку выше, в докачку размышлений), решение
@@ -2237,6 +2279,7 @@ where
             // та же, что у «думателя без ответа» выше; флаг живёт до конца
             // прогона агента.
             force_no_thinking.set(true);
+            ctx.continuation_is_answer = true;
             if push_continuation_for_cutoff(
                 &log_cb,
                 &agent.id,
@@ -2247,6 +2290,7 @@ where
                 &ctx_label,
                 stream_meta.clone(),
                 &raw_response,
+                true,
                 &mut ctx.llm_messages,
                 &mut ctx.continuation_raw,
                 &mut ctx.continuation_mark,
@@ -3110,20 +3154,20 @@ mod tests {
     /// лог 03.11.26: 3×(think ~1495 + ответ ~545) из max_gen=2048 — отказ).
     #[test]
     fn cutoff_continuation_conditions_truth_table() {
-        // Классический обрыв в данных: последний символ не финальный.
-        assert!(cutoff_continuation_conditions("MAX_TOKENS", false, false, false));
-        // Обрыв внутри ```json-конверта: пунктуация «финальная» (кавычка),
-        // но конверт открыт — докачка обязательна.
-        assert!(cutoff_continuation_conditions("MAX_TOKENS", false, true, true));
-        // Не финальная пунктуация при открытом конверте — тоже докачка.
-        assert!(cutoff_continuation_conditions("MAX_TOKENS", false, false, true));
-        // Валидный JSON — ответ завершён, докачки нет.
-        assert!(!cutoff_continuation_conditions("MAX_TOKENS", true, false, false));
+        // Обрыв посреди данных — докачка.
+        assert!(cutoff_continuation_conditions("MAX_TOKENS", false));
+        // Обрезано на финальной пунктуации (кейс synthesizer 14.11.26: msg_17
+        // оборван на «...желание „закрыться“.») — докачка ОБЯЗАТЕЛЬНА:
+        // MAX_TOKENS означает «EOS не испущен», последний символ этого не
+        // опровергает. Прежняя строка assert!(!…(MAX_TOKENS, false, true, false))
+        // кодифицировала этот баг.
+        assert!(cutoff_continuation_conditions("MAX_TOKENS", false));
+        // Строго полный JSON (весь текст — JSON либо закрытый ```json-фенс
+        // с валидным JSON) — ответ завершён, докачки нет.
+        assert!(!cutoff_continuation_conditions("MAX_TOKENS", true));
         // Причина не лимит токенов (стоп-слово/EOS) — другой механизм.
-        assert!(!cutoff_continuation_conditions("STOP_WORD", false, false, false));
-        assert!(!cutoff_continuation_conditions("EOS", false, true, false));
-        // Финальная пунктуация без открытого конверта — ответ выглядит законченным.
-        assert!(!cutoff_continuation_conditions("MAX_TOKENS", false, true, false));
+        assert!(!cutoff_continuation_conditions("STOP_WORD", false));
+        assert!(!cutoff_continuation_conditions("EOS", false));
     }
 
     #[test]

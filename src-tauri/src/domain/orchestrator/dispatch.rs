@@ -224,6 +224,11 @@ where
     pub(crate) restart_regens: usize,
     pub(crate) continuation_raw: String,
     pub(crate) continuation_mark: Option<usize>,
+    /// Вид активной докачки: false — размышления (компакт разрешён, склейка через
+    /// '\n'), true — видимый ОТВЕТ (чистый prefill без компакта, прямая склейка
+    /// без форсированного '\n', пустой EOS = успешное завершение). Ставится в
+    /// run_agent_node на call-site докачки.
+    pub(crate) continuation_is_answer: bool,
     pub(crate) action_found: bool,
     pub(crate) thought_logged: bool,
     /// Per-agent GBNF-грамматика (загружена из agents/*/grammars/<agent_id>.gbnf).

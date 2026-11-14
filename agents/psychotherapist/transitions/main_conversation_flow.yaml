@@ -48,7 +48,6 @@ nodes:
   output_type: frontend
   inject_response:
   - validator
-  - synthesizer
   - decomposer
   - soma_translator
   ui_pos:
@@ -86,7 +85,6 @@ nodes:
 
     {{ nodes.import_cases.output.imported_cases_text }}
   inject_response:
-  - synthesizer
   - decomposer
   ui_pos:
     y: 410
@@ -151,7 +149,6 @@ nodes:
     Переведи паттерны на контекст проблемы пользователя, следуя ИНСТРУКЦИИ и формату вывода из системного промпта: каждому этажу — своя энергия Дара из его паттерна.
   output_type: frontend
   inject_response:
-  - synthesizer
   - decomposer
   ui_pos:
     x: 2804
@@ -163,7 +160,6 @@ nodes:
   output_type: frontend
   inject_response:
   - validator
-  - synthesizer
   - decomposer
   - soma_translator
   ui_pos:

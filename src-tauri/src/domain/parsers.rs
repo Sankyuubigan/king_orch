@@ -110,6 +110,36 @@ pub fn is_valid_json_action(text: &str) -> bool {
     }
 }
 
+/// Строгая проверка СТРУКТУРНОЙ ПОЛНОТЫ JSON-ответа — для гейта докачки
+/// (`cutoff_continuation_conditions`). Валидно, только если ВЕСЬ ответ является
+/// JSON либо содержит ЗАКРЫТЫЙ ```json-фенс с валидным JSON внутри.
+///
+/// Рыхлая `is_valid_json_action` для гейта не годится: `extract_json_block`
+/// вытаскивает {...} из любого места текста — случайный объект в прозе
+/// обрезанного ответа закрывал бы докачку (граница №1 ревью специалиста,
+/// 14.11.2026). Здесь же «валидно» = «структурная единица (конверт или весь
+/// текст) завершена», а не «где-то в тексте есть парсабельный JSON».
+pub fn is_complete_json_response(text: &str) -> bool {
+    let cleaned = clean_thought_tags(text);
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Весь текст — JSON (голый конверт без оградок).
+    if serde_json::from_str::<serde_json::Value>(trimmed).is_ok() {
+        return true;
+    }
+    // Закрытый ```json-фенс с валидным JSON внутри (конверт тул-вызова завершён).
+    if let Some((_, rest)) = trimmed.split_once("```json") {
+        if let Some((block, _)) = rest.split_once("```") {
+            if serde_json::from_str::<serde_json::Value>(block.trim()).is_ok() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// МЕХАНИЧЕСКИЙ признак «обрыв внутри ```json-конверта»: открывающая оградка
 /// ```json присутствует, закрывающей ``` после неё нет — конверт структурно
 /// не завершён (модель отрезана по лимиту токенов посреди конверта).
@@ -951,6 +981,27 @@ mod tests {
         assert!(!has_unclosed_json_fence("обычный финальный ответ."));
         // Незакрытая ОБОЗНАЧАЮЩАЯ оградка обычного кода — не json-конверт
         assert!(!has_unclosed_json_fence("код:\n```rust\nfn main() {}"));
+    }
+
+    /// Строгая JSON-полнота для гейта докачки: «валидно» = вся структурная
+    /// единица завершена, а не «где-то в тексте есть парсабельный JSON»
+    /// (граница №1 ревью специалиста 14.11.2026).
+    #[test]
+    fn is_complete_json_response_strictness() {
+        // Голый JSON целиком — валидно.
+        assert!(is_complete_json_response("{\"tool\":\"x\",\"arguments\":{}}"));
+        // Закрытый фенс — валидно (даже с прозой вокруг).
+        assert!(is_complete_json_response("мысль\n```json\n{\"tool\":\"x\"}\n```"));
+        // Обрыв посреди конверта — НЕ валидно (докачка обязательна).
+        assert!(!is_complete_json_response("```json\n{\"tool\":\"x\", \"arg\": \"знач"));
+        // Случайный {...} в прозе обрезанного ответа НЕ закрывает докачку:
+        // рыхлая is_valid_json_action здесь возвращала true.
+        assert!(!is_complete_json_response(
+            "Пункт 1. Правило {\"x\": 1} упомянуто. Пункт 2 оборван посередине сло"
+        ));
+        // Пустой и проза — не JSON.
+        assert!(!is_complete_json_response(""));
+        assert!(!is_complete_json_response("обычный финальный ответ."));
     }
 
     #[test]
