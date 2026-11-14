@@ -1,6 +1,5 @@
 ---
 name: Объединение мишеней
-replace_report: true
 ---
 
 # РОЛЬ

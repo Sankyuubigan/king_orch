@@ -1,6 +1,5 @@
 ---
 name: Валидатор данных
-replace_report: true
 tools: ["emit_signal"]
 think_budget: 350
 ---

@@ -598,9 +598,9 @@ where
                         }
                     }
                 }
-                push_report(&mut context.messages, signal, false, None);
+                push_report(&mut context.messages, signal);
             } else {
-                push_report(&mut context.messages, msg, agent.replace_report, Some(2));
+                push_report(&mut context.messages, msg);
                 *runner.msg_counter += 1;
             }
             context.output_emitted = node.publishes_to_chat();

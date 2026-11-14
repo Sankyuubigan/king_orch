@@ -956,12 +956,6 @@ where
         let Some(author) = stage.spec.author.as_deref() else {
             continue;
         };
-        let replace_report = runner
-            .agents
-            .iter()
-            .find(|a| a.id == author)
-            .map(|a| a.replace_report)
-            .unwrap_or(false);
         let msg = ChatMessage {
             id: Some(format!("msg_{}", runner.msg_counter)),
             msg_type: stage.spec.msg_type.clone(),
@@ -974,7 +968,7 @@ where
             phase: Some(2),
             author_name: None,
         };
-        push_report(&mut context.messages, msg, replace_report, Some(2));
+        push_report(&mut context.messages, msg);
         *runner.msg_counter += 1;
         published.push(format!(
             "{} → {} ({})",
@@ -1021,7 +1015,7 @@ where
             phase: None,
             author_name: Some(author_name),
         };
-        push_report(&mut context.messages, msg, false, None);
+        push_report(&mut context.messages, msg);
         *runner.msg_counter += 1;
         context.output_emitted = true;
     }
@@ -1094,7 +1088,6 @@ mod tests {
             mcp_servers: Vec::new(),
             subagents: Vec::new(),
             folder: None,
-            replace_report: false,
             tools: Vec::new(),
             current_date: false,
             temperature: temp,

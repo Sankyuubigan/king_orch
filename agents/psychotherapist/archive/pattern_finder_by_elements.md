@@ -1,7 +1,6 @@
 ---
 name: Поиск паттернов
 description: Специалист по Эннеаграмме
-replace_report: true
 tools: ["emit_signal"]
 ---
 

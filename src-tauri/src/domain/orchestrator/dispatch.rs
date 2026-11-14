@@ -1703,7 +1703,7 @@ where
                     phase: Some(2),
                     author_name: Some(subagent.name.clone()),
                 };
-                push_report(&mut **messages, err_msg, subagent.replace_report, Some(2));
+                push_report(&mut **messages, err_msg);
                 **msg_counter += 1;
                 *final_response = sub_result;
                 return Ok(DispatchCtl::Break);
@@ -1721,11 +1721,11 @@ where
                 phase: Some(2),
                 author_name: Some(subagent.name.clone()),
             };
-            push_report(&mut **messages, msg, subagent.replace_report, Some(2));
+            push_report(&mut **messages, msg);
             **msg_counter += 1;
             // Сигнал сабагента сохраняется ПОСЛЕ thought.
             if let Some(signal) = sub_pending_signal.take() {
-                push_report(&mut **messages, signal, false, None);
+                push_report(&mut **messages, signal);
                 **msg_counter += 1;
             }
 

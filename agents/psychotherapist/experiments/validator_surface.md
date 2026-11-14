@@ -1,7 +1,6 @@
 ---
 name: Валидатор слоя 1 «Поверхность»
 description: Первый слой иерархической проверки элементов невроза: что пациент прямо сказал о себе (элементы 1, 2, 6, 7).
-replace_report: true
 tools: ["emit_signal"]
 disable_reasoning: true
 ---

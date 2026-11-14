@@ -428,7 +428,6 @@ mod tests {
             mcp_servers: mcp.iter().map(|s| s.to_string()).collect(),
             subagents: subs.iter().map(|s| s.to_string()).collect(),
             folder: None,
-            replace_report: false,
             tools: tools.iter().map(|s| s.to_string()).collect(),
             current_date: false,
             temperature: None,

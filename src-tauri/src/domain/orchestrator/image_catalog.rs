@@ -1548,7 +1548,6 @@ mod tests {
                 mcp_servers: Vec::new(),
                 subagents: Vec::new(),
                 folder: None,
-                replace_report: false,
                 tools: tools.iter().map(|s| s.to_string()).collect(),
                 current_date: false,
                 temperature: None,

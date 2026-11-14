@@ -2,7 +2,6 @@
 name: Веб-исследователь
 description: Глубокий веб-исследователь. Итеративный поиск, переформулирование запросов, декомпозиция сложных вопросов, ответ с цитатами-источниками.
 current_date: true
-replace_report: true
 mcp_servers: ["docs_fetcher", "knowledge_api", "searxng_search", "time", "browser"]
 # WebSearch — нативный тул хоста (крейт web-tools), НЕ MCP-сервер (09.11.26)
 tools:

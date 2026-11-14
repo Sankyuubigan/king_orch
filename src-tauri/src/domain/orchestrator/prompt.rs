@@ -302,7 +302,6 @@ mod tests {
             mcp_servers: Vec::new(),
             subagents: Vec::new(),
             folder: None,
-            replace_report: false,
             tools: Vec::new(),
             current_date: false,
             temperature: None,

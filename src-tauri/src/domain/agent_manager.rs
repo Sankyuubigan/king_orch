@@ -19,8 +19,6 @@ pub struct AgentProfile {
     #[serde(default)]
     pub folder: Option<String>,
     #[serde(default)]
-    pub replace_report: bool,
-    #[serde(default)]
     pub tools: Vec<String>,
     #[serde(default)]
     pub current_date: bool,
@@ -271,7 +269,6 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
             let system_prompt = text[end_idx + 6..].trim().to_string();
             let mut name = String::new();
             let mut description = String::new();
-            let mut replace_report = false;
             let mut current_date = false;
             let mut temperature: Option<f32> = None;
             let mut vision = false;
@@ -300,8 +297,6 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                         ),
                     }
                 }
-                else if line.starts_with("replace_report:") { replace_report = line["replace_report:".len()..].trim().parse().unwrap_or(false); }
-                else if line.starts_with("single_report:") { replace_report = line["single_report:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("current_date:") { current_date = line["current_date:".len()..].trim().parse().unwrap_or(false); }
                 else if line.starts_with("temperature:") {
                     temperature = line["temperature:".len()..].trim().parse::<f32>().ok();
@@ -363,7 +358,7 @@ fn parse_agent_markdown(content: &str) -> Option<AgentProfile> {
                 }
                 i += 1;
             }
-            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, replace_report, tools, current_date, temperature, vision, think_budget_chars, disable_reasoning, require_tool_call, visible }); }
+            if !name.is_empty() { return Some(AgentProfile { id: String::new(), name, description, system_prompt, mode: "worker".to_string(), mcp_servers, subagents: Vec::new(), folder: None, tools, current_date, temperature, vision, think_budget_chars, disable_reasoning, require_tool_call, visible }); }
         }
     }
     None
