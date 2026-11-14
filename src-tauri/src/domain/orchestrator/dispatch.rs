@@ -347,8 +347,8 @@ where
             return false;
         };
         // Сигнал сохраняется КАК ИЗВЛЕЧЁН: агент-специфичной механики в движке
-        // нет — доменные вычисления (напр. floor2_type валидатора) делают ноды
-        // custom_tool_call графа команды.
+        // нет — доменные вычисления (напр. pattern_vector валидатора) делают
+        // ноды custom_tool_call графа команды.
         let mut map = serde_json::Map::new();
         map.insert(contract.key.clone(), value.clone());
         let signal_msg = ChatMessage {
@@ -1898,7 +1898,7 @@ where
             self.signal_saved = true;
             // Сигнал сохраняется КАК ВЫДАН: никакой агент-специфичной механики в
             // общем emit-пути нет (движок агент-агностичен). Доменные вычисления
-            // над сигналом (напр. floor2_type валидатора) — ноды custom_tool_call
+            // над сигналом (напр. pattern_vector валидатора) — ноды custom_tool_call
             // в графе команды (compute_pattern → ../tools/compute_pattern_type.ts).
             let signal_content = serde_json::json!({key: normalized}).to_string();
             let signal_msg = ChatMessage {

@@ -12,22 +12,25 @@
  * формула сдвига).
  *
  * Соответствие этаж → паттерн (лечение e4/e8/e9, решение владельца 06.11.2026):
- *   Этаж 0  (элементы 1, 4, 7) → floor0_type из сигнала валидатора
- *   Этаж -1 (элементы 2, 5, 8) → floor1_type из сигнала валидатора
- *   Этаж -2 (ядро, элементы 3, 6, 9) → core (floor2_type, вычислен нодой
- *                               compute_pattern по SAFETY-сцепке)
+ *   Этаж 0  (элементы 1, 4, 7) → floor0 (Симптом выбранного вектора)
+ *   Этаж -1 (элементы 2, 5, 8) → floor1 (Защита выбранного вектора)
+ *   Этаж -2 (ядро, элементы 3, 6, 9) → core (Ядро выбранного вектора)
+ * Цифры приходят от ноды compute_pattern (pattern_vector принят гейтами) —
+ * сырой сигнал здесь не разбирается (SSOT: один источник классификации).
  *
  * Вход: Deno.args[0] = JSON (значения приходят СТРОКАМИ от движка):
  *   {
- *     "report": "<JSON-строка сигнала validator_report или сам объект>",
- *     "core":   "<цифра 1..9 из {{ nodes.compute_pattern.output.floor2_type }}>"
+ *     "file":   "<путь к базе от корня agents/>",
+ *     "core":   "<цифра 1..9 из {{ nodes.compute_pattern.output.core_type }}>",
+ *     "floor1": "<цифра 1..9 из {{ nodes.compute_pattern.output.floor1_type }}>",
+ *     "floor0": "<цифра 1..9 из {{ nodes.compute_pattern.output.floor0_type }}>"
  *   }
  *
  * Выход: ТОЛЬКО JSON в stdout:
  *   {"content": "<трёхэтажный блок с подписями>", "floor0": "…", "floor1": "…", "core": "…"}
  *
  * Честные отказы (stderr + exit(1), движок превращает их в ошибку ноды):
- * не-JSON вход, report не объект, этажи/ядро не цифры 1..9, файл вне agents/,
+ * не-JSON вход, вход не объект, этажи/ядро не цифры 1..9, файл вне agents/,
  * файл не найден, секция не найдена. Никаких нечётких фолбэков: тихо отдать
  * «похожую» секцию — значит лечить не тем паттерном.
  */
@@ -36,12 +39,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const SAFETY_TRANSITIONS: readonly number[] = [0, 7, 4, 6, 1, 8, 9, 5, 2, 3];
-
 interface ReadInput {
   file?: unknown;
-  report?: unknown;
   core?: unknown;
+  floor1?: unknown;
+  floor0?: unknown;
 }
 
 function fail(message: string): never {
@@ -51,7 +53,7 @@ function fail(message: string): never {
 
 function parseInput(raw: string | undefined): ReadInput {
   if (raw === undefined || raw.trim() === "") {
-    fail("пустой вход: ожидался JSON-объект с полями file, report, core");
+    fail("пустой вход: ожидался JSON-объект с полями file, core, floor1, floor0");
   }
   let parsed: unknown;
   try {
@@ -60,7 +62,7 @@ function parseInput(raw: string | undefined): ReadInput {
     fail(`вход не является валидным JSON: ${raw.slice(0, 100)}`);
   }
   if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-    fail("вход обязан быть JSON-объектом с полями file, report, core");
+    fail("вход обязан быть JSON-объектом с полями file, core, floor1, floor0");
   }
   return parsed as ReadInput;
 }
@@ -133,34 +135,11 @@ function main(): void {
   const rel = typeof input.file === "string" && input.file.trim() !== ""
     ? input.file.trim()
     : fail("поле file обязательно (путь к базе от корня agents/)");
+  // Цифры этажей — от compute_pattern (pattern_vector принят гейтами);
+  // никакого report и никакого выравнивания здесь быть не должно.
   const core = parseTypeDigit(input.core, "core");
-  if (!("report" in input)) {
-    fail("поле report обязательно (сигнал validator_report)");
-  }
-  // report приходит JSON-строкой из {{ signals.validator_report }}; объект
-  // тоже принимаем (облачная ветка может отдать разобранный объект).
-  let report: unknown = input.report;
-  if (typeof report === "string") {
-    try {
-      report = JSON.parse(report);
-    } catch (error) {
-      fail(
-        `report — не валидный JSON: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-  const reportObj = report !== null && typeof report === "object" &&
-      !Array.isArray(report)
-    ? report as Record<string, unknown>
-    : fail("report: ожидался JSON-объект сигнала validator_report");
-  let floor0 = parseTypeDigit(reportObj["floor0_type"], "floor0_type");
-  let floor1 = parseTypeDigit(reportObj["floor1_type"], "floor1_type");
-  if (SAFETY_TRANSITIONS[floor1] !== core || SAFETY_TRANSITIONS[floor0] !== floor1) {
-    floor1 = SAFETY_TRANSITIONS.indexOf(core);
-    floor0 = SAFETY_TRANSITIONS.indexOf(floor1);
-  }
+  const floor1 = parseTypeDigit(input.floor1, "floor1");
+  const floor0 = parseTypeDigit(input.floor0, "floor0");
 
   const target = resolveAgentsFile(rel);
   if (!fs.existsSync(target)) {

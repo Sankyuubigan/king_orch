@@ -1049,12 +1049,13 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         );
     }
 
-    /// gate_tool_contract (реальный Deno): тул вычисления floor2_type
-    /// (вынос финализации из движка, 03.11.2026) — SAFETY-сцепка выдаёт
-    /// цифру Этажа -2; гейт критических элементов {e3,e6,e8,e9} живёт в туле
-    /// с 04.11.2026 (нода check_critical_elements удалена из графа); доменный
-    /// отказ — ТОТАЛЬНОЕ явное "none" + pattern_found=false с причиной (не
-    /// ошибка узла), только сломанная инвокация даёт exit≠0.
+    /// gate_tool_contract (реальный Deno): тул механической проверки ПАР
+    /// eN/eN_text и ОДНОГО сквозного вектора pattern_vector (13.11.2026,
+    /// план спеца) — вектор принимается только при всех гейтах-парах
+    /// {e1,e2,e3,e5,e6,e7,e8,e9} (e4 не гейтит); химеры невозможны выбором
+    /// РОВНО одного литерала каталога. Доменный отказ — pattern_found=false
+    /// с именованными непрогейтами (не ошибка узла, exit 0); только сломанная
+    /// инвокация даёт exit≠0.
     #[test]
     #[ignore]
     fn real_deno_compute_pattern_tool_contract() {
@@ -1077,87 +1078,140 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             .expect("тул выполнен")
         };
 
-        // Валидные цепи: (1,7) -> 5; (3,6) -> 9 (тип 3 на Этаже 0 валиден —
-        // множества {1,4,7}/{3,6,9} в SSOT — элементы этажей, не типы).
-        // Третий кейс — вердикт-тексты (05.11.2026): is_proven принимает
-        // непустые строки; surface_proven собирается из e1,e2,e6,e7.
-        for (report, expected, expected_surface) in [
-            (
-                r#"{"e3":true,"e6":true,"e8":true,"e9":true,"floor0_type":"1","floor1_type":"7"}"#,
-                "5",
-                false,
-            ),
-            (
-                r#"{"e3":true,"e6":true,"e8":true,"e9":true,"floor0_type":"3","floor1_type":"6"}"#,
-                "9",
-                false,
-            ),
-            (
-                r#"{"e1":"спазм лба и висков","e2":"замираю перед звонком","e3":"дыра: страх отвержения","e6":"триггер: замечание начальника","e7":"волна стыда","e8":"идол: чужое одобрение","e9":"дыра: «я недостаточен»","floor0_type":"3","floor1_type":"6"}"#,
-                "9",
-                true,
-            ),
-        ] {
-            let (stdout, stderr, status) = run(report);
-            assert!(status.success(), "exit: {}, stderr: {}", status, String::from_utf8_lossy(&stderr));
-            let output: serde_json::Value =
-                serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
-            assert_eq!(output["floor2_type"], expected, "цепь {}", report);
-            assert_eq!(output["pattern_found"], true, "цепь {}", report);
-            assert_eq!(output["surface_proven"], expected_surface, "цепь {}", report);
-            assert_eq!(output["reason"], "SAFETY-сцепка этажей сходится");
-        }
+        // Успех: все гейты парами (bool + непустой eN_text), вектор каталога №1
+        // «Core 5 | Protection 7 | Symptom 1». e4 (не гейт) доказан — попадает
+        // в кейс; тексты проходят capFirst (первая буква заглавная).
+        let full = r#"{"e1":true,"e1_text":"паралич перед объёмом задач","e2":true,"e2_text":"уходу в сериалы и еду","e3":true,"e3_text":"страшно, что силы кончатся и знания пропадут","e4":true,"e4_text":"если ошибусь — я плохой","e5":true,"e5_text":"я обязан всё проверить сам","e6":true,"e6_text":"большой разбор проекта","e7":true,"e7_text":"тяжесть и вина","e8":true,"e8_text":"люди и задачи выпивают энергию","e9":true,"e9_text":"идеальный инструмент сам всё сохранит","pattern_vector":"Core 5 | Protection 7 | Symptom 1","target":"паралич перед большим разбором проекта"}"#;
+        let (stdout, stderr, status) = run(full);
+        assert!(
+            status.success(),
+            "exit: {}, stderr: {}",
+            status,
+            String::from_utf8_lossy(&stderr)
+        );
+        let output: serde_json::Value =
+            serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
+        assert_eq!(output["pattern_found"], true);
+        assert_eq!(output["pattern_vector"], "Core 5 | Protection 7 | Symptom 1");
+        assert_eq!(output["core_type"], "5");
+        assert_eq!(output["floor1_type"], "7");
+        assert_eq!(output["floor0_type"], "1");
+        assert_eq!(output["surface_proven"], true);
+        assert!(
+            output["reason"].as_str().unwrap_or("").contains("сквозной вектор принят"),
+            "reason: {}",
+            output["reason"]
+        );
+        assert_eq!(output["case_report"]["target"], "Паралич перед большим разбором проекта");
+        assert_eq!(output["case_report"]["e1"], "Паралич перед объёмом задач");
+        // e4 не гейтит вектор, но доказан — текст идёт в кейс.
+        assert_eq!(output["case_report"]["e4"], "Если ошибусь — я плохой");
+        assert_eq!(output["case_report"]["e3"], "Страшно, что силы кончатся и знания пропадут");
 
-        // Доменные отказы — тотальные: явное "none" + pattern_found=false + причина, exit 0.
-        for (report, reason_part) in [
-            (
-                r#"{"e3":false,"e6":true,"e8":true,"e9":true,"floor0_type":"1","floor1_type":"7"}"#,
-                "ядро не подтверждено",
-            ),
-            // Гейт бывшей ноды check_critical_elements (04.11.2026 — в туле).
-            (
-                r#"{"e3":true,"e6":false,"e8":true,"e9":true,"floor0_type":"1","floor1_type":"7"}"#,
-                "критический элемент e6 не подтверждён",
-            ),
-            (
-                r#"{"e3":true,"e6":true,"e8":false,"e9":true,"floor0_type":"1","floor1_type":"7"}"#,
-                "критический элемент e8 не подтверждён",
-            ),
-            (
-                r#"{"e3":true,"e6":true,"e8":true,"e9":false,"floor0_type":"1","floor1_type":"7"}"#,
-                "критический элемент e9 не подтверждён",
-            ),
-            (
-                r#"{"e3":true,"e6":true,"e8":true,"e9":true,"floor0_type":"1","floor1_type":"8"}"#,
-                "не сходится",
-            ),
-            (r#"{"e3":true}"#, "этажи не классифицированы"),
-        ] {
+        let expect_refusal = |report: &str, reason_part: &str| -> serde_json::Value {
             let (stdout, stderr, status) = run(report);
             assert!(
                 status.success(),
-                "доменный отказ — не ошибка узла: exit {}, stderr: {}",
+                "доменный отказ — не ошибка узла: exit {}, stderr: {} / report: {}",
                 status,
-                String::from_utf8_lossy(&stderr)
+                String::from_utf8_lossy(&stderr),
+                report
             );
             let output: serde_json::Value =
                 serde_json::from_str(String::from_utf8_lossy(&stdout).trim()).expect("stdout — JSON");
-            assert_eq!(output["floor2_type"], "none", "цепь {}", report);
-            assert_eq!(output["pattern_found"], false, "цепь {}", report);
+            assert_eq!(output["pattern_found"], false, "report: {}", report);
             assert!(
                 output["reason"].as_str().unwrap_or("").contains(reason_part),
                 "reason объясняет отказ ({}): {}",
                 reason_part,
                 output["reason"]
             );
-        }
+            output
+        };
+
+        // "none" при непрогейтах: named e3/e9, этажи "none", кейс честный
+        // (e3/e9=false, доказанные e1/e4 — текстами).
+        let none_unproven = full
+            .replace(
+                r#""e3":true,"e3_text":"страшно, что силы кончатся и знания пропадут""#,
+                r#""e3":false,"e3_text":""#,
+            )
+            .replace(
+                r#""e9":true,"e9_text":"идеальный инструмент сам всё сохранит""#,
+                r#""e9":false,"e9_text":""#,
+            )
+            .replace(
+                r#""pattern_vector":"Core 5 | Protection 7 | Symptom 1""#,
+                r#""pattern_vector":"none""#,
+            );
+        let output = expect_refusal(
+            &none_unproven,
+            "вектор не выбран (pattern_vector='none'): не подтверждены самим пользователем: e3, e9",
+        );
+        assert_eq!(output["core_type"], "none");
+        assert_eq!(output["floor1_type"], "none");
+        assert_eq!(output["floor0_type"], "none");
+        assert_eq!(output["surface_proven"], true);
+        assert_eq!(output["case_report"]["e3"], false);
+        assert_eq!(output["case_report"]["e9"], false);
+        assert_eq!(output["case_report"]["e1"], "Паралич перед объёмом задач");
+
+        // "none" при ВСЕХ доказанных гейтах — отдельная причина (добор данных).
+        let none_all_proven = full.replace(
+            r#""pattern_vector":"Core 5 | Protection 7 | Symptom 1""#,
+            r#""pattern_vector":"none""#,
+        );
+        expect_refusal(
+            &none_all_proven,
+            "все факты подтверждены, но валидатор не выбрал вектор (pattern_vector='none')",
+        );
+
+        // Мусор вместо вектора (в т.ч. химеры-комбинации) — перечисляем каталог.
+        let junk = full.replace(
+            r#""pattern_vector":"Core 5 | Protection 7 | Symptom 1""#,
+            r#""pattern_vector":"Ядро 5-7-1""#,
+        );
+        expect_refusal(&junk, "мусор вместо вектора");
+
+        // Вектор при непрогейте e6 — не принимается с именем элемента.
+        let vector_unproven = full.replace(
+            r#""e6":true,"e6_text":"большой разбор проекта""#,
+            r#""e6":false,"e6_text":""#,
+        );
+        expect_refusal(
+            &vector_unproven,
+            r#""Core 5 | Protection 7 | Symptom 1" не принимается: не подтверждены самим пользователем: e6"#,
+        );
+
+        // bool без текста — не доказано (одно без другого не проходит гейт).
+        let bool_no_text = full.replace(
+            r#""e5_text":"я обязан всё проверить сам""#,
+            r#""e5_text":""#,
+        );
+        expect_refusal(
+            &bool_no_text,
+            "не подтверждены самим пользователем: e5",
+        );
+
+        // Отсутствующий pattern_vector.
+        let missing = full.replace(
+            r#""pattern_vector":"Core 5 | Protection 7 | Symptom 1","#,
+            "",
+        );
+        expect_refusal(&missing, "pattern_vector отсутствует");
+
+        // Сломанный JSON сигнала — refusal() (surface_proven=false).
+        let output = expect_refusal("не json", "не является валидным JSON");
+        assert_eq!(output["surface_proven"], false);
+        assert_eq!(output["core_type"], "none");
     }
 
     /// gate_tool_contract (реальный Deno): тул сохранения кейса психотерапевта
-    /// (05.11.2026, замена удалённого агента case_packer) — эталонная триада
-    /// 6→9→3: РОВНО 13 полей в каноническом порядке (target, core_type,
-    /// floor1_type, floor0_type, e1..e9), этажи — ЧИСЛА (сигнал отдаёт
-    /// строками), e-поля — вердикт-тексты|false; never-overwrite (идентичное →
+    /// (05.11.2026, замена удалённого агента case_packer; 13.11.2026 план спеца
+    /// — вход ГОТОВЫЙ чистый кейс case_report ноды compute_pattern) — РОВНО 13
+    /// полей в каноническом порядке (target, core_type, floor1_type,
+    /// floor0_type, e1..e9), этажи — ЧИСЛА (кейс-отчёт отдаёт строками),
+    /// e-поля — тексты пользователя|false; never-overwrite (идентичное →
     /// skip, изменённое → ревизия « (2)»); честные отказы на мусорной форме.
     #[test]
     #[ignore]
@@ -1176,8 +1230,13 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
             .join("психо кейсы");
         let _ = std::fs::remove_dir_all(&cases_dir);
 
-        let report = r#"{"e1":"Тупик: «помню = контролирую», давит «надо»","e2":"Заморозка важных дел, 60 вкладок, уход в сонливость","e3":"«Я будто НЕ СУЩЕСТВУЮ в этом мире»","e4":"Держусь, пока всё под контролем","e5":"Мне нельзя в нудную тяжесть без гарантии легкости","e6":"Медленные «жирные» задачи, остановка прогресса","e7":"Хронические сомнения и упадок сил","e8":"Важные дела — вязкое болото, высосет силы","e9":"Успеть получить опыт как доказательство жизни","floor0_type":"6","floor1_type":"9","target":"Спазм лба и висков + Заморозка важных дел"}"#;
-        let args = serde_json::json!({ "report": report, "core_type": "3" }).to_string();
+        // Чистый кейс-отчёт ноды compute_pattern (этажи строками, тексты
+        // capFirst, e-поля string|false) — как в графе:
+        // {{ nodes.compute_pattern.output.case_report }}.
+        let case_report = r#"{"target":"Спазм лба и висков + Заморозка важных дел","core_type":"3","floor1_type":"9","floor0_type":"6","e1":"Тупик: «помню = контролирую», давит «надо»","e2":"Заморозка важных дел, 60 вкладок, уход в сонливость","e3":"«Я будто НЕ СУЩЕСТВУЮ в этом мире»","e4":"Держусь, пока всё под контролем","e5":"Мне нельзя в нудную тяжесть без гарантии легкости","e6":"Медленные «жирные» задачи, остановка прогресса","e7":"Хронические сомнения и упадок сил","e8":"Важные дела — вязкое болото, высосет силы","e9":"Успеть получить опыт как доказательство жизни"}"#;
+        let case_value: serde_json::Value =
+            serde_json::from_str(case_report).expect("кейс-отчёт — JSON");
+        let args = serde_json::json!({ "case": case_value }).to_string();
         let run = |args: &str| {
             run_test_tool(
                 &deno,
@@ -1209,7 +1268,7 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         for key in ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9"] {
             assert!(
                 case[key].is_string() || case[key] == "false",
-                "{} — вердикт-текст или false, получено {}",
+                "{} — текст пользователя или false, получено {}",
                 key,
                 case[key]
             );
@@ -1242,8 +1301,11 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         assert_eq!(output["saved_path"], output["saved_path"]);
 
         // 3-й прогон (юзер уточнил данные) → ревизия « (2)», оригинал не тронут.
-        let revised = report.replace("60 вкладок", "70 вкладок");
-        let args2 = serde_json::json!({ "report": revised, "core_type": "3" }).to_string();
+        let revised: serde_json::Value = serde_json::from_str(
+            &case_report.replace("60 вкладок", "70 вкладок"),
+        )
+        .expect("ревизия кейс-отчёта — JSON");
+        let args2 = serde_json::json!({ "case": revised }).to_string();
         let (stdout, _, status) = run(&args2);
         assert!(status.success());
         let output: serde_json::Value =
@@ -1258,19 +1320,32 @@ console.log(JSON.stringify({ received: args.n, doubled: Number(args.n) * 2 }));
         assert!(std::path::Path::new(saved_path).is_file(), "оригинал не перезаписан");
 
         // Честные отказы: мусорная форма → exit≠0 и объяснение в stderr.
+        let bad_case = |fragment_from: &str, fragment_to: &str| -> String {
+            serde_json::json!({
+                "case": serde_json::from_str::<serde_json::Value>(
+                    &case_report.replace(fragment_from, fragment_to)
+                ).expect("кейс-отчёт — JSON")
+            })
+            .to_string()
+        };
         for (bad_args, reason_part) in [
-            (r#"{"core_type":"3"}"#.to_string(), "report"),
-            (r#"{"report":"не json","core_type":"3"}"#.to_string(), "JSON"),
+            (r#"{"core_type":"3"}"#.to_string(), "поле case обязательно"),
+            (r#"{"case":"не json"}"#.to_string(), "JSON"),
+            // Этажи-строки принимаются только как цифры 1..9 (compute_pattern
+            // отдаёт вектор, а не "none" в успешном кейсе).
+            (bad_case(r#""floor1_type":"9""#, r#""floor1_type":"none""#), "мусор вместо цифры"),
             (
-                serde_json::json!({ "report": report, "core_type": "none" }).to_string(),
-                "мусор вместо цифры",
-            ),
-            (
-                serde_json::json!({ "report": report.replace("\"target\":\"Спазм лба и висков + Заморозка важных дел\"", "\"target\":\"\""), "core_type": "3" }).to_string(),
+                bad_case(
+                    r#""target":"Спазм лба и висков + Заморозка важных дел""#,
+                    r#""target":""#,
+                ),
                 "target",
             ),
             (
-                serde_json::json!({ "report": report.replace("\"e5\":\"Мне нельзя в нудную тяжесть без гарантии легкости\",", ""), "core_type": "3" }).to_string(),
+                bad_case(
+                    r#""e5":"Мне нельзя в нудную тяжесть без гарантии легкости","#,
+                    "",
+                ),
                 "e5",
             ),
         ] {

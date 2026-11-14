@@ -1,27 +1,54 @@
 /**
- * compute_pattern_type — тул команды «Психотерапевт»: механическая верификация
- * сквозной SAFETY-цепи всех трёх этажей (T0 -> T-1 -> T-2) и готовности
- * критических элементов Ядра.
+ * compute_pattern_type — тул команды «Психотерапевт»: механическая проверка
+ * ПАРАМИ eN/eN_text и ОДНОГО сквозного вектора (`pattern_vector`), выбранного
+ * Валидатором, + сборка ЧИСТОГО кейс-отчёта (план спеца 13.11.2026).
+ *
+ * Роли разведены: канал решения — ЛИТЕРАЛ bool (`eN`), текст — `eN_text`
+ * (виден юзеру на схеме). Заглушка-строка в канале решения невозможна
+ * грамматикой контракта; химеры (согласование этажей по отдельности)
+ * невозможны выбором РОВНО одного готового вектора из каталога.
+ * Здесь НЕТ авто-выравнивания и НЕТ эвристик «доказанности по тексту»:
+ * неполные данные — честный отказ (§00.2), маршрутизируемый графом
+ * (check_pattern → добор данных).
  *
  * Вход: Deno.args[0] = JSON (значения приходят СТРОКАМИ от движка):
  *   {"report": "<JSON-строка сигнала validator_report или сам объект>"}
  *
  * Выход: ТОЛЬКО JSON в stdout:
- *   {"floor2_type": "1".."9" | "none", "pattern_found": boolean, "surface_proven": boolean, "reason": "<объяснение>"}
+ *   {
+ *     "pattern_found":  boolean,
+ *     "surface_proven": boolean,
+ *     "reason":         "<честное объяснение исхода>",
+ *     "pattern_vector": "<литерал из сигнала, 'none' — как пришло>",
+ *     "core_type":      "1".."9" | "none",
+ *     "floor1_type":    "1".."9" | "none",
+ *     "floor0_type":    "1".."9" | "none",
+ *     "case_report": {
+ *       "target": "<житейская мишень>",
+ *       "core_type": "…", "floor1_type": "…", "floor0_type": "…",
+ *       "e1": "<суть словами пользователя>" | false, …, "e9": …
+ *     }
+ *   }
+ *
+ * case_report — ЕДИНСТВЕННЫЙ downstream-формат (save_neurosis_case,
+ * read_pattern_sections, call_healer читают его, а не сырой сигнал):
+ * текст eN_text без подтверждения bool-каналом сюда не попадает никогда.
  */
 
-const SAFETY_TRANSITIONS: readonly number[] = [0, 7, 4, 6, 1, 8, 9, 5, 2, 3];
-
-export interface PatternVerdict {
-  /** Цифра типа 1..9 либо явное "none" (тип не определён → добор данных). */
-  floor2_type: string;
-  /** Производный булев (floor2_type != "none"): читаемое роутером состояние. */
-  pattern_found: boolean;
-  /** Производный булев: ВСЕ элементы поверхностного контура {e1, e2, e6, e7} подтверждены. */
-  surface_proven: boolean;
-  /** Честное объяснение исхода (для логов и диагностики пайплайна). */
-  reason: string;
-}
+/** Каталог сквозных векторов — SSOT (конверсии Безопасности,
+ * `database/conversions_patterns.md`; порядок = каталог №1..№9).
+ * Литерал контракта (формат владельца 13.11.2026) → [Ядро, Защита, Симптом]. */
+const PATTERN_VECTORS: Readonly<Record<string, readonly [number, number, number]>> = {
+  "Core 5 | Protection 7 | Symptom 1": [5, 7, 1],
+  "Core 1 | Protection 4 | Symptom 2": [1, 4, 2],
+  "Core 9 | Protection 6 | Symptom 3": [9, 6, 3],
+  "Core 7 | Protection 1 | Symptom 4": [7, 1, 4],
+  "Core 2 | Protection 8 | Symptom 5": [2, 8, 5],
+  "Core 3 | Protection 9 | Symptom 6": [3, 9, 6],
+  "Core 8 | Protection 5 | Symptom 7": [8, 5, 7],
+  "Core 4 | Protection 2 | Symptom 8": [4, 2, 8],
+  "Core 6 | Protection 3 | Symptom 9": [6, 3, 9],
+};
 
 const NONE = "none";
 
@@ -29,37 +56,72 @@ const NONE = "none";
  * сопротивление (e1), автоматизм (e2), триггер (e6), эмоция-повторитель (e7). */
 const SURFACE_ELEMENTS: readonly string[] = ["e1", "e2", "e6", "e7"];
 
-const FALSE_TEXT_RE = /^false(?![\p{L}\p{N}])/iu;
+/** Гейты принятия вектора: элемент считается доказанным, только если
+ * пользователь САМ подтвердил его (eN=true) и дал свою формулировку
+ * (непустой eN_text). e4 (самооценка) НЕ гейтит — опорный контекст:
+ * нейрохиллер строит шаги лечения на e1/e2/e9 (проверено по его md). */
+const GATES: readonly string[] = ["e1", "e2", "e3", "e5", "e6", "e7", "e8", "e9"];
 
-/** Маркеры того, что Валидатор сам смоделировал гипотезу в уме или списал
- * книжные штампы из справочника `patterns_9_types_detailed.md` в обход
- * `shadow_worker` (например: «Если защита … рухнет — откроется черная дыра…»,
- * «При крушении защиты…», «из контекста вытекает…»). Такие строки механически
- * отбраковываются как НЕ доказанные (`false`), чтобы гарантированно вызывался
- * `shadow_worker`. */
-const UNVERIFIED_HYPOTHESIS_RE =
-  /(?:^если\s+(?:защита|идол|правило|контроль|система|маска|броня).*?(?:рухн|пад| провал|не\s+сработа|исчезн)|^при\s+крушении\s+(?:защит|идол|правил)|из\s+контекста\s+(?:вытекает|следует|считывается)|черная\s+дыра|экзистенциальн(?:ая|ой)\s+бездн|непоколебимый\s+тотем|онтологическ(?:ий|ая|ого)\s+(?:вакуум|дыра|крах|ужас)|утробное\s+небытие|протез\s+бытия|цитадель\s+разума|выкидыш\s+бытия)/iu;
+const E_KEYS: readonly string[] = [
+  "e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9",
+];
 
-export function is_proven(value: unknown): boolean {
-  if (value === true) return true;
-  if (typeof value !== "string") return false;
-  const trimmed = value.trim();
-  if (trimmed === "" || FALSE_TEXT_RE.test(trimmed)) return false;
-  if (UNVERIFIED_HYPOTHESIS_RE.test(trimmed)) return false;
-  return true;
+/** trim + заглавная первая буква. НИКАКОЙ хирургии текста регэкспами:
+ * валидатор обязан писать житейскую формулировку словами пользователя,
+ * а не канцелярит (правило — в его md); чистая строка downstream. */
+function capFirst(text: string): string {
+  const trimmed = text.trim();
+  if (trimmed.length === 0) return trimmed;
+  return trimmed[0].toUpperCase() + trimmed.slice(1);
 }
 
-/** Критические элементы контура: тип Триады Травмы не объявляется, пока не
- * подтверждены все (e3 проверяется отдельно первым). */
-const CRITICAL_ELEMENTS: readonly string[] = ["e6", "e8", "e9"];
+export interface CaseReport {
+  target: string;
+  core_type: string;
+  floor1_type: string;
+  floor0_type: string;
+  e1: string | false;
+  e2: string | false;
+  e3: string | false;
+  e4: string | false;
+  e5: string | false;
+  e6: string | false;
+  e7: string | false;
+  e8: string | false;
+  e9: string | false;
+}
 
-function refusal(reason: string): PatternVerdict {
-  return {
-    floor2_type: NONE,
-    pattern_found: false,
-    surface_proven: false,
-    reason,
-  };
+export interface PatternVerdict {
+  /** Вектор принят (все гейты подтверждены парами eN/eN_text). */
+  pattern_found: boolean;
+  /** Производный булев: ВСЕ элементы поверхностного контура {e1, e2, e6, e7} подтверждены. */
+  surface_proven: boolean;
+  /** Честное объяснение исхода (для логов и диагностики пайплайна). */
+  reason: string;
+  /** Литерал из сигнала как пришло ("none" — ранний ход без вскрытого Ядра). */
+  pattern_vector: string;
+  /** Цифры выбранного вектора строками ("none" при отказе) — читаемо роутером. */
+  core_type: string;
+  floor1_type: string;
+  floor0_type: string;
+  /** Чистый кейс-отчёт для save_neurosis_case / call_healer. */
+  case_report: CaseReport;
+}
+
+/** Элемент доказан = пользователь сам подтвердил (bool-канал решения)
+ * И дал свою формулировку (непустой eN_text). Одно без другого — не доказано:
+ * bool без текста не даёт материала кейса, текст без bool — не решение. */
+function proven(obj: Record<string, unknown>, key: string): boolean {
+  if (obj[key] !== true) return false;
+  const text = obj[`${key}_text`];
+  return typeof text === "string" && text.trim() !== "";
+}
+
+/** Чистый элемент кейса: формулировка пользователя или честное false. */
+function element(obj: Record<string, unknown>, key: string): string | false {
+  if (!proven(obj, key)) return false;
+  const text = obj[`${key}_text`];
+  return typeof text === "string" ? capFirst(text) : false;
 }
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -69,20 +131,29 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
   return value as Record<string, unknown>;
 }
 
-/** Парсит цифру типа: непустая строка из десятичных цифр, значение 1..9. */
-function parseTypeDigit(raw: unknown): number | undefined {
-  if (typeof raw !== "string") return undefined;
-  const text = raw.trim();
-  if (!/^\d+$/.test(text)) return undefined;
-  const parsed = Number(text);
-  return parsed >= 1 && parsed <= 9 ? parsed : undefined;
+function buildCaseReport(
+  obj: Record<string, unknown>,
+  core: string,
+  floor1: string,
+  floor0: string,
+): CaseReport {
+  const rawTarget = typeof obj["target"] === "string" ? obj["target"] : "";
+  const elements = Object.fromEntries(
+    E_KEYS.map((key) => [key, element(obj, key)]),
+  ) as Record<string, string | false>;
+  return {
+    target: capFirst(rawTarget),
+    core_type: core,
+    floor1_type: floor1,
+    floor0_type: floor0,
+    ...elements,
+  } as CaseReport;
 }
 
-/** Механическая проверка сцепки всех трёх этажей (T0 -> T-1 -> T-2) и
- * подтверждённости критических элементов (`e3`, `e6`, `e8`, `e9`).
- * Если все критические элементы доказаны, но модель ошиблась в арифметике
- * переходов между этажами, цепочка авто-выравнивается без зацикливания
- * пайплайна в `shadow_worker`. */
+/** Механическая проверка пар и вектора + сборка чистого кейс-отчёта.
+ * Авто-выравнивания нет: вектор выбирает МОДЕЛЬ одним выбором из каталога
+ * (химеры невозможны), здесь только проверка гейтов. Неполные данные —
+ * отказ с именованными элементами. */
 export function computePatternType(report: unknown): PatternVerdict {
   let value: unknown = report;
   if (typeof value === "string") {
@@ -96,80 +167,83 @@ export function computePatternType(report: unknown): PatternVerdict {
   if (!obj) {
     return refusal("значение сигнала не объект");
   }
-  const surface_proven = SURFACE_ELEMENTS.every((element) => is_proven(obj[element]));
-  const refuse = (reason: string): PatternVerdict => ({
-    floor2_type: NONE,
+  const surface_proven = SURFACE_ELEMENTS.every((e) => proven(obj, e));
+  const unproven = GATES.filter((e) => !proven(obj, e));
+  const refuse = (reason: string, vector: string): PatternVerdict => ({
     pattern_found: false,
     surface_proven,
     reason,
+    pattern_vector: vector,
+    core_type: NONE,
+    floor1_type: NONE,
+    floor0_type: NONE,
+    case_report: buildCaseReport(obj, NONE, NONE, NONE),
   });
-  const floor0 = typeof obj["floor0_type"] === "string" ? obj["floor0_type"].trim() : undefined;
-  const floor1 = typeof obj["floor1_type"] === "string" ? obj["floor1_type"].trim() : undefined;
-  const floor2 = typeof obj["floor2_type"] === "string" ? obj["floor2_type"].trim() : undefined;
-  if (floor0 === undefined || floor1 === undefined) {
-    return refuse("этажи не классифицированы (floor0_type/floor1_type отсутствуют)");
+  const vectorRaw = typeof obj["pattern_vector"] === "string"
+    ? obj["pattern_vector"].trim()
+    : "";
+  if (vectorRaw === "") {
+    return refuse("pattern_vector отсутствует или не строка", NONE);
   }
-  if (!is_proven(obj["e3"])) {
-    return refuse("ядро не подтверждено (e3 — false или не проверенная с юзером гипотеза) — вызываем shadow_worker");
+  if (vectorRaw === NONE) {
+    return refuse(
+      unproven.length === 0
+        ? "все факты подтверждены, но валидатор не выбрал вектор (pattern_vector='none') — нужен добор данных"
+        : `вектор не выбран (pattern_vector='none'): не подтверждены самим пользователем: ${unproven.join(", ")} — нужен добор данных`,
+      NONE,
+    );
   }
-  for (const element of CRITICAL_ELEMENTS) {
-    if (!is_proven(obj[element])) {
-      return refuse(
-        `критический элемент ${element} не подтверждён — тип Триады Травмы не объявляется`,
-      );
-    }
+  const vector = PATTERN_VECTORS[vectorRaw];
+  if (vector === undefined) {
+    return refuse(
+      `мусор вместо вектора: "${vectorRaw}" — допустимы 'none' и 9 векторов каталога`,
+      vectorRaw,
+    );
   }
-  const t0 = parseTypeDigit(floor0);
-  if (t0 === undefined) {
-    return refuse(`мусор вместо цифры Этажа 0: ${floor0}`);
+  if (unproven.length > 0) {
+    return refuse(
+      `вектор "${vectorRaw}" не принимается: не подтверждены самим пользователем: ${unproven.join(", ")}`,
+      vectorRaw,
+    );
   }
-  const t1 = parseTypeDigit(floor1);
-  if (t1 === undefined) {
-    return refuse(`мусор вместо цифры Этажа -1: ${floor1}`);
-  }
-  const t2 = floor2 !== undefined && floor2 !== "" ? parseTypeDigit(floor2) : undefined;
-  if (floor2 !== undefined && floor2 !== "" && t2 === undefined) {
-    return refuse(`мусор вместо цифры Этажа -2: ${floor2}`);
-  }
-
-  // 1. Идеальное совпадение всей цепочки T0 -> T-1 (-> T-2)
-  if (SAFETY_TRANSITIONS[t0] === t1) {
-    const expectedT2 = SAFETY_TRANSITIONS[t1];
-    if (t2 === undefined || t2 === expectedT2) {
-      return {
-        floor2_type: String(expectedT2),
-        pattern_found: true,
-        surface_proven,
-        reason: "SAFETY-сцепка этажей сходится",
-      };
-    }
-    // Совпала пара (T0 -> T-1), выравниваем T-2 по ней
-    return {
-      floor2_type: String(expectedT2),
-      pattern_found: true,
-      surface_proven,
-      reason: `Авто-выравнивание SAFETY-сцепки по паре T0(${t0})->T-1(${t1}): Ядро = Тип ${expectedT2}`,
-    };
-  }
-
-  // 2. Если T0 и T-1 разошлись, но передан валидный T-2 (Ядро):
-  // проверяем совпадение пары (T-1 -> T-2) или (T0 -> ... -> T-2), иначе якоримся от Ядра T-2
-  if (t2 !== undefined) {
-    return {
-      floor2_type: String(t2),
-      pattern_found: true,
-      surface_proven,
-      reason: `Авто-выравнивание SAFETY-сцепки от Ядра (floor2_type=${t2}) при доказанных элементах`,
-    };
-  }
-
-  // 3. Если T-2 не передан, вычисляем Ядро на 2 шага Безопасности от T0
-  const alignedT2 = SAFETY_TRANSITIONS[SAFETY_TRANSITIONS[t0]];
+  const [core, floor1, floor0] = vector;
   return {
-    floor2_type: String(alignedT2),
     pattern_found: true,
     surface_proven,
-    reason: `Авто-выравнивание SAFETY-сцепки от Этажа 0 (floor0_type=${t0}): Ядро = Тип ${alignedT2}`,
+    reason: `сквозной вектор принят: все гейты подтверждены парами eN/eN_text (${vectorRaw})`,
+    pattern_vector: vectorRaw,
+    core_type: String(core),
+    floor1_type: String(floor1),
+    floor0_type: String(floor0),
+    case_report: buildCaseReport(obj, String(core), String(floor1), String(floor0)),
+  };
+}
+
+/** refusal ДО объявления — вынесен наверх hoisting'ом function declaration. */
+function refusal(reason: string): PatternVerdict {
+  return {
+    pattern_found: false,
+    surface_proven: false,
+    reason,
+    pattern_vector: NONE,
+    core_type: NONE,
+    floor1_type: NONE,
+    floor0_type: NONE,
+    case_report: {
+      target: "",
+      core_type: NONE,
+      floor1_type: NONE,
+      floor0_type: NONE,
+      e1: false,
+      e2: false,
+      e3: false,
+      e4: false,
+      e5: false,
+      e6: false,
+      e7: false,
+      e8: false,
+      e9: false,
+    },
   };
 }
 

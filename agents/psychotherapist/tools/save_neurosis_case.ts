@@ -2,8 +2,12 @@
  * save_neurosis_case — тул команды «Психотерапевт»: сохранение кейса юзера.
  *
  * Заменяет агента case_packer (удалён 05.11.2026 — лишний LLM-вызов для
- * механической перекомпоновки): сборка плоского JSON из сигнала валидатора —
- * детерминированная операция кода, а не эпистемия модели (§00.2).
+ * механической перекомпоновки). 13.11.2026 (план спеца): вход — ГОТОВЫЙ
+ * чистый кейс (`case_report` ноды compute_pattern), а не сырой сигнал:
+ * компоновка уже детерминирована кодом compute_pattern; здесь только
+ * валидация формы, имя файла и never-overwrite запись. Ни SAFETY-таблицы,
+ * ни выравнивания этажей, ни санитизации текстов — их быть не должно
+ * (заглушки/химеры отсекаются upstream грамматикой и гейтами).
  */
 
 /** Кейс в каноническом порядке полей (эталон владельца). */
@@ -23,8 +27,9 @@ interface CaseJson {
   e9: string | false;
 }
 
-const SAFETY_TRANSITIONS: readonly number[] = [0, 7, 4, 6, 1, 8, 9, 5, 2, 3];
-const E_KEYS: readonly string[] = ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9"];
+const E_KEYS: readonly string[] = [
+  "e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9",
+];
 /** Суффиксы ревизий: `<stem> (2).json` … `<stem> (99).json`. */
 const MAX_REVISIONS = 99;
 
@@ -49,7 +54,7 @@ function parseJsonOr(raw: string, what: string): unknown {
   }
 }
 
-/** Цифра типа 1..9 из строки сигнала (этажи приходят строками "1".."9"). */
+/** Цифра типа 1..9 из строки кейс-отчёта (этажи приходят строками "1".."9"). */
 function parseTypeDigit(raw: unknown, label: string): number {
   if (typeof raw !== "string") {
     fail(`${label} обязан быть строкой-цифрой 1..9, получено ${JSON.stringify(raw)}`);
@@ -63,49 +68,6 @@ function parseTypeDigit(raw: unknown, label: string): number {
     fail(`${label}: ${parsed} вне диапазона 1..9`);
   }
   return parsed;
-}
-
-/** Санитизация текста вердикта на случай, если LLM всё же вставила канцелярский
- * оборот 3-го лица («пользователь фиксирует…», «из контекста вытекает…») или
- * академический термин («онтологическая», «императив»). */
-export function sanitizeVerdictText(text: string): string {
-  let cleaned = text.trim();
-
-  const metaPrefixes: readonly RegExp[] = [
-    /^из\s+контекста\s+(?:вытекает|следует|считывается|видно)\s*(?:убеждение|требование|императив|правило|страх|боязнь|ощущение)?\s*(?:,\s*что|:\s*|\s+)/iu,
-    /^(?:пользователь|клиент|человек)\s+(?:указывает\s+на\s+(?:конкретный\s+)?(?:пусковой\s+момент|триггер|стимул|ситуацию)\s*:\s*)/iu,
-    /^(?:пользователь|клиент|человек)\s+(?:описывает\s+(?:хроническую\s+|повторяющуюся\s+)?эмоцию\s*:?\s*)/iu,
-    /^(?:пользователь|клиент|человек)\s+(?:фиксирует|описывает|указывает|отмечает|испытывает|ощущает|чувствует|проявляет)\s*(?:,\s*что\s+|\s+)/iu,
-    /^(?:пользователь|клиент|человек)\s+оценивает\s+себя\s+как\s+/iu,
-  ];
-  for (const re of metaPrefixes) {
-    cleaned = cleaned.replace(re, "");
-  }
-
-  cleaned = cleaned
-    .replace(/онтологическ(?:ая|ой|ую|ий|ого|ому|им|ом|ие|их)\s+/giu, "")
-    .replace(/экзистенциальн(?:ая|ой|ую|ый|ого|ому|ым|ом|ые|ых)\s+/giu, "")
-    .replace(/категорический\s+императив\s*:?\s*/giu, "жёсткое правило: ")
-    .replace(/\bимператив\s*:?\s*/giu, "правило: ")
-    .replace(/конкретный\s+пусковой\s+(?:момент|стимул)\s*:\s*/giu, "")
-    .replace(/пусковой\s+(?:момент|стимул)\s*:\s*/giu, "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (cleaned.length > 0) {
-    cleaned = cleaned[0].toUpperCase() + cleaned.slice(1);
-  }
-  return cleaned;
-}
-
-/** e-поле сигнала: вердикт-текст (непустая строка) или false. */
-function parseElement(raw: unknown, key: string): string | false {
-  if (raw === false) return false;
-  if (typeof raw === "string" && raw.trim() !== "") {
-    if (/^false(?![\p{L}\p{N}])/iu.test(raw.trimStart())) return false;
-    return sanitizeVerdictText(raw);
-  }
-  fail(`${key}: ожидался вердикт-текст или false, получено ${JSON.stringify(raw)}`);
 }
 
 /** Имя файла из target: `<core>тип - <slug>.json`. */
@@ -124,30 +86,33 @@ export function caseFileName(coreType: number, target: string): string {
   return `${coreType}тип - ${safe}.json`;
 }
 
-/** Канонический порядок полей — эталон: target, core, f1, f0, e1..e9.
- * Если этажи в отчёте Валидатора разошлись с coreType по таблице Безопасности,
- * выравниваем floor1 и floor0 детерминированно от coreType. */
-export function buildCaseJson(report: Record<string, unknown>, coreType: number): CaseJson {
-  const rawTarget = typeof report["target"] === "string" ? report["target"].trim() : "";
-  if (rawTarget === "") {
+/** Проверка формы чистого кейса и пересборка в каноническом порядке полей
+ * (target, core, f1, f0, e1..e9). Никаких преобразований контента: тексты
+ * eN — уже житейские формулировки пользователя от compute_pattern. */
+export function buildCaseJson(caseReport: Record<string, unknown>): CaseJson {
+  const target = typeof caseReport["target"] === "string"
+    ? caseReport["target"].trim()
+    : "";
+  if (target === "") {
     fail("target: обязана быть непустая строка (мишень разбора)");
   }
-  const target = sanitizeVerdictText(rawTarget);
-  let floor1 = parseTypeDigit(report["floor1_type"], "floor1_type");
-  let floor0 = parseTypeDigit(report["floor0_type"], "floor0_type");
-  if (SAFETY_TRANSITIONS[floor1] !== coreType || SAFETY_TRANSITIONS[floor0] !== floor1) {
-    floor1 = SAFETY_TRANSITIONS.indexOf(coreType);
-    floor0 = SAFETY_TRANSITIONS.indexOf(floor1);
-  }
-  const elements = Object.fromEntries(
-    E_KEYS.map((key) => [key, parseElement(report[key], key)]),
-  ) as Record<string, string | false>;
+  const coreType = parseTypeDigit(caseReport["core_type"], "core_type");
+  const floor1 = parseTypeDigit(caseReport["floor1_type"], "floor1_type");
+  const floor0 = parseTypeDigit(caseReport["floor0_type"], "floor0_type");
+  const elements = E_KEYS.map((key) => {
+    const raw = caseReport[key];
+    if (raw === false) return [key, false] as const;
+    if (typeof raw === "string" && raw.trim() !== "") {
+      return [key, raw] as const;
+    }
+    fail(`${key}: ожидался текст пользователя или false, получено ${JSON.stringify(raw)}`);
+  });
   return {
     target,
     core_type: coreType,
     floor1_type: floor1,
     floor0_type: floor0,
-    ...elements,
+    ...Object.fromEntries(elements),
   } as CaseJson;
 }
 
@@ -185,25 +150,26 @@ if (import.meta.main) {
   }
   const raw = Deno.args[0];
   if (raw === undefined || raw.trim() === "") {
-    fail("пустой вход: ожидался JSON-объект {report, core_type}");
+    fail("пустой вход: ожидался JSON-объект {case}");
   }
   const args = asObject(parseJsonOr(raw, "вход")) ??
-    fail("вход обязан быть JSON-объектом {report, core_type}");
-  if (!("report" in args) || !("core_type" in args)) {
-    fail("поля report и core_type обязательны");
+    fail("вход обязан быть JSON-объектом {case}");
+  if (!("case" in args)) {
+    fail("поле case обязательно (чистый кейс-отчёт ноды compute_pattern)");
   }
 
-  let report: unknown = args["report"];
-  if (typeof report === "string") {
-    report = parseJsonOr(report, "report");
+  // case приходит из {{ nodes.compute_pattern.output.case_report }}; строка
+  // тоже принимается (облачная ветка может отдать её сериализованной).
+  let caseReport: unknown = args["case"];
+  if (typeof caseReport === "string") {
+    caseReport = parseJsonOr(caseReport, "case");
   }
-  const reportObj = asObject(report) ??
-    fail("report: ожидался JSON-объект сигнала validator_report");
-  const coreType = parseTypeDigit(args["core_type"], "core_type");
+  const caseObj = asObject(caseReport) ??
+    fail("case: ожидался JSON-объект чистого кейс-отчёта");
 
-  const caseJson = buildCaseJson(reportObj, coreType);
+  const caseJson = buildCaseJson(caseObj);
   const caseJsonText = JSON.stringify(caseJson, null, 2);
-  const baseName = caseFileName(coreType, caseJson.target);
+  const baseName = caseFileName(caseJson.core_type, caseJson.target);
   const { savedPath, fileName, isNew } = await saveNeverOverwrite(dir, baseName, caseJsonText);
 
   console.log(JSON.stringify({

@@ -79,6 +79,8 @@ flowchart TD
   crate__infra__system_proxy["crate::infra::system_proxy"]
   crate__infra__tools__diag["crate::infra::tools::diag"]
   crate__infra__tools__excel["crate::infra::tools::excel"]
+  crate__infra__tools__ffmpeg["crate::infra::tools::ffmpeg"]
+  crate__infra__tools__ffmpeg_tests["crate::infra::tools::ffmpeg_tests"]
   crate__infra__tools__media["crate::infra::tools::media"]
   crate__infra__tools__media_lora["crate::infra::tools::media_lora"]
   crate__infra__tools__media_lora_tests["crate::infra::tools::media_lora_tests"]

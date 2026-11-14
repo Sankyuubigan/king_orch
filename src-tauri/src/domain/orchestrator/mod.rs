@@ -1531,20 +1531,20 @@ where
             json_schema: None,
         }));
         if engine.supports_grammar() {
-            // Слоты отчёта = think-слоты + финальные строковые слоты без
-            // дум-тела (напр. floor0_type/floor1_type у валидатора): в логе
-            // числа разделяются, чтобы «слотов: 11» не читалось как «дум: 11».
+            // Отчётные поля = дум-блоки + поля без дум-тела (тексты пар eN_text
+            // и target у валидатора): в логе числа разделяются, чтобы
+            // «полей: 20» не читалось как «дум: 20».
             let total_slots = draft_count_for_contract(&contract.value_schema);
             let think_slots = think_slot_count(&contract.value_schema);
             let anchored = slot_anchor_labels(&contract.value_schema, total_slots).is_some();
             let slots_note = if total_slots > think_slots {
                 format!(
-                    "{} дум-слотов + {} финальных без дум-тела",
+                    "{} дум-блоков + {} полей без дум-тела",
                     think_slots,
                     total_slots - think_slots
                 )
             } else {
-                format!("{} дум-слотов", think_slots)
+                format!("{} дум-блоков", think_slots)
             };
             log_cb(format!("🎯 Агент '{}': применена гибридная GBNF-грамматика (<think> + JSON, поля вердикта защищены), граница размышления: {:?} симв ({}), слотов отчёта: {} ({}, {}) ", agent.id, signal_think_budget, if agent.think_budget_chars.is_some() { "frontmatter" } else { "авто-расчёт от бюджетов движка" }, total_slots, slots_note, if anchored { "якорные think-слоты — метка Element N в каждом" } else { "свободные" }));
         } else {
@@ -2933,7 +2933,7 @@ where
             }
         }
 
-        // Восстанавливаем оригинальную грамматику (hybrid) для возможных后续-вызовов
+        // Восстанавливаем оригинальную грамматику (hybrid) для возможных последующих вызовов
         ctx.restore_grammar();
     }
 
