@@ -799,10 +799,6 @@ fn collect_yaml_files(dir: &Path, files: &mut Vec<PathBuf>) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                if crate::domain::agent_manager::is_archive_dir(&path) {
-                    log::info!("[workflow_engine] Пропущен архив: {}", path.display());
-                    continue;
-                }
                 collect_yaml_files(&path, files);
             } else if path
                 .extension()

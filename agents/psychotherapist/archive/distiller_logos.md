@@ -1,5 +1,6 @@
 ---
 name: distiller_logos
+visible: false
 description: Аналитик логических команд.
 ---
 

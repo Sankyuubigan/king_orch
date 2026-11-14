@@ -1,7 +1,7 @@
 ---
 name: Синхронизация данных
 destiny: Синхронизировать с юзером информацию и убедиться что гипотезы верные 
-visible: true
+visible: false
 tools:
   write: false
   bash: false

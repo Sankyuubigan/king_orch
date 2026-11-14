@@ -1,5 +1,6 @@
 ---
 name: Verificator
+visible: false
 destiny: Проверить истинность данных и соответствие на разных этажах.
 tools:
   write: false

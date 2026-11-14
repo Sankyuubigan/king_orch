@@ -1,5 +1,6 @@
 ---
 name: pattern_finder_by_double_bind
+visible: false
 description: Специалист по Эннеаграмме
 destiny: Определить паттерн (один из 9) проблемы юзера.
 ---

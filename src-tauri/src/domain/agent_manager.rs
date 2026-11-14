@@ -135,12 +135,6 @@ pub struct AgentEntry {
     pub fusable_groups: usize,
 }
 
-/// Имя папки, содержимое которой — мёртвый код и НЕ должно попадать
-/// ни в каталог, ни в загрузку агентов. Исключение на уровне сканера,
-/// а не на уровне UI: иначе архивные агенты остались бы «невидимыми,
-/// но исполняемыми» через прямой `agent_id` (это ложь в UI, §2.2 core/rules).
-const ARCHIVE_DIR: &str = "archive";
-
 /// Относительный путь файла внутри `agents/` через `/` (кроссплатформенно).
 fn rel_path_of(path: &Path, agents_dir: &Path) -> String {
     path.strip_prefix(agents_dir)
@@ -195,22 +189,12 @@ fn collect_md_files(dir: &Path, files: &mut Vec<PathBuf>) {
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir() {
-                if is_archive_dir(&path) {
-                    log::info!("[agents] Пропущен архив: {}", path.display());
-                    continue;
-                }
                 collect_md_files(&path, files);
             } else if path.extension().map_or(false, |e| e == "md") {
                 files.push(path);
             }
         }
     }
-}
-
-/// Папка `archive/` в любой вложенности — мёртвый код, исключается из обхода.
-pub(crate) fn is_archive_dir(path: &Path) -> bool {
-    path.file_name()
-        .map_or(false, |n| n == std::ffi::OsStr::new(ARCHIVE_DIR))
 }
 
 fn process_includes(base_path: &Path, content: &str) -> String {
