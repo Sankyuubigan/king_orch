@@ -8,18 +8,18 @@
 
 | Слой | Путь | Что там | Потребители |
 |---|---|---|---|
-| **L0** | `my-tauri-plugins/tools/agent-tools/` | CLI/MCP для ИИ-кодеров внешних харнессов: codemap, websearch, consult, code. Не входит в поставку King Orch | ZCode/OpenCode/Claude Code |
-| **L1** | `my-tauri-plugins/{code,excel,diag}-tools/` + `json-store/` (и будущие lib-крейты) | Tauri-free SSOT-ядра: code, excel, diag, json-store | code-tools ест И хост И agent-tools; остальные — хост |
-| **L2** | `my-tauri-plugins/tauri-plugin-*` | Движки с Tauri/OS-зависимостями: image-engine, ytdlp, downloader, llama-engine, logs… | Хост (и любые другие Tauri-проекты) |
+| **L0** | `cross-app-plugins/tools/agent-tools/` | CLI/MCP для ИИ-кодеров внешних харнессов: codemap, websearch, consult, code. Не входит в поставку King Orch | ZCode/OpenCode/Claude Code |
+| **L1** | `cross-app-plugins/{code,excel,diag}-tools/` + `json-store/` (и будущие lib-крейты) | Tauri-free SSOT-ядра: code, excel, diag, json-store | code-tools ест И хост И agent-tools; остальные — хост |
+| **L2** | `cross-app-plugins/tauri-plugin-*` | Движки с Tauri/OS-зависимостями: image-engine, ytdlp, downloader, llama-engine, logs… | Хост (и любые другие Tauri-проекты) |
 | **L3** | `src-tauri/src/infra/tools/` | Трейт `Tool` + built-ins + тонкие адаптеры над L1/L2 + нишевые тула | Только King Orch |
 | **L4** | `agents/<agent>/tools/*.ts` | Бизнес-математика конкретного агента; исполняется нодой `tool` через Deno (`workflow_engine/custom_tool.rs`) | Конкретный агент |
 | **L5** | `src-tauri/mcp_servers/*.ts` | Deno MCP-серверы (JSON-RPC stdio): внешний сервис/протокол | Боевые агенты через `mcp_servers:` frontmatter |
 
-**Правило нейтральности L0–L2** (репо `my-tauri-plugins`): см. README репо, раздел
+**Правило нейтральности L0–L2** (репо `cross-app-plugins`): см. README репо, раздел
 «⚖️ Нейтральность репозитория». Ни имени, ни путей, ни env продуктов-потребителей
 (включая King Orch) в именах крейтов, коде, env и доках. Имя — по capability.
 
-### Исторические нарушения нейтральности в my-tauri-plugins (список к чистке)
+### Исторические нарушения нейтральности в cross-app-plugins (список к чистке)
 
 Ниже — нарушения правила, ревизия конца 09.11.26: **кодовые нарушения (имена крейтов, env,
 temp-префиксы, док-комменты тронутых файлов) исправлены и верифицированы компилятором обоих
@@ -42,7 +42,7 @@ temp-префиксы, док-комменты тронутых файлов) и
 Проверять **строго сверху вниз**, не перескакивать:
 
 1. **Нужна хосту И другим харнессам (≥2 потребителя)?** → **L1** lib-крейт в
-   `my-tauri-plugins`, имя по capability (без продуктовых акронимов), жёстко
+   `cross-app-plugins`, имя по capability (без продуктовых акронимов), жёстко
    Tauri-free (Tauri-зависимость = отказ — agent-tools бинарь без Tauri).
 2. **Нужен GUI/OS/движок (графика, аудио, видео, окна)?** → **L2** `tauri-plugin-*`.
 3. **Нишевая capability продукта King Orch?** → **L3** `infra/tools`: built-in или
@@ -76,7 +76,7 @@ temp-префиксы, док-комменты тронутых файлов) и
 ## Известные ограничения (зафиксировано, решение отдельно)
 
 - `agents/coder/task_planner.md`, `agents/coder/project_mapper.md` хардкодят дев-путь
-  `D:\Projects\my-tauri-plugins\bin\agent-tools.exe` — на машине пользователя пути нет
+  `D:\Projects\cross-app-plugins\bin\agent-tools.exe` — на машине пользователя пути нет
   (agent-tools.exe не бандлится). Либо бандлить exe, либо убирать codemap-инструкции из
   продуктовых агентов — решение владельца.
 - `markdown_section_reader` (L5) подключён только архивным агентам (archive/neuro_reprogrammer)
@@ -89,4 +89,4 @@ temp-префиксы, док-комменты тронутых файлов) и
 - Каталог тулов: [GENERATED_TOOL_CATALOG.md](GENERATED_TOOL_CATALOG.md) (автоген из кода)
 - Создание агентов и параметр `tools`: [AGENT_CREATION_GUIDE.md](AGENT_CREATION_GUIDE.md)
 - Контракты CLI для кодеров (L0): глобальная дока `global_ai_docs/agent_tools.md`
-- Правило нейтральности репо плагинов: `my-tauri-plugins/README.md`
+- Правило нейтральности репо плагинов: `cross-app-plugins/README.md`

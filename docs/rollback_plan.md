@@ -129,7 +129,7 @@ installer::run_install(app, kind, version, download_url)
 ## Порядок реализации
 1. `tauri-build-toolkit` (шаг release) — НЕ генерирует `manifest.json` (убрано: было источником бага);
    `latest.json` для обычных обновлений остаётся.
-2. `my-tauri-plugins/tauri-plugin-about-updates` — `installer.rs` (запуск инсталлера),
+2. `cross-app-plugins/tauri-plugin-about-updates` — `installer.rs` (запуск инсталлера),
    `install_report.rs` (отчёт), `commands.rs` (`install_release`, `get_install_report`).
 3. `src-tauri/src/api/updater.rs` — резервная установка через тот же лаунчер.
 4. Регистрация команд плагина: `build.rs`, `lib.rs`, `permissions/default.toml`.

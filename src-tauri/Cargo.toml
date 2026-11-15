@@ -21,47 +21,47 @@ tauri-plugin-dialog = "2.0.0"
 tauri-plugin-shell = "2.0.0"
 tauri-plugin-updater = "2.0.0"
 tauri-plugin-process = "2.0.0"
-# Единый лог + опциональное облако (Aptabase) — runtime-плагин my-tauri-plugins.
-tauri-plugin-logs = { path = "../../my-tauri-plugins/tauri-plugin-logs" }
-# Переиспользуемый модуль «О приложении / Обновления» (общий репозиторий my-tauri-plugins).
-tauri-plugin-about-updates = { path = "../../my-tauri-plugins/tauri-plugin-about-updates" }
+# Единый лог + опциональное облако (Aptabase) — runtime-плагин cross-app-plugins.
+tauri-plugin-logs = { path = "../../cross-app-plugins/tauri-plugin-logs" }
+# Переиспользуемый модуль «О приложении / Обновления» (общий репозиторий cross-app-plugins).
+tauri-plugin-about-updates = { path = "../../cross-app-plugins/tauri-plugin-about-updates" }
 # Движок llama.cpp — единый для всех хостов (SSOT): установка/обновление
 # бекендов, каталог моделей, список моделей, параметры сэмплинга, VRAM.
 # feature host-logs связывает телеметрию движка с единой аналитикой хоста.
-tauri-plugin-llama-engine = { path = "../../my-tauri-plugins/tauri-plugin-llama-engine", features = ["host-logs"] }
+tauri-plugin-llama-engine = { path = "../../cross-app-plugins/tauri-plugin-llama-engine", features = ["host-logs"] }
     # Шлюз облачных LLM (9Router, ExtremeRouter, OmniRoute) — единый для всех хостов (SSOT): установка
     # портативного Node.js + бандла роутера, ленивый автозапуск по требованию,
     # список комбо и OpenAI-совместимый чат (kill сервера на выходе через Job Object).
-    tauri-plugin-cloud-routers = { path = "../../my-tauri-plugins/tauri-plugin-cloud-routers" }
+    tauri-plugin-cloud-routers = { path = "../../cross-app-plugins/tauri-plugin-cloud-routers" }
 # Единый движок скачивания (SSOT): 6 уровней, stall/resume, прогресс speed/ETA,
 # без системных окон (CREATE_NO_WINDOW). Используют хост и все плагины.
-tauri-plugin-downloader = { path = "../../my-tauri-plugins/tauri-plugin-downloader" }
+tauri-plugin-downloader = { path = "../../cross-app-plugins/tauri-plugin-downloader" }
 # Движок изображений stable-diffusion.cpp (SSOT): установка бекендов sd-server,
 # бандл Qwen Image 2.1, VRAM-preflight, generate/edit по HTTP.
-tauri-plugin-image-engine = { path = "../../my-tauri-plugins/tauri-plugin-image-engine" }
+tauri-plugin-image-engine = { path = "../../cross-app-plugins/tauri-plugin-image-engine" }
 # Атомарные записи JSON (app_config.json, sessions/): tmp->rename + sidecar lock.
-json-store = { path = "../../my-tauri-plugins/json-store" }
-# Ядро кодо-тулов (SSOT, репозиторий my-tauri-plugins): чит/поиск/shell-тулы.
+json-store = { path = "../../cross-app-plugins/json-store" }
+# Ядро кодо-тулов (SSOT, репозиторий cross-app-plugins): чит/поиск/shell-тулы.
 # Регулярные функции переехали в ядро; host оставляет только политику записи.
-code-tools = { path = "../../my-tauri-plugins/tools/code-tools" }
+code-tools = { path = "../../cross-app-plugins/tools/code-tools" }
 # Ядро Excel-тулов (SSOT): umya-spreadsheet-операции, QA-гейты формул,
 # recalc/PDF через LibreOffice (soffice — внешняя программа, не зависимость).
-excel-tools = { path = "../../my-tauri-plugins/tools/excel-tools" }
+excel-tools = { path = "../../cross-app-plugins/tools/excel-tools" }
 # Ядро диагностических тулов (SSOT): аудит системы Windows, криминалистика
 # сбоев (журнал/дампы), «чёрный ящик» рекордера с sync_all. PowerShell —
 # внешняя программа, не зависимость.
-diag-tools = { path = "../../my-tauri-plugins/tools/diag-tools" }
+diag-tools = { path = "../../cross-app-plugins/tools/diag-tools" }
 # Ядро веб-поиска (SSOT): движки/HTTP/кеш/статистика + поисковое ядро.
 # Нативный тул `WebSearch` (infra/tools/websearch.rs) — замена MCP web_search.ts.
-web-tools = { path = "../../my-tauri-plugins/tools/web-tools" }
+web-tools = { path = "../../cross-app-plugins/tools/web-tools" }
 # Движок yt-dlp (SSOT): установка/обновление бинаря + субтитры YouTube
 # (VTT-парсер/спонсорские/чанки). Нативные тула prepare_video/get_chunk
 # (infra/tools/youtube.rs) — замена MCP youtube_mcp.ts.
-tauri-plugin-ytdlp = { path = "../../my-tauri-plugins/tauri-plugin-ytdlp" }
+tauri-plugin-ytdlp = { path = "../../cross-app-plugins/tauri-plugin-ytdlp" }
 # Движок FFmpeg (SSOT): автоскачивание официальной сборки в хранилище +
 # запуск ffmpeg/ffprobe subprocess без shell. Нативные тула ffmpeg_probe/
 # ffmpeg_run (infra/tools/ffmpeg.rs) — агент видеомонтажа.
-tauri-plugin-ffmpeg = { path = "../../my-tauri-plugins/tauri-plugin-ffmpeg" }
+tauri-plugin-ffmpeg = { path = "../../cross-app-plugins/tauri-plugin-ffmpeg" }
 # RefMod-карточки (tasks/04.11.26): декод/ресайз кадров персонажа при сохранении
 # в карточку (кратность 32px, длинная сторона ≤1024px) — png/jpeg/webp фото юзера.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

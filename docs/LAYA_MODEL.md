@@ -3,7 +3,7 @@
 Справочник по модели **перенесён в плагин**, вместе с кодом, который её выполняет:
 
 ```
-D:\Projects\my-tauri-plugins\tauri-plugin-system1\docs\LAYA_MODEL.md
+D:\Projects\cross-app-plugins\tauri-plugin-system1\docs\LAYA_MODEL.md
 ```
 
 Причина переноса: инференс, рантайм ONNX и доставка модели живут в

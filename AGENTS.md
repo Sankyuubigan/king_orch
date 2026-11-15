@@ -135,7 +135,7 @@
 - Путь: `C:\Users\user\AppData\Roaming\com.kingorch.app\app_config.json`
 - Содержит список `.gguf` моделей, последнюю использованную модель (`last_model`), параметры (`model_params`), настройки контекста.
 - **`max_gen_tokens` НЕ поднимаем (решение владельца 04.11.2026 — ЗАПРЕЩЕНО).** Бюджет генерации фиксирован; отказы «модель упирается в лимит токенов» лечатся в коде (структурно: докачки без думателя, грамматические потолки think), а не сдвигом параметра — сдвиг порога лишь откладывает отказ (§00.2). Исторический кейс: excel_operator при 2048 падал после 3 докачек — причина была в think-налоге на каждой докачке, не в размере бюджета.
-- Ошибки юзеров в Aptabase: скрипт чтения `D:\Projects\my-tauri-plugins\tauri-plugin-logs\scripts\aptabase_read.mjs`, дока-SSOT `tauri-plugin-logs/docs/README.md` (раздел «Чтение отчётов из Aptabase»), кука в `%APPDATA%\aptabase\`.
+- Ошибки юзеров в Aptabase: скрипт чтения `D:\Projects\cross-app-plugins\tauri-plugin-logs\scripts\aptabase_read.mjs`, дока-SSOT `tauri-plugin-logs/docs/README.md` (раздел «Чтение отчётов из Aptabase»), кука в `%APPDATA%\aptabase\`.
 
 ### 0.6. Параллельные сессии — файлы-претензии (`temp/claims/`)
 Схема работы двух и более AI-сессий в этом каталоге одновременно. Механика: сессия до правок
@@ -353,7 +353,7 @@ pub struct ChatMessage {
 
 ### Нативные Excel-тулы (📊 Capability excel, паттерн медиа-тулов)
 
-- **SSOT-ядро** — lib-крейт `D:\Projects\my-tauri-plugins\excel-tools` (umya-spreadsheet-операции, QA-гейты формул, recalc/PDF через LibreOffice). Хост-адаптер — `infra/tools/excel/mod.rs` (6 тулов: `excel_inspect`/`excel_read`/`excel_apply`/`excel_audit`/`excel_render`/`excel_convert`, `EXCEL_TOOL_NAMES`).
+- **SSOT-ядро** — lib-крейт `D:\Projects\cross-app-plugins\excel-tools` (umya-spreadsheet-операции, QA-гейты формул, recalc/PDF через LibreOffice). Хост-адаптер — `infra/tools/excel/mod.rs` (6 тулов: `excel_inspect`/`excel_read`/`excel_apply`/`excel_audit`/`excel_render`/`excel_convert`, `EXCEL_TOOL_NAMES`).
 - **Подключение агенту**: frontmatter `tools: {excel_apply: true, ...}` → `excel_tool_schemas(&agent.tools)` — 3 точки инъекции схем (`orchestrator/mod.rs` worst-prompt + run_agent, `api/chat.rs`), диспетчеризация — ветка `is_excel_tool` в `dispatch.rs` с grant-проверкой (`meta == "excel"`).
 - **Гейт источников (§00.2)**: читаются ТОЛЬКО файлы из allow-read списка (вложения пользователя, `request_media.current_attachment_paths()`) ИЛИ из `<exe>/excel_outputs/<session_id>/` — произвольные пути диска структурно недоступны (`ensure_allowed_source`: абсолютный путь, без `..`, is_file).
 - **Артефакты**: результат `excel_apply`/`excel_render` → маркер `[EXCEL_SAVED id=N]` → `attach_saved_excel_from_sub_calls` → `ChatAttachment{file_path}` (без base64) → фронт-карточка `src/ui/file-attachment.ts` (📂 проводник / ⬇ сохранение). Стем ВСЕГДА через `sequenced_stem` (счётчик `stem-<seq>`) — защита от коллизии «два apply за секунду → тихая перезапись».
@@ -399,7 +399,7 @@ pub struct ChatMessage {
 - Базовый фреймворк: `mcp_base.ts`
 - Права Deno выдаются гранулярно per-server (`runtime.rs` → `deno_permissions`)
 - Карта слоёв тулов L0–L5 и дерево решений «куда класть новую тулу» — **SSOT:
-  `docs/TOOL_ARCHITECTURE.md`** (включая правило нейтральности my-tauri-plugins
+  `docs/TOOL_ARCHITECTURE.md`** (включая правило нейтральности cross-app-plugins
   и список исторических нарушений к чистке)
 
 ## 8. Сборка и тестирование (специфика King Orch)
@@ -407,7 +407,7 @@ pub struct ChatMessage {
 > ✅ **ТЕСТИРУЕМ ЧЕРЕЗ `build.bat` — просто запустить его, и всё.**
 > `build.bat` → `tauri-build-toolkit` — готовая и правильная реализация запуска билда: автоопределение VS (`vswhere`), инициализация MSVC (`vcvarsall.bat`), `npm install`, обновление версии, генерация иконок, сборка Tauri (без установщика), запуск приложения. Ничего вручную вызывать не нужно.
 >
-> Скрипты сборки — общие для всех проектов, вынесены в пакет `D:\Projects\my-tauri-plugins\tauri-build-toolkit` (логка: `build` / `prep` / `installer` / `release` / `test`, конфиг проекта — `.build-config.json`). Настройки для King Orch: `repo`, `syncDirs` (`agents`, `tasks_for_test_llm`, `mcp_servers`), `devWindow` (CDP-порт 9222), `vcRedist`. Правила — в `tauri-build-toolkit/docs/build_release_rules.md`.
+> Скрипты сборки — общие для всех проектов, вынесены в пакет `D:\Projects\cross-app-plugins\tauri-build-toolkit` (логка: `build` / `prep` / `installer` / `release` / `test`, конфиг проекта — `.build-config.json`). Настройки для King Orch: `repo`, `syncDirs` (`agents`, `tasks_for_test_llm`, `mcp_servers`), `devWindow` (CDP-порт 9222), `vcRedist`. Правила — в `tauri-build-toolkit/docs/build_release_rules.md`.
 
 > ⚠️ **ЗАПРЕЩЁН прямой вызов `cargo build` / `cargo test` / `cargo check` / `npx tauri build` / `npx tauri dev`**
 > (см. `global_ai_docs/desktop_rust_tauri/rules.md:29`, `global_ai_docs/desktop_rust_tauri/rules.md:34`)

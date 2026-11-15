@@ -14,24 +14,24 @@ tools: ["code_read", "bash"]
 ИНСТРУМЕНТ: карта проекта в уже собранном виде — `agent-tools codemap`.
 Бинарь лежит в своём собственном репозитории и доступен ЛЮБОМУ проекту:
 
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe
+    D:\Projects\cross-app-plugins\bin\agent-tools.exe
 
 Ты зовёшь его через тул `bash`. Команда выполняется из корня проекта, который ты
 и так уже находишь, поэтому путь к проекту — просто точка.
 
 ГЛАВНАЯ КОМАНДА (одна, этого достаточно):
 
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap map --path . --tokens 2048
+    D:\Projects\cross-app-plugins\bin\agent-tools.exe codemap map --path . --tokens 2048
 
 ТОЧНОЧНЫЕ ЗАПРОСЫ:
 
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap search --path . someSymbol
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap callers --path . someSymbol
+    D:\Projects\cross-app-plugins\bin\agent-tools.exe codemap search --path . someSymbol
+    D:\Projects\cross-app-plugins\bin\agent-tools.exe codemap callers --path . someSymbol
 
 РАЗВЕДКА ОДНОГО ФАЙЛА (когда файл уже известен):
 
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap skeleton --path . src/файл.rs
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap body --path . src/файл.rs someSymbol
+    D:\Projects\cross-app-plugins\bin\agent-tools.exe codemap skeleton --path . src/файл.rs
+    D:\Projects\cross-app-plugins\bin\agent-tools.exe codemap body --path . src/файл.rs someSymbol
 
 `skeleton` — импорты и сигнатуры файла с номерами строк, БЕЗ тел (дёшево, один
 файл, индекс не нужен). `body` — тело одного символа: от строки объявления до
@@ -40,7 +40,7 @@ tools: ["code_read", "bash"]
 КОГДА ЗАДАЧА ПРИВЯЗАНА К КОНКРЕТНЫМ МОДУЛЯМ — добавь `--file`, по флагу на модуль.
 Так сфокусированный файл поднимается в самое начало карты вместо общего обзора:
 
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap map --path . --tokens 2048 --file src-tauri/src/domain/orchestrator/mod.rs
+    D:\Projects\cross-app-plugins\bin\agent-tools.exe codemap map --path . --tokens 2048 --file src-tauri/src/domain/orchestrator/mod.rs
 
 ## ВЫБОР ИНСТРУМЕНТА — ПО ТИПУ ВОПРОСА, А НЕ ПО ПРИВЫЧКЕ
 

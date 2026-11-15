@@ -85,13 +85,13 @@ function buildToolCatalog() {
       md += `- \`${m[1]}\` — ${m[2]}\n`;
     }
   }
-  md += "\n## Инструменты кодинга (SSOT-ядро code-tools, my-tauri-plugins)\n\n";
+  md += "\n## Инструменты кодинга (SSOT-ядро code-tools, cross-app-plugins)\n\n";
   // С 20.10.2026 реализации файловых/поисковых/shell-тулов перенесены в крейт
-  // `code-tools` (repo my-tauri-plugins) — единственный источник правды
+  // `code-tools` (repo cross-app-plugins) — единственный источник правды
   // (тот же код использует CLI agent-tools). Хост содержит только тонкие
   // адаптеры (макрос `adapter_tool!`), их текст в его mod.rs не парсится.
   // Само ядро описывает тула через `impl CodeTool for X { ... }` — парсим его.
-  const coreDir = "D:\\Projects\\my-tauri-plugins\\code-tools\\src";
+  const coreDir = "D:\\Projects\\cross-app-plugins\\code-tools\\src";
   // С 21.10.2026 fs.rs разбит на facade + fs/{read,write,edit,lint}.rs,
   // search.rs держит grep, а glob/list_directory переехали в search/listing.rs.
   for (const f of ["fs/fs_read.rs", "fs/fs_write.rs", "fs/fs_edit.rs", "search.rs", "search/listing.rs", "shell.rs"]) {
@@ -112,7 +112,7 @@ function buildToolCatalog() {
   }
   md += "\n## Внешние бинарные инструменты (вызываются через `bash`)\n\n";
   // Инструменты, которые лежат НЕ в этом репозитории, а в своём собственном
-  // (`my-tauri-plugins`), и зовутся агентом напрямую через `bash`.
+  // (`cross-app-plugins`), и зовутся агентом напрямую через `bash`.
   //
   // Почему не сканируется `src-tauri/bin/`: там лежат скачанные рантаймы
   // (deno, node, yt-dlp) с соглашением об имени `{имя}-{TARGET}.exe` — их
@@ -125,7 +125,7 @@ function buildToolCatalog() {
   const EXTERNAL_TOOLS = [
     {
       name: "agent-tools",
-      repo: "D:\\Projects\\my-tauri-plugins",
+      repo: "D:\\Projects\\cross-app-plugins",
       relative: "bin\\agent-tools.exe",
       purpose: "Карта репозитория под бюджет токенов (codemap: AST → граф → сжатый текст) и единое ядро кодо-тулов кода агента (code: read_file/grep/bash/...; CLI `code call` и MCP-режим — тот же код, что хостовые тула King Orch)",
     },
@@ -137,7 +137,7 @@ function buildToolCatalog() {
     md += `- \`${tool.name}\` [${ready ? "на месте" : "ОТСУТСТВУЕТ"}] — ${tool.purpose}. `
       + `Путь: \`${full}\`. Запуск из корня проекта: \`${full} codemap map --path . --tokens 2048\`. `
       + (ready
-        ? `Команды — в \`my-tauri-plugins/tools/agent-tools/README.md\`.`
+        ? `Команды — в \`cross-app-plugins/tools/agent-tools/README.md\`.`
         : `Собрать: \`scripts\\\\build_binaries.cmd\` в \`${tool.repo}\`.`);
     md += "\n";
   }

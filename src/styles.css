@@ -32,7 +32,7 @@
   --tab-hover-bg: rgba(0, 0, 0, 0.06);
   --tab-divider: rgba(0, 0, 0, 0.2);
 
-  /* ── Токены, которые читают Web Components плагинов (my-tauri-plugins) ──
+  /* ── Токены, которые читают Web Components плагинов (cross-app-plugins) ──
      Без них каждый плагин падал в свои хардкод-фолбэки и рисовал тёмные
      поля ввода внутри светлых карточек. Контракт — PLUGIN_STANDARD.md. */
   --text-muted: #6b7280;

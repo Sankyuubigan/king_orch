@@ -1,7 +1,7 @@
 # Подключение tauri-plugin-logs (единый лог вывода приложения)
 
 Виджет «Логи» вынесен в переиспользуемый плагин `tauri-plugin-logs`
-(репозиторий: `D:\Projects\my-tauri-plugins\tauri-plugin-logs`).
+(репозиторий: `D:\Projects\cross-app-plugins\tauri-plugin-logs`).
 Плагин: один `log::Log` (включая host RSL при дебаге), файл `king_orch.log` рядом
 с exe, dev-зеркало `test/last_logs.txt`, «Последние логи» в Store, опциональный
 облачный репорт и аналитика Aptabase (поле `project`). Длинные записи автоматически
@@ -11,7 +11,7 @@
 
 ### 1. Rust-зависимость (`src-tauri/Cargo.toml`)
 ```toml
-tauri-plugin-logs = { path = "../../my-tauri-plugins/tauri-plugin-logs" }
+tauri-plugin-logs = { path = "../../cross-app-plugins/tauri-plugin-logs" }
 log = "0.4"
 ```
 
@@ -59,7 +59,7 @@ tauri_plugin_logs::track_event("имя", Some(json!({...})))  // локальн�
 
 ### 6. Фронтенд (`package.json`)
 ```json
-"dependencies": { "@my-tauri-plugins/plugin-logs": "file:../my-tauri-plugins/tauri-plugin-logs" }
+"dependencies": { "@my-tauri-plugins/plugin-logs": "file:../cross-app-plugins/tauri-plugin-logs" }
 ```
 ```ts
 import "@my-tauri-plugins/plugin-logs";           // side-effect: ловит ошибки UI

@@ -1,7 +1,7 @@
 //! 🧰 Инструменты кодинга и файлов (SSOT в крейте `code-tools`).
 //!
 //! Реализации ВСЕХ кодовых тулов (файлы/поиск/shell) живут в крейте
-//! `code-tools` (репозиторий my-tauri-plugins) — тем же ядром пользуется
+//! `code-tools` (репозиторий cross-app-plugins) — тем же ядром пользуется
 //! CLI `agent-tools`. Хост держит только:
 //!  - публичные [`Tool`] / [`ToolError`] / [`ToolCtx`] (контракт King Orch);
 //!  - политику записи хоста (`PermissionApprover` / `WriteOutside` / `authorize_write`);

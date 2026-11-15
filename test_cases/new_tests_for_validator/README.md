@@ -58,7 +58,7 @@
 
 `docs/LAYA_MODEL.md` — это **указатель**. Сам справочник по модели (грабли,
 формат вопросов, перестановки, история замеров) перенесён в плагин:
-`D:\Projects\my-tauri-plugins\tauri-plugin-system1\docs\LAYA_MODEL.md`.
+`D:\Projects\cross-app-plugins\tauri-plugin-system1\docs\LAYA_MODEL.md`.
 
 ## Экспериментальные скрипты и YAML уехали в `test/laya_probe/`
 

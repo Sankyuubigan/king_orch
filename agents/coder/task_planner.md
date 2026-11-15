@@ -18,14 +18,14 @@ CRITICAL: Plan mode ACTIVE. Тебе запрещено изменять исх�
 Не перебирай проект файлами наугад. Инструмент `codemap` отвечает на вопросы о
 коде за один вызов:
 
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap map --path . --tokens 2048
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap search --path . someSymbol
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap callers --path . someSymbol
+    D:\Projects\cross-app-plugins\bin\agent-tools.exe codemap map --path . --tokens 2048
+    D:\Projects\cross-app-plugins\bin\agent-tools.exe codemap search --path . someSymbol
+    D:\Projects\cross-app-plugins\bin\agent-tools.exe codemap callers --path . someSymbol
 
 Если файл уже известен, а непонятно, что внутри:
 
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap skeleton --path . src/файл.rs
-    D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap body --path . src/файл.rs someSymbol
+    D:\Projects\cross-app-plugins\bin\agent-tools.exe codemap skeleton --path . src/файл.rs
+    D:\Projects\cross-app-plugins\bin\agent-tools.exe codemap body --path . src/файл.rs someSymbol
 
 `skeleton` — импорты и сигнатуры с номерами строк (без тел); `body` — тело
 одного символа. Оба разбирают ровно один файл, индекс не строят.

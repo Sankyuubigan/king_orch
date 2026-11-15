@@ -10,12 +10,12 @@
 - `emit_signal` — Сохранить сигнал/маркер в сессию. Другие агенты, экстрактор и phase_router увидят его. Принимает key (имя сигнала) и value (произвольный JSON-объект с данными).
 - `read_spill` — Дочитать полный результат большого инструмента, сохранённый в файл spills (локатор приходит в сообщении '[РЕЗУЛЬТАТ ИНСТРУМЕНТА сохранён в файл spills]'). Принимает path (путь к spill-файлу); offset — 1-based позиция в символах (по умолчанию 1); limit — сколько символов прочитать (по умолчанию 16000, максимум 16000). Артефакт может быть большим — дочитывай ДИАПАЗОНАМИ по подсказкам 'Продолжай с offset=N', не копируй целиком.
 
-## Инструменты кодинга (SSOT-ядро code-tools, my-tauri-plugins)
+## Инструменты кодинга (SSOT-ядро code-tools, cross-app-plugins)
 
 
 ## Внешние бинарные инструменты (вызываются через `bash`)
 
-- `agent-tools` [на месте] — Карта репозитория под бюджет токенов (codemap: AST → граф → сжатый текст) и единое ядро кодо-тулов кода агента (code: read_file/grep/bash/...; CLI `code call` и MCP-режим — тот же код, что хостовые тула King Orch). Путь: `D:\Projects\my-tauri-plugins\bin\agent-tools.exe`. Запуск из корня проекта: `D:\Projects\my-tauri-plugins\bin\agent-tools.exe codemap map --path . --tokens 2048`. Команды — в `my-tauri-plugins/tools/agent-tools/README.md`.
+- `agent-tools` [на месте] — Карта репозитория под бюджет токенов (codemap: AST → граф → сжатый текст) и единое ядро кодо-тулов кода агента (code: read_file/grep/bash/...; CLI `code call` и MCP-режим — тот же код, что хостовые тула King Orch). Путь: `D:\Projects\cross-app-plugins\bin\agent-tools.exe`. Запуск из корня проекта: `D:\Projects\cross-app-plugins\bin\agent-tools.exe codemap map --path . --tokens 2048`. Команды — в `cross-app-plugins/tools/agent-tools/README.md`.
 
 ## Скачанные рантаймы (агент напрямую их не зовёт)
 
