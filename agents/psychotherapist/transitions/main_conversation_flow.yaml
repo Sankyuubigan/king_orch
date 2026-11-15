@@ -85,6 +85,7 @@ nodes:
 
     {{ nodes.import_cases.output.imported_cases_text }}
   inject_response:
+  - synthesizer
   - decomposer
   ui_pos:
     y: 410
@@ -160,8 +161,8 @@ nodes:
   output_type: frontend
   inject_response:
   - validator
+  - synthesizer
   - decomposer
-  - soma_translator
   ui_pos:
     y: 536
     x: 2684
