@@ -2,7 +2,8 @@
 # 3д объекты
 
 ### из картинки в 3д модель
-1. https://huggingface.co/speridlabs/idol
+1. Budget3D https://budgetany.github.io/budget3d/
+https://huggingface.co/speridlabs/idol
 2. Hi3D 1.0 https://www.hi3d.ai/hi3d-1-0-open-source
 3. https://github.com/xibushu/UniForge3D
 4. https://facebookresearch.github.io/GenIA/
@@ -24,8 +25,6 @@
 20. https://nju-3dv.github.io/projects/Direct3D-S2/
 21. https://stepfun-ai.github.io/Step1X-3D/
 22. https://hyperhuman.deemos.com/rodin
-https://silent-chen.github.io/PartGen/ - редактирование 3д моделей и создание
-https://stability.ai/news/stable-point-aware-3d - быстрая имейдж ту 3д с редактированием
 3д модель создавать - https://mvpaint.github.io/
 https://huanngzh.github.io/MV-Adapter-Page/ - 3д модель
 
@@ -39,6 +38,8 @@ https://huanngzh.github.io/MV-Adapter-Page/ - 3д модель
 2. https://jamesyjl.github.io/Nano3D/
 3. Hunyuan3D Part
 4. https://huanngzh.github.io/VoxHammer-Page/
+https://silent-chen.github.io/PartGen/ - редактирование 3д моделей и создание
+https://stability.ai/news/stable-point-aware-3d - быстрая имейдж ту 3д с редактированием
 
 ### удобно прототип по картинке персонаж
 1. https://app.leonardo.ai/realtime-gen
