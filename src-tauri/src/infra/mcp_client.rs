@@ -33,6 +33,8 @@ pub struct McpClient {
 }
 
 impl McpClient {
+    /// Обёртка spawn_stub_with_env без доп. env — на вырост.
+    #[allow(dead_code)]
     pub fn spawn_stub(cmd_path: &str, args: &[&str], log_cb: impl Fn(String) + Send + Sync + 'static) -> Result<Self, String> {
         Self::spawn_stub_with_env(cmd_path, args, &[], log_cb)
     }

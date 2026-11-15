@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 /// Трейт плагина. Переопределяй только нужные методы (остальные — no-op).
 pub trait Plugin: Send + Sync {
+    #[allow(dead_code)] // контракт плагин-системы — на вырост
     fn name(&self) -> &str {
         "unnamed"
     }
@@ -38,6 +39,7 @@ impl PluginManager {
     }
 
     /// Зарегистрировать плагин (вызывается один раз при инициализации приложения).
+    #[allow(dead_code)] // инициализация плагинов ещё не подключена — на вырост
     pub fn register(&self, plugin: Arc<dyn Plugin>) {
         self.plugins.lock().unwrap().push(plugin);
     }

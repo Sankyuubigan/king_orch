@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 #[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 use crate::infra::ChatMessage;
 
@@ -297,6 +297,8 @@ fn open_in_explorer_and_select(file_path: &std::path::Path) {
     }
 }
 
+/// Фикстура тестов session_manager (живёт только в тестовой сборке).
+#[cfg(test)]
 fn sample_session(title: &str, title_manual: bool) -> ChatSession {
     ChatSession {
         id: "test".to_string(),

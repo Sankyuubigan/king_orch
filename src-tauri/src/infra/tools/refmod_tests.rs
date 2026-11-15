@@ -5,6 +5,7 @@
 //! (engine/refmod_tests.rs) — там же, где код.
 
 use super::*;
+use plugin_media_gen_engine::engine::FRAME_SIZE_MULTIPLE;
 
 fn temp_root(tag: &str) -> std::path::PathBuf {
     let stamp = std::time::SystemTime::now()

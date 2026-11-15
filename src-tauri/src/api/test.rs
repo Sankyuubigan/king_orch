@@ -4,7 +4,7 @@ use std::io::Write;
 use std::sync::atomic::Ordering;
 use std::sync::Mutex;
 use std::time::Instant;
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::domain;
 use crate::infra::{self, ChatMessage, SubCall};

@@ -672,7 +672,7 @@ mod tests {
             write_root: std::path::Path::new("."),
             write_outside: crate::infra::WriteOutside::Prompt,
             session_id: Box::leak(session.to_string().into_boxed_str()),
-            approver: crate::infra::test_approver(),
+            approver: crate::infra::permissions::test_approver(),
             agent_id: "excel_operator",
             bins_dir: std::path::Path::new("."),
             image_artifacts: Some(registry),

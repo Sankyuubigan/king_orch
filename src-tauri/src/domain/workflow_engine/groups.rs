@@ -87,6 +87,7 @@ pub fn resolve_strategy(
 }
 
 /// Индекс групп по `id` + проверка уникальности. Пустой для графов без групп.
+#[allow(dead_code)] // API workflow-движка — на вырост
 pub fn group_index(workflow: &WorkflowDef) -> Result<Vec<(String, usize)>, String> {
     let mut seen: HashSet<&str> = HashSet::new();
     let mut out = Vec::with_capacity(workflow.groups.len());
@@ -628,6 +629,7 @@ pub fn build_fused_grammar(
 /// (`condition_check`, `condition_router`, `signal_router`, `switch`, `note`,
 /// `system_condition`) — чистые функции от `signals`: они стоят 0 токенов и
 /// ОБЯЗАНЫ выполниться после фьюжинга, иначе маршрутизация потеряет опору.
+#[allow(dead_code)] // классификатор нод для фьюжинга групп — на вырост
 pub fn node_calls_llm(node: &NodeDef) -> bool {
     use super::parser::NodeType;
     matches!(

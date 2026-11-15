@@ -3,7 +3,7 @@
 
 use super::*;
 use serde_json::json;
-use crate::infra::tools::refmod::{CARD_PX_BUDGET_MAIN, FRAME_SIZE_MULTIPLE};
+use plugin_media_gen_engine::engine::{CARD_PX_BUDGET_MAIN, FRAME_SIZE_MULTIPLE};
 
 fn solid(w: u32, h: u32, color: [u8; 3]) -> image::DynamicImage {
     image::DynamicImage::ImageRgb8(image::RgbImage::from_pixel(

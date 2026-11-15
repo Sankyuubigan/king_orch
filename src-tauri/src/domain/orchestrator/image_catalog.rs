@@ -173,6 +173,7 @@ pub fn active_image_bundle_facts() -> Option<ActiveBundleFacts> {
 /// Маркер активного бандла (F5) — текст `[АКТИВНЫЙ БОНДЛ]` для системного
 /// промпта меди-агента. Точка вызова: сборка системного промпта меди-агента (
 /// `orchestrator::run_agent_node`) и превью промпта (`api/chat.rs`).
+#[allow(dead_code)] // док называет точки вызова, которых в коде уже нет — на вырост
 pub fn active_image_bundle_marker() -> Option<String> {
     active_image_bundle_facts().map(|facts| facts.marker)
 }

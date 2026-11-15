@@ -79,7 +79,7 @@ pub(crate) fn lookup_id<'a>(raw: &str, candidate_ids: &[&'a str]) -> IdLookup<'a
     }
 
     // Стадия 3: Левенштейн (ранняя отсечка — по длине и по минимуму строки).
-    let mut scored: Vec<(usize, &'a str)> = candidate_ids
+    let scored: Vec<(usize, &'a str)> = candidate_ids
         .iter()
         .copied()
         .filter_map(|candidate| {

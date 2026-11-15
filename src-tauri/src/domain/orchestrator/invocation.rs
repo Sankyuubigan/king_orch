@@ -1,13 +1,4 @@
-use super::*;
 use crate::domain::agent_manager::AgentProfile;
-use crate::infra::{
-    extract_model_filename, push_report, ChatAttachment, ChatMessage, GrammarSpec, LlamaEngine,
-    LlmMessage, ModelParams, SubCall, ToolCallInfo,
-};
-use serde_json::Value;
-use std::fs;
-use std::io::Write;
-use std::path::Path;
 
 /// Компактное описание вызова агента для subcall (вместо полной копии системного
 /// промпта): только task и injected_reports — то, что реально различается между

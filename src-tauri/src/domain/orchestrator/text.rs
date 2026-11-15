@@ -1,14 +1,4 @@
-use super::*;
-use crate::domain::agent_manager::AgentProfile;
 use crate::domain::parsers::{clean_thought_tags, split_thinking_and_answer};
-use crate::infra::{
-    extract_model_filename, push_report, ChatAttachment, ChatMessage, GrammarSpec, LlamaEngine,
-    LlmMessage, ModelParams, SubCall, ToolCallInfo,
-};
-use serde_json::Value;
-use std::fs;
-use std::io::Write;
-use std::path::Path;
 
 /// Хвост строки длиной ≤ `n` символов (без разрыва UTF-8).
 pub(crate) fn tail_chars(s: &str, n: usize) -> String {

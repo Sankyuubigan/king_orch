@@ -51,6 +51,7 @@ pub fn load_signal_contract(signals_dir: &Path, agent_id: &str) -> Option<Signal
 /// Без `$ref` (сломаны в llama.cpp #8073): value-схема встраивается инлайн.
 /// Требования движка: `additionalProperties` по умолчанию `false`,
 /// `pattern` обязан начинаться `^` и заканчиваться `$`.
+#[allow(dead_code)] // обёртка протокола сигналов — на вырост
 pub fn build_signal_envelope_schema(contract: &SignalContract) -> Value {
     serde_json::json!({
         "type": "object",
@@ -86,6 +87,7 @@ pub fn build_signal_envelope_schema(contract: &SignalContract) -> Value {
 /// сигнальных агентов. Агент, которому бюджет размышления задан во
 /// frontmatter (`think_budget:`), собирает грамматику через
 /// [`build_signal_envelope_grammar_with_think_budget`].
+#[allow(dead_code)] // обёртка без think-budget — на вырост
 pub fn build_signal_envelope_grammar(contract: &SignalContract) -> String {
     build_signal_envelope_grammar_with_think_budget(contract, None)
 }
@@ -938,6 +940,7 @@ fn with_slot_min_body(draft_rule: &str, min_chars: usize) -> String {
 /// вместить даже пустой черновик, и молча ставить `Some(0)` значило бы запретить
 /// модели размышлять вовсе. Тогда грамматика строится без границы, и отказ
 /// приходит из движка, а не из заведомо непроходимого формата.
+#[allow(dead_code)] // расчёт бюджета черновиков — на вырост
 pub fn per_draft_budget_chars(max_gen_tokens: usize, drafts: usize) -> Option<usize> {
     auto_think_budget_chars(max_gen_tokens, 0, drafts)
 }
@@ -1014,6 +1017,7 @@ pub fn contract_envelope_tokens(schema: &serde_json::Value) -> usize {
 /// бюджета генерации и РЕЗЕРВА КОНТРАКТА ([`contract_envelope_tokens`]) —
 /// место под слоты вычитается из бюджета ДО деления на дум-слоты. Заменяет
 /// вызовы `per_draft_budget_chars` там, где есть схема контракта.
+#[allow(dead_code)] // расчёт think-бюджета по схеме контракта — на вырост
 pub fn contract_think_budget(max_gen_tokens: usize, schema: &serde_json::Value) -> Option<usize> {
     crate::infra::auto_think_budget_chars_with_envelope(
         max_gen_tokens,
@@ -1680,6 +1684,7 @@ fn find_verdict_from(
 
 /// Первое `"ключ": true|false` в тексте (легаси-обёртка: юнит-проверки
 /// отбраковки идентификаторов и булевых слотов).
+#[cfg(test)]
 fn find_bool_after_key(text: &str, key: &str) -> Option<bool> {
     match find_verdict_from(text, 0, key, false) {
         Some((Verdict::Bool(b), _)) => Some(b),
@@ -1730,6 +1735,7 @@ fn scan_json_string(inner: &str) -> Option<String> {
     None
 }
 /// Полностью инлайн-схемы агентов (карта agent_id → контракт) для отладки/тестов.
+#[allow(dead_code)] // отладочная карта контрактов — на вырост
 pub fn load_all_signal_contracts(signals_dir: &Path) -> HashMap<String, SignalContract> {
     let mut map = HashMap::new();
     let path = signals_dir.join("root.schema.json");

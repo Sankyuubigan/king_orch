@@ -22,7 +22,6 @@ pub use orchestrator::RequestMedia;
 pub use orchestrator::agent_consumes_image_catalog;
 pub use orchestrator::agent_receives_bundle_marker;
 pub use orchestrator::active_image_bundle_facts;
-pub use orchestrator::active_image_bundle_marker;
 pub use orchestrator::full_media_prompt_block;
 pub use orchestrator::StreamMeta;
 pub use orchestrator::prompt::build_system_prompt;
@@ -31,7 +30,7 @@ pub use agent_manager::load_agents;
 pub use agent_manager::load_entry_points;
 pub use catalog_cache::{catalog_snapshot, invalidate_catalog_cache};
 pub use workflow_engine::{
-    analyze_workflow_fidelity, find_workflow_by_stem, load_workflows, resolve_entry,
+    analyze_workflow_fidelity, find_workflow_by_stem, resolve_entry,
     separate_top_level_fields, EdgeDef, FactsFile, GraphDiagnostic, GroupDef, NodeDef,
     WorkflowConfig, WorkflowDef,
 };

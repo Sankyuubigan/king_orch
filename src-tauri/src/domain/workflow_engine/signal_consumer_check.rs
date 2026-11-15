@@ -204,7 +204,7 @@ mod tests {
     use std::fs;
 
     use super::super::editor_fidelity::analyze_workflow_fidelity;
-    use super::super::parser;
+    
 
     /// Структура временного окружения сигналов: `<tmp>/agents/work/tests`
     /// как папка графа, `<tmp>/agents/signals` — с root.schema.json.

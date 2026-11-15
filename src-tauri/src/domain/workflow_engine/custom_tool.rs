@@ -445,13 +445,6 @@ mod tests {
     use super::*;
     use crate::domain::workflow_engine::parser::NodeType;
 
-    fn workflow_def() -> WorkflowDef {
-        serde_yaml::from_str(
-            "name: Тест\nentry: user_message\nnodes:\n  - id: user_message\n    type: user_message\n",
-        )
-        .expect("граф распарсен")
-    }
-
     #[test]
     fn yaml_roundtrip_keeps_custom_tool_fields() {
         let yaml = r#"id: draw_cards

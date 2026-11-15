@@ -1,6 +1,6 @@
 use serde::Serialize;
 use std::sync::{Arc, Mutex};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::api::AppState;
 use crate::domain;
@@ -268,7 +268,7 @@ pub async fn chat_request(
                     }),
                 );
                 log::info!("[queue] ход {}: ждёт освобождения локального движка", session_key);
-                let mut acquire = gate.acquire_owned();
+                let acquire = gate.acquire_owned();
                 tokio::pin!(acquire);
                 loop {
                     tokio::select! {
@@ -484,7 +484,7 @@ pub async fn chat_request(
     let reason_meta = stream_meta.clone();
     let reasoning_cb = move |chunk: String| {
         let author = {
-            let mut m = reason_meta.lock().expect("stream_meta lock poisoned");
+            let m = reason_meta.lock().expect("stream_meta lock poisoned");
             m.author.clone()
         };
         let _ = app_reason.emit(

@@ -64,6 +64,7 @@ impl StepOutput {
     }
 
     /// Есть ли что публиковать в шину.
+    #[allow(dead_code)] // API шины сигналов workflow — на вырост
     pub fn has_signals(&self) -> bool {
         !self.signals.is_empty()
     }

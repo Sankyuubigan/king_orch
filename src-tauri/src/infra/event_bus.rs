@@ -62,7 +62,30 @@ impl EventBus {
     }
 
     /// Опубликовать событие всем подписчикам. Порядок доставки не гарантирован.
+    ///
+    /// Все поля событий читаются здесь (лог): даже без подписчиков статус
+    /// агентов виден в логе приложения.
     pub fn publish(&self, event: AgentEvent) {
+        match &event {
+            AgentEvent::Spawned { agent, namespace } => {
+                log::info!("[bus] Spawned agent={} namespace={}", agent, namespace);
+            }
+            AgentEvent::Finished { agent, namespace, ms, error } => {
+                log::info!(
+                    "[bus] Finished agent={} namespace={} ms={} error={:?}",
+                    agent, namespace, ms, error
+                );
+            }
+            AgentEvent::ToolCall { agent, tool } => {
+                log::info!("[bus] ToolCall agent={} tool={}", agent, tool);
+            }
+            AgentEvent::PermissionRequest { request_id, agent, tool, path, session_id } => {
+                log::info!(
+                    "[bus] PermissionRequest agent={} tool={} path={} session={} request={}",
+                    agent, tool, path, session_id, request_id
+                );
+            }
+        }
         for listener in self.listeners.lock().unwrap().iter() {
             listener(&event);
         }

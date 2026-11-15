@@ -1,13 +1,6 @@
-use super::*;
-use crate::domain::agent_manager::AgentProfile;
 use crate::infra::{
-    extract_model_filename, push_report, ChatAttachment, ChatMessage, GrammarSpec, LlamaEngine,
-    LlmMessage, ModelParams, SubCall, ToolCallInfo,
+    ChatMessage, SubCall,
 };
-use serde_json::Value;
-use std::fs;
-use std::io::Write;
-use std::path::Path;
 
 /// Результат чата: текст ответа + собранные sub-calls + обновлённый массив сообщений
 /// + диагностика движка (режим GPU/CPU и скорость) для UI-индикатора.

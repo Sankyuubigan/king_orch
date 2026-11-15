@@ -234,6 +234,7 @@ where
     /// Per-agent GBNF-грамматика (загружена из agents/*/grammars/<agent_id>.gbnf).
     /// Хранится для повторного применения после каждого tool call
     /// (take_pending_grammar() consume-and-clear сбрасывает грамматику).
+    #[allow(dead_code)] // поле контекста под будущий apply-путь грамматик
     pub(crate) agent_grammar: Option<String>,
     /// Активная грамматика для текущего агента (signal envelope или per-agent GBNF).
     /// Используется restore_grammar() для единообразного восстановления после
@@ -1430,7 +1431,7 @@ where
     pub(crate) fn execute_native_tool_calls(
         &mut self,
         calls: &[ToolCall],
-        gen_start: Instant,
+        _gen_start: Instant,
         assistant_text: &str,
     ) -> Result<DispatchCtl, String> {
         if calls.is_empty() {
@@ -1623,8 +1624,8 @@ where
             request_media,
             image_artifacts,
             write_outside,
-            agent_grammar,
-            active_grammar,
+            agent_grammar: _,
+            active_grammar: _,
             ..
         } = self;
 
@@ -1735,7 +1736,7 @@ where
             }
 
             let is_cloud = self.engine.is_cloud();
-            let mut new_sys = build_system_prompt(
+            let new_sys = build_system_prompt(
                 *agent,
                 &**messages,
                 *has_tools_for_prompt,

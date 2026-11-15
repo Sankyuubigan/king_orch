@@ -275,7 +275,7 @@ mod tests {
             write_root: Path::new("."),
             write_outside: crate::infra::WriteOutside::Prompt,
             session_id: "test_session",
-            approver: crate::infra::test_approver(),
+            approver: crate::infra::permissions::test_approver(),
             agent_id: "youtube_summarizer",
             bins_dir: Path::new("."),
             image_artifacts: None,

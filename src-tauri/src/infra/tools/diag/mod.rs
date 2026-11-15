@@ -441,7 +441,7 @@ mod tests {
             write_root: Path::new("."),
             write_outside: crate::infra::WriteOutside::Prompt,
             session_id: Box::leak(session.to_string().into_boxed_str()),
-            approver: crate::infra::test_approver(),
+            approver: crate::infra::permissions::test_approver(),
             agent_id: "diag_specialist",
             bins_dir: Path::new("."),
             image_artifacts: None,

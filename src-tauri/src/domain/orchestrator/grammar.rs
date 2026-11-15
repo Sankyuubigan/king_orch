@@ -1,12 +1,4 @@
 use super::*;
-use crate::domain::agent_manager::AgentProfile;
-use crate::infra::{
-    extract_model_filename, push_report, ChatAttachment, ChatMessage, GrammarSpec, LlamaEngine,
-    LlmMessage, ModelParams, SubCall, ToolCallInfo,
-};
-use serde_json::Value;
-use std::fs;
-use std::io::Write;
 use std::path::Path;
 
 /// Загружает per-agent GBNF-грамматику из `grammars_dir/<agent_id>.gbnf`.

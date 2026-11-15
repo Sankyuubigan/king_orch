@@ -40,6 +40,8 @@ impl GrantDecision {
         }
     }
 
+    /// Сериализация решения для фронта/логов — на вырост; сейчас используют тесты.
+    #[allow(dead_code)]
     pub fn as_str(&self) -> &'static str {
         match self {
             GrantDecision::Deny => "deny",
@@ -170,6 +172,8 @@ fn uuid_short() -> String {
 }
 
 static GLOBAL: OnceLock<Arc<PermissionApprover>> = OnceLock::new();
+/// Тестовый approver живёт только в тестовой сборке.
+#[cfg(test)]
 static TEST: OnceLock<Arc<PermissionApprover>> = OnceLock::new();
 
 /// Глобальный approver приложения (используется циклом агента и командой).
@@ -180,6 +184,7 @@ pub fn global_approver() -> Arc<PermissionApprover> {
 }
 
 /// Тестовый approver: решения вне корня принимаются автоматически (Deny).
+#[cfg(test)]
 pub fn test_approver() -> &'static PermissionApprover {
     TEST.get_or_init(|| Arc::new(PermissionApprover::new(true)))
 }

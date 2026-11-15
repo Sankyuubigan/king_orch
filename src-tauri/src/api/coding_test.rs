@@ -1,6 +1,6 @@
 // Tauri-команды coding-бенчмарка LLM (Кодинг тест моделей).
 use serde::{Deserialize, Serialize};
-use tauri::{AppHandle, Emitter, Manager, State};
+use tauri::{AppHandle, Emitter, State};
 
 use crate::api::AppState;
 use crate::domain;

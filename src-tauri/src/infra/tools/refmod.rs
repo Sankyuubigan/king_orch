@@ -23,8 +23,7 @@ use crate::infra::tools::{Tool, ToolCtx, ToolError};
 // ── SSOT-реэкспорт (типы и константы без ошибок) ──
 pub use plugin_media_gen_engine::engine::{
     copy_card_voice_in, engine_ref_paths, normalize_frame, set_card_voice_in,
-    update_voice_desc_in, NormalizeReport, RefModBundle, CARD_PX_BUDGET_MAIN,
-    CARD_PX_BUDGET_TOTAL, FRAME_SIZE_MULTIPLE, FRAMES_PER_RUN,
+    update_voice_desc_in, NormalizeReport, RefModBundle, FRAMES_PER_RUN,
 };
 
 /// Маппинг ошибки SSOT в ошибку тул-слоя (вариант в вариант — семантика честных
@@ -43,12 +42,14 @@ pub fn refmods_dir() -> PathBuf {
 }
 
 /// Валидный slug папки карточки (1–48 символов `[a-z0-9_-]`, без traversal).
+#[allow(dead_code)] // обёртка SSOT-плагина — API тула на вырост
 pub fn validate_slug(slug: &str) -> Result<(), ToolError> {
     plugin_media_gen_engine::engine::validate_slug(slug).map_err(map_error)
 }
 
 /// Сохранить RefMod-карточку из файлов-источников (перезаписывает существующую).
 /// Второй элемент — отчёт нормализации (SSOT — плагин): хост только форматирует.
+#[allow(dead_code)] // обёртка SSOT-плагина — API тула на вырост
 pub fn save_refmod_card(
     slug: &str,
     name: &str,
@@ -97,10 +98,12 @@ pub fn load_refmod_card_in(refmods_root: &Path, slug: &str) -> Result<RefModBund
 }
 
 /// Список карточек (битые пропускаются с warn-логом в SSOT).
+#[allow(dead_code)] // обёртка SSOT-плагина — API тула на вырост
 pub fn list_refmod_cards() -> Vec<RefModBundle> {
     list_refmod_cards_in(&refmods_dir())
 }
 
+#[allow(dead_code)] // обёртка SSOT-плагина — API тула на вырост
 pub fn list_refmod_cards_in(refmods_root: &Path) -> Vec<RefModBundle> {
     plugin_media_gen_engine::engine::list_refmod_cards_in(refmods_root)
 }

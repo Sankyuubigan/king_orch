@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use crate::infra::{ChatMessage, LlmEngine, ModelParams, SubCall};
+use crate::infra::{ChatMessage, LlmEngine, SubCall};
 use crate::domain::agent_manager::load_agents;
 use crate::domain::workflow_engine::{parse_workflow_file, run_workflow, WorkflowDef, WorkflowRunner};
 use crate::domain::workflow_engine::context::WorkflowContext;
@@ -255,6 +255,7 @@ fn load_test_files(
     })
 }
 
+#[allow(dead_code)] // CLI-вход pipeline-тестов — на вырост
 pub fn load_single_test(dir: &Path) -> Result<PipelineTestDef, String> {
     let mut defs = load_dir_tests(dir)?;
     if defs.len() != 1 {
@@ -806,6 +807,7 @@ fn chrono_timestamp() -> String {
 
 // ─── CLI-обёртка ───
 
+#[allow(dead_code)] // CLI-вход pipeline-тестов — на вырост
 pub fn run_pipeline_test_cli(
     test_id: &str,
     model_path: &str,

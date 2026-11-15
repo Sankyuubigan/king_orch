@@ -26,7 +26,7 @@ pub mod websearch;
 pub mod youtube;
 
 /// Хелперы ядра: ними пользуется media.rs через `super::` (имена прежние).
-pub use code_tools::{is_within_root, resolve_path};
+pub use code_tools::is_within_root;
 
 /// Ошибка тула — единый тип с ядром (варианты и Display-тексты 1:1, конверсий нет).
 pub use code_tools::ToolError;

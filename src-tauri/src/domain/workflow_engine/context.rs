@@ -165,6 +165,7 @@ impl WorkflowContext {
     }
 
     /// Добавляет сигнал в bus (вызывается из dispatch.rs после emit_signal).
+    #[allow(dead_code)] // док обещает вызов из dispatch.rs, его пока нет — на вырост
     pub fn insert_signal(&mut self, key: String, value: serde_json::Value) {
         self.signals.insert(key, value);
     }

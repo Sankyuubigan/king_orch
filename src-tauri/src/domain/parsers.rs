@@ -150,6 +150,7 @@ pub fn is_complete_json_response(text: &str) -> bool {
 /// JSON-конверт уходил пользователю как ответ (баг №3, лог 01.11.26). Здесь
 /// НЕ эвристика по содержимому: оградка — это ФОРМАТ, её незакрытость
 /// детерминирована, догадок не требует.
+#[allow(dead_code)] // ограда из фикса бага №3 — хелпер парсера на вырост
 pub fn has_unclosed_json_fence(text: &str) -> bool {
     match text.rfind("```json") {
         None => false,

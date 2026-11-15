@@ -1,13 +1,4 @@
-use super::*;
-use crate::domain::agent_manager::AgentProfile;
-use crate::infra::{
-    extract_model_filename, push_report, ChatAttachment, ChatMessage, GrammarSpec, LlamaEngine,
-    LlmMessage, ModelParams, SubCall, ToolCallInfo,
-};
-use serde_json::Value;
-use std::fs;
-use std::io::Write;
-use std::path::Path;
+use crate::infra::ChatMessage;
 
 /// Ключ хранения чек-листа задач агента в сессии (как `thought`-сообщение).
 pub(crate) fn todo_store_key(agent_id: &str) -> String {

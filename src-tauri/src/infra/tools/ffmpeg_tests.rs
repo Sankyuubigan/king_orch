@@ -18,7 +18,7 @@ fn ctx_with_registry() -> (ToolCtx<'static>, &'static ImageArtifactRegistry) {
         write_root: Path::new("."),
         write_outside: crate::infra::WriteOutside::Prompt,
         session_id: Box::leak("test_session".to_string().into_boxed_str()),
-        approver: crate::infra::test_approver(),
+        approver: crate::infra::permissions::test_approver(),
         agent_id: "video_editor",
         bins_dir: Path::new("."),
         image_artifacts: Some(registry),

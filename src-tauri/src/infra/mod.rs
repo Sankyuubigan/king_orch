@@ -44,11 +44,11 @@ pub use llm_backend::{
     is_cloud_retryable_transport_error, is_cloud_timeout_error, is_cloud_truncated_error,
 };
 pub use messages::{
-    attachment_line, attachment_lines, content_with_attachments, llm_history, message_phase,
+    llm_history, message_phase,
     push_report, ChatAttachment, ChatMessage, SubCall, ToolCallInfo,
 };
 pub use session_manager::{ChatSession, SessionMeta};
-pub use mcp_client::{McpClient, McpPool, SharedMcpClient};
+pub use mcp_client::McpPool;
 
 // ─── Публичные функции ───
 pub use config::{
@@ -57,9 +57,9 @@ pub use config::{
     find_agents_dir, find_agents_dir_early, find_mcp_servers_dir, find_coding_tests_dir,
 };
 pub use session_manager::{get_session, get_sessions, save_session, delete_session, rename_session, open_session_folder, reveal_path};
-pub use permissions::{PermissionApprover, GrantDecision, global_approver, test_approver};
+pub use permissions::{PermissionApprover, GrantDecision, global_approver};
 pub use window_icon::apply_window_icons;
-pub use tools::{Tool, ToolCtx, ToolError, WriteOutside, tool_schemas, execute_tool, all_tools};
+pub use tools::{Tool, ToolCtx, ToolError, WriteOutside};
 pub use tools::media::{
     attach_saved_images_from_sub_calls, execute_image_tool, image_tool_schemas,
     ImageArtifactRegistry,

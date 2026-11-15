@@ -356,9 +356,9 @@ mod tests {
         let gate = Arc::new(Semaphore::new(1));
         let first = gate.clone().acquire_owned().await.unwrap();
         let gate2 = gate.clone();
-        let waiter1 = tokio::spawn(async move { gate2.acquire_owned().await.unwrap(); });
+        let waiter1 = tokio::spawn(async move { let _permit = gate2.acquire_owned().await.unwrap(); });
         let gate3 = gate.clone();
-        let waiter2 = tokio::spawn(async move { gate3.acquire_owned().await.unwrap(); });
+        let waiter2 = tokio::spawn(async move { let _permit = gate3.acquire_owned().await.unwrap(); });
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         drop(first);
         let (w1, w2) = tokio::join!(waiter1, waiter2);

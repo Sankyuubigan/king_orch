@@ -20,7 +20,6 @@ pub use image_catalog::RequestMedia;
 pub use image_catalog::agent_consumes_image_catalog;
 pub use image_catalog::agent_receives_bundle_marker;
 pub use image_catalog::active_image_bundle_facts;
-pub use image_catalog::active_image_bundle_marker;
 pub use image_catalog::full_media_prompt_block;
 pub(crate) use invocation::*;
 pub(crate) use prompt_log::*;
@@ -38,7 +37,7 @@ pub use runtime::builtin_tools;
 use crate::domain::agent_manager::{load_agents, AgentProfile};
 use crate::domain::parsers::{
     clean_thought_tags, extract_think_content, extract_thought_from_partial_json,
-    has_incomplete_json_action, is_thinking_truncated,
+    has_incomplete_json_action,
     looks_like_broken_tool_call, needs_cutoff_continuation, parse_orchestrator_response,
     parse_tool_call, parse_tool_call_detailed, split_thinking_and_answer, ToolCallParse,
 };
@@ -60,7 +59,6 @@ use crate::infra::{
     ImageArtifactRegistry,
 };
 use prompt::build_system_prompt;
-use std::collections::HashMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};

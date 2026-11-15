@@ -1020,7 +1020,7 @@ fn probe_template_leak(
 /// (легитимный markdown) — только `### Instruction|System|User|Assistant`.
 fn template_token_hits(text: &str) -> Vec<String> {
     let mut hits: Vec<String> = Vec::new();
-    let mut push = |s: String, hits: &mut Vec<String>| {
+    let push = |s: String, hits: &mut Vec<String>| {
         if !s.is_empty() && !hits.contains(&s) {
             hits.push(s);
         }

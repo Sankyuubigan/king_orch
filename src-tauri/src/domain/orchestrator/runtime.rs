@@ -89,6 +89,7 @@ pub fn builtin_tools() -> Vec<(String, String, serde_json::Value)> {
 /// read-only тулы (read_file, read_many_files, grep, glob, list_directory) —
 /// доступны любому агенту БЕЗ плашки. Мутаторы (write_file, edit_file, bash)
 /// внутри корня проекта — авто, вне корня — плашка пользователя.
+#[allow(dead_code)] // capability-шов оркестратора — на вырост
 pub fn code_tool_schemas(include_write: bool) -> Vec<(String, String, serde_json::Value)> {
     crate::infra::tools::tool_schemas(include_write, &[])
 }
@@ -125,6 +126,7 @@ pub fn agent_code_tool_schemas(
 /// Ядро оркестратора спрашивает шов вместо хардкода; добавить/заменить
 /// capability можно, не трогая цикл выполнения. Возвращает человекочитаемую
 /// сводку (используется в промптах/логах и для согласования между агентами).
+#[allow(dead_code)] // capability-шов оркестратора — на вырост
 pub fn agent_capabilities(agent: &crate::domain::agent_manager::AgentProfile) -> Vec<String> {
     let mut caps = Vec::new();
     for t in &agent.tools {
@@ -144,6 +146,7 @@ pub fn agent_capabilities(agent: &crate::domain::agent_manager::AgentProfile) ->
 }
 
 /// Человекочитаемая сводка capability-шва для логов/промпта.
+#[allow(dead_code)] // capability-шов оркестратора — на вырост
 pub fn agent_capabilities_summary(agent: &crate::domain::agent_manager::AgentProfile) -> String {
     let caps = agent_capabilities(agent);
     if caps.is_empty() {

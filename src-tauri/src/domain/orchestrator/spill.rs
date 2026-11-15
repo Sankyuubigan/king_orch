@@ -1,13 +1,4 @@
 use super::*;
-use crate::domain::agent_manager::AgentProfile;
-use crate::infra::{
-    extract_model_filename, push_report, ChatAttachment, ChatMessage, GrammarSpec, LlamaEngine,
-    LlmMessage, ModelParams, SubCall, ToolCallInfo,
-};
-use serde_json::Value;
-use std::fs;
-use std::io::Write;
-use std::path::Path;
 
 /// Если вывод инструмента большой — пишет полный текст в spill-файл и
 /// возвращает выжимку (head 2000 + tail 1000) с локатором для встроенного
@@ -110,6 +101,7 @@ pub(crate) fn read_spill_file(path: &str, offset: usize, limit: usize) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn spill_paths_are_unique_for_same_agent_and_idx() {

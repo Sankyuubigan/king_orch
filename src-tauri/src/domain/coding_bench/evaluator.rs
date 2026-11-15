@@ -14,6 +14,7 @@ pub struct ExecVerdict {
     pub passed: bool,
     pub exit_code: Option<i32>,
     pub timed_out: bool,
+    #[allow(dead_code)] // диагностическое поле вердикта, консюмер на вырост
     pub compile_ok: bool,
     pub stdout: String,
     pub stderr: String,

@@ -138,6 +138,7 @@ pub fn parse_ops(value: Option<&Value>) -> Result<Vec<RefModOp>, ToolError> {
 }
 
 /// Загрузить кадры другой карточки в память (для splice).
+#[allow(dead_code)] // обёртка splice-операции — API на вырост
 pub fn load_other_frames(other_slug: &str) -> Result<Vec<image::DynamicImage>, ToolError> {
     load_other_frames_in(&crate::infra::tools::refmod::refmods_dir(), other_slug)
 }
@@ -297,6 +298,7 @@ fn splice_vertical(a: &image::DynamicImage, b: &image::DynamicImage) -> image::D
 
 /// Следующий свободный slug-вариант: `<base>`, `<base>_v2`, `<base>_v3`, …
 /// Если вариант перестаёт влезать в валидатор slug — честный Usage.
+#[allow(dead_code)] // генерация свободного slug — API на вырост
 pub fn next_free_slug(base: &str) -> Result<String, ToolError> {
     next_free_slug_in(&crate::infra::tools::refmod::refmods_dir(), base)
 }

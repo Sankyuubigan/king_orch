@@ -12,7 +12,7 @@
 use std::path::{Path, PathBuf};
 use tauri::AppHandle;
 
-use crate::infra::{self, AppConfig};
+use crate::infra::{self};
 
 /// Имя папки хранилища. Всегда такое, независимо от того, что выбрал юзер.
 pub const DATA_DIR_NAME: &str = "KingOrchData";
@@ -88,6 +88,7 @@ pub fn resolve(app: &AppHandle) -> PathBuf {
 }
 
 /// Создаёт папку хранилища, если её нет. Ошибка возвращается наружу.
+#[allow(dead_code)] // инфра-хелпер хранилища — на вырост
 pub fn ensure_dir(app: &AppHandle) -> Result<PathBuf, String> {
     let dir = resolve(app);
     std::fs::create_dir_all(&dir)
