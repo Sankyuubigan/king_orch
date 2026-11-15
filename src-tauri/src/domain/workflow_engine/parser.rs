@@ -1688,7 +1688,7 @@ edges: []
     ///
     /// На 10.11.26 в `agents/` живёт 12 графов (день добавил video-edit-flow —
     /// команда «Видеомонтаж», video_editor/video_helper; SSOT движка — плагин
-    /// tauri-plugin-ffmpeg). Вариант психотерапевта из `experiments/`
+    /// plugin-ffmpeg-wrapper). Вариант психотерапевта из `experiments/`
     /// удалён коммитом `83e37f9` вместе с нодой System-1.
     #[test]
     fn real_graphs_are_still_discovered() {

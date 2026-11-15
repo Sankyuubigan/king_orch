@@ -1006,7 +1006,7 @@ where
                 }
             }
         } else if crate::infra::is_ffmpeg_tool(tool_name) {
-            // 🎬 FFmpeg-тулы (SSOT-ядро — плагин tauri-plugin-ffmpeg): probe
+            // 🎬 FFmpeg-тулы (SSOT-ядро — плагин plugin-ffmpeg-wrapper): probe
             // (ffprobe) + run (монтаж, результат рядом с исходником с
             // суффиксом). Гейт источников — внутри execute_ffmpeg_tool
             // (вложения юзера + артефакты сессии). VRAM-suspend не нужен:
@@ -1129,7 +1129,7 @@ where
                 }
             }
         } else if crate::infra::is_youtube_tool(tool_name) {
-            // 📺 Субтитры YouTube (SSOT-механика — плагин tauri-plugin-ytdlp,
+            // 📺 Субтитры YouTube (SSOT-механика — плагин plugin-ytdlp-wrapper,
             // engine::subtitles): нативная замена MCP youtube_mcp.ts, контракт
             // модели прежний (имя/schema/формат вывода). Каталог движка и cookies
             // резолвит адаптер из конфига плагина; VRAM-suspend не нужен: HTTP +

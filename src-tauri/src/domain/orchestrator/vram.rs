@@ -14,7 +14,7 @@ use super::consts::AGENT_ERROR_PREFIX;
 use crate::infra::tools::ToolError;
 
 /// Маркеры ресурсной ошибки image/video-preflight (SSOT формулировок — плагин,
-/// `tauri-plugin-image-engine/src/engine/preflight.rs::resource_markers`;
+/// `plugin-media-gen-engine/src/engine/preflight.rs::resource_markers`;
 /// здесь только детект текста для маршрутизации ретраев). Каноны video-preflight
 /// («Недостаточно VRAM/места на диске», 27.10.26) живут в этом списке наравне
 /// с image-канонами: маркер, которого нет в списке, снова маскируется в
@@ -54,7 +54,7 @@ pub fn is_honest_tool_error(e: &ToolError) -> bool {
     match e {
         ToolError::NotFound(_) | ToolError::Usage(_) | ToolError::Forbidden(_) => true,
         ToolError::Io(msg) => {
-            msg.contains(tauri_plugin_image_engine::engine::ENGINE_LOG_REASON)
+            msg.contains(plugin_media_gen_engine::engine::ENGINE_LOG_REASON)
         }
         _ => false,
     }
@@ -171,7 +171,7 @@ mod tests {
             "sd-cli (рефайн) завершился с ошибкой (код Some(1)). {}: \
              [E] cannot update model sources during execution --- model_manager_files.cpp:80 | \
              [E] generate failed --- main.cpp:926",
-            tauri_plugin_image_engine::engine::ENGINE_LOG_REASON
+            plugin_media_gen_engine::engine::ENGINE_LOG_REASON
         ));
         assert!(is_honest_tool_error(&crash), "краш с хвостом = честный");
         assert!(!is_honest_tool_error(&ToolError::Io(

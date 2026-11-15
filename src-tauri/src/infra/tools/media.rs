@@ -1,6 +1,6 @@
 //! 🖼️ Инструменты изображений (generate_image / edit_image).
 //!
-//! Тонкие схемы + исполнение поверх `tauri-plugin-image-engine` (SSOT движка).
+//! Тонкие схемы + исполнение поверх `plugin-media-gen-engine` (SSOT движка).
 //! Исполнение синхронное (spawn_blocking внутри команд плагина не нужен —
 //! reqwest::blocking уже синхронный; генерация — долгая операция, минуты).
 //!
@@ -14,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::infra::tools::{Tool, ToolCtx, ToolError};
-use tauri_plugin_image_engine::engine::LoraSpec;
+use plugin_media_gen_engine::engine::LoraSpec;
 
 // LoRA-аргументы media-тулов (PRP 29.10.26): извлечение/резолв/лог — SSOT
 // содержимого резолва живёт в плагине (resolve_lora_names), здесь — только
@@ -197,25 +197,25 @@ fn session_outputs_dir(session_id: &str) -> std::path::PathBuf {
 }
 
 /// Результат тула: путь к PNG (агент показывает его + кладёт в attachments ответа).
-fn resolve_bundle_for_tools() -> Result<tauri_plugin_image_engine::engine::ImageBundleEntry, ToolError> {
+fn resolve_bundle_for_tools() -> Result<plugin_media_gen_engine::engine::ImageBundleEntry, ToolError> {
     // Выбор юзера: активный бандл из конфига, иначе дефолт каталога.
     // НЕ тихий фолбэк: если активный бандл скачан не полностью — честная ошибка
     // с требованием докачать (иначе агент получил бы «пустой» прогон).
-    let cfg = tauri_plugin_image_engine::engine::load_image_config_early();
+    let cfg = plugin_media_gen_engine::engine::load_image_config_early();
     let selected = cfg.selected_bundle.clone().unwrap_or_default();
     let entry = if selected.is_empty() {
-        tauri_plugin_image_engine::engine::default_bundle_entry()
+        plugin_media_gen_engine::engine::default_bundle_entry()
             .ok_or_else(|| ToolError::NotFound(
                 "В каталоге нет бандла изображений по умолчанию".to_string(),
             ))?
     } else {
-        tauri_plugin_image_engine::engine::bundle_by_name(&selected)
+        plugin_media_gen_engine::engine::bundle_by_name(&selected)
             .ok_or_else(|| ToolError::NotFound(format!(
                 "Активный бандл «{}» отсутствует в каталоге — выберите другой в Настройки → «Движок изображений».",
                 selected
             )))?
     };
-    let dir = tauri_plugin_image_engine::engine::bundle_dir_early();
+    let dir = plugin_media_gen_engine::engine::bundle_dir_early();
     let missing: Vec<&str> = entry
         .files
         .iter()
@@ -252,16 +252,16 @@ fn resolve_bundle_for_tools() -> Result<tauri_plugin_image_engine::engine::Image
 /// лечится другими аргументами; Usage здесь доводил до трёх пустых генераций
 /// и «Лимит неудачных вызовов инструмента»).
 fn plan_ref_edit_strict(
-    entry: &tauri_plugin_image_engine::engine::ImageBundleEntry,
+    entry: &plugin_media_gen_engine::engine::ImageBundleEntry,
     lora_dir: &std::path::Path,
     loras: Vec<LoraSpec>,
 ) -> Result<(Vec<LoraSpec>, Option<String>), ToolError> {
-    match tauri_plugin_image_engine::engine::plan_ref_edit(entry, lora_dir, loras) {
-        Ok(tauri_plugin_image_engine::engine::RefEditPlan::Unsupported { reason }) => {
+    match plugin_media_gen_engine::engine::plan_ref_edit(entry, lora_dir, loras) {
+        Ok(plugin_media_gen_engine::engine::RefEditPlan::Unsupported { reason }) => {
             log::warn!("[IMG-TOOL] ref-edit отказ (fail-closed): бандл «{}»", entry.name);
             Err(ToolError::NotFound(reason))
         }
-        Ok(tauri_plugin_image_engine::engine::RefEditPlan::Ready { loras: plan_loras, ref_image_args }) => {
+        Ok(plugin_media_gen_engine::engine::RefEditPlan::Ready { loras: plan_loras, ref_image_args }) => {
             let stack: Vec<String> = plan_loras
                 .iter()
                 .map(|l| format!("{}×{:.2}", l.path, l.multiplier))
@@ -294,15 +294,15 @@ fn run_generate(
     } else {
         plan_ref_edit_strict(
             &entry,
-            &tauri_plugin_image_engine::engine::image_lora_dir_early(),
+            &plugin_media_gen_engine::engine::image_lora_dir_early(),
             loras.to_vec(),
         )?
     };
-    let cfg = tauri_plugin_image_engine::engine::load_image_config_early();
-    let engine_dir = tauri_plugin_image_engine::engine::engine_dir_early();
-    let bundle_dir = tauri_plugin_image_engine::engine::bundle_dir_early();
+    let cfg = plugin_media_gen_engine::engine::load_image_config_early();
+    let engine_dir = plugin_media_gen_engine::engine::engine_dir_early();
+    let bundle_dir = plugin_media_gen_engine::engine::bundle_dir_early();
 
-    if !tauri_plugin_image_engine::engine::sdcpp_installer::has_any_installed(&engine_dir) {
+    if !plugin_media_gen_engine::engine::sdcpp_installer::has_any_installed(&engine_dir) {
         return Err(ToolError::NotFound(
             "Движок изображений не установлен. Откройте Настройки → «Движок изображений» и нажмите «Установить движок».".to_string(),
         ));
@@ -318,7 +318,7 @@ fn run_generate(
     let log_cb = |msg: String| log::info!("[IMG-TOOL] {}", msg);
 
     let res = if ref_paths.is_empty() {
-        tauri_plugin_image_engine::engine::generate_image_simple(
+        plugin_media_gen_engine::engine::generate_image_simple(
             &engine_dir, &bundle_dir, &entry,
             cfg.image_engine_variant.as_deref(),
             prompt_en,
@@ -327,7 +327,7 @@ fn run_generate(
             &out_path, &loras, None, log_cb,
         )
     } else {
-        tauri_plugin_image_engine::engine::edit_image_files(
+        plugin_media_gen_engine::engine::edit_image_files(
             &engine_dir, &bundle_dir, &entry,
             cfg.image_engine_variant.as_deref(),
             prompt_en, ref_paths,
@@ -356,11 +356,11 @@ fn run_upscale(
     ctx: &ToolCtx,
 ) -> Result<ImageRunOutput, ToolError> {
     let entry = resolve_bundle_for_tools()?;
-    let cfg = tauri_plugin_image_engine::engine::load_image_config_early();
-    let engine_dir = tauri_plugin_image_engine::engine::engine_dir_early();
-    let bundle_dir = tauri_plugin_image_engine::engine::bundle_dir_early();
+    let cfg = plugin_media_gen_engine::engine::load_image_config_early();
+    let engine_dir = plugin_media_gen_engine::engine::engine_dir_early();
+    let bundle_dir = plugin_media_gen_engine::engine::bundle_dir_early();
 
-    if !tauri_plugin_image_engine::engine::sdcpp_installer::has_any_installed(&engine_dir) {
+    if !plugin_media_gen_engine::engine::sdcpp_installer::has_any_installed(&engine_dir) {
         return Err(ToolError::NotFound(
             "Движок изображений не установлен. Откройте Настройки → «Движок изображений» и нажмите «Установить движок».".to_string(),
         ));
@@ -375,11 +375,11 @@ fn run_upscale(
     let out_path = out_dir.join(format!("img_{ts}_{sequence}.png"));
     let log_cb = |msg: String| log::info!("[IMG-TOOL] {}", msg);
 
-    tauri_plugin_image_engine::engine::upscale_image_files(
+    plugin_media_gen_engine::engine::upscale_image_files(
         &engine_dir, &bundle_dir, &entry,
         cfg.image_engine_variant.as_deref(),
         prompt_en,
-        tauri_plugin_image_engine::engine::UPSCALE_STRENGTH_DEFAULT,
+        plugin_media_gen_engine::engine::UPSCALE_STRENGTH_DEFAULT,
         source_path,
         entry.preset.seed,
         // loras: апскейл LoRA-стек не ведёт (решение PRP — tool upscale не трогаем).

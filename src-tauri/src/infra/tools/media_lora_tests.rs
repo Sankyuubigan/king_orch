@@ -361,7 +361,7 @@ fn resolve_clamps_multiplier_on_plugin_boundary() {
     };
     let specs = resolve_specs_in(&dir, &req).expect("резолв");
     assert!(
-        (specs[0].multiplier - tauri_plugin_image_engine::engine::LORA_MULTIPLIER_MAX).abs()
+        (specs[0].multiplier - plugin_media_gen_engine::engine::LORA_MULTIPLIER_MAX).abs()
             < f32::EPSILON,
         "кламп до верхней границы"
     );
@@ -483,7 +483,7 @@ fn status_line_reports_names_and_resolved_files() {
         strength: 1.0,
     };
     let specs = vec![
-        tauri_plugin_image_engine::engine::LoraSpec {
+        plugin_media_gen_engine::engine::LoraSpec {
             path: "a.safetensors".to_string(),
             multiplier: 1.0,
         },
@@ -508,11 +508,11 @@ fn status_line_shows_per_item_resolved_strengths() {
         strength: 0.8,
     };
     let specs = vec![
-        tauri_plugin_image_engine::engine::LoraSpec {
+        plugin_media_gen_engine::engine::LoraSpec {
             path: "slider.safetensors".to_string(),
             multiplier: 1.8,
         },
-        tauri_plugin_image_engine::engine::LoraSpec {
+        plugin_media_gen_engine::engine::LoraSpec {
             path: "adult.safetensors".to_string(),
             multiplier: 0.8,
         },

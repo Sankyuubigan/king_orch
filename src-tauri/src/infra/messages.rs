@@ -2,7 +2,7 @@
 //!
 //! Доменные типы сессии (`ChatMessage`, `SubCall`, `ToolCallInfo`) и её
 //! списковые операции (`push_report`, `message_phase`, `llm_history`) раньше
-//! жили в плагине `tauri-plugin-llama-engine` — доменное знание во внешнем
+//! жили в плагине `plugin-llama-engine` — доменное знание во внешнем
 //! инфраструктурном крейте. С 18.10.2026 контракт определяется здесь:
 //! плагин хранит только LLM-внутренности (`LlmMessage`, грамматики,
 //! `GenerationResult`) и API-тип вложений `ChatAttachment` (вход
@@ -13,9 +13,9 @@
 
 use serde::{Deserialize, Serialize};
 
-use tauri_plugin_llama_engine::engine::LlmMessage;
+use plugin_llama_engine::engine::LlmMessage;
 // Ре-экспорт: путь вложения — публичные данные графа и тулов (см. attachment_line).
-pub use tauri_plugin_llama_engine::engine::ChatAttachment;
+pub use plugin_llama_engine::engine::ChatAttachment;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCallInfo {

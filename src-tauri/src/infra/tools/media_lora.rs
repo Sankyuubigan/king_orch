@@ -1,7 +1,7 @@
 //! Опциональные LoRA-аргументы image-тулов (PRP 29.10.26, фаза 2).
 //!
 //! Извлечение из аргументов тула + резолв через SSOT плагина
-//! (`tauri_plugin_image_engine::engine::resolve_lora_specs`). Схемные
+//! (`plugin_media_gen_engine::engine::resolve_lora_specs`). Схемные
 //! описания полей живут в `media.rs` (`parameters()`); вся LoRA-логика —
 //! здесь: никаких новых каналов прокидки и дублей резолва.
 //!
@@ -12,7 +12,7 @@
 
 use serde_json::Value;
 
-use tauri_plugin_image_engine::engine::LoraSpec;
+use plugin_media_gen_engine::engine::LoraSpec;
 
 use crate::infra::tools::ToolError;
 
@@ -190,7 +190,7 @@ pub fn resolve_specs_in(
         .iter()
         .map(|i| (i.name.clone(), i.strength.unwrap_or(req.strength)))
         .collect();
-    tauri_plugin_image_engine::engine::resolve_lora_specs(dir, &wanted)
+    plugin_media_gen_engine::engine::resolve_lora_specs(dir, &wanted)
         .map_err(lora_resolve_error)
 }
 
@@ -207,7 +207,7 @@ pub fn resolve_specs_in_base(
         .iter()
         .map(|i| (i.name.clone(), i.strength.unwrap_or(req.strength)))
         .collect();
-    tauri_plugin_image_engine::engine::resolve_lora_specs_for_base(dir, &wanted, base)
+    plugin_media_gen_engine::engine::resolve_lora_specs_for_base(dir, &wanted, base)
         .map_err(lora_resolve_error)
 }
 
@@ -227,12 +227,12 @@ fn lora_resolve_error(msg: String) -> ToolError {
 /// здесь берётся только имя базы. Бандл отсутствует в каталоге → `None`
 /// (легаси-плоский) — честный отказ произойдёт позже, при генерации.
 fn active_lora_base() -> Option<String> {
-    let cfg = tauri_plugin_image_engine::engine::load_image_config_early();
+    let cfg = plugin_media_gen_engine::engine::load_image_config_early();
     let selected = cfg.selected_bundle.clone().unwrap_or_default();
     let entry = if selected.is_empty() {
-        tauri_plugin_image_engine::engine::default_bundle_entry()
+        plugin_media_gen_engine::engine::default_bundle_entry()
     } else {
-        tauri_plugin_image_engine::engine::bundle_by_name(&selected)
+        plugin_media_gen_engine::engine::bundle_by_name(&selected)
     };
     entry.and_then(|e| e.lora_base)
 }
@@ -242,12 +242,12 @@ fn active_lora_base() -> Option<String> {
 /// делает `resolve_video_bundle_for_tools` при генерации; здесь берётся
 /// только имя базы (`"minimax_h3"` у бандлов семейства H3).
 fn active_video_lora_base() -> Option<String> {
-    let cfg = tauri_plugin_image_engine::engine::load_image_config_early();
+    let cfg = plugin_media_gen_engine::engine::load_image_config_early();
     let selected = cfg.selected_video_bundle.clone().unwrap_or_default();
     let entry = if selected.is_empty() {
-        tauri_plugin_image_engine::engine::default_video_bundle_entry()
+        plugin_media_gen_engine::engine::default_video_bundle_entry()
     } else {
-        tauri_plugin_image_engine::engine::video_bundle_by_name(&selected)
+        plugin_media_gen_engine::engine::video_bundle_by_name(&selected)
     };
     entry.and_then(|e| e.lora_base)
 }
@@ -256,7 +256,7 @@ fn active_video_lora_base() -> Option<String> {
 /// дефолт `<KingOrchData>/image_loras`) и на базу АКТИВНОГО бандла (F3).
 pub fn resolve_specs(req: &LoraRequest) -> Result<Vec<LoraSpec>, ToolError> {
     resolve_specs_in_base(
-        &tauri_plugin_image_engine::engine::image_lora_dir_early(),
+        &plugin_media_gen_engine::engine::image_lora_dir_early(),
         req,
         active_lora_base().as_deref(),
     )
@@ -267,7 +267,7 @@ pub fn resolve_specs(req: &LoraRequest) -> Result<Vec<LoraSpec>, ToolError> {
 /// (`"minimax_h3"`). Зеркало `resolve_specs` для тулза generate_video.
 pub fn resolve_video_specs(req: &LoraRequest) -> Result<Vec<LoraSpec>, ToolError> {
     resolve_specs_in_base(
-        &tauri_plugin_image_engine::engine::video_lora_dir_early(),
+        &plugin_media_gen_engine::engine::video_lora_dir_early(),
         req,
         active_video_lora_base().as_deref(),
     )
@@ -398,7 +398,7 @@ fn parse_lora_sidecar(path: &std::path::Path) -> (String, Vec<String>, Option<f3
 /// честная строка-заглушка, а не тишина (агент обязан знать, что лор нет).
 /// Боевая точка: папка базы активного видео-бандла.
 pub fn video_loras_prompt() -> String {
-    let dir = tauri_plugin_image_engine::engine::video_lora_dir_early();
+    let dir = plugin_media_gen_engine::engine::video_lora_dir_early();
     let target = match active_video_lora_base().as_deref() {
         Some(base) if !base.trim().is_empty() => dir.join(base.trim()),
         _ => dir,
@@ -412,7 +412,7 @@ pub fn video_loras_prompt() -> String {
 /// назвала лору, которую ей никто не показывал). Скан/формат те же —
 /// `video_loras_prompt_in` фактически директория-сканер, имя историческое.
 pub fn image_loras_prompt() -> String {
-    let dir = tauri_plugin_image_engine::engine::image_lora_dir_early();
+    let dir = plugin_media_gen_engine::engine::image_lora_dir_early();
     let target = match active_lora_base().as_deref() {
         Some(base) if !base.trim().is_empty() => dir.join(base.trim()),
         _ => dir,

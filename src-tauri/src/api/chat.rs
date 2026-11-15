@@ -9,7 +9,7 @@ use crate::infra::{
 };
 
 // ─── Лог-файл ───
-// Единый log::Log из tauri-plugin-logs (core rules §2.5): king_orch.log РЯДОМ
+// Единый log::Log из plugin-log-collector (core rules §2.5): king_orch.log РЯДОМ
 // С EXE (даже если приложение падает на старте), dev-зеркало test/last_logs.txt
 // и событие «logs:message» для вкладки «Логи». Записи уровня ERROR/паника
 // дополнительно уходят в облако, если юзер не отключил настройку.
@@ -288,18 +288,18 @@ pub async fn chat_request(
 
     let cloud_endpoint = if is_cloud {
         let router_id = if model_path.starts_with("9router:") {
-            tauri_plugin_cloud_routers::RouterId::NineRouter
+            plugin_cloud_routers::RouterId::NineRouter
         } else if model_path.starts_with("extremerouter:") {
-            tauri_plugin_cloud_routers::RouterId::ExtremeRouter
+            plugin_cloud_routers::RouterId::ExtremeRouter
         } else if model_path.starts_with("gateway:") {
-            tauri_plugin_cloud_routers::RouterId::Gateway
+            plugin_cloud_routers::RouterId::Gateway
         } else {
-            tauri_plugin_cloud_routers::RouterId::OmniRoute
+            plugin_cloud_routers::RouterId::OmniRoute
         };
-        tauri_plugin_cloud_routers::commands::ensure_started(app.clone(), router_id.to_string())
+        plugin_cloud_routers::commands::ensure_started(app.clone(), router_id.to_string())
             .await
             .map_err(|error| format!("Облачный роутер недоступен: {}", error))?;
-        let config = tauri_plugin_cloud_routers::router::config::load_config(&app, router_id);
+        let config = plugin_cloud_routers::router::config::load_config(&app, router_id);
         Some(CloudEndpoint {
             base_url: config.base_url(router_id),
             api_key: config.api_key,

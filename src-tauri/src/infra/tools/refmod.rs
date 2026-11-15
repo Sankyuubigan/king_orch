@@ -2,7 +2,7 @@
 //! `refmod_edit` (warp/hue/splice → новая карточка), capability-паттерн
 //! медиа-тулов (tasks/261104_0230-db2cb59c, Этап 2).
 //!
-//! **SSOT формата карточки — плагин** (`tauri_plugin_image_engine::engine::refmod`):
+//! **SSOT формата карточки — плагин** (`plugin_media_gen_engine::engine::refmod`):
 //! одна реализация меты/кадров/нормализации потребляется и тулами хоста,
 //! и командами плашки «Рефмодс». Этот модуль держит только:
 //! 1) тонкие обёртки над SSOT (маппинг `RefModError` → `ToolError`, чтобы
@@ -21,7 +21,7 @@ use crate::infra::tools::refmod_ops::{apply_ops, parse_ops};
 use crate::infra::tools::{Tool, ToolCtx, ToolError};
 
 // ── SSOT-реэкспорт (типы и константы без ошибок) ──
-pub use tauri_plugin_image_engine::engine::{
+pub use plugin_media_gen_engine::engine::{
     copy_card_voice_in, engine_ref_paths, normalize_frame, set_card_voice_in,
     update_voice_desc_in, NormalizeReport, RefModBundle, CARD_PX_BUDGET_MAIN,
     CARD_PX_BUDGET_TOTAL, FRAME_SIZE_MULTIPLE, FRAMES_PER_RUN,
@@ -29,22 +29,22 @@ pub use tauri_plugin_image_engine::engine::{
 
 /// Маппинг ошибки SSOT в ошибку тул-слоя (вариант в вариант — семантика честных
 /// отказов Usage/NotFound сохраняется для диспетчера и ретрай-логики).
-fn map_error(error: tauri_plugin_image_engine::engine::RefModError) -> ToolError {
+fn map_error(error: plugin_media_gen_engine::engine::RefModError) -> ToolError {
     match error {
-        tauri_plugin_image_engine::engine::RefModError::Usage(msg) => ToolError::Usage(msg),
-        tauri_plugin_image_engine::engine::RefModError::NotFound(msg) => ToolError::NotFound(msg),
-        tauri_plugin_image_engine::engine::RefModError::Io(msg) => ToolError::Io(msg),
+        plugin_media_gen_engine::engine::RefModError::Usage(msg) => ToolError::Usage(msg),
+        plugin_media_gen_engine::engine::RefModError::NotFound(msg) => ToolError::NotFound(msg),
+        plugin_media_gen_engine::engine::RefModError::Io(msg) => ToolError::Io(msg),
     }
 }
 
 /// Папка карточек по действующему конфигу: `<KingOrchData>/refmods`.
 pub fn refmods_dir() -> PathBuf {
-    tauri_plugin_image_engine::engine::refmods_dir()
+    plugin_media_gen_engine::engine::refmods_dir()
 }
 
 /// Валидный slug папки карточки (1–48 символов `[a-z0-9_-]`, без traversal).
 pub fn validate_slug(slug: &str) -> Result<(), ToolError> {
-    tauri_plugin_image_engine::engine::validate_slug(slug).map_err(map_error)
+    plugin_media_gen_engine::engine::validate_slug(slug).map_err(map_error)
 }
 
 /// Сохранить RefMod-карточку из файлов-источников (перезаписывает существующую).
@@ -65,7 +65,7 @@ pub fn save_refmod_card_in(
     description: &str,
     sources: &[PathBuf],
 ) -> Result<(RefModBundle, NormalizeReport), ToolError> {
-    tauri_plugin_image_engine::engine::save_refmod_card_in(refmods_root, slug, name, description, sources)
+    plugin_media_gen_engine::engine::save_refmod_card_in(refmods_root, slug, name, description, sources)
         .map_err(map_error)
 }
 
@@ -77,7 +77,7 @@ pub fn save_refmod_card_images_in(
     description: &str,
     images: &[image::DynamicImage],
 ) -> Result<(RefModBundle, NormalizeReport), ToolError> {
-    tauri_plugin_image_engine::engine::save_refmod_card_images_in(
+    plugin_media_gen_engine::engine::save_refmod_card_images_in(
         refmods_root,
         slug,
         name,
@@ -93,7 +93,7 @@ pub fn load_refmod_card(slug: &str) -> Result<RefModBundle, ToolError> {
 }
 
 pub fn load_refmod_card_in(refmods_root: &Path, slug: &str) -> Result<RefModBundle, ToolError> {
-    tauri_plugin_image_engine::engine::load_refmod_card_in(refmods_root, slug).map_err(map_error)
+    plugin_media_gen_engine::engine::load_refmod_card_in(refmods_root, slug).map_err(map_error)
 }
 
 /// Список карточек (битые пропускаются с warn-логом в SSOT).
@@ -102,7 +102,7 @@ pub fn list_refmod_cards() -> Vec<RefModBundle> {
 }
 
 pub fn list_refmod_cards_in(refmods_root: &Path) -> Vec<RefModBundle> {
-    tauri_plugin_image_engine::engine::list_refmod_cards_in(refmods_root)
+    plugin_media_gen_engine::engine::list_refmod_cards_in(refmods_root)
 }
 
 /// Блок «Доступные RefMod-карточки» для графа (`{{ video_refmods }}`).
@@ -111,7 +111,7 @@ pub fn refmods_prompt() -> String {
 }
 
 pub fn refmods_prompt_in(refmods_root: &Path) -> String {
-    tauri_plugin_image_engine::engine::refmods_prompt_in(refmods_root)
+    plugin_media_gen_engine::engine::refmods_prompt_in(refmods_root)
 }
 
 // ── Tool-слой (capability-паттерн медиа-тулов) ──

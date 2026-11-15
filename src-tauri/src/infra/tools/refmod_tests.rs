@@ -301,7 +301,7 @@ fn edit_honest_gates_before_disk() {
 /// сэмпл голоса юзера. Контейнер строится SSOT-фн плагина (to_wav_bytes),
 /// symphonia его читает. Разные freq → разные байты (смена голоса отличима).
 fn wav_attachment(dir: &Path, name: &str, freq: f64) -> crate::infra::ChatAttachment {
-    let wav = tauri_plugin_image_engine::engine::VoiceWav {
+    let wav = plugin_media_gen_engine::engine::VoiceWav {
         // Амплитуда 12000: синус [-1, 1] кастом в i16 даёт почти все нули
         // (sin не достигает ±1.0 в этих точках) — v1 и v2 становятся
         // неразличимыми, и тест смены голоса сравнивает пустышки.

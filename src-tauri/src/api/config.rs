@@ -68,7 +68,7 @@ pub fn set_config_value(app: AppHandle, key: String, value: serde_json::Value) {
                 cfg.allow_error_reports = v;
                 // Мгновенный переключатель облачной отправки в плагине логов
                 // (panic-хук и события больше не отправляются сразу же).
-                tauri_plugin_logs::set_reporting_enabled(v);
+                plugin_log_collector::set_reporting_enabled(v);
             }
         }
         "chat_font_scale" => {

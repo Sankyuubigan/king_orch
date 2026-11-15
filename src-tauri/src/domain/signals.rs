@@ -918,7 +918,7 @@ fn with_slot_min_body(draft_rule: &str, min_chars: usize) -> String {
 }
 
 /// Константы формулы (`ENVELOPE_TOKENS`, `CHARS_PER_TOKEN`) и сама формула
-/// переехали в плагин (`tauri-plugin-llama-engine`, `llm_types.rs`) — SSOT
+/// переехали в плагин (`plugin-llama-engine`, `llm_types.rs`) — SSOT
 /// авто-потолка think для ВСЕХ JSON-контрактов: signal-агенты (здесь),
 /// узел `llm_fact_extractor` (`fact_extractor.rs`), fused-группы
 /// (`groups.rs`), вердикт-стенды (`verdict_contract.rs`). До 01.11.2026

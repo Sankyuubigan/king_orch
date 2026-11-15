@@ -1,5 +1,5 @@
 //! 📺 Capability YouTube: нативные тула `prepare_video`/`get_chunk` поверх
-//! SSOT-механики субтитров плагина `tauri-plugin-ytdlp` (`engine::subtitles`).
+//! SSOT-механики субтитров плагина `plugin-ytdlp-wrapper` (`engine::subtitles`).
 //!
 //! Нативная замена Deno MCP-сервера `youtube_mcp.ts`: имена тулов, описания,
 //! inputSchema и формат вывода дословно прежние, меняется только исполнение
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::infra::tools::{Tool, ToolCtx, ToolError};
-use tauri_plugin_ytdlp::engine::subtitles;
+use plugin_ytdlp_wrapper::engine::subtitles;
 
 pub const YOUTUBE_TOOL_NAMES: [&str; 2] = ["prepare_video", "get_chunk"];
 

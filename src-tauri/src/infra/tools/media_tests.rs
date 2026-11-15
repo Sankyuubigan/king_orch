@@ -416,7 +416,7 @@ fn saved_image_attachments_are_path_only() {
 /// отказывал этому бандлу 100% валидных edit-вызовов (`ToolError::Usage`),
 /// и оркестратор сжигал три генерации (~51–59 с каждая) до «Лимит неудачных
 /// вызовов инструмента (3)».
-fn flux3_style_entry() -> tauri_plugin_image_engine::engine::ImageBundleEntry {
+fn flux3_style_entry() -> plugin_media_gen_engine::engine::ImageBundleEntry {
     serde_json::from_value(serde_json::json!({
         "name": "flux3-klein-adq4k",
         "ref_edit_mode": "native",

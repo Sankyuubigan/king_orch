@@ -1132,7 +1132,7 @@ where
 
     // 🖼 Capability изображений: `tools: ["generate_image"]` / `["edit_image"]` в .md
     // агента → схемы media-тулов (мета-имя "media"). Исполнение — через
-    // tauri-plugin-image-engine, референсы — аттачменты текущего запроса.
+    // plugin-media-gen-engine, референсы — аттачменты текущего запроса.
     all_tools.extend(crate::infra::image_tool_schemas(&agent.tools));
     all_tools.extend(crate::infra::video_tool_schemas(&agent.tools));
 
@@ -1143,13 +1143,13 @@ where
 
     // 🎬 Capability FFmpeg: `tools: {ffmpeg_probe: true, ffmpeg_run: true}` в .md
     // → схемы ffmpeg-тулов (мета-имя "ffmpeg"). Исполнение — нативно через
-    // плагин tauri-plugin-ffmpeg (движок автоскачивается в хранилище),
+    // плагин plugin-ffmpeg-wrapper (движок автоскачивается в хранилище),
     // источники — allow-read вложения и артефакты сессии.
     all_tools.extend(crate::infra::ffmpeg_tool_schemas(&agent.tools));
 
     // 🧩 Capability RefMod: `tools: {refmod_create: true, refmod_edit: true}` в .md
     // → схемы refmod-тулов (мета-имя "refmod"). Исполнение — нативно (SSOT формата
-    // карточек в tauri-plugin-image-engine), источники create — вложения запроса.
+    // карточек в plugin-media-gen-engine), источники create — вложения запроса.
     all_tools.extend(crate::infra::refmod_tool_schemas(&agent.tools));
 
     // 🩺 Capability Diag: `tools: {diag_snapshot: true, ...}` в .md → схемы
@@ -1164,7 +1164,7 @@ where
 
     // 📺 Capability YouTube: `tools: {prepare_video: true, get_chunk: true}` в .md
     // → схемы тулов (мета-имя "youtube"). Исполнение — нативно через плагин
-    // tauri-plugin-ytdlp (engine::subtitles), замена MCP youtube_mcp.ts.
+    // plugin-ytdlp-wrapper (engine::subtitles), замена MCP youtube_mcp.ts.
     all_tools.extend(crate::infra::youtube_tool_schemas(&agent.tools));
 
     let has_real_tools = !all_tools.is_empty() || !agent.tools.is_empty();

@@ -282,7 +282,7 @@ fn video_refuses_wrong_attachment_counts_before_resolve() {
 #[test]
 fn video_refuses_unsupported_mode_on_bundle() {
     // uni-бандл умеет i2va и ref2va — гейт пропускает оба.
-    let uni = tauri_plugin_image_engine::engine::video_bundle_by_name("minimax_h3_uni-q3k")
+    let uni = plugin_media_gen_engine::engine::video_bundle_by_name("minimax_h3_uni-q3k")
         .expect("uni-бандл в каталоге");
     assert!(uni.modes.iter().any(|m| m == "i2va"));
     assert!(uni.modes.iter().any(|m| m == "ref2va"));
@@ -387,7 +387,7 @@ fn extract_saved_video_id_parses_marker() {
 #[test]
 fn refmod_voice_paths_carries_card_voice() {
     use std::path::PathBuf;
-    use tauri_plugin_image_engine::engine::RefModBundle;
+    use plugin_media_gen_engine::engine::RefModBundle;
     let make = |voice: Option<PathBuf>| RefModBundle {
         slug: "char".to_string(),
         name: "Персонаж".to_string(),
@@ -825,7 +825,7 @@ fn video_refine_memory_survives_restart() {
                 sample_method: "euler".to_string(),
                 scheduler: "beta".to_string(),
                 flow_shift: Some(12.0),
-                lora: vec![tauri_plugin_image_engine::engine::VideoLoraRef {
+                lora: vec![plugin_media_gen_engine::engine::VideoLoraRef {
                     path: "minimax_h3_turbo_lora.safetensors".to_string(),
                     multiplier: 0.8,
                 }],

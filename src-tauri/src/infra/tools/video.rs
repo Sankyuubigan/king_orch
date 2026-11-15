@@ -1,6 +1,6 @@
 //! 🎬 Инструмент видео-генерации (`generate_video`).
 //!
-//! Тонкая схема + исполнение поверх `tauri-plugin-image-engine::engine` (SSOT
+//! Тонкая схема + исполнение поверх `plugin-media-gen-engine::engine` (SSOT
 //! движка: дефолты размеров/seed/fps/лимит seconds — из пресета каталога,
 //! никаких локальных копий констант). По образцу `media.rs` (generate_image),
 //! но: один тул, артефакт прикрепляется к ответу ПО ПУТИ (`file_path`), потому
@@ -13,7 +13,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use tauri_plugin_image_engine::engine::{RefModBundle, VideoSamplingPlan, sampling_plan_for_quality};
+use plugin_media_gen_engine::engine::{RefModBundle, VideoSamplingPlan, sampling_plan_for_quality};
 
 use crate::infra::tools::media::ImageArtifactRegistry;
 use crate::infra::tools::{Tool, ToolCtx, ToolError};
@@ -51,7 +51,7 @@ struct LastVideoReq {
     ref_audio_paths: Vec<String>,
     /// Путь первого кадра (i2va). Рефайн i2va бенчем не проверен → honest отказ.
     init_path: Option<String>,
-    loras: Vec<tauri_plugin_image_engine::engine::LoraSpec>,
+    loras: Vec<plugin_media_gen_engine::engine::LoraSpec>,
     seed: i64,
     /// Честный реплей (2.3 Euler-PRP): разрешённый план ДРАФТА на момент его
     /// генерации (шаги/сэмплер/шедулер/shift/вес turbo-лоры). Рефайн реплеит
@@ -190,24 +190,24 @@ fn video_session_outputs_dir(session_id: &str) -> std::path::PathBuf {
 /// фолбэк: отсутствующее имя или недокачанные файлы — честная ошибка
 /// с инструкцией (по образцу media.rs resolve_bundle_for_tools).
 fn resolve_video_bundle_for_tools() -> Result<
-    tauri_plugin_image_engine::engine::VideoBundleEntry,
+    plugin_media_gen_engine::engine::VideoBundleEntry,
     ToolError,
 > {
-    let cfg = tauri_plugin_image_engine::engine::load_image_config_early();
+    let cfg = plugin_media_gen_engine::engine::load_image_config_early();
     let selected = cfg.selected_video_bundle.clone().unwrap_or_default();
     let entry = if selected.is_empty() {
-        tauri_plugin_image_engine::engine::default_video_bundle_entry()
+        plugin_media_gen_engine::engine::default_video_bundle_entry()
             .ok_or_else(|| ToolError::NotFound(
                 "В каталоге нет видео-бандла по умолчанию".to_string(),
             ))?
     } else {
-        tauri_plugin_image_engine::engine::video_bundle_by_name(&selected)
+        plugin_media_gen_engine::engine::video_bundle_by_name(&selected)
             .ok_or_else(|| ToolError::NotFound(format!(
                 "Активный видео-бандл «{}» отсутствует в каталоге — выберите другой в Настройки → «Модели ImageGEN».",
                 selected
             )))?
     };
-    let dir = tauri_plugin_image_engine::engine::video_bundle_dir_early();
+    let dir = plugin_media_gen_engine::engine::video_bundle_dir_early();
     let missing: Vec<&str> = entry
         .files
         .iter()
@@ -236,7 +236,7 @@ fn resolve_video_bundle_for_tools() -> Result<
 /// (i2va) ловятся здесь ДО обращения к движку. Выделен в чистую функцию для
 /// герметичного теста на синтетическом entry (без реального конфига машины).
 fn ensure_bundle_supports_mode(
-    entry: &tauri_plugin_image_engine::engine::VideoBundleEntry,
+    entry: &plugin_media_gen_engine::engine::VideoBundleEntry,
     mode: &str,
 ) -> Result<(), ToolError> {
     if entry.modes.iter().any(|m| m == mode) {
@@ -271,7 +271,7 @@ fn run_generate_video(
     ref_paths: &[String],
     ref_image_size_max: bool,
     ref_audio_paths: &[String],
-    loras: &[tauri_plugin_image_engine::engine::LoraSpec],
+    loras: &[plugin_media_gen_engine::engine::LoraSpec],
     refmod_slug: Option<String>,
     ctx: &ToolCtx,
 ) -> Result<VideoRunOutput, ToolError> {
@@ -295,10 +295,10 @@ fn run_generate_video(
         "t2va"
     };
     ensure_bundle_supports_mode(&entry, mode)?;
-    let engine_dir = tauri_plugin_image_engine::engine::engine_dir_early();
-    let bundle_dir = tauri_plugin_image_engine::engine::video_bundle_dir_early();
+    let engine_dir = plugin_media_gen_engine::engine::engine_dir_early();
+    let bundle_dir = plugin_media_gen_engine::engine::video_bundle_dir_early();
 
-    if !tauri_plugin_image_engine::engine::sdcpp_installer::has_any_installed(&engine_dir) {
+    if !plugin_media_gen_engine::engine::sdcpp_installer::has_any_installed(&engine_dir) {
         return Err(ToolError::NotFound(
             "Движок изображений не установлен. Откройте Настройки → «Движок запуска ImageGEN моделей» и нажмите «Установить движок».".to_string(),
         ));
@@ -335,7 +335,7 @@ fn run_generate_video(
     let out_path = out_dir.join(format!("vid_{}_{}.webm", ts, sequence));
     let log_cb = |msg: String| log::info!("[VID-TOOL] {}", msg);
 
-    tauri_plugin_image_engine::engine::generate_video_simple(
+    plugin_media_gen_engine::engine::generate_video_simple(
         &engine_dir,
         &bundle_dir,
         &entry,
@@ -425,9 +425,9 @@ fn run_refine_video(ctx: &ToolCtx) -> Result<VideoRunOutput, ToolError> {
             entry.name
         )));
     };
-    let engine_dir = tauri_plugin_image_engine::engine::engine_dir_early();
-    let bundle_dir = tauri_plugin_image_engine::engine::video_bundle_dir_early();
-    if !tauri_plugin_image_engine::engine::sdcpp_installer::has_any_installed(&engine_dir) {
+    let engine_dir = plugin_media_gen_engine::engine::engine_dir_early();
+    let bundle_dir = plugin_media_gen_engine::engine::video_bundle_dir_early();
+    if !plugin_media_gen_engine::engine::sdcpp_installer::has_any_installed(&engine_dir) {
         return Err(ToolError::NotFound(
             "Движок изображений не установлен. Откройте Настройки → «Движок запуска ImageGEN моделей» и нажмите «Установить движок».".to_string(),
         ));
@@ -474,7 +474,7 @@ fn run_refine_video(ctx: &ToolCtx) -> Result<VideoRunOutput, ToolError> {
     let out_path = out_dir.join(format!("vid_{}_{}_refined.webm", ts, sequence));
     let log_cb = |msg: String| log::info!("[VID-TOOL] {}", msg);
 
-    tauri_plugin_image_engine::engine::generate_video_refine(
+    plugin_media_gen_engine::engine::generate_video_refine(
         &engine_dir,
         &bundle_dir,
         &entry,

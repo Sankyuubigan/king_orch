@@ -1,5 +1,5 @@
 //! 🎬 Capability FFmpeg: нативные тула `ffmpeg_probe`/`ffmpeg_run` поверх
-//! SSOT-механики плагина `tauri-plugin-ffmpeg` (автоустановка движка +
+//! SSOT-механики плагина `plugin-ffmpeg-wrapper` (автоустановка движка +
 //! запуск subprocess БЕЗ shell).
 //!
 //! Архитектурные гейты (§00.2 — структурные, не промптовые):
@@ -17,7 +17,7 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::infra::tools::{Tool, ToolCtx, ToolError};
-use tauri_plugin_ffmpeg::engine;
+use plugin_ffmpeg_wrapper::engine;
 
 pub const FFMPEG_TOOL_NAMES: [&str; 2] = ["ffmpeg_probe", "ffmpeg_run"];
 

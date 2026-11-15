@@ -2,13 +2,13 @@ use std::fs;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use tauri_plugin_cloud_routers::router::client::{self, ChatMessage, ChatRequest};
-use tauri_plugin_cloud_routers::router::client_error::{
+use plugin_cloud_routers::router::client::{self, ChatMessage, ChatRequest};
+use plugin_cloud_routers::router::client_error::{
     is_retryable_transport_error, CloudStreamError, CLOUD_CANCELLED_MARKER,
     CLOUD_EMPTY_STREAM_MARKER, CLOUD_TIMEOUT_MARKER, CLOUD_TRUNCATED_MARKER,
 };
-use tauri_plugin_llama_engine::engine::llm_types::GenerationResult;
-use tauri_plugin_llama_engine::engine::{
+use plugin_llama_engine::engine::llm_types::GenerationResult;
+use plugin_llama_engine::engine::{
     ChatAttachment, GrammarSpec, LlmMessage, LlamaEngine, ModelParams, ToolCall, ToolDefinition,
 };
 

@@ -105,17 +105,17 @@ pub async fn install_update_from_github(
 
     // Бэкап пользовательских данных. Для обновления это best-effort (схема
     // данных не меняется), но ошибку не глотаем молча — пишем в лог (core §2.2).
-    if let Err(e) = tauri_plugin_about_updates::backup_before_rollback(&app) {
+    if let Err(e) = plugin_about_updates::backup_before_rollback(&app) {
         log::error!("[updater] бэкап перед обновлением не удался: {}", e);
     }
 
     // Скачивание, запуск NSIS (/P /UPDATE /R), перезапуск приложения и выход —
-    // ровно тот же конвейер, что у отката версий (SSOT, tauri-plugin-about-updates).
+    // ровно тот же конвейер, что у отката версий (SSOT, plugin-about-updates).
     // Раньше здесь был второй, отдельный вызов установщика без `/R`:
     // после резервного обновления приложение не перезапускалось вообще.
-    tauri_plugin_about_updates::installer::run_install(
+    plugin_about_updates::installer::run_install(
         &app,
-        tauri_plugin_about_updates::install_report::InstallKind::Update,
+        plugin_about_updates::install_report::InstallKind::Update,
         &version,
         &url,
     )

@@ -1,7 +1,7 @@
 //! Полный конфиг приложения (`app_config.json`) — хостовый `AppConfig`.
 //!
 //! ## Разделение с движковым плагином (два файла, один SSOT на ключ)
-//! Плагин `tauri-plugin-llama-engine` владеет движковыми ключами (models,
+//! Плагин `plugin-llama-engine` владеет движковыми ключами (models,
 //! models_dir, model_params, mmproj_files, model_meta, llamacpp_dir,
 //! engine_source, engine_variant) в СОБСТВЕННОМ общем файле
 //! `%APPDATA%/llama-engine/app_config.json` (SSOT для всех хостов плагина).
@@ -28,9 +28,9 @@ use tauri::{AppHandle, Manager};
 
 /// Единые движковые типы — из плагина (SSOT), чтоб хостовый `AppConfig`
 /// сериализовался в тот же JSON, что и `EngineConfig` плагина.
-pub use tauri_plugin_llama_engine::engine::config::{ModelMeta, ModelParams};
+pub use plugin_llama_engine::engine::config::{ModelMeta, ModelParams};
 
-use tauri_plugin_llama_engine::engine::config::{
+use plugin_llama_engine::engine::config::{
     self as engine_config, EngineConfig,
 };
 

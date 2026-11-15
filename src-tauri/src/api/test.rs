@@ -401,7 +401,7 @@ fn new_llama_server_pid(before: &HashSet<u32>) -> Option<u32> {
 /// VRAM device-level — вся занятая VRAM GPU, включая чужие процессы; сравнивать
 /// модели между собой корректнее по Δ (пик − база до запуска движка).
 fn mem_fields(
-    report: tauri_plugin_llama_engine::engine::mem_profiler::MemReport,
+    report: plugin_llama_engine::engine::mem_profiler::MemReport,
     vram_before_mb: Option<f64>,
 ) -> (Option<f64>, Option<f64>, Option<f64>) {
     const MB: f64 = 1024.0 * 1024.0;
@@ -1220,7 +1220,7 @@ pub fn write_custom_prompt_report(
 /// поэтому llama-server установленной релизной копии не затрагивается.
 #[tauri::command]
 pub fn cancel_test_run() -> Result<(), String> {
-    tauri_plugin_llama_engine::engine::process_util::kill_active_engines();
+    plugin_llama_engine::engine::process_util::kill_active_engines();
     Ok(())
 }
 

@@ -25,7 +25,7 @@ fn bin_filename(name: &str) -> String {
 fn bin_url(name: &str) -> Result<&'static str, String> {
     match name {
         "deno" => Ok(DENO_URL),
-        // yt-dlp НЕ здесь: бинарь управляется плагином tauri-plugin-ytdlp
+        // yt-dlp НЕ здесь: бинарь управляется плагином plugin-ytdlp-wrapper
         // (<exe>/ytdlp, установка/обновление с GitHub) — см. infra/tools/youtube.rs.
         _ => Err(format!("Неизвестный бинарник: {}", name)),
     }
@@ -35,19 +35,19 @@ fn is_zip(name: &str) -> bool {
     name == "deno"
 }
 
-/// Скачивание байтов единым движком tauri-plugin-downloader (temp-файл → память).
+/// Скачивание байтов единым движком plugin-downloader (temp-файл → память).
 fn download_bytes_with_fallback(url: &str, log_cb: &dyn Fn(String)) -> Result<Vec<u8>, String> {
-    let opts = tauri_plugin_downloader::DownloadOptions {
+    let opts = plugin_downloader::DownloadOptions {
         label: "Загрузка бинаря".into(),
         kind: "bin".into(),
         ..Default::default()
     };
-    let bytes = tauri_plugin_downloader::download_bytes_blocking(url, opts)?;
+    let bytes = plugin_downloader::download_bytes_blocking(url, opts)?;
     log_cb(format!("📥 Скачано {} МБ", bytes.len() as f64 / 1024.0 / 1024.0));
     Ok(bytes)
 }
 
-/// Скачивание файла единым движком tauri-plugin-downloader.
+/// Скачивание файла единым движком plugin-downloader.
 /// `log_cb` должен быть `Send + Sync` — требование async-callback'ов движка.
 fn download_file_sync(
     url: &str,
@@ -55,7 +55,7 @@ fn download_file_sync(
     log_cb: &(dyn Fn(String) + Send + Sync),
 ) -> Result<(), String> {
     log_cb(format!("📥 Скачивание {}...", url));
-    let opts = tauri_plugin_downloader::DownloadOptions {
+    let opts = plugin_downloader::DownloadOptions {
         label: dest
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
@@ -63,7 +63,7 @@ fn download_file_sync(
         kind: "bin".into(),
         ..Default::default()
     };
-    tauri_plugin_downloader::download_blocking(url, dest, opts, Some(log_cb))?;
+    plugin_downloader::download_blocking(url, dest, opts, Some(log_cb))?;
     log_cb(format!(
         "📥 Скачано {} МБ",
         fs::metadata(dest).map(|m| m.len()).unwrap_or(0) as f64 / 1024.0 / 1024.0

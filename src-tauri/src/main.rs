@@ -14,11 +14,11 @@ use std::time::Instant;
 async fn main() {
     let process_started = Instant::now();
     // ── Логирование с первой миллисекунды запуска ──
-    // Единый log::Log из tauri-plugin-logs (core rules §2.5): файл king_orch.log
+    // Единый log::Log из plugin-log-collector (core rules §2.5): файл king_orch.log
     // РЯДОМ С EXE (юзер может прислать его, даже если приложение не открывается
     // или падает на старте), dev-зеркало test/last_logs.txt и вкладка «Логи».
     // Ранний pre-Tauri период пишется через early_* (краш-лог живёт сразу).
-    tauri_plugin_logs::early_init("king_orch.log");
+    plugin_log_collector::early_init("king_orch.log");
 
     // Плагины llama-engine и cloud-routers владеют своими конфигами в
     // собственных каталогах (%APPDATA%/llama-engine, %APPDATA%/cloud-routers),
@@ -27,18 +27,18 @@ async fn main() {
     // описывал схему до переезда плагинов и маскировал рассинхрон списков моделей
     // (инцидент 25.10.26 — стык см. в доке infra::config).
 
-    tauri_plugin_logs::early_log(
+    plugin_log_collector::early_log(
         "INFO",
         &format!("=== King Orch {}: запуск ===", env!("CARGO_PKG_VERSION")),
     );
-    tauri_plugin_logs::early_log(
+    plugin_log_collector::early_log(
         "INFO",
         &format!(
             "exe: {}",
             std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default()
         ),
     );
-    tauri_plugin_logs::early_log(
+    plugin_log_collector::early_log(
         "INFO",
         &format!(
             "OS: {} | arch: {} | CPU: {}",
@@ -47,7 +47,7 @@ async fn main() {
             std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_default(),
         ),
     );
-    tauri_plugin_logs::early_log(
+    plugin_log_collector::early_log(
         "INFO",
         &format!("[BOOT] early logging ready {}ms", process_started.elapsed().as_millis()),
     );
@@ -63,7 +63,7 @@ async fn main() {
     // ── Системный прокси: детект до любых HTTP-запросов ──
     infra::system_proxy::detect_and_set_proxy();
 
-    tauri_plugin_logs::early_log("INFO", "Tauri: создание приложения…");
+    plugin_log_collector::early_log("INFO", "Tauri: создание приложения…");
 
     // ── WebView2: программный рендер UI (без GPU-процесса) ──
     // Окно в фоне под нагрузкой GPU (llama.cpp + другие программы) может
@@ -81,7 +81,7 @@ async fn main() {
     // любом случае), а облачная отправка управляется флагом set_reporting_enabled:
     // если юзер снял галочку — отправка в Aptabase физически блокируется.
     let telemetry_enabled = infra::config::load_config_early().allow_error_reports;
-    tauri_plugin_logs::early_log(
+    plugin_log_collector::early_log(
         "INFO",
         if telemetry_enabled {
             "Телеметрия: включена (анонимные отчёты об ошибках)"
@@ -90,7 +90,7 @@ async fn main() {
         },
     );
 
-    tauri_plugin_logs::early_log(
+    plugin_log_collector::early_log(
         "INFO",
         &format!("[BOOT] pre-Tauri checks done {}ms", process_started.elapsed().as_millis()),
     );
@@ -100,23 +100,23 @@ async fn main() {
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_about_updates::init())
-        .plugin(tauri_plugin_logs::init())
+        .plugin(plugin_about_updates::init())
+        .plugin(plugin_log_collector::init())
         // Единый движок скачивания (SSOT): engine, bin, app update, 9router.
-        .plugin(tauri_plugin_downloader::init())
+        .plugin(plugin_downloader::init())
         // Движок llama.cpp — переиспользуемый плагин (SSOT). Регистрирует
         // команды движка/моделей, owns процесс llama-server (kill на выходе).
-        .plugin(tauri_plugin_llama_engine::init())
+        .plugin(plugin_llama_engine::init())
         // Шлюз облачных LLM (SSOT). Регистрирует команды
         // get_status/install_or_update/ensure_started/get_combos/chat_completion
         // и процесс node.exe (ленивый старт, переживает закрытие приложения).
-        .plugin(tauri_plugin_cloud_routers::init())
+        .plugin(plugin_cloud_routers::init())
         // Движок изображений stable-diffusion.cpp (SSOT). Регистрирует
         // команды движка/бандла/генерации, owns процесс sd-server (kill на выходе).
-        .plugin(tauri_plugin_image_engine::init())
+        .plugin(plugin_media_gen_engine::init())
         // Движок FFmpeg (SSOT): статус установки для UI/диагностики; сами
         // тулы монтажа идут нативно через infra/tools/ffmpeg.rs (без команд).
-        .plugin(tauri_plugin_ffmpeg::init())
+        .plugin(plugin_ffmpeg_wrapper::init())
 
         .manage(AppState::new())
         .setup(move |app| {
@@ -225,9 +225,9 @@ async fn main() {
             // Облачная отправка: блокируем, если юзер снял галочку. Плагин логов
             // поднял своё reporting-состояние из tauri.conf.json при регистрации.
             if !telemetry_enabled {
-                tauri_plugin_logs::set_reporting_enabled(false);
+                plugin_log_collector::set_reporting_enabled(false);
             }
-            tauri_plugin_logs::track_event("app_started", None);
+            plugin_log_collector::track_event("app_started", None);
             std::thread::spawn(|| {
                 infra::network_diagnostics::run_diagnostics();
             });
@@ -247,7 +247,7 @@ async fn main() {
             }
             let app_for_update = app_handle.clone();
             tauri::async_runtime::spawn(async move {
-                let _ = tauri_plugin_llama_engine::commands::check_engine_update(app_for_update).await;
+                let _ = plugin_llama_engine::commands::check_engine_update(app_for_update).await;
             });
 
             log::info!("[BOOT] setup complete {}ms", process_started.elapsed().as_millis());
@@ -303,14 +303,14 @@ async fn main() {
             api::updater::check_github_release_update,
             api::updater::install_update_from_github,
             // Команды движка/моделей/параметров регистрирует плагин
-            // tauri-plugin-llama-engine (get_engine_status, install_llamacpp,
+            // plugin-llama-engine (get_engine_status, install_llamacpp,
             // add_model, get_model_params, download_model и т.д.).
         ])
         .build(tauri::generate_context!())
         .expect("ошибка создания приложения Tauri")
         .run(|_app_handle, _event| {
             // Гарантированное убийство движка llama.cpp (llama-server.exe) при
-            // выходе обрабатывает плагин tauri-plugin-llama-engine (on_event
+            // выходе обрабатывает плагин plugin-llama-engine (on_event
             // ExitRequested → kill_active_engines; дополнительно каждый движок
             // назначен в Windows Job Object с KILL_ON_JOB_CLOSE).
         });

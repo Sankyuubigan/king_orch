@@ -52,7 +52,7 @@ fn translate_sync(
     let ctx_limit = cfg.context_size;
     let max_tokens = cfg.max_gen_tokens as usize;
     let params =
-        tauri_plugin_llama_engine::commands::get_model_params(app.clone(), model_path.clone());
+        plugin_llama_engine::commands::get_model_params(app.clone(), model_path.clone());
 
     let target_name = match target_lang.as_str() {
         "en" => "English",
