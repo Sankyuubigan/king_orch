@@ -58,11 +58,21 @@ export function renderMarkdown(text: string): string {
   html = html.replace(/^# (.*$)/gim, '<h1>$1</h1>');
   html = html.replace(/\*\*(.*?)\*\*/gim, '<strong>$1</strong>');
   html = html.replace(/\*(.*?)\*/gim, '<em>$1</em>');
-  html = html.replace(/^\s*[-*]\s+(.*$)/gim, '<li>$1</li>');
+  // [^\S\n]* вместо \s*: с флагом m \s* протягивается через \n и съедает пустые
+  // строки перед пунктом списка ещё ДО правила переносов (та же семья дефекта —
+  // пустая строка обязана дожить до построчного шага и дать <br>).
+  html = html.replace(/^[^\S\n]*[-*]\s+(.*$)/gim, '<li>$1</li>');
   html = html.replace(/(<li>.*?<\/li>(\s*<li>.*?<\/li>)*)/gims, '<ul>$1</ul>');
 
-  html = html.split('\n').map(line => {
-    if (line.trim() === '' || line.startsWith('<h') || line.startsWith('<ul') || line.startsWith('<li') || line.startsWith('</ul') || line.startsWith('__MERMAID_BLOCK_') || line.startsWith('__SCHEME_BLOCK_')) {
+  // Каждый \n внутри текста = ровно один видимый разрыв (16.11.2026, PRP
+  // «Сохранение пустых строк в чате»): пустая/пробельная строка — контент
+  // (разделитель абзацев) и обязана дать свой <br>, иначе HTML whitespace
+  // коллапсирует и абзацы юзера склеиваются (тест test/markdown.test.ts).
+  // Последняя строка закрывающий разрыв не удваивает — хвост не растёт.
+  html = html.split('\n').map((line, i, arr) => {
+    const isLastLine = i === arr.length - 1;
+    if (line.trim() === '') return isLastLine ? '' : '<br>';
+    if (line.startsWith('<h') || line.startsWith('<ul') || line.startsWith('<li') || line.startsWith('</ul') || line.startsWith('__MERMAID_BLOCK_') || line.startsWith('__SCHEME_BLOCK_')) {
       return line;
     }
     return `${line}<br>`;
