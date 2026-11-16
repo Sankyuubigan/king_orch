@@ -219,7 +219,7 @@
 > - Запрещено использовать `confirm()` для диалогов обновления.
 
 > ### 4. Логирование — единый стандарт `tauri-plugin-logs`
-> Вкладка «Логи» вынесена в переиспользуемый плагин (см. `tauri-build-toolkit/templates/LOGS_SETUP.md` и `global_ai_docs/core/rules.md` §2.5/§2.5.1/§2.5.2). Правила для King Orch:
+> Вкладка «Логи» вынесена в переиспользуемый плагин (см. `rust-build-toolkit/templates/LOGS_SETUP.md` и `global_ai_docs/core/rules.md` §2.5/§2.5.1/§2.5.2). Правила для King Orch:
 > - **Единственный логгер** — плагин `tauri-plugin-logs` (`tauri_plugin_logs::init()` в setup, ранний краш-лог `early_init`/`early_log`). Собственные логгеры/старт-аппенды (типа старого `startup_log`) ЗАПРЕЩЕНЫ.
 > - Backend пишет через `log::info!/warn!/error!/debug!` и `tauri_plugin_logs::track_event(name, Some(json!(...)))` для аналитики. Ручной `emit("log")`/`append` для логов — запрещён (остаются только `agent_thought`/`agent_tool_call`, это не логи).
 > - Фронтенд: `logFront(msg)` из `@my-tauri-plugins/plugin-logs` (вместо `bus.emit("log", ...)`); галочка «анонимные отчёты» в настройках — через адаптер `src/telemetry.ts` → `setReportingEnabled`; `<logs-panel>` — виджет вкладки «Логи».
@@ -405,9 +405,9 @@ pub struct ChatMessage {
 ## 8. Сборка и тестирование (специфика King Orch)
 
 > ✅ **ТЕСТИРУЕМ ЧЕРЕЗ `build.bat` — просто запустить его, и всё.**
-> `build.bat` → `tauri-build-toolkit` — готовая и правильная реализация запуска билда: автоопределение VS (`vswhere`), инициализация MSVC (`vcvarsall.bat`), `npm install`, обновление версии, генерация иконок, сборка Tauri (без установщика), запуск приложения. Ничего вручную вызывать не нужно.
+> `build.bat` → `rust-build-toolkit` — готовая и правильная реализация запуска билда: автоопределение VS (`vswhere`), инициализация MSVC (`vcvarsall.bat`), `npm install`, обновление версии, генерация иконок, сборка Tauri (без установщика), запуск приложения. Ничего вручную вызывать не нужно.
 >
-> Скрипты сборки — общие для всех проектов, вынесены в пакет `D:\Projects\cross-app-plugins\tauri-build-toolkit` (логка: `build` / `prep` / `installer` / `release` / `test`, конфиг проекта — `.build-config.json`). Настройки для King Orch: `repo`, `syncDirs` (`agents`, `tasks_for_test_llm`, `mcp_servers`), `devWindow` (CDP-порт 9222), `vcRedist`. Правила — в `tauri-build-toolkit/docs/build_release_rules.md`.
+> Скрипты сборки — общие для всех проектов, вынесены в пакет `D:\Projects\cross-app-plugins\rust-build-toolkit` (логка: `build` / `prep` / `installer` / `release` / `test`, конфиг проекта — `.build-config.json`). Настройки для King Orch: `repo`, `syncDirs` (`agents`, `tasks_for_test_llm`, `mcp_servers`), `devWindow` (CDP-порт 9222), `vcRedist`. Правила — в `rust-build-toolkit/docs/build_release_rules.md`.
 
 > ⚠️ **ЗАПРЕЩЁН прямой вызов `cargo build` / `cargo test` / `cargo check` / `npx tauri build` / `npx tauri dev`**
 > (см. `global_ai_docs/desktop_rust_tauri/rules.md:29`, `global_ai_docs/desktop_rust_tauri/rules.md:34`)
