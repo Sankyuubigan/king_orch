@@ -123,8 +123,8 @@
   `D:\Projects\cross-app-plugins\bin\agent-tools.exe`. ИИ зовёт её обычной командой
   через тул `bash` и получает сжатую карту репозитория вместо десятков чтений
   файлов наугад. Пересобирается командой `scripts\build_binaries.cmd`
-  в репозитории `cross-app-plugins`. Полный список — в
-  [GENERATED_TOOL_CATALOG.md](GENERATED_TOOL_CATALOG.md).
+  в репозитории `cross-app-plugins`. Каталог нативных тулов хоста — в
+  [AGENT_CREATION_GUIDE.md](AGENT_CREATION_GUIDE.md).
 - **`mcp_servers/`** — "Руки" искусственного интеллекта. Это скрипты-инструменты, которые агенты могут запускать по своей инициативе:
   - `searxng_search.ts` — Мета-поиск через публичные инстансы SearXNG (без API-ключей): сам находит и кеширует рабочие инстансы из списка searx.space, умеет HTML-фолбэк, фильтры языка/времени и параллельный опрос.
   - `web_http.ts` — Общий HTTP-слой для MCP-серверов (загрузка страниц, декомпрессия, защита от SSRF).

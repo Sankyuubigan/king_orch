@@ -9,8 +9,13 @@ edition = "2021"
 tauri-build = { version = "2.0.0", features = [] }
 
 [profile.release]
-lto = true
-codegen-units = 1
+# Thin LTO + 16 codegen units (решение владельца 16.11.2026, эксперимент «A»):
+# fat LTO (`lto = true`) + cgu=1 давали однопоточный полный ребилд ~6м40с
+# (rustc 3.3 ГБ RAM на 1 ядре) при каждом прогоне build.bat. Thin LTO
+# распараллеливает оптимизацию; ожидаемый компромисс — чуть больше exe.
+# Откат при регрессе: lto = true, codegen-units = 1.
+lto = "thin"
+codegen-units = 16
 strip = "debuginfo"
 
 [dependencies]

@@ -1,8 +1,9 @@
 # Архитектура тулов King Orch (SSOT)
 
 > Этот файл — **единственный источник правды** о том, где живут тула и куда класть новую.
-> Остальные доки на него ссылаются, а не дублируют. Каталог конкретных тулов —
-> [GENERATED_TOOL_CATALOG.md](GENERATED_TOOL_CATALOG.md) (автоген).
+> Остальные доки на него ссылаются, а не дублируют. Каталог нативных тулов —
+> в [AGENT_CREATION_GUIDE.md](AGENT_CREATION_GUIDE.md); карта кода — codemap
+> (`agent-tools.exe codemap`, репо `cross-app-plugins`).
 
 ## Слои (L0–L5)
 
@@ -86,7 +87,7 @@ temp-префиксы, док-комменты тронутых файлов) и
 
 ## Ссылки
 
-- Каталог тулов: [GENERATED_TOOL_CATALOG.md](GENERATED_TOOL_CATALOG.md) (автоген из кода)
+- Каталог нативных тулов: [AGENT_CREATION_GUIDE.md](AGENT_CREATION_GUIDE.md)
 - Создание агентов и параметр `tools`: [AGENT_CREATION_GUIDE.md](AGENT_CREATION_GUIDE.md)
 - Контракты CLI для кодеров (L0): глобальная дока `global_ai_docs/agent_tools.md`
 - Правило нейтральности репо плагинов: `cross-app-plugins/README.md`
