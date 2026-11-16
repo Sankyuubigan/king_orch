@@ -61,7 +61,18 @@
                   <div class="sessions-preview-title" id="session-preview-title">Предпросмотр</div>
                   <div class="sessions-preview-date" id="session-preview-date"></div>
                 </div>
-                <button type="button" class="btn-primary sessions-preview-open" id="session-preview-open" hidden>Открыть</button>
+                <div class="sessions-preview-actions">
+                  <button type="button" class="btn-primary sessions-preview-open" id="session-preview-open" hidden>Открыть</button>
+                  <div class="sessions-preview-menu">
+                    <button type="button" class="btn-session-menu" id="session-preview-menu" hidden title="Действия с сессией">⋮</button>
+                    <div class="session-menu-dropdown" id="session-preview-dropdown">
+                      <button class="session-menu-item btn-rename"><span class="menu-ico">✏️</span>Переименовать</button>
+                      <button class="session-menu-item btn-copy"><span class="menu-ico">📋</span>Копировать в буфер</button>
+                      <button class="session-menu-item btn-explore"><span class="menu-ico">📁</span>Проводник</button>
+                      <button class="session-menu-item danger btn-delete"><span class="menu-ico">🗑️</span>Удалить</button>
+                    </div>
+                  </div>
+                </div>
               </header>
               <div class="sessions-preview-body" id="session-preview-body">
                 <div class="sessions-preview-empty">Наведите на сессию слева, чтобы увидеть переписку</div>

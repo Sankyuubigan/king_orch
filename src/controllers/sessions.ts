@@ -14,6 +14,8 @@ export interface SessionElements {
   sessionPreviewTitle: HTMLDivElement;
   sessionPreviewDate: HTMLDivElement;
   sessionPreviewOpen: HTMLButtonElement;
+  sessionPreviewMenu: HTMLButtonElement;
+  sessionPreviewMenuDropdown: HTMLDivElement;
   sessionPreviewBody: HTMLDivElement;
   sessionSelectToggle: HTMLButtonElement;
   sessionSelectBar: HTMLDivElement;
@@ -91,6 +93,7 @@ export class SessionController {
     this.el.sessionPreviewOpen.addEventListener("click", () => {
       if (this.previewId) bus.emit("session:open", this.previewId);
     });
+    this.bindPreviewMenu();
     this.el.sessionSelectToggle.addEventListener("click", () => this.setSelectMode(!this.selectMode));
     this.el.sessionSelectCancel.addEventListener("click", () => this.setSelectMode(false));
     this.el.sessionSelectAll.addEventListener("click", () => this.selectAll());
@@ -298,46 +301,25 @@ export class SessionController {
       });
       dropdown?.classList.toggle("show");
     });
-    renameBtn.addEventListener("click", async (e) => {
+    renameBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       dropdown?.classList.remove("show");
-      const cur = renameBtn.dataset.title || "";
-      const newT = prompt("Новое название:", cur);
-      if (newT && newT.trim() !== "" && newT !== cur) {
-        try {
-          await renameSession(s.id, newT.trim());
-          // Единый цикл обновления: собственный слушатель перезагрузит список
-          // и превью, tabs.ts — заголовки открытых вкладок.
-          bus.emit("session:changed");
-        } catch (err) {
-          showToast(`Ошибка: ${err}`, "error");
-          void trackError("sessions.rename", err);
-        }
-      }
+      void this.runSessionAction("rename", s.id, s.title);
     });
-    exploreBtn.addEventListener("click", async (e) => {
+    exploreBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       dropdown?.classList.remove("show");
-      try {
-        await openSessionFolder(s.id);
-      } catch (err) {
-        void trackError("sessions.openFolder", err);
-      }
+      void this.runSessionAction("explore", s.id, s.title);
     });
-    copyBtn.addEventListener("click", async (e) => {
+    copyBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       dropdown?.classList.remove("show");
-      try {
-        await this.copySessionToClipboard(s.id, s.title);
-      } catch (err) {
-        showToast(`Ошибка: ${err}`, "error");
-        void trackError("sessions.copy", err);
-      }
+      void this.runSessionAction("copy", s.id, s.title);
     });
-    deleteBtn.addEventListener("click", async (e) => {
+    deleteBtn.addEventListener("click", (e) => {
       e.stopPropagation();
       dropdown?.classList.remove("show");
-      await this.deleteSessionUI(s.id);
+      void this.runSessionAction("delete", s.id, s.title);
     });
     return div;
   }
@@ -360,6 +342,7 @@ export class SessionController {
     this.el.sessionPreviewTitle.textContent = meta?.title ?? "Сессия";
     this.el.sessionPreviewDate.textContent = meta ? formatFullDate(meta.updated_at) : "";
     this.el.sessionPreviewOpen.hidden = false;
+    this.el.sessionPreviewMenu.hidden = false;
     this.el.sessionPreviewOpen.dataset.sid = id;
     this.el.sessionPreviewBody.dataset.rid = "";
     this.el.sessionPreviewBody.innerHTML = `<div class="sessions-preview-empty">Загрузка…</div>`;
@@ -466,6 +449,8 @@ export class SessionController {
     this.el.sessionPreviewTitle.textContent = "Предпросмотр";
     this.el.sessionPreviewDate.textContent = "";
     this.el.sessionPreviewOpen.hidden = true;
+    this.el.sessionPreviewMenu.hidden = true;
+    this.el.sessionPreviewMenuDropdown.classList.remove("show");
     delete this.el.sessionPreviewOpen.dataset.sid;
     this.el.sessionPreviewBody.dataset.rid = "";
     this.el.sessionPreviewBody.innerHTML = `<div class="sessions-preview-empty">Наведите на сессию слева, чтобы увидеть переписку</div>`;
@@ -478,6 +463,73 @@ export class SessionController {
       ? liveCtl.state.history
       : ((await loadSession(id))?.messages ?? []);
     await copyMarkdownToClipboard(title, messages);
+  }
+
+  /** SSOT действий меню сессии: работает и меню элемента списка, и меню шапки предпросмотра. */
+  private async runSessionAction(action: "rename" | "copy" | "explore" | "delete", id: string, title: string): Promise<void> {
+    if (action === "rename") {
+      const newT = prompt("Новое название:", title);
+      if (newT && newT.trim() !== "" && newT !== title) {
+        try {
+          await renameSession(id, newT.trim());
+          // Единый цикл обновления: собственный слушатель перезагрузит список
+          // и превью, tabs.ts — заголовки открытых вкладок.
+          bus.emit("session:changed");
+        } catch (err) {
+          showToast(`Ошибка: ${err}`, "error");
+          void trackError("sessions.rename", err);
+        }
+      }
+      return;
+    }
+    if (action === "copy") {
+      try {
+        await this.copySessionToClipboard(id, title);
+      } catch (err) {
+        showToast(`Ошибка: ${err}`, "error");
+        void trackError("sessions.copy", err);
+      }
+      return;
+    }
+    if (action === "explore") {
+      try {
+        await openSessionFolder(id);
+      } catch (err) {
+        void trackError("sessions.openFolder", err);
+      }
+      return;
+    }
+    await this.deleteSessionUI(id);
+  }
+
+  /** Меню ⋮ в шапке предпросмотра: биндится один раз, id резолвится на момент клика из previewId. */
+  private bindPreviewMenu() {
+    const { sessionPreviewMenu: menuBtn, sessionPreviewMenuDropdown: dropdown } = this.el;
+    menuBtn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (this.selectMode) return;
+      document.querySelectorAll(".session-menu-dropdown.show").forEach(dd => {
+        if (dd !== dropdown) dd.classList.remove("show");
+      });
+      dropdown.classList.toggle("show");
+    });
+    for (const btn of dropdown.querySelectorAll<HTMLElement>(".session-menu-item")) {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        dropdown.classList.remove("show");
+        const id = this.previewId;
+        const meta = id ? this.sessions.find(s => s.id === id) : undefined;
+        if (!id || !meta) return;
+        const action: "rename" | "copy" | "explore" | "delete" = btn.classList.contains("btn-rename")
+          ? "rename"
+          : btn.classList.contains("btn-copy")
+            ? "copy"
+            : btn.classList.contains("btn-explore")
+              ? "explore"
+              : "delete";
+        void this.runSessionAction(action, id, meta.title);
+      });
+    }
   }
 
   private async deleteSessionUI(id: string) {

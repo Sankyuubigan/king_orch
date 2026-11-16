@@ -116,6 +116,8 @@ async function initApp() {
     sessionPreviewTitle: $<HTMLDivElement>("session-preview-title"),
     sessionPreviewDate: $<HTMLDivElement>("session-preview-date"),
     sessionPreviewOpen: $<HTMLButtonElement>("session-preview-open"),
+    sessionPreviewMenu: $<HTMLButtonElement>("session-preview-menu"),
+    sessionPreviewMenuDropdown: $<HTMLDivElement>("session-preview-dropdown"),
     sessionPreviewBody: $<HTMLDivElement>("session-preview-body"),
     sessionSelectToggle: $<HTMLButtonElement>("session-select-toggle"),
     sessionSelectBar: $<HTMLDivElement>("session-select-bar"),

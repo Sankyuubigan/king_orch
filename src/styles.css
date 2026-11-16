@@ -185,6 +185,9 @@ body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-
 .sessions-preview-title { font-size: 14px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sessions-preview-date { font-size: 11px; color: #888; }
 .sessions-preview-open { flex: 0 0 auto; padding: 6px 14px; font-size: 12.5px; }
+.sessions-preview-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.sessions-preview-menu { position: relative; flex: 0 0 auto; display: flex; }
+.sessions-preview-menu .btn-session-menu { opacity: 0.85; font-size: 16px; }
 .sessions-preview-body {
   flex: 1;
   min-height: 0;
