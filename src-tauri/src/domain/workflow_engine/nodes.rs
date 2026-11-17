@@ -560,6 +560,16 @@ where
                 &current_sub_calls,
                 &runner.image_artifacts,
             ).map_err(|e| log::error!("[EXCEL] Файлы не приложены (узел '{}'): {}", agent_id, e)).unwrap_or(0);
+            let mesh_attached = crate::infra::attach_saved_meshes_from_sub_calls(
+                &mut msg,
+                &current_sub_calls,
+                &runner.image_artifacts,
+            ).map_err(|e| log::error!("[MESH] 3D-модели не приложены (узел '{}'): {}", agent_id, e)).unwrap_or(0);
+            let rig_attached = crate::infra::attach_saved_rigged_meshes_from_sub_calls(
+                &mut msg,
+                &current_sub_calls,
+                &runner.image_artifacts,
+            ).map_err(|e| log::error!("[RIG] GLB с ригом не приложены (узел '{}'): {}", agent_id, e)).unwrap_or(0);
             if attached > 0 {
                 (runner.log_cb)(format!(
                     "🖼 Прикреплено изображений к ответу узла '{}': {}",
@@ -576,6 +586,18 @@ where
                 (runner.log_cb)(format!(
                     "📊 Прикреплено файлов Excel к ответу узла '{}': {}",
                     agent_id, excel_attached
+                ));
+            }
+            if mesh_attached > 0 {
+                (runner.log_cb)(format!(
+                    "🧊 Прикреплено 3D-моделей к ответу узла '{}': {}",
+                    agent_id, mesh_attached
+                ));
+            }
+            if rig_attached > 0 {
+                (runner.log_cb)(format!(
+                    "🧩 Прикреплено GLB с ригом к ответу узла '{}': {}",
+                    agent_id, rig_attached
                 ));
             }
             // Один прогон сигнального воркера = одна мысль (SSOT — оркестратор).
@@ -848,6 +870,7 @@ where
             .with_image_loras(context.image_loras.clone())
             .with_spreadsheet_files(context.spreadsheet_files.clone())
             .with_video_files(context.video_files.clone())
+            .with_mesh_files(context.mesh_files.clone())
             .with_json_files(context.json_files.clone())
             .with_request_media(context.request_media.clone());
 

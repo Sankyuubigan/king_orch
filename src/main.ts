@@ -10,12 +10,15 @@ import "@my-tauri-plugins/plugin-logs";
 import "@my-tauri-plugins/plugin-llama-engine";
 // Регистрирует <image-engine-panel> / <image-bundle-panel> (движок изображений + бандл Qwen Image 2.1).
 import "@my-tauri-plugins/plugin-image-engine";
+// Регистрирует <mesh-engine-panel> (движок 3D-генерации trellis.cpp: установка + выбор папки).
+import "@my-tauri-plugins/plugin-mesh-engine";
 // Регистрирует <cloud-routers-panel> (облачный шлюз: 9Router, ExtremeRouter, OmniRoute).
 import "@my-tauri-plugins/plugin-cloud-routers";
 // Регистрирует <downloader-widget> / <downloader-progress> (единый прогресс загрузок).
 import "@my-tauri-plugins/plugin-downloader";
 import { initUpdateWatcher as initLlamaUpdateWatcher } from "@my-tauri-plugins/plugin-llama-engine";
 import { initUpdateWatcher as initImageUpdateWatcher } from "@my-tauri-plugins/plugin-image-engine";
+import { initMeshUpdateWatcher } from "@my-tauri-plugins/plugin-mesh-engine";
 import { initUpdateWatcher as initRoutersUpdateWatcher, onOpenDashboard, onStatusChange } from "@my-tauri-plugins/plugin-cloud-routers";
 import {
   SessionController, SettingsController, AgentPickerController,
@@ -234,6 +237,7 @@ async function initApp() {
   initUpdateBadgeTargets({ menuEngines: navMenu });
   initLlamaUpdateWatcher();
   initImageUpdateWatcher();
+  initMeshUpdateWatcher();
   initRoutersUpdateWatcher();
   initUpdateWatchers();
 

@@ -952,6 +952,7 @@ mod tests {
         "agents/image-gen/transitions/image-gen-flow.yaml",
         "agents/excel/transitions/excel-flow.yaml",
         "agents/refmod/transitions/refmod-flow.yaml",
+        "agents/3d-gen/transitions/mesh-gen-flow.yaml",
         "agents/diagnostics/transitions/diagnostics-flow.yaml",
         "agents/tarot-master/transitions/tarot_master.yaml",
         "agents/astrologist/transitions/astrologist.yaml",
@@ -1686,9 +1687,9 @@ edges: []
 
     /// Настоящий граф обязан распознаваться как граф и грузиться.
     ///
-    /// На 10.11.26 в `agents/` живёт 12 графов (день добавил video-edit-flow —
-    /// команда «Видеомонтаж», video_editor/video_helper; SSOT движка — плагин
-    /// plugin-ffmpeg-wrapper). Вариант психотерапевта из `experiments/`
+    /// На 17.11.26 в `agents/` живёт 13 графов (день добавил mesh-gen-flow —
+    /// агент 3d-gen, plugin-mesh-engine/trellis.cpp). На 10.11.26 было 12
+    /// (video-edit-flow). Вариант психотерапевта из `experiments/`
     /// удалён коммитом `83e37f9` вместе с нодой System-1.
     #[test]
     fn real_graphs_are_still_discovered() {
@@ -1709,6 +1710,7 @@ edges: []
                 "excel-flow",
                 "image-gen-flow",
                 "main_conversation_flow",
+                "mesh-gen-flow",
                 "refmod-flow",
                 "search-specialist",
                 "tarot_master",

@@ -309,6 +309,8 @@ pub fn build_worst_agent_prompt(
             tools.extend(runtime::agent_code_tool_schemas(agent));
             tools.extend(crate::infra::image_tool_schemas(&agent.tools));
             tools.extend(crate::infra::video_tool_schemas(&agent.tools));
+            tools.extend(crate::infra::mesh_tool_schemas(&agent.tools));
+            tools.extend(crate::infra::rig_tool_schemas(&agent.tools));
             tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
             tools.extend(crate::infra::ffmpeg_tool_schemas(&agent.tools));
             tools.extend(crate::infra::refmod_tool_schemas(&agent.tools));
@@ -652,6 +654,9 @@ where
         // Каталог видео (`{{ video_files }}`): вложения-контейнеры текущего
         // запроса и истории с путями — источники ffmpeg-тулов.
         .with_video_files(request_media.video_files_prompt())
+        // Каталог GLB-моделей (`{{ mesh_files }}`): вложения .glb текущего
+        // запроса и истории с путями — источник rig-тула.
+        .with_mesh_files(request_media.mesh_files_prompt())
         // Каталог JSON-вложений (`{{ json_files }}`): прикреплённые .json —
         // источники тулов-импортёров графа (напр. кейс психотерапевта).
         .with_json_files(request_media.json_files_catalog())
@@ -854,6 +859,16 @@ where
             &current_sub_calls,
             &image_artifacts,
         ).map_err(|e| log::error!("[EXCEL] Файлы не приложены: {}", e)).unwrap_or(0);
+        let mesh_attached = crate::infra::attach_saved_meshes_from_sub_calls(
+            &mut final_message,
+            &current_sub_calls,
+            &image_artifacts,
+        ).map_err(|e| log::error!("[MESH] 3D-модели не приложены: {}", e)).unwrap_or(0);
+        let rig_attached = crate::infra::attach_saved_rigged_meshes_from_sub_calls(
+            &mut final_message,
+            &current_sub_calls,
+            &image_artifacts,
+        ).map_err(|e| log::error!("[RIG] GLB с ригом не приложены: {}", e)).unwrap_or(0);
         let diag_attached = crate::infra::attach_saved_diag_from_sub_calls(
             &mut final_message,
             &current_sub_calls,
@@ -866,6 +881,12 @@ where
         }
         if excel_attached > 0 {
             log_cb(format!("📊 Прикреплено файлов Excel к ответу: {}", excel_attached));
+        }
+        if mesh_attached > 0 {
+            log_cb(format!("🧊 Прикреплено 3D-моделей к ответу: {}", mesh_attached));
+        }
+        if rig_attached > 0 {
+            log_cb(format!("🧩 Прикреплено GLB с ригом к ответу: {}", rig_attached));
         }
         if diag_attached > 0 {
             log_cb(format!("🩺 Прикреплён файл диагностики к ответу: {}", diag_attached));
@@ -1133,6 +1154,16 @@ where
     // plugin-media-gen-engine, референсы — аттачменты текущего запроса.
     all_tools.extend(crate::infra::image_tool_schemas(&agent.tools));
     all_tools.extend(crate::infra::video_tool_schemas(&agent.tools));
+    // 🧊 Capability 3D: `tools: {generate_mesh: true}` в .md → схема mesh-тула
+    // (мета-имя "mesh"). Исполнение — нативно через trellis-server,
+    // источники — резолвнутые вложения/артефакты сессии.
+    all_tools.extend(crate::infra::mesh_tool_schemas(&agent.tools));
+
+    // 🧩 Capability риггинг (этап 2): `tools: {rig_mesh: true}` в .md → схема
+    // rig-тула (мета-имя "rig"). Исполнение — синхронный спавн skintokens-cli
+    // (skin-tokens.cpp), источник — РОВНО один GLB (артефакт сессии или
+    // вложение юзера).
+    all_tools.extend(crate::infra::rig_tool_schemas(&agent.tools));
 
     // 📊 Capability Excel: `tools: {excel_inspect: true, ...}` в .md → схемы
     // excel-тулов (мета-имя "excel"). Исполнение — нативно через excel-tools

@@ -738,6 +738,8 @@ pub fn get_prompt_preview(
                 let mut tools = crate::domain::builtin_tools();
                 tools.extend(crate::infra::image_tool_schemas(&agent.tools));
                 tools.extend(crate::infra::video_tool_schemas(&agent.tools));
+                tools.extend(crate::infra::mesh_tool_schemas(&agent.tools));
+                tools.extend(crate::infra::rig_tool_schemas(&agent.tools));
                 tools.extend(crate::infra::excel_tool_schemas(&agent.tools));
                 tools.extend(crate::infra::ffmpeg_tool_schemas(&agent.tools));
                 tools.extend(crate::infra::refmod_tool_schemas(&agent.tools));

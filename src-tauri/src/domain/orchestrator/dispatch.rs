@@ -25,6 +25,26 @@ fn is_media_tool(tool: &str) -> bool {
     matches!(tool, "generate_image" | "edit_image" | "upscale_image" | "generate_video")
 }
 
+/// 3D-инструменты движка trellis.cpp (§1 AGENTS.md): исполняются парой
+/// `infra::execute_mesh_tool` / реестра артефактов сессии. Набор обязан
+/// совпадать с исполняемым (mesh.rs: "generate_mesh") — симметрично
+/// is_media_tool.
+fn is_mesh_tool(tool: &str) -> bool {
+    matches!(tool, "generate_mesh")
+}
+
+/// Риг-тулы (этап 2, PRP «Риггинг skin-tokens.md») — тот же класс честных
+/// стопов, что у mesh (сетап-ошибка движка риггинга не лечится ретраем).
+fn is_rig_tool(tool: &str) -> bool {
+    matches!(tool, "rig_mesh")
+}
+
+/// Нормализация пути для сравнения с allow-read списком (Windows: сепаратор
+/// и регистр не значимы; паттерн ffmpeg.rs::normalized_path).
+fn normalized_mesh_path(path: &str) -> String {
+    path.replace('/', "\\").to_ascii_lowercase()
+}
+
 /// Вердикт GUARD «финал без действия» для текущего ответа агента.
 pub(crate) enum FinalGuardVerdict {
     /// Ретрай: ответ не принят, честный хинт уже в истории (тул / сигнал).
@@ -605,7 +625,9 @@ where
         if !tool_found || !tool_succeeded {
             // Ресурсная ошибка image-движка (нет памяти) — не «плохие аргументы»:
             // повтор тем же способом бесполезен. Честный стоп сразу (§2.2, §1.7.1).
-            if super::vram::is_resource_error(&output) && is_media_tool(tool_name) {
+            if super::vram::is_resource_error(&output)
+                && (is_media_tool(tool_name) || is_mesh_tool(tool_name) || is_rig_tool(tool_name))
+            {
                 self.tool_calls.push(ToolCallInfo {
                     tool_name: tool_name.to_string(),
                     arguments: args_str,
@@ -619,7 +641,9 @@ where
             // движок не установлен / бандла нет в каталоге): ни один ретрай не
             // меняет состояние диска, приказ «вызови СНОВА» порождал три
             // бессмысленных прогона и ложный финал про «лимит». Честный стоп сразу.
-            if super::vram::is_setup_error(&output) && is_media_tool(tool_name) {
+            if super::vram::is_setup_error(&output)
+                && (is_media_tool(tool_name) || is_mesh_tool(tool_name) || is_rig_tool(tool_name))
+            {
                 self.tool_calls.push(ToolCallInfo {
                     tool_name: tool_name.to_string(),
                     arguments: args_str,
@@ -930,6 +954,318 @@ where
                         } else {
                             tool_output = Some(format!(
                                 "Ошибка '{}': внутренняя ошибка media-движка",
+                                tool_name
+                            ));
+                        }
+                    }
+                    None => {
+                        tool_output = Some(format!("Ошибка: Инструмент '{}' не найден.", tool_name));
+                    }
+                }
+            }
+        } else if tool_name == "mesh_concept_prompt" {
+            // 🧊 Text→3D сборка промпта концепта: read-only строковая функция
+            // (SSOT шаблонов — core плагина). Без резолва вложений (их нет) и
+            // БЕЗ VRAM-suspend — GPU не трогает; ошибки Usage идут в общую
+            // механику ретраев с фидбэком.
+            tool_found = true;
+            let granted = self
+                .all_tools
+                .iter()
+                .any(|(meta, name, _)| meta == "mesh" && name == tool_name);
+            if !granted {
+                tool_output = Some(format!(
+                    "Ошибка '{}': инструмент недоступен агенту '{}'",
+                    tool_name, self.agent.id
+                ));
+            } else {
+                let code_ctx = crate::infra::ToolCtx {
+                    workspace_root: &self.workspace_root,
+                    write_root: &self.write_root,
+                    write_outside: self.write_outside,
+                    session_id: &self.session_id,
+                    approver: &self.approver,
+                    agent_id: &self.agent.id,
+                    bins_dir: self.bins_dir,
+                    image_artifacts: Some(&self.image_artifacts),
+                };
+                tool_output = Some(
+                    match crate::infra::execute_mesh_tool(tool_name, arguments, &code_ctx, &[]) {
+                        Some(Ok(output)) => output,
+                        Some(Err(error)) => {
+                            super::vram::tool_error_to_output(tool_name, error)
+                        }
+                        None => format!("Ошибка '{}': не найден.", tool_name),
+                    },
+                );
+            }
+        } else if is_mesh_tool(tool_name) {
+            // 🧊 3D-тул (§1 AGENTS.md, паттерн media): источник — РОВНО одно
+            // изображение. Резолв source_image_ids: каталог изображений
+            // (req_NN/hist_NN/легаси-hex); фолбэк — реестр артефактов сессии
+            // (id "artifact_N" от edit_image этого же хода: кросс-тул ЧТЕНИЕ
+            // источника легально, attach остаётся строгим — resolve по тулу).
+            tool_found = true;
+            let granted = self
+                .all_tools
+                .iter()
+                .any(|(meta, name, _)| meta == "mesh" && name == tool_name);
+            if !granted {
+                tool_output = Some(format!(
+                    "Ошибка '{}': инструмент недоступен агенту '{}'",
+                    tool_name, self.agent.id
+                ));
+            }
+            let mut selected_attachments = Vec::new();
+            if tool_output.is_none() {
+                let source_ids = arguments
+                    .get("source_image_ids")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|ids| {
+                        ids.iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if source_ids.is_empty() {
+                    tool_output = Some(super::vram::tool_error_to_output(
+                        tool_name,
+                        crate::infra::ToolError::Usage(
+                            "source_image_ids обязателен: выбери один ID из списка доступных изображений"
+                                .to_string(),
+                        ),
+                    ));
+                } else {
+                    match self.request_media.resolve(&source_ids, &*self.messages) {
+                        Ok(attachments) => selected_attachments = attachments,
+                        Err(catalog_error) => {
+                            let mut fallback = Vec::with_capacity(source_ids.len());
+                            let mut failed: Option<String> = None;
+                            for id in &source_ids {
+                                match self.image_artifacts.resolve_any(id) {
+                                    Ok(path) => {
+                                        match crate::infra::tools::media::image_path_to_attachment(&path) {
+                                            Ok(attachment) => fallback.push(attachment),
+                                            Err(error) => {
+                                                failed = Some(error);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    Err(registry_error) => {
+                                        failed = Some(format!(
+                                            "ID '{}' не разрешён: каталог изображений — {}; артефакты сессии — {}",
+                                            id, catalog_error, registry_error
+                                        ));
+                                        break;
+                                    }
+                                }
+                            }
+                            match failed {
+                                Some(error) => tool_output = Some(super::vram::tool_error_to_output(
+                                    tool_name,
+                                    crate::infra::ToolError::Usage(error),
+                                )),
+                                None => selected_attachments = fallback,
+                            }
+                        }
+                    }
+                }
+            }
+            if tool_output.is_none() {
+                let code_ctx = crate::infra::ToolCtx {
+                    workspace_root: &self.workspace_root,
+                    write_root: &self.write_root,
+                    write_outside: self.write_outside,
+                    session_id: &self.session_id,
+                    approver: &self.approver,
+                    agent_id: &self.agent.id,
+                    bins_dir: self.bins_dir,
+                    image_artifacts: Some(&self.image_artifacts),
+                };
+                let was_suspended = self.engine.suspend_for_external_compute();
+                if was_suspended {
+                    (self.log_cb)("⏸ LLM-движок выгружен из VRAM на время 3D-генерации (KV-кэш будет потерян)".to_string());
+                    log::info!("⏸ LLM suspend перед '{}' (агент '{}')", tool_name, self.agent.id);
+                }
+                let mesh_result =
+                    crate::infra::execute_mesh_tool(tool_name, arguments, &code_ctx, &selected_attachments);
+                if was_suspended {
+                    match self.engine.resume_after_external_compute() {
+                        Ok(()) => {
+                            (self.log_cb)("▶ LLM-движок перезапущен после 3D-генерации".to_string());
+                            log::info!("▶ LLM resume после '{}' (агент '{}')", tool_name, self.agent.id);
+                        }
+                        Err(error) => {
+                            (self.log_cb)(format!("⚠️ Не удалось перезапустить LLM после 3D-генерации: {}", error));
+                            log::error!("LLM resume после '{}' не удался: {}", tool_name, error);
+                        }
+                    }
+                }
+                match mesh_result {
+                    Some(Ok(result)) => {
+                        tool_output = Some(result);
+                        tool_succeeded = true;
+                        crate::infra::event_bus::global_bus().publish(
+                            crate::infra::event_bus::AgentEvent::ToolCall {
+                                agent: self.agent.id.clone(),
+                                tool: tool_name.to_string(),
+                            },
+                        );
+                    }
+                    Some(Err(error)) => {
+                        let raw_error = error.to_string();
+                        log::error!(
+                            "Ошибка mesh-тула '{}' (агент '{}'): {}",
+                            tool_name,
+                            self.agent.id,
+                            raw_error
+                        );
+                        // Честный текст (core §2.2): у NotFound/Usage причина в
+                        // Display (префлайт с инструкцией установки, валидация
+                        // аргументов) — маскировать «внутренней ошибкой» = ложь.
+                        if super::vram::is_resource_error(&raw_error)
+                            || super::vram::is_honest_tool_error(&error)
+                        {
+                            tool_output = Some(super::vram::tool_error_to_output(tool_name, error));
+                        } else {
+                            tool_output = Some(format!(
+                                "Ошибка '{}': внутренняя ошибка 3D-движка",
+                                tool_name
+                            ));
+                        }
+                    }
+                    None => {
+                        tool_output = Some(format!("Ошибка: Инструмент '{}' не найден.", tool_name));
+                    }
+                }
+            }
+        } else if is_rig_tool(tool_name) {
+            // 🧩 Риггинг (этап 2, PRP «Риггинг skin-tokens.md»): источник —
+            // РОВНО один GLB. Резолв source_mesh_ids: реестр артефактов
+            // сессии (id "artifact_N" от generate_mesh/rig_mesh — кросс-тул
+            // ЧТЕНИЕ источника легально, attach остаётся строгим — resolve по
+            // тулу); фолбэк — allow-read вложение юзера (точный путь из
+            // каталога {{ mesh_files }}, гейт §00.2: сравнение с
+            // current_attachment_paths, произвольные пути диска недоступны).
+            // VRAM-suspend не нужен: skintokens-cli — CPU-процесс.
+            tool_found = true;
+            let granted = self
+                .all_tools
+                .iter()
+                .any(|(meta, name, _)| meta == "rig" && name == tool_name);
+            if !granted {
+                tool_output = Some(format!(
+                    "Ошибка '{}': инструмент недоступен агенту '{}'",
+                    tool_name, self.agent.id
+                ));
+            }
+            let mut selected_attachments = Vec::new();
+            if tool_output.is_none() {
+                let source_ids = arguments
+                    .get("source_mesh_ids")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|ids| {
+                        ids.iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                if source_ids.is_empty() {
+                    tool_output = Some(super::vram::tool_error_to_output(
+                        tool_name,
+                        crate::infra::ToolError::Usage(
+                            "source_mesh_ids обязателен: выбери один GLB — artifact_N из \
+                             результата generate_mesh/rig_mesh или путь файла из каталога \
+                             [GLB ЧАТА]"
+                                .to_string(),
+                        ),
+                    ));
+                } else {
+                    let allowed_sources = self.request_media.current_attachment_paths();
+                    let mut failed: Option<String> = None;
+                    for id in &source_ids {
+                        let resolved = if let Ok(path) = self.image_artifacts.resolve_any(id) {
+                            Some(crate::infra::tools::rig::rigged_path_to_attachment(&path))
+                        } else if let Some(allowed) = allowed_sources
+                            .iter()
+                            .find(|a| normalized_mesh_path(a) == normalized_mesh_path(id))
+                        {
+                            Some(crate::infra::tools::rig::rigged_path_to_attachment(allowed))
+                        } else {
+                            failed = Some(format!(
+                                "ID '{}' не разрешён: источник — artifact_N из результатов \
+                                 generate_mesh/rig_mesh этой сессии ИЛИ точный путь файла из \
+                                 каталога [GLB ЧАТА]",
+                                id
+                            ));
+                            None
+                        };
+                        match resolved {
+                            None => break,
+                            Some(Ok(att)) => selected_attachments.push(att),
+                            Some(Err(error)) => {
+                                failed = Some(error);
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(error) = failed {
+                        tool_output = Some(super::vram::tool_error_to_output(
+                            tool_name,
+                            crate::infra::ToolError::Usage(error),
+                        ));
+                    }
+                }
+            }
+            if tool_output.is_none() {
+                let code_ctx = crate::infra::ToolCtx {
+                    workspace_root: &self.workspace_root,
+                    write_root: &self.write_root,
+                    write_outside: self.write_outside,
+                    session_id: &self.session_id,
+                    approver: &self.approver,
+                    agent_id: &self.agent.id,
+                    bins_dir: self.bins_dir,
+                    image_artifacts: Some(&self.image_artifacts),
+                };
+                let rig_result = crate::infra::execute_rig_tool(
+                    tool_name,
+                    arguments,
+                    &code_ctx,
+                    &selected_attachments,
+                );
+                match rig_result {
+                    Some(Ok(result)) => {
+                        tool_output = Some(result);
+                        tool_succeeded = true;
+                        crate::infra::event_bus::global_bus().publish(
+                            crate::infra::event_bus::AgentEvent::ToolCall {
+                                agent: self.agent.id.clone(),
+                                tool: tool_name.to_string(),
+                            },
+                        );
+                    }
+                    Some(Err(error)) => {
+                        let raw_error = error.to_string();
+                        log::error!(
+                            "Ошибка rig-тула '{}' (агент '{}'): {}",
+                            tool_name,
+                            self.agent.id,
+                            raw_error
+                        );
+                        // Честный текст (core §2.2): у NotFound/Usage причина в
+                        // Display (префлайт с инструкцией установки, валидация
+                        // аргументов) — маскировать «внутренней ошибкой» = ложь.
+                        if super::vram::is_resource_error(&raw_error)
+                            || super::vram::is_honest_tool_error(&error)
+                        {
+                            tool_output = Some(super::vram::tool_error_to_output(tool_name, error));
+                        } else {
+                            tool_output = Some(format!(
+                                "Ошибка '{}': внутренняя ошибка риггинга",
                                 tool_name
                             ));
                         }
@@ -1479,7 +1815,7 @@ where
             // как в legacy-пути (ретраи бесполезны, §2.2).
             if found
                 && super::vram::is_resource_error(&output)
-                && is_media_tool(&call.name)
+                && (is_media_tool(&call.name) || is_mesh_tool(&call.name) || is_rig_tool(&call.name))
             {
                 self.tool_calls.push(ToolCallInfo {
                     tool_name: call.name.clone(),
@@ -1495,7 +1831,7 @@ where
             // тот же немедленный стоп, что и в legacy-пути.
             if found
                 && super::vram::is_setup_error(&output)
-                && is_media_tool(&call.name)
+                && (is_media_tool(&call.name) || is_mesh_tool(&call.name) || is_rig_tool(&call.name))
             {
                 self.tool_calls.push(ToolCallInfo {
                     tool_name: call.name.clone(),

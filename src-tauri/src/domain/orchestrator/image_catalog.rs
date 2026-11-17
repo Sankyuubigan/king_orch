@@ -723,6 +723,38 @@ impl RequestMedia {
         out
     }
 
+    /// Каталог GLB-моделей для rig-агента (`{{ mesh_files }}`): вложения .glb
+    /// текущего запроса и истории с абсолютными путями — источник rig_mesh
+    /// (гейт allow-read тот же, что у excel/ffmpeg: `current_attachment_paths()`).
+    /// GLB из результатов generate_mesh/rig_mesh идут отдельно — как
+    /// artifact_N через реестр артефактов (id в маркере результата тула).
+    pub fn mesh_files_prompt(&self) -> String {
+        let mut rows = String::new();
+        for r in &self.attachment_refs {
+            let name = r.get("file_name").and_then(|v| v.as_str()).unwrap_or("");
+            if !name.to_ascii_lowercase().ends_with(".glb") {
+                continue;
+            }
+            let origin = match r.get("origin").and_then(|v| v.as_str()) {
+                Some("current") => "текущий запрос",
+                _ => "история чата",
+            };
+            let path = r.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
+            rows.push_str(&format!("- file=\"{}\"; path={}; origin={}\n", name, path, origin));
+        }
+        if rows.is_empty() {
+            return String::new();
+        }
+        let mut out = String::from("[GLB ЧАТА]\n");
+        out.push_str(&rows);
+        out.push_str(
+            "Передавай path из этого списка в аргумент `source_mesh_ids` тула rig_mesh \
+             (или id artifact_N из результата generate_mesh/rig_mesh). РОВНО один \
+             источник на вызов.\n",
+        );
+        out
+    }
+
     /// Каталог аудио для voice-фн refmod-тулов (`{{ audio_candidates }}`,
     /// Этап 3): сэмплы голоса, прикладываемые к refmod_create/refmod_edit.
     pub fn audio_candidates_prompt(&self) -> String {

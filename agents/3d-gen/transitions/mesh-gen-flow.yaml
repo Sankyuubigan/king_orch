@@ -1,0 +1,157 @@
+name: Работа с 3D-моделями
+description: Генерация GLB 3D-моделей из изображений (trellis.cpp) и по текстовому описанию через концепт-картинку; правка, риггинг.
+
+config:
+  facts_file: facts.yaml
+  default_llm_params: creative
+
+# Точка входа графа — текст, отправленный пользователем в чат.
+entry: user_message
+
+nodes:
+  # ── Источник данных: текст пользователя (без LLM) ──
+  - id: user_message
+    type: user_message
+    ui_pos:
+      x: -320
+      y: 40
+
+  # ── Классификация через LLM (вложения оцениваются экстрактором
+  #    через блок {{ image_candidates }} — как в image-gen-flow) ──
+  - id: extract_facts
+    type: llm_fact_extractor
+    input: "{{ nodes.user_message.output.text }}"
+    llm_params: strict
+    ui_pos:
+      x: -80
+      y: 40
+
+  - id: route
+    type: switch
+    input_object: "{{ nodes.extract_facts.output }}"
+    cases_priority:
+      - key: needs_rigging
+        to: mesh_rig
+      - key: needs_3d_edit
+        to: mesh_3d_edit
+      - key: needs_3d_generate
+        to: mesh_3d_generate
+      - key: needs_3d_from_text
+        to: mesh_text_concept
+    default: no_3d_task
+    ui_pos:
+      x: 140
+      y: 40
+
+  # ── Ветка риггинга готовой модели (терминальная) ──
+  #    Скелет + веса скиннинга на статической GLB (skin-tokens.cpp);
+  #    анимацию это не добавляет. CPU: минуты до десятков минут.
+  - id: mesh_rig
+    type: llm_worker
+    agent: rig_operator
+    task: |
+      РЕЖИМ РИГГИНГА: пользователь просит поставить на готовую 3D-модель
+      скелет и веса скиннинга. Действуй по разделу «Как работать» своего
+      агента: ровно один исходный GLB → инструмент rig_mesh. Анимацию это
+      не добавляет — честно предупреди.
+
+      Запрос: {{ nodes.extract_facts.output.rewritten_query }}
+      Исходный текст пользователя: {{ nodes.user_message.output.text }}
+
+      GLB-модели, прикреплённые в чате (источник для rig_mesh, путь):
+      {{ mesh_files }}
+
+      GLB из результатов generate_mesh/rig_mesh этой сессии доступны как
+      id artifact_N (см. маркеры результатов тулов в истории).
+    output_type: frontend
+    ui_pos:
+      x: 360
+      y: 0
+
+  # ── Ветка генерации из картинки (терминальная) ──
+  - id: mesh_3d_generate
+    type: llm_worker
+    agent: mesh_operator
+    task: |
+      Сгенерируй 3D-модель (GLB) из изображения.
+
+      Описание задачи: {{ nodes.extract_facts.output.rewritten_query }}
+      Исходный текст пользователя: {{ nodes.user_message.output.text }}
+
+      Доступные изображения в чате (источник для generate_mesh):
+      {{ image_candidates }}
+    output_type: frontend
+    ui_pos:
+      x: 360
+      y: 80
+
+  # ── Ветка правки существующей 3D-модели (терминальная) ──
+  #    AI-редактирование 3D на GGML не существует: маршрут = правка
+  #    исходной КАРТИНКИ (edit_image) → регенерация (generate_mesh).
+  - id: mesh_3d_edit
+    type: llm_worker
+    agent: mesh_operator
+    task: |
+      РЕЖИМ ПРАВКА 3D-МОДЕЛИ: пользователь просит изменить существующую 3D-модель.
+      Действуй по разделу «Режим ПРАВКА» своего агента: правится исходная
+      картинка (edit_image), затем модель регенерируется (generate_mesh).
+      Если исходной картинки нет — честно попроси её приложить.
+
+      Запрос на правку: {{ nodes.extract_facts.output.rewritten_query }}
+      Исходный текст пользователя: {{ nodes.user_message.output.text }}
+
+      Доступные изображения в чате (кандидаты в исходники правки):
+      {{ image_candidates }}
+    output_type: frontend
+    ui_pos:
+      x: 360
+      y: 160
+
+  # ── Ветка текст→3D: концепт-картинка до долгой генерации (терминальная) ──
+  #    Объект описан словами, картинки нет. Агент собирает промпт по
+  #    проверенному шаблону (тул mesh_concept_prompt, SSOT шаблонов —
+  #    плагин), рисует концепт (generate_image) и показывает юзеру.
+  #    Модель строится СЛЕДУЮЩИМ ходом: юзер подтверждает → картинка уже
+  #    в истории → needs_3d_generate → mesh_operator → generate_mesh.
+  - id: mesh_text_concept
+    type: llm_worker
+    agent: mesh_concept
+    task: |
+      РЕЖИМ КОНЦЕПТА (текст→3D): пользователь описывает объект словами,
+      изображения-источника нет. Действуй по своему агенту: английское
+      описание объекта → категория → mesh_concept_prompt → generate_image →
+      покажи концепт и спроси, годится ли. Модель (generate_mesh) САМ
+      не вызывай — она строится следующим ходом после подтверждения.
+
+      Описание объекта: {{ nodes.extract_facts.output.rewritten_query }}
+      Исходный текст пользователя: {{ nodes.user_message.output.text }}
+
+      Концепт-картинки прошлых ходов (если пользователь просит правку концепта):
+      {{ image_candidates }}
+    output_type: frontend
+    ui_pos:
+      x: 360
+      y: 240
+
+  # ── Не 3D-запрос: помощник (объясняет возможности, уточняет задачу) ──
+  - id: no_3d_task
+    type: llm_worker
+    agent: mesh_helper
+    task: |
+      Классификатор НЕ распознал задачу для 3D-моделей (ни generate, ни edit):
+      пользователь либо спрашивает о возможностях, либо описал задачу неточно.
+      Объясни коротко, что умеет команда, и уточни, что именно сделать.
+      НЕ вызывай инструменты.
+
+      Сообщение пользователя: {{ nodes.user_message.output.text }}
+    output_type: frontend
+    ui_pos:
+      x: 360
+      y: 320
+
+edges:
+  - from: user_message
+    to: extract_facts
+
+  - from: extract_facts
+    to: route

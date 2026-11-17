@@ -64,6 +64,12 @@ pub use tools::media::{
     attach_saved_images_from_sub_calls, execute_image_tool, image_tool_schemas,
     ImageArtifactRegistry,
 };
+pub use tools::mesh::{
+    attach_saved_meshes_from_sub_calls, execute_mesh_tool, mesh_tool_schemas,
+};
+pub use tools::rig::{
+    attach_saved_rigged_meshes_from_sub_calls, execute_rig_tool, rig_tool_schemas,
+};
 pub use tools::video::{
     attach_saved_videos_from_sub_calls, execute_video_tool, video_image_gate_error,
     video_tool_schemas,

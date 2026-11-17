@@ -71,6 +71,11 @@ pub struct WorkflowContext {
     /// запроса и истории с абсолютными путями — источники ffmpeg-тулов.
     /// Заполняется при создании контекста (orchestrator) из RequestMedia.
     pub video_files: String,
+    /// Каталог GLB-моделей (`{{ mesh_files }}`): вложения .glb текущего
+    /// запроса и истории с абсолютными путями — источники rig-тула (гейт
+    /// allow-read тот же, что у excel/ffmpeg: `current_attachment_paths()`).
+    /// Заполняется при создании контекста (orchestrator) из RequestMedia.
+    pub mesh_files: String,
     /// Каталог JSON-вложений (`{{ json_files }}`): прикреплённые .json
     /// (текущий запрос + история) как JSON-массив {file_name, file_path,
     /// origin} — источник тулов-импортёров графа (напр. кейс психотерапевта).
@@ -104,6 +109,7 @@ impl WorkflowContext {
             image_loras: String::new(),
             spreadsheet_files: String::new(),
             video_files: String::new(),
+            mesh_files: String::new(),
             json_files: String::new(),
             request_media: Arc::new(RequestMedia::empty()),
         }
@@ -154,6 +160,11 @@ impl WorkflowContext {
         self
     }
 
+    pub fn with_mesh_files(mut self, block: String) -> Self {
+        self.mesh_files = block;
+        self
+    }
+
     pub fn with_json_files(mut self, block: String) -> Self {
         self.json_files = block;
         self
@@ -189,6 +200,7 @@ impl WorkflowContext {
         result = result.replace("{{ image_loras }}", &self.image_loras);
         result = result.replace("{{ spreadsheet_files }}", &self.spreadsheet_files);
         result = result.replace("{{ video_files }}", &self.video_files);
+        result = result.replace("{{ mesh_files }}", &self.mesh_files);
         result = result.replace("{{ json_files }}", &self.json_files);
 
         // {{ signals }} — JSON-объект из signal bus (ключ → значение)

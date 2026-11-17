@@ -18,6 +18,7 @@
     "@my-tauri-plugins/plugin-cloud-routers": "file:../cross-app-plugins/plugin-cloud-routers",
     "@my-tauri-plugins/plugin-downloader": "file:../cross-app-plugins/plugin-downloader",
     "@my-tauri-plugins/plugin-image-engine": "file:../cross-app-plugins/plugin-media-gen-engine",
+    "@my-tauri-plugins/plugin-mesh-engine": "file:../cross-app-plugins/plugin-mesh-engine",
     "@tauri-apps/api": "2.10.1",
     "@tauri-apps/plugin-dialog": "2.7.0",
     "@tauri-apps/plugin-process": "2.3.1",

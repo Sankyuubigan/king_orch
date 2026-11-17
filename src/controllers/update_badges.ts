@@ -1,5 +1,6 @@
 import { onUpdateState } from "@my-tauri-plugins/plugin-llama-engine";
 import { onUpdateState as onImageUpdateState } from "@my-tauri-plugins/plugin-image-engine";
+import { onUpdateMeshState as onMeshUpdateState } from "@my-tauri-plugins/plugin-mesh-engine";
 import { onUpdateState as onRoutersUpdateState } from "@my-tauri-plugins/plugin-cloud-routers";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { bus } from "../events";
@@ -36,6 +37,10 @@ export function initUpdateWatchers(): () => void {
     store.plugins.set("image-engine", s);
     renderUpdateBadges();
   }));
+  unsubs.push(onMeshUpdateState((s) => {
+    store.plugins.set("mesh-engine", s);
+    renderUpdateBadges();
+  }));
   unsubs.push(onRoutersUpdateState((s) => {
     store.plugins.set("cloud-routers", s);
     renderUpdateBadges();
@@ -54,7 +59,7 @@ export function initUpdateWatchers(): () => void {
 }
 
 export function renderUpdateBadges() {
-  const hasEngineUpdate = ["llama-engine", "image-engine"].some(
+  const hasEngineUpdate = ["llama-engine", "image-engine", "mesh-engine"].some(
     (id) => store.plugins.get(id)?.hasUpdate
   );
 

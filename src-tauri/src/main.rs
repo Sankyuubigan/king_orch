@@ -114,6 +114,10 @@ async fn main() {
         // Движок изображений stable-diffusion.cpp (SSOT). Регистрирует
         // команды движка/бандла/генерации, owns процесс sd-server (kill на выходе).
         .plugin(plugin_media_gen_engine::init())
+        // Движок 3D-генерации trellis.cpp (SSOT): статус установки весов для
+        // UI/диагностики; тул generate_mesh идёт нативно через
+        // infra/tools/mesh.rs (без команд), owns процесс trellis-server.
+        .plugin(plugin_mesh_engine::init())
         // Движок FFmpeg (SSOT): статус установки для UI/диагностики; сами
         // тулы монтажа идут нативно через infra/tools/ffmpeg.rs (без команд).
         .plugin(plugin_ffmpeg_wrapper::init())

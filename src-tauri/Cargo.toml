@@ -44,6 +44,8 @@ plugin-downloader = { path = "../../cross-app-plugins/plugin-downloader" }
 # Движок изображений stable-diffusion.cpp (SSOT): установка бекендов sd-server,
 # бандл Qwen Image 2.1, VRAM-preflight, generate/edit по HTTP.
 plugin-media-gen-engine = { path = "../../cross-app-plugins/plugin-media-gen-engine" }
+# Движок 3D-генерации trellis.cpp (SSOT): image->GLB по HTTP, веса models/<quant>.
+plugin-mesh-engine = { path = "../../cross-app-plugins/plugin-mesh-engine" }
 # Атомарные записи JSON (app_config.json, sessions/): tmp->rename + sidecar lock.
 json-store = { path = "../../cross-app-plugins/json-store" }
 # Ядро кодо-тулов (SSOT, репозиторий cross-app-plugins): чит/поиск/shell-тулы.
