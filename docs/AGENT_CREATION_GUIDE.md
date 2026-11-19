@@ -908,3 +908,5 @@ facts:
   - "Building Effective Agents" — гайд по паттернам AI-агентов (Routing, Prompt Chaining, Parallelization, Orchestrator-Workers, Evaluator-Optimizer)
 - **Anthropic Prompt Engineering** — https://docs.anthropic.com/en/docs/build-with-claude/prompt-engineering
   - Официальные лучшие практики промптинга
+- **Rivet (Ironclad/rivet)** — https://github.com/Ironclad/rivet
+  - Open-source визуальная среда node-based AI-агентов (графы LLM-workflow, редактор нод): источник архитектурных решений для движка workflow-графов
