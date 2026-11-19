@@ -191,6 +191,21 @@ async fn main() {
             // каталога, недописанные записи проиграны из журнала.
             infra::storage::init(&app_handle);
 
+            // Машинный корень установки роутеров: хранилище хоста сообщается
+            // плагину cloud-routers и хранится в ЕГО общем конфиге (first-wins,
+            // 19.11.2026) — дефолт установки шлюза ложится в KingOrchData, а не
+            // в %APPDATA%. First-wins — не per-app конфиг: исторический кейс
+            // `cloud_routers_dir` (см. infra/data_dir.rs) показал, что хостовый
+            // путь разводит папку шлюза по приложениям. Ошибка не фатальна:
+            // дефолт остаётся %APPDATA%, а установка всё равно честно упадёт,
+            // если конфиг-каталог недоступен.
+            if let Err(e) = plugin_cloud_routers::set_default_install_root(
+                &app_handle,
+                &infra::data_dir::resolve(&app_handle),
+            ) {
+                log::warn!("[BOOT] cloud-routers install_root не записан: {e}");
+            }
+
             // ── Санитария хвостов sidecar-локов (SQLite hot-journal-паттерн) ──
             // Лок интересен только на время операции записи; после успеха он
             // удаляется сам (`CrossLock::drop`), но хвост от обрыва процесса

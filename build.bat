@@ -50,6 +50,40 @@ REM в cli.cjs — одной строкой для всех команд (build
 REM Дублировать подмену здесь нельзя: разъезжаются версии между скриптами,
 REM и ровно так уже ломалось — подмена была в двух .bat из четырёх.
 
+REM --- Шлюз cloud-routers: собрать и уложить в ресурсы бандла (19.11.2026) ---
+REM Дистрибуция бинаря юзерам: инсталлер кладёт его рядом с exe хоста
+REM (tauri.conf.json → resources), installer плагина копирует в папку шлюза
+REM (source_candidates, кандидат 1 — gateway_installer.rs). cargo metadata
+REM резолвит глобальный target-dir машины (16.11.2026: D:/Programs/cargo-target)
+REM — без этого резолва путь пришлось бы хардкодить.
+set "GW_MANIFEST=%~dp0..\cross-app-plugins\Cargo.toml"
+if not exist "%GW_MANIFEST%" (
+  echo [ERROR] cross-app-plugins workspace not found: "%GW_MANIFEST%"
+  pause
+  exit /b 1
+)
+cargo build --manifest-path "%GW_MANIFEST%" -p cloud-routers-gateway --release
+if errorlevel 1 (
+  echo [ERROR] cloud-routers-gateway build failed.
+  pause
+  exit /b 1
+)
+set "GW_TARGET="
+for /f "usebackq delims=" %%i in (`powershell -NoProfile -Command "(cargo metadata --manifest-path '%GW_MANIFEST%' --no-deps --format-version 1 | ConvertFrom-Json).target_directory"`) do set "GW_TARGET=%%i"
+if "%GW_TARGET%"=="" (
+  echo [ERROR] cargo metadata did not report target_directory.
+  pause
+  exit /b 1
+)
+if not exist "%GW_TARGET%\release\cloud-routers-gateway.exe" (
+  echo [ERROR] Gateway binary not found after build: %GW_TARGET%\release\cloud-routers-gateway.exe
+  pause
+  exit /b 1
+)
+if not exist "%PROJ%src-tauri\resources" mkdir "%PROJ%src-tauri\resources"
+copy /Y "%GW_TARGET%\release\cloud-routers-gateway.exe" "%PROJ%src-tauri\resources\cloud-routers-gateway.exe" >nul
+echo [gateway] copied to src-tauri\resources from %GW_TARGET%\release
+
 node "%TOOLKIT%" build --project "%PROJ%"
 if errorlevel 1 (
   echo [ERROR] Build failed.

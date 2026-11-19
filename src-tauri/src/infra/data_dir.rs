@@ -125,10 +125,13 @@ pub fn apply(app: &AppHandle, raw_path: &str) -> Result<PathBuf, String> {
     // подпапки порождали перекачку общих файлов, плагин держит один пул).
     cfg.image_bundle_dir = Some(dir.join("image_models").to_string_lossy().to_string());
     cfg.video_bundle_dir = Some(dir.join("video_models").to_string_lossy().to_string());
-    // `cloud_routers_dir` здесь больше не пишется: папку роутеров задаёт сам
-    // плагин (`APPDATA/cloud-routers/<id>`), общий для всех проектов. Хост,
-    // назначавший путь, разводил бы папку шлюза по приложениям — процесс-то
-    // один, и второй проект его не видел бы.
+    // `cloud_routers_dir` здесь больше не пишется: путь из per-app конфига
+    // хоста разводил бы папку шлюза по приложениям — процесс-то один, и второй
+    // проект его не видел бы. Вместо этого хост сообщает плагину МАШИННЫЙ
+    // корень установки (`set_default_install_root`, вызов в main.rs setup,
+    // 19.11.2026): плагин хранит его в своём общем конфиге first-wins, и
+    // дефолт установки ложится в хранилище, оставаясь одним из любого проекта.
+    // Ручной «Путь» в панели (`cloud_routers.<id>.dir`) сильнее умолчания.
     infra::save_config(app, &cfg)?;
     Ok(dir)
 }

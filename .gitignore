@@ -2,6 +2,9 @@ node_modules
 dist
 src-tauri/target
 /src-tauri/redist/
+# Бинарь шлюза cloud-routers — артефакт сборки (кладёт build.bat из cross-app-plugins,
+# в git не попадает, в бандл идёт через tauri.conf.json → resources)
+/src-tauri/resources/
 .env
 /env
 /test
