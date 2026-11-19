@@ -1,6 +1,6 @@
 {
   "productName": "King Orch",
-  "version": "26.11.7",
+  "version": "26.11.8",
   "identifier": "com.kingorch.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -50,7 +50,8 @@
       "mcp_servers/*": "mcp_servers/",
       "../agents/": "agents/",
       "../tasks_for_test_llm/": "tasks_for_test_llm/",
-      "../sampling_presets.json": "sampling_presets.json"
+      "../sampling_presets.json": "sampling_presets.json",
+      "resources/cloud-routers-gateway.exe": "cloud-routers-gateway.exe"
     }
   },
   "plugins": {
