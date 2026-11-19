@@ -19,6 +19,12 @@ async fn main() {
     // или падает на старте), dev-зеркало test/last_logs.txt и вкладка «Логи».
     // Ранний pre-Tauri период пишется через early_* (краш-лог живёт сразу).
     plugin_log_collector::early_init("king_orch.log");
+    // Пер-сессионный архив строк лога (PRP 261119): каждая log::-строка
+    // ДОПОЛНИТЕЛЬНО дописывается в <exe>/session_logs/<session_id>.log и
+    // переживает перезапуск приложения; живой king_orch.log по-прежнему
+    // начинается чистым (core rules §2.5.1). Ранние early_log-строки идут
+    // мимо хука — они и так в king_orch.log текущего запуска.
+    infra::init_session_logs();
 
     // Плагины llama-engine и cloud-routers владеют своими конфигами в
     // собственных каталогах (%APPDATA%/llama-engine, %APPDATA%/cloud-routers),

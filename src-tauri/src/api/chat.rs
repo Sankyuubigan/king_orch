@@ -5,7 +5,8 @@ use tauri::{AppHandle, Emitter, State};
 use crate::api::AppState;
 use crate::domain;
 use crate::infra::{
-    self, llm_history, ChatAttachment, ChatMessage, CloudEndpoint, LlmMessage, ModelParams, SubCall,
+    self, llm_history, sanitize_filename_token, ChatAttachment, ChatMessage, CloudEndpoint,
+    LlmMessage, ModelParams, SubCall,
 };
 
 // ─── Лог-файл ───
@@ -222,6 +223,10 @@ pub async fn chat_request(
     // равно перезаписал бы историю первого хода). Гард снимает ход с реестра
     // на любом выходе из команды. Ходы разных сессий идут параллельно.
     let registration = state.register_turn(&session_id)?;
+    // Архив логов сессии (PRP 261119): строки log:: этого хода ДОПОЛНИТЕЛЬНО
+    // дописываются в <exe>/session_logs/<session_id>.log и переживают
+    // перезапуск приложения (карта сохраняемости — AGENTS.md §4).
+    infra::set_current_session(Some(&session_id));
     let cancel_flag = registration.handle.cancel.clone();
     let mut stop_rx = registration.stop_rx;
     let _turn_guard = crate::api::TurnGuard::new(&state, registration.key.clone());
@@ -675,39 +680,6 @@ pub fn stop_processing(state: State<'_, AppState>, session_id: String) -> Result
         );
     }
     Ok(())
-}
-
-/// Токен для имени файла (prompt_log): только файлобезопасные символы,
-/// ограничение длины по границам символов (не байт).
-fn sanitize_filename_token(s: &str) -> String {
-    let cleaned: String = s
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .take(40)
-        .collect();
-    cleaned
-}
-
-#[cfg(test)]
-mod sanitize_tests {
-    use super::sanitize_filename_token;
-
-    #[test]
-    fn sanitizes_unsafe_chars_and_keeps_short_ascii() {
-        assert_eq!(sanitize_filename_token("basic"), "basic");
-        assert_eq!(sanitize_filename_token("9router:gemini"), "9router_gemini");
-        assert_eq!(
-            sanitize_filename_token("a/b\\c*d?e"),
-            "a_b_c_d_e",
-            "опасные для путей символы заменяются"
-        );
-    }
-
-    #[test]
-    fn truncates_by_chars_not_bytes() {
-        let long = "д".repeat(80); // кириллица: 2 байта на символ
-        assert_eq!(sanitize_filename_token(&long).chars().count(), 40);
-    }
 }
 
 /// Режим графа: системный промпт самого «тяжёлого» агента графа — см.
