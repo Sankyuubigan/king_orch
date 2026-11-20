@@ -458,17 +458,37 @@ where
             .find(|a| a.id == agent_id)
             .is_some_and(|agent| agent.vision),
     };
-    // Слот движка = окно модели из GGUF-метаданных (SSOT: extract_context_length).
-    // Задание агента материализуется ПОЗЖЕ (run_agent_node собирает его из выходов
-    // тулов), поэтому стартовая оценка промпта занижает слот — на ней слот больше
-    // не строится. Ограничитель запроса — физическое окно модели; нехватку железа
-    // режет RAM-гейт движка ДО спавна (его урезание согласовано с бюджетом хоста
-    // через global_ctx_limit и видно юзеру плашкой vram_notice).
+    // Слот движка = ТИР от потребности (PRP 26.11.20, Вариант B): need_ctx от истории
+    // (SSOT 2 симв/ток + 2×max_gen margin) → next_tier — удвоение от 16384,
+    // clamp к окну GGUF (SSOT: extract_context_length). Задание агента
+    // материализуется ПОЗЖЕ (run_agent_node собирает его из выходов тулов) —
+    // поэтому слот ниже окна безопасен ТОЛЬКО в связке с новой архитектурой:
+    // бюджет компакции считается от ЖЕЛЕЗНОГО потолка (hardware_ctx_limit), а
+    // переполнение слота ловит step-up движка (respawn на тир выше) — усечение
+    // истории включается только когда данные не влезают в железо в принципе
+    // (астро-баг 3dea2ed «данных нет» не воскрешается). Нехватку железа
+    // дополнительно режут RAM- и VRAM-гейты движка ДО спавна (их урезание
+    // согласовано с бюджетом хоста через hardware_ctx_limit и видно юзеру
+    // плашкой vram_notice).
     let model_window = crate::infra::extract_context_length(&model_path);
-    let engine_ctx_limit = model_window.unwrap_or(context_size).max(2048);
+    let history_chars: usize = history
+        .iter()
+        .filter(|m| m.msg_type != "thought")
+        .map(|m| m.content.chars().count())
+        .sum();
+    let need_ctx_val = crate::infra::engine_slot::need_ctx(
+        history_chars,
+        user_text.chars().count(),
+        max_gen_tokens,
+    );
+    let engine_ctx_limit = crate::infra::engine_slot::choose_slot(
+        need_ctx_val,
+        model_window.unwrap_or(context_size).max(2048),
+    );
     log_cb(format!(
-        "📐 Слот движка: {} токенов (окно модели из GGUF{}); RAM-гейт урежет запрос при нехватке памяти, бюджет компакции считается от фактического слота",
+        "📐 Слот движка: {} токенов (тир от потребности ~{}; окно GGUF{}); RAM- и VRAM-гейты урежут запрос при нехватке памяти, бюджет компакции считается от железного потолка",
         engine_ctx_limit,
+        need_ctx_val,
         if model_window.is_some() { "" } else { " недоступно — fallback на config.context_size" }
     ));
 
@@ -503,6 +523,11 @@ where
         }
     }
 
+    // ── Движок: свежий спавн на каждый ход. Кэш между ходами (C4) откачен
+    // 20.11.26 по решению владельца: после хода движок умирает (Drop → плагин
+    // гасит llama-server), память освобождается сразу — цена в занятую VRAM
+    // после хода не оправдала экономию 3-4.6с/ход (см. замер и
+    // tasks/261120_0024-baad336f/201120_2030-Откат C4.md).
     let engine = if let Some(endpoint) = cloud_endpoint {
         let model = if model_path.starts_with("9router:") {
             model_path.strip_prefix("9router:").unwrap()
@@ -752,13 +777,18 @@ where
                 });
             }
         }
+        // Engine-поля читаются до move-конструкций результата; сам движок
+        // дропается на выходе из run_chat (гасит свой llama-server).
+        let engine_mode = engine.engine_mode().to_string();
+        let engine_tok_per_sec = engine.tok_per_sec();
+        let engine_mode_detail = engine.engine_mode_detail().to_string();
         return Ok(ChatRunResult {
             text: String::new(),
             sub_calls: all_sub_calls,
             messages: ctx.messages,
-            engine_mode: engine.engine_mode().to_string(),
-            engine_tok_per_sec: engine.tok_per_sec(),
-            engine_mode_detail: engine.engine_mode_detail().to_string(),
+            engine_mode,
+            engine_tok_per_sec,
+            engine_mode_detail,
             has_error: fallback_error,
         });
     }
@@ -896,16 +926,23 @@ where
         if let Some(signal) = pending_signal.take() {
             messages_store.push(signal);
         }
+        // Engine-поля читаются до move-конструкций результата; сам движок
+        // дропается на выходе из run_chat (гасит свой llama-server).
+        let engine_mode = engine.engine_mode().to_string();
+        let engine_tok_per_sec = engine.tok_per_sec();
+        let engine_mode_detail = engine.engine_mode_detail().to_string();
         Ok(ChatRunResult {
             text: final_res,
             sub_calls: all_sub_calls,
             messages: messages_store,
-            engine_mode: engine.engine_mode().to_string(),
-            engine_tok_per_sec: engine.tok_per_sec(),
-            engine_mode_detail: engine.engine_mode_detail().to_string(),
+            engine_mode,
+            engine_tok_per_sec,
+            engine_mode_detail,
             has_error: None,
         })
     } else {
+        // Движок создан, но entry point не найден — дропается на выходе
+        // (гасит свой llama-server).
         Err(format!(
             "Entry point '{}' не найден: нет ни workflow, ни .md агента с таким ID",
             agent_id
@@ -1411,8 +1448,13 @@ where
     // Единый pipeline компакции (по паттернам DeepSeek `compaction.md`): бюджет в
     // РЕАЛЬНЫХ токенах, head/tail pruning результатов инструментов, LLM-саммари
     // старой истории, усечение и (край) жёсткий drop.
+    // Бюджет компакции от ЖЕЛЕЗНОГО потолка (PRP 26.11.20 C5), а НЕ от
+    // активного слота: слот ниже потолка выбирается тир-селекцией ради экономии
+    // VRAM — усечение истории из-за него воспроизвело бы астро-баг «данных нет»
+    // (3dea2ed). Компакция включается, только когда история не влезает в железо
+    // в принципе; переполнение СЛОТА ловит step-up движка (respawn на тир выше).
     let budget_tokens = engine
-        .global_ctx_limit()
+        .hardware_ctx_limit()
         .saturating_sub(max_gen_tokens as u32) as usize;
     // Замыкание подсчёта токенов: точный tokenize движка, fallback — char/2.
     let token_count = |msgs: &[LlmMessage]| -> usize {
@@ -4365,4 +4407,5 @@ mod tests {
             );
         }
     }
+
 }

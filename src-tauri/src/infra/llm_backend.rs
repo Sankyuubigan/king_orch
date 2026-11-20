@@ -478,6 +478,23 @@ impl LlmEngine {
         }
     }
 
+    /// Железный потолок контекста (PRP 26.11.20 C1): min(VRAM-инверсии,
+    /// RAM-инверсии) на окно запроса, посчитан префлайтом плагина до спавна.
+    /// Бюджет компакции хоста считается от НЕГО, а не от активного слота:
+    /// слот может быть ниже потолка (тир-селекция ради экономии VRAM) —
+    /// усечение истории из-за слота ломало бы данные задания. Переполнение
+    /// слота лечит step-up движка (C6), а не компакция. Guard 0 (путь без
+    /// префлайта) — fallback на фактический слот.
+    pub fn hardware_ctx_limit(&self) -> u32 {
+        match &self.backend {
+            LlmBackend::Local(engine) => {
+                let hw = engine.hardware_ctx_limit;
+                if hw > 0 { hw } else { engine.global_ctx_limit }
+            }
+            LlmBackend::Cloud(_) => 128_000,
+        }
+    }
+
     pub fn get_tokens_count(
         &self,
         messages: &[LlmMessage],

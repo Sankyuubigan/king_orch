@@ -9,6 +9,7 @@
 
 pub mod config;
 pub mod data_dir;
+pub mod engine_slot;
 pub mod llm_backend;
 pub mod event_bus;
 pub mod messages;

@@ -136,6 +136,41 @@ pub fn apply(app: &AppHandle, raw_path: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
+/// Материализует дефолты путей бандлов медиа-движков в app_config.json
+/// (PRP 26.11.20, Шаг 3): если ключи `image_bundle_dir`/`video_bundle_dir`
+/// отсутствуют, записывает вычисленный дефолт (`resolve()/image_models`,
+/// `resolve()/video_models`) явным ключом. Одна запись при изменениях,
+/// идемпотентно.
+///
+/// Зачем: без записи эффективная папка вычисляется при каждом чтении
+/// (ключ `data_dir` → диск с макс. свободным местом → exe-фолбэк). На чистой
+/// установке вставка флешки/смена дисков тихо меняла путь — скачанные веса
+/// «пропадали» и перекачивались. Отсутствующее состояние = записанный путь.
+///
+/// `sdcpp_dir` здесь НЕ трогается: его плагиновый дефолт — `<exe>/sdcpp`,
+/// другой паттерн, материализуется отдельно при необходимости.
+pub fn materialize_media_defaults(app: &AppHandle) {
+    let mut cfg = infra::load_config(app);
+    let mut changed = false;
+    if cfg.image_bundle_dir.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+        let path = resolve(app).join("image_models");
+        log::info!("[data_dir] материализован дефолт image_bundle_dir: {}", path.display());
+        cfg.image_bundle_dir = Some(path.to_string_lossy().to_string());
+        changed = true;
+    }
+    if cfg.video_bundle_dir.as_deref().map(|s| s.trim().is_empty()).unwrap_or(true) {
+        let path = resolve(app).join("video_models");
+        log::info!("[data_dir] материализован дефолт video_bundle_dir: {}", path.display());
+        cfg.video_bundle_dir = Some(path.to_string_lossy().to_string());
+        changed = true;
+    }
+    if changed {
+        if let Err(e) = infra::save_config(app, &cfg) {
+            log::error!("[data_dir] не удалось сохранить материализованные дефолты бандлов: {}", e);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
