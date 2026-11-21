@@ -57,9 +57,10 @@ export function createMessageElement(
     msgDiv.appendChild(attDiv);
   }
 
-  // Модель подписывается у ответов агентов (с временем) и у системных ошибок
-  // (timeText отсутствует — рисуется только подпись модели, проставленная бэкендом).
-  if ((timeText && role === 'agent') || (role === 'system' && modelName)) {
+  // Модель подписывается у ответов агентов и у системных ошибок хода; бейдж
+  // времени — у агентов И у системных ошибок наравне с ответами (решение
+  // владельца 20.11.26: ход занял время — оно честно показывается).
+  if ((timeText && (role === 'agent' || role === 'system')) || (role === 'system' && modelName)) {
     const timeDiv = document.createElement("div");
     timeDiv.className = "msg-time";
     if (modelName) {

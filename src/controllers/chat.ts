@@ -961,7 +961,8 @@ export class ChatController {
         const afterOldHistory = newMessages.slice(preSendLength);
         
         afterOldHistory.forEach((m: any) => {
-            if (m.author && m.author !== 'user' && m.author !== 'system') {
+            // Системные ошибки хода тоже несут время хода (см. send-путь).
+            if (m.author && m.author !== 'user') {
                 m.time_sec = dur;
             }
         });
@@ -988,7 +989,7 @@ export class ChatController {
       this.triggerTokenCount();
 
     } catch (error) {
-      await this.handleSendFailure(error, "chat.send.runFrom");
+      await this.handleSendFailure(error, "chat.send.runFrom", startTime);
     } finally {
       this.setProcessingState(false);
     }
@@ -1528,7 +1529,10 @@ export class ChatController {
    * Служебные JSON-конверты (сигналы/вызовы тулов) не сохраняются: юзер их
    * не видел.
    */
-  private async handleSendFailure(error: unknown, scope: string) {
+  private async handleSendFailure(error: unknown, scope: string, startTime?: number) {
+    // Время хода в момент отказа — бейдж справа внизу показывается и у ошибок
+    // (решение владельца 20.11.26); у вызовов без startTime время неизвестно.
+    const dur = startTime ? (performance.now() - startTime) / 1000 : undefined;
     const errText = String(error);
     const wasCancelled = errText.includes("Отменено") || errText.includes("Прервано");
     const partial = stripStreamArtifacts(this.state.rtStreamBuffer ?? "").trim();
@@ -1541,15 +1545,16 @@ export class ChatController {
         type: "message",
         author,
         content: `${partial}\n\n---\n⚠️ **Ответ оборван:** ${reason}`,
+        ...(dur ? { time_sec: dur } : {}),
       });
       this.state.uidList.push(this.state.nextUid());
     }
     if (wasCancelled) {
-      this.state.history.push({ type: "message", author: "system", content: "⚠️ Прервано." });
+      this.state.history.push({ type: "message", author: "system", content: "⚠️ Прервано.", ...(dur ? { time_sec: dur } : {}) });
       this.state.uidList.push(this.state.nextUid());
     } else {
       showToast(`Ошибка: ${error}`, "error");
-      this.state.history.push({ type: "message", author: "system", content: `⚠️ Ошибка: ${error}` });
+      this.state.history.push({ type: "message", author: "system", content: `⚠️ Ошибка: ${error}`, ...(dur ? { time_sec: dur } : {}) });
       this.state.uidList.push(this.state.nextUid());
       void trackError(scope, error);
     }
@@ -1579,11 +1584,12 @@ export class ChatController {
     // инвариант «UI не остаётся в состоянии Обработка» держится структурно: любой
     // await ниже, включая персистентность, обязан дойти до finally.
     this.setProcessingState(true);
+    // До try: catch-путь (handleSendFailure) тоже обязан нести время хода.
+    const startTime = performance.now();
     try {
       const attachments = this.commitUserMessage(text);
       bus.emit("session:changed");
       await this.persistSession("");
-      const startTime = performance.now();
       const _p2 = store.currentModelParams;
       const params = { temperature: parseFloat(this.el.tempSlider.value), top_k: parseInt(this.el.topkSlider.value, 10), top_p: parseFloat(this.el.toppSlider.value), min_p: parseFloat(this.el.minpSlider.value), repetition_penalty: parseFloat(this.el.reppenSlider.value), presence_penalty: parseFloat(this.el.prespenSlider.value), dry_multiplier: _p2?.dry_multiplier ?? 0.0, dry_base: _p2?.dry_base ?? 1.75, dry_allowed_length: _p2?.dry_allowed_length ?? 2, dry_penalty_last_n: _p2?.dry_penalty_last_n ?? 0, xtc_probability: _p2?.xtc_probability ?? 0.0, xtc_threshold: _p2?.xtc_threshold ?? 0.1 };
       const allHistory = this.state.history.slice();
@@ -1627,7 +1633,9 @@ export class ChatController {
       // Мысли стриминга: теперь приходят в response.messages от backend.
       if (newMessages.length > 0) {
         newMessages.slice(preSendLength).forEach((m: any) => {
-            if (m.author && m.author !== 'user' && m.author !== 'system') {
+            // Системные ошибки хода тоже несут время хода (бейдж справа внизу —
+            // как у ответов; решение владельца 20.11.26).
+            if (m.author && m.author !== 'user') {
                 m.time_sec = dur;
             }
         });
@@ -1656,7 +1664,7 @@ export class ChatController {
       }
       await this.persistSession();
     } catch (error) {
-      await this.handleSendFailure(error, "chat.send");
+      await this.handleSendFailure(error, "chat.send", startTime);
     } finally {
       this.setProcessingState(false);
       this.triggerTokenCount();
