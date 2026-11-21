@@ -41,8 +41,25 @@ fn extract_json_block(text: &str) -> Option<String> {
     // JSON-строк не считаются) и берём ПОСЛЕДНИЙ валидный JSON. Итоговый JSON
     // модели идёт в конце ответа, а первая {…} из прозы/размышлений может быть
     // мусором (например, при парсинге склеенного continuation_raw + нового ответа).
-    let mut candidates: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in balanced_object_slices(&text).iter().rev() {
+        let candidate = &text[*start..=*end];
+        if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
+            return Some(candidate.trim().to_string());
+        }
+    }
+    None
+}
+
+/// Сканнер сбалансированных `{…}` (string/escape-aware): возвращает срезы
+/// (start, end) ВКЛЮЧИТЕЛЬНО для КАЖДОГО верхнеуровневого объекта, продолжая
+/// скан с `end+1`. Незакрытый `{` прекращает сбор закрытых кандидатов (дальше
+/// по тексту закрытого объекта появиться не может).
+/// Общая база extract_json_block (не-fenced путь) и разбора двухобъектного
+/// конверта (Баг B, 21.11.2026): `{"thought": …}` + `{"tool": …}` двумя
+/// объектами — оба среза должны попасть в разбор.
+fn balanced_object_slices(text: &str) -> Vec<(usize, usize)> {
     let bytes = text.as_bytes();
+    let mut slices = Vec::<(usize, usize)>::new();
     let mut i = 0usize;
     while i < bytes.len() {
         if bytes[i] == b'{' {
@@ -80,7 +97,7 @@ fn extract_json_block(text: &str) -> Option<String> {
             }
             match closed_at {
                 Some(end) => {
-                    candidates.push((start, end));
+                    slices.push((start, end));
                     i = end + 1;
                     continue;
                 }
@@ -90,14 +107,7 @@ fn extract_json_block(text: &str) -> Option<String> {
         }
         i += 1;
     }
-
-    for (start, end) in candidates.iter().rev() {
-        let candidate = &text[*start..=*end];
-        if serde_json::from_str::<serde_json::Value>(candidate).is_ok() {
-            return Some(candidate.trim().to_string());
-        }
-    }
-    None
+    slices
 }
 
 pub fn is_valid_json_action(text: &str) -> bool {
@@ -369,7 +379,24 @@ fn scan_arguments_object(text: &str) -> ArgsScan {
                 // От объекта arguments ожидаем валидный JSON — простой пробой
                 // serde-парса, иначе (мусор из прозы) идём дальше.
                 match serde_json::from_str::<serde_json::Value>(&text[start..=end]) {
-                    Ok(v) => return ArgsScan::Found(v),
+                    Ok(v) => {
+                        // Инвариант (Баг B, 21.11.2026): объект-мысль — первый
+                        // объект двухобъектного конверта — НИКОГДА не становится
+                        // arguments: иначе тул получает arguments={"thought":…}
+                        // и «prompt_en пуст» ×3 → abort. Мысль не несёт
+                        // tool/name/arguments/arg — пропускаем и сканируем
+                        // дальше (обрыв после неё → честный ArgsLost/Truncated).
+                        let has_action_keys = v.get("tool").is_some()
+                            || v.get("name").is_some()
+                            || v.get("arguments").is_some()
+                            || v.get("arg").is_some();
+                        let is_thought_only = v.get("thought").is_some() && !has_action_keys;
+                        if is_thought_only {
+                            search = end + 1;
+                            continue;
+                        }
+                        return ArgsScan::Found(v);
+                    }
                     Err(e) => {
                         // serde даёт колонку ошибки внутри среза — переводим в
                         // абсолютную позицию для диагностики модели.
@@ -428,7 +455,96 @@ pub enum ToolCallParse {
     },
 }
 
+/// Разбор ПОСЛЕДОВАТЕЛЬНОСТИ top-level объектов (Баг B, 21.11.2026): часть
+/// моделей (Qwen3.8-класс, инцидент юзера 00:40–00:44 21.11.2026) эмитит
+/// tool-конверт ДВУМЯ объектами — `{"thought": "…"}` + перенос + `{"tool": …,
+/// "arguments": {…}}`. Прежний tolerant-парс целого блока падал на «двух
+/// склеенных объектах», фолбэк-сканнер хватал ПЕРВЫЙ сбалансированный объект
+/// (мысль) как arguments — тул получал `arguments={"thought":…}` и «prompt_en
+/// пуст» ×3 → abort. SSOT-инвариант: конверт = ПОСЛЕДНИЙ объект с ключом
+/// `tool`/`name`; thought собирается из всех объектов с ключом `thought`.
+///
+/// Возвращает решение только при найденном конверте (Call; невалидное имя или
+/// нативный `{"name":…}` без arguments → None). Конверта среди разобранных
+/// объектов нет → None (вызывающий код падает в regex-фолбэк, который видит
+/// и обрезанный хвост конверта).
+fn parse_tool_call_from_object_sequence(json_str: &str, slices: &[(usize, usize)]) -> ToolCallParse {
+    let mut envelope_val: Option<serde_json::Value> = None;
+    let mut envelope_has_legacy_key = false;
+    let mut thought_parts: Vec<String> = Vec::new();
+
+    for (start, end) in slices {
+        let Some(val) = parse_json_tolerant_block(&json_str[*start..=*end]) else {
+            // Закрытый, но невалидный объект — конвертом быть не может;
+            // regex-фолбэк (если дойдёт) честно отработает обрыв.
+            continue;
+        };
+        // `tool` внутри СТРОКИ мысли конвертом не является: ключи смотрим
+        // только на верхнем уровне разобранного объекта.
+        let has_tool_key = val.get("tool").is_some();
+        let has_name_key = val.get("name").is_some();
+        if has_tool_key || has_name_key {
+            // Последний побеждает: итоговый JSON модели идёт в конце ответа.
+            envelope_has_legacy_key = has_tool_key;
+            envelope_val = Some(val.clone());
+        }
+        if let Some(t) = val.get("thought").and_then(|t| t.as_str()) {
+            thought_parts.push(t.to_string());
+        }
+    }
+
+    let Some(val) = envelope_val else {
+        return ToolCallParse::None;
+    };
+    let Some(tool) = val
+        .get("tool")
+        .or_else(|| val.get("name"))
+        .and_then(|v| v.as_str())
+    else {
+        return ToolCallParse::None;
+    };
+    if !is_valid_tool_name(tool) {
+        return ToolCallParse::None;
+    }
+    let explicit_args = val.get("arguments").cloned().or_else(|| val.get("arg").cloned());
+    // Нативный OpenAI-конверт {"name": …} обязан нести arguments/arg — иначе
+    // это посторонний JSON с ключом name (тот же гард, что в однообъектном пути).
+    if !envelope_has_legacy_key && explicit_args.is_none() {
+        return ToolCallParse::None;
+    }
+    let args = explicit_args.unwrap_or_else(|| {
+        // Легаси-конверт без arguments: arguments = объект без служебных ключей,
+        // пустота = `{}` — thought-объект диспетчеризации не подменяет.
+        if let Some(obj) = val.as_object() {
+            let mut m = obj.clone();
+            m.remove("tool");
+            m.remove("name");
+            m.remove("thought");
+            serde_json::Value::Object(m)
+        } else {
+            serde_json::Value::Object(serde_json::Map::new())
+        }
+    });
+    ToolCallParse::Call {
+        tool: tool.to_string(),
+        arguments: args,
+        thought: thought_parts.join(" "),
+    }
+}
+
 fn parse_tool_call_from_json(json_str: &str) -> ToolCallParse {
+    // Путь последовательности (Баг B, 21.11.2026): ≥2 top-level объектов в
+    // блоке — двухобъектный конверт `{"thought":…}`+`{"tool":…}`. Один срез =
+    // прежняя однообъектная логика без изменений. None последовательности
+    // (конверта нет / объект невалиден) падает в regex-фолбэк ниже — он видит
+    // и обрезанный хвост второго объекта.
+    let slices = balanced_object_slices(json_str);
+    if slices.len() >= 2 {
+        let seq = parse_tool_call_from_object_sequence(json_str, &slices);
+        if !matches!(seq, ToolCallParse::None) {
+            return seq;
+        }
+    }
     let parsed = parse_json_tolerant_block(json_str);
     if let Some(val) = parsed {
         let has_legacy_tool_key = val.get("tool").is_some();
@@ -1330,5 +1446,118 @@ mod tests {
         assert_eq!(call.as_ref().map(|c| c.0.as_str()), Some("emit_signal"));
         assert_eq!(analysis, "Аналитический отчёт по элементам.");
         assert!(!analysis.contains("invoke"), "разметка не утекает в отчёт: {analysis}");
+    }
+
+    // ── Баг B (21.11.2026, инцидент Qwen3.8-9B 00:40–00:44): двухобъектный
+    // конверт `{"thought":…}` + `{"tool":…}`. Раньше tolerant-парс целого блока
+    // падал на двух склеенных объектах, фолбэк-сканнер хватал ПЕРВЫЙ объект
+    // (мысль) как arguments → тул получал arguments={"thought":…} →
+    // «prompt_en пуст» ×3 → abort. ──
+
+    #[test]
+    fn parse_tool_call_two_object_envelope_fenced() {
+        let raw = "```json\n{\"thought\": \"Нарисую слона в костюме.\"}\n{\"tool\": \"generate_image\", \"arguments\": {\"prompt_en\": \"An elegant elephant in a white formal suit\"}}\n```";
+        match parse_tool_call_detailed(raw) {
+            ToolCallParse::Call {
+                tool,
+                arguments,
+                thought,
+            } => {
+                assert_eq!(tool, "generate_image");
+                assert_eq!(
+                    arguments["prompt_en"],
+                    "An elegant elephant in a white formal suit"
+                );
+                assert_eq!(thought, "Нарисую слона в костюме.");
+            }
+            other => panic!("двухобъектный конверт обязан быть Call: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_two_object_envelope_non_fenced() {
+        // Не-fenced путь extract_json_block отдаёт последний валидный объект —
+        // конверт; главное — arguments не подменяется thought-объектом.
+        let raw = "{\"thought\": \"мысли перед вызовом\"}\n{\"tool\": \"generate_image\", \"arguments\": {\"prompt_en\": \"elephant\"}}";
+        match parse_tool_call_detailed(raw) {
+            ToolCallParse::Call { tool, arguments, .. } => {
+                assert_eq!(tool, "generate_image");
+                assert_eq!(arguments["prompt_en"], "elephant");
+            }
+            other => panic!("двухобъектный конверт без фенса обязан быть Call: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_two_object_tool_inside_thought_string() {
+        // «tool» внутри СТРОКИ мысли конвертом не является — ключи смотрим
+        // только на верхнем уровне разобранного объекта.
+        let raw = "```json\n{\"thought\": \"сначала проверю {\\\"tool\\\": \\\"write_file\\\"} как текст\"}\n{\"tool\": \"generate_image\", \"arguments\": {\"prompt_en\": \"x\"}}\n```";
+        match parse_tool_call_detailed(raw) {
+            ToolCallParse::Call { tool, arguments, .. } => {
+                assert_eq!(tool, "generate_image");
+                assert_eq!(arguments["prompt_en"], "x");
+            }
+            other => panic!("конверт после thought-строки с JSON обязан быть Call: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_truncated_tail_after_thought_is_args_lost() {
+        // Обрезанный второй объект (лимит токенов): честный ArgsLost с именем
+        // тула из хвоста — НЕ Call с thought-объектом в arguments.
+        let raw = "```json\n{\"thought\": \"мысли\"}\n{\"tool\": \"generate_image\", \"arguments\": {\"prompt_en\": \"An elegant eleph";
+        match parse_tool_call_detailed(raw) {
+            ToolCallParse::ArgsLost { tool, .. } => assert_eq!(tool, "generate_image"),
+            other => panic!("обрыв хвоста обязан быть ArgsLost, получено {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_tool_call_two_object_native_name_without_arguments_is_none() {
+        // Нативный {"name": …} без arguments среди двух объектов — не tool call
+        // (тот же гард, что у однообъектного пути).
+        let raw = "{\"thought\": \"мысли\"}\n{\"name\": \"read_file\"}";
+        assert!(matches!(
+            parse_tool_call_detailed(raw),
+            ToolCallParse::None
+        ));
+    }
+
+    #[test]
+    fn parse_tool_call_two_object_legacy_without_arguments_gets_empty_args() {
+        // Легаси {"tool": …} без arguments: arguments = {} (план Бага B) —
+        // thought-объект диспетчеризации не подменяет.
+        let raw = "```json\n{\"thought\": \"сигналю\"}\n{\"tool\": \"emit_signal\"}\n```";
+        match parse_tool_call_detailed(raw) {
+            ToolCallParse::Call { tool, arguments, .. } => {
+                assert_eq!(tool, "emit_signal");
+                assert!(
+                    arguments.as_object().map(|o| o.is_empty()).unwrap_or(false),
+                    "arguments обязан быть пустым объектом, получено: {arguments}"
+                );
+            }
+            other => panic!("легаси-конверт двумя объектами обязан быть Call: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn scan_arguments_object_skips_thought_only_object() {
+        // Инвариант сканнера: объект-мысль НИКОГДА не возвращается как arguments.
+        let text = "{\"thought\": \"мысли\"}\n{\"tool\": \"generate_image\", \"arguments\": {\"prompt_en\": \"x\"}}";
+        let scan = scan_arguments_object(text);
+        assert!(
+            matches!(&scan, ArgsScan::Found(v) if v.get("tool").is_some()),
+            "сканнер обязан взять конверт (объект с ключом tool), не мысль"
+        );
+    }
+
+    #[test]
+    fn scan_arguments_object_truncated_after_thought_is_truncated() {
+        let text = "{\"thought\": \"мысли\"}\n{\"tool\": \"generate_image\", \"arguments\": {\"prompt_en\": \"An elegant eleph";
+        assert!(
+            matches!(scan_arguments_object(text), ArgsScan::Truncated),
+            "обрыв после thought-объекта обязан быть Truncated"
+        );
     }
 }

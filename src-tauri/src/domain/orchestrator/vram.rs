@@ -20,11 +20,17 @@ use crate::infra::tools::ToolError;
 /// с image-канонами: маркер, которого нет в списке, снова маскируется в
 /// «внутренняя ошибка media-движка» и порождает слепые ретраи модели.
 pub fn is_resource_error(output: &str) -> bool {
+    let lower = output.to_lowercase();
     output.contains("Недостаточно памяти")
         || output.contains("Недостаточно RAM")
         || output.contains("Недостаточно VRAM")
         || output.contains("Недостаточно места на диске")
         || output.contains("не стал готов за 300 сек")
+        // Баг C (21.11.2026): CUDA OOM в середине job (sd-server вернул
+        // `failed` с «CUDA out of memory») — та же ресурсная категория,
+        // что и preflight-отказ: повтор НЕ прибавит памяти (спец: повтор
+        // бесполезен), честный финал вместо 3 слепых ретраев модели.
+        || lower.contains("out of memory")
 }
 
 /// Детерминированная сетап-ошибка media-тула: бандл не скачан/недокачан,
@@ -91,6 +97,23 @@ mod tests {
         assert!(is_resource_error("Недостаточно RAM: нужно ~13 ГБ"));
         assert!(!is_resource_error("Ошибка 'generate_image': Неверные аргументы: prompt_en пуст"));
         assert!(!is_resource_error("Готово за 12.3 сек"));
+    }
+
+    /// Баг C (21.11.2026): CUDA OOM в середине job (боевая форма из лога юзера
+    /// 00:21 — sd-server вернул job `failed` с «CUDA out of memory») — ресурсная
+    /// категория: ретраи слепы, честный финал сразу.
+    #[test]
+    fn detects_cuda_oom_from_job_failed() {
+        assert!(is_resource_error(
+            "Ошибка 'generate_image': Генерация не удалась: CUDA error: out of memory (buffer size 6239022080 bytes)"
+        ));
+        assert!(is_resource_error(
+            "Ошибка 'generate_image': Генерация не удалась: cudaMalloc failed: out of memory"
+        ));
+        // Обычные ошибки генерации OOM-маркером не задеваются.
+        assert!(!is_resource_error(
+            "Ошибка 'generate_image': Неверные аргументы: prompt_en пуст"
+        ));
     }
 
     /// Боевой текст из лога 27.10.26 (video-preflight q4km, 29.5 ГБ свободно):

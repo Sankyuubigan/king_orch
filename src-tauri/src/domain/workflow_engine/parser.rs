@@ -1311,13 +1311,18 @@ edges: []
         );
     }
 
-    /// Известное и ОГОВОРЁННОЕ ограничение авто-склейки на этом же графе.
+    /// Диагностика потери внешних инжектов при включении Fused.
     ///
-    /// `call_decomposer` внедряет отчёт `soma_translator`, а тот производится
-    /// ВНЕ группы. В FUSED склеенный вызов получает историю без
-    /// thought-сообщений, поэтому отчёт до модели не дойдёт. Это не поломка
-    /// движка, а свойство склейки — и автор обязан знать о нём ДО включения
-    /// Fused, поэтому здесь оно зафиксировано диагностикой.
+    /// История: раньше боевой граф психотерапевта реально нес это
+    /// ограничение — нода группы внедряла отчёт `soma_translator`,
+    /// производимого ВНЕ группы, и тест проверял граф «как есть».
+    /// v26.11.9 (9b55b00) вылечила граф: `soma_translator` убран из
+    /// `inject_response` ноды группы `call_synthesizer` (исправление
+    /// «ухода в абстракции»). Механизм диагностики при этом обязан жить:
+    /// автор, включивший Fused на графе с внешним инжектом, обязан узнать
+    /// о потере ДО запуска, поэтому премиса воссоздаётся здесь
+    /// синтетически (боевой граф + временный внешний инжект), а заодно
+    /// гейтится, что боевой граф БЕЗ мутации диагностики не даёт.
     #[test]
     fn production_group_reports_lost_external_injects() {
         use crate::domain::workflow_engine::editor_fidelity::analyze_workflow_fidelity;
@@ -1325,10 +1330,9 @@ edges: []
         let path = graph_path("agents/psychotherapist/transitions/main_conversation_flow.yaml");
         let content = std::fs::read_to_string(&path).expect("чтение YAML");
         let source: serde_yaml::Value = serde_yaml::from_str(&content).expect("YAML");
-        let mut wf: WorkflowDef = serde_yaml::from_value(source.clone()).expect("workflow");
-        for group in wf.groups.iter_mut() {
-            group.fused_instruction = Some("Сделай всё.".to_string());
-        }
+
+        // Искусственная fused_instruction на всех группах: диагностика потери
+        // инжектов работает только при включённой инструкции (ветка Some(text)).
         let mut with_instruction = source.clone();
         if let Some(seq) = with_instruction
             .get_mut("groups")
@@ -1344,8 +1348,51 @@ edges: []
             }
         }
 
+        // 1) Боевой граф «как есть»: с v26.11.9 (9b55b00) группа не внедряет
+        //    отчётов агентов извне группы — диагностика обязана молчать.
+        let wf_as_is: WorkflowDef =
+            serde_yaml::from_value(with_instruction.clone()).expect("workflow");
         let diagnostics =
-            analyze_workflow_fidelity(&with_instruction, &wf).expect("анализ");
+            analyze_workflow_fidelity(&with_instruction, &wf_as_is).expect("анализ");
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|d| d.code == "GROUP_FUSED_INJECT_LOST"),
+            "боевой граф после v26.11.9 не несёт потерянных инжектов, но диагностика \
+             сработала: {:?}",
+            diagnostics.iter().map(|d| d.code.as_str()).collect::<Vec<_>>()
+        );
+
+        // 2) Премиса старого ограничения воссоздаётся: ноде группы
+        //    (call_synthesizer) возвращаем внедрение отчёта `soma_translator`,
+        //    производимого ВНЕ группы (состояние графа до v26.11.9). В FUSED
+        //    склеенный вызов получает историю без thought-сообщений, поэтому
+        //    отчёт до модели не дойдёт — автор обязан узнать об этом ДО
+        //    включения Fused, что и гарантирует диагностика.
+        let mut mutated = with_instruction.clone();
+        if let Some(seq) = mutated.get_mut("nodes").and_then(|n| n.as_sequence_mut()) {
+            for item in seq.iter_mut() {
+                let is_target = item
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(|id| id == "call_synthesizer")
+                    .unwrap_or(false);
+                if is_target {
+                    if let Some(map) = item.as_mapping_mut() {
+                        map.insert(
+                            serde_yaml::Value::String("inject_response".into()),
+                            serde_yaml::Value::Sequence(vec![
+                                serde_yaml::Value::String("decomposer".into()),
+                                serde_yaml::Value::String("soma_translator".into()),
+                            ]),
+                        );
+                    }
+                }
+            }
+        }
+        let wf_mutated: WorkflowDef = serde_yaml::from_value(mutated.clone()).expect("workflow");
+        let diagnostics =
+            analyze_workflow_fidelity(&mutated, &wf_mutated).expect("анализ");
         let lost: Vec<&str> = diagnostics
             .iter()
             .filter(|d| d.code == "GROUP_FUSED_INJECT_LOST")

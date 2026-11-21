@@ -548,10 +548,23 @@ where
 
         (self.status_cb)(format!("Выполнение {}...", tool_name), 60);
         let args_str = arguments.to_string();
+        // Наблюдаемость формы конверта (Баг B, 21.11.2026): когда тул получает
+        // пустые/чужие аргументы, ключи arriving-объекта сразу видны в логе —
+        // без реконструкции по сырым выводам модели.
+        let args_keys = arguments
+            .as_object()
+            .map(|o| {
+                o.keys()
+                    .map(|k| k.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            })
+            .unwrap_or_else(|| "<не объект>".to_string());
         (self.log_cb)(format!(
-            "🔧 Агент '{}' вызвал инструмент {}: {}",
+            "🔧 Агент '{}' вызвал инструмент {}: keys=[{}] {}",
             self.agent.name,
             tool_name,
+            args_keys,
             safe_truncate(&args_str, 200)
         ));
         // emit_signal — особый сигнальный инструмент (legacy-конверт): требует полного

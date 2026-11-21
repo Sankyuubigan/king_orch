@@ -517,7 +517,7 @@ pub async fn chat_request(
 
     if is_cloud {
         log_cb(format!(
-            "📐 Промпт: ~{} токенов, max_gen={}, ожидаемый финал: ~{}/{} (n_ctx)",
+            "📐 Промпт: ~{} токенов, max_gen={}, ожидаемый финал: ~{}/{} (контекст конфига; фактический слот логирует оркестратор)",
             prompt_tokens,
             max_gen_tokens,
             prompt_tokens + max_gen_tokens,
@@ -539,7 +539,7 @@ pub async fn chat_request(
             infra::estimate_vram_mb(&model_path, effective_ctx, kv_quant_keys, kv_quant_values);
         let kv_mb = (total_mb - file_mb).max(0.0);
         log_cb(format!(
-            "📐 Промпт: ~{} токенов, max_gen={}, ожидаемый финал: ~{}/{} (n_ctx)",
+            "📐 Промпт: ~{} токенов, max_gen={}, ожидаемый финал: ~{}/{} (контекст конфига; фактический слот логирует оркестратор)",
             prompt_tokens,
             max_gen_tokens,
             prompt_tokens + max_gen_tokens,
