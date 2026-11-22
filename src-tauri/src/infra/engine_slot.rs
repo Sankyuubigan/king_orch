@@ -20,13 +20,26 @@ pub fn choose_slot(need: u32, window: u32) -> u32 {
     next_tier(need, window)
 }
 
-/// Потребность в контексте (токены): SSOT-эвристика 2 симв/ток (кириллица,
-/// `estimate_chars_per_token`) + запас на генерацию ×2 (второй `max_gen` —
-/// margin на материализацию тулов до следующего хода). Точный подсчёт
-/// `get_tokens_count` остаётся в компакции: llm_messages собираются ПОСЛЕ
-/// выбора слота, а грубые тиры (×2) прощают шум оценки.
-pub fn need_ctx(history_chars: usize, user_text_chars: usize, max_gen_tokens: u32) -> u32 {
-    ((history_chars.saturating_add(user_text_chars) / 2).min(u32::MAX as usize) as u32)
+/// Потребность в контексте (токены). Оценка токенов — ×10/27 симв (≈1/2.7;
+/// спец 21.11.2026, 07-ответ.md: chars/2 завышал кириллицу ~1.5× и без
+/// system-терма давал слот ниже фактического промпта — валидатор
+/// психотерапевта ~20k ток системы при потребности ~4k → HTTP 400 → лишний
+/// step-up-респавн на каждом ходу). В потребность входит МАКСИМУМ системных
+/// промптов llm_worker-нод графа (system_prompt агента + фрейм) —
+/// подсчитывается на call-site (orchestrator/mod.rs). Запас генерации ×2
+/// (второй `max_gen` — margin на материализацию тулов до следующего хода).
+/// Точный подсчёт `get_tokens_count` остаётся в компакции: llm_messages
+/// собираются ПОСЛЕ выбора слота, а грубые тиры (×2) прощают шум оценки.
+pub fn need_ctx(
+    history_chars: usize,
+    user_text_chars: usize,
+    system_chars: usize,
+    max_gen_tokens: u32,
+) -> u32 {
+    let total_chars = history_chars
+        .saturating_add(user_text_chars)
+        .saturating_add(system_chars);
+    ((total_chars * 10 / 27).min(u32::MAX as usize) as u32)
         .saturating_add(max_gen_tokens.saturating_mul(2))
 }
 
@@ -35,14 +48,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn need_ctx_is_half_chars_plus_double_generation() {
-        // 1000 символов истории → ~500 токенов; max_gen 2048 → margin 4096.
-        assert_eq!(need_ctx(1000, 0, 2048), 4596);
-        assert_eq!(need_ctx(0, 500, 2048), 4346);
+    fn need_ctx_is_chars_over_27_plus_double_generation() {
+        // 1000 символов истории → ~370 токенов; max_gen 2048 → margin 4096.
+        assert_eq!(need_ctx(1000, 0, 0, 2048), 4466);
+        assert_eq!(need_ctx(0, 500, 0, 2048), 4281);
+        // Системный промпт считается тем же коэффициентом.
+        assert_eq!(need_ctx(0, 0, 62491, 0), 23144);
+        // Кириллица валидатора (62491 симв → 23144 ток; факт 20725 — запас ~12%).
+        assert_eq!(need_ctx(0, 0, 62491, 2048), 27240);
         // Ноль всего → только margin от генерации.
-        assert_eq!(need_ctx(0, 0, 2048), 4096);
-        // Кириллица: 2 символа на токен — ровно половина.
-        assert_eq!(need_ctx(20000, 0, 0), 10000);
+        assert_eq!(need_ctx(0, 0, 0, 2048), 4096);
     }
 
     #[test]

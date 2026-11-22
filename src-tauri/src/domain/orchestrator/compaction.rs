@@ -58,8 +58,15 @@ where
         return report;
     }
 
+    // Защищённая голова (спец 21.11.2026, 07-ответ.md): system (idx 0) +
+    // закреплённые (pinned) сообщения сразу после него — фрейм агента /
+    // persona. Все слои компакции работают только с хвостом после этой
+    // головы: срез фрейма = «агент не видит ни одного сообщения юзера и
+    // собственного фрейма» (ход 09:53 21.11.2026).
+    let protected_head = 1 + messages[1..].iter().take_while(|m| m.is_pinned()).count();
+
     // Слой 1: head/tail pruning крупных результатов инструментов.
-    for m in messages.iter_mut().skip(1) {
+    for m in messages.iter_mut().skip(protected_head) {
         if m.content.contains("[РЕЗУЛЬТАТ ИНСТРУМЕНТА")
             && !m.content.contains("сохранён в файл spills")
             && !m.content.contains("свёрнуто")
@@ -89,10 +96,11 @@ where
         return report;
     }
 
-    // Слои 2/3: старые сообщения (кроме system + `keep_recent` последних).
+    // Слои 2/3: старые сообщения (кроме защищённой головы + `keep_recent`
+    // последних).
     let n = messages.len();
     let keep_recent = keep_recent.max(2);
-    if n > keep_recent + 2 {
+    if n > keep_recent + protected_head {
         let mut compress_end = n - keep_recent; // эксклюзивно
                                                 // Защита пары: если сохраняемый messages[compress_end] — результат
                                                 // инструмента, а его вызов (assistant, в dropped) удалён — дропаем и его,
@@ -105,18 +113,18 @@ where
         {
             compress_end += 1;
         }
-        let range_count = compress_end - 1; // сколько старых сообщений в диапазоне
+        let range_count = compress_end - protected_head; // сколько старых сообщений в диапазоне
         if range_count >= 6 {
             // Слой 2: LLM-саммари затенённого диапазона.
             let mut to_summarize = String::new();
-            for m in messages.iter().take(compress_end).skip(1) {
+            for m in messages.iter().take(compress_end).skip(protected_head) {
                 to_summarize.push_str(&format!("({}) {}\n\n", m.role, m.content));
             }
             match summarize(&to_summarize) {
                 Some(summary) => {
-                    messages.drain(1..compress_end);
+                    messages.drain(protected_head..compress_end);
                     messages.insert(
-                        1,
+                        protected_head,
                         LlmMessage {
                             role: "system".to_string(),
                             content: format!("[СЖАТАЯ ИСТОРИЯ]: {}", summary),
@@ -132,37 +140,42 @@ where
                         "⚠️ Саммаризация истории не удалась — переходим к усечению (head/tail)."
                             .into(),
                     );
-                    truncate_range(messages, compress_end, &mut report);
+                    truncate_range(messages, protected_head, compress_end, &mut report);
                 }
             }
         } else {
             // Слой 3: диапазон мал — сразу усечение (head/tail), суммаризация не окупается.
-            truncate_range(messages, compress_end, &mut report);
+            truncate_range(messages, protected_head, compress_end, &mut report);
         }
     }
     if total(messages) <= budget_tokens {
         return report;
     }
 
-    // Слой 4: абсолютный last-resort — жёстко дропаем старейшие, пока не влезем.
-    // Не трогаем узел `[СЖАТАЯ ИСТОРИЯ]` (дропаем индекс 2, если он на месте 1).
+    // Слой 4: абсолютный last-resort — жёстко дропаем старейшие, пока не
+    // влезем. Не трогаем: закреплённые (pinned — фрейм агента), узел
+    // `[СЖАТАЯ ИСТОРИЯ]` (продукт сжатия, не сырьё), task текущего прогона
+    // (последний элемент) и последнюю РЕАЛЬНУЮ реплику пользователя (спец
+    // 21.11.2026, 07-ответ.md, инвариант (d): в графе последний user —
+    // заглушка «Выполни задачу.», текст юзера — раньше в истории). Удалять
+    // нечего → break: дальше честный отказ вызывающего вместо тихой потери
+    // инвариантов.
     while messages.len() > 2 {
         if total(messages) <= budget_tokens {
             break;
         }
-        let idx = if messages
-            .get(1)
-            .map_or(false, |m| m.content.contains("[СЖАТАЯ ИСТОРИЯ]"))
-        {
-            2
-        } else {
-            1
-        };
-        if idx >= messages.len() {
-            break;
+        let last_user = last_real_user_idx(messages);
+        let idx = (protected_head..messages.len().saturating_sub(1)).find(|&i| {
+            let m = &messages[i];
+            !m.is_pinned() && !m.content.contains("[СЖАТАЯ ИСТОРИЯ]") && Some(i) != last_user
+        });
+        match idx {
+            Some(i) => {
+                messages.remove(i);
+                report.old_messages_dropped += 1;
+            }
+            None => break,
         }
-        messages.remove(idx);
-        report.old_messages_dropped += 1;
     }
     if report.old_messages_dropped > 0 || report.history_truncated > 0 {
         report.history_compressed = true;
@@ -183,9 +196,27 @@ fn head_tail(s: &str, keep: usize) -> (String, String) {
     (head, tail)
 }
 
-/// Усечь (head/tail) старые сообщения диапазона `[1..end)`, не удаляя их из промпта.
-fn truncate_range(messages: &mut Vec<LlmMessage>, end: usize, report: &mut CompactionReport) {
-    for m in messages.iter_mut().take(end).skip(1) {
+/// Индекс последней «настоящей» реплики пользователя — user-сообщения, НЕ
+/// являющегося последним элементом массива (последний элемент — task текущего
+/// прогона; в графе это может быть заглушка «Выполни задачу.», спец
+/// 21.11.2026, 07-ответ.md, инвариант (d)). None — реальной реплики нет.
+pub(crate) fn last_real_user_idx(messages: &[LlmMessage]) -> Option<usize> {
+    let n = messages.len();
+    if n == 0 {
+        return None;
+    }
+    messages[..n - 1].iter().rposition(|m| m.role == "user")
+}
+
+/// Усечь (head/tail) старые сообщения диапазона `[start..end)`, не удаляя их
+/// из промпта (start — защищённая голова: system + pinned).
+fn truncate_range(
+    messages: &mut Vec<LlmMessage>,
+    start: usize,
+    end: usize,
+    report: &mut CompactionReport,
+) {
+    for m in messages.iter_mut().take(end).skip(start) {
         let len = m.content.chars().count();
         if len > 800 {
             let (head, tail) = head_tail(m.content.as_str(), 400);
@@ -217,11 +248,17 @@ where
     L: Fn(String),
     F: Fn(&[LlmMessage]) -> usize,
 {
-    let task_idx = messages.iter().rposition(|m| m.role == "user");
+    // Защита инвариантов (спец 21.11.2026, 07-ответ.md): закреплённые
+    // (pinned — фрейм агента), последний элемент (task текущего прогона) и
+    // последняя РЕАЛЬНАЯ реплика пользователя исключены из кандидатов.
+    // Раньше защищался только последний user — в графе это заглушка
+    // «Выполни задачу.», и свёртка приходилась на текст юзера.
+    let last_elem = messages.len().saturating_sub(1);
+    let real_user = last_real_user_idx(messages);
     let mut best: Option<usize> = None;
     let mut best_len = 0usize;
     for (i, m) in messages.iter().enumerate().skip(1) {
-        if Some(i) == task_idx {
+        if m.is_pinned() || i == last_elem || Some(i) == real_user {
             continue;
         }
         if m.content.chars().count() > best_len {
@@ -463,10 +500,17 @@ mod tests {
         );
         assert!(rep.history_summarized, "ожидаем LLM-саммари");
         assert!(msgs.iter().any(|m| m.content.contains("[СЖАТАЯ ИСТОРИЯ]")));
+        // Спец 21.11.2026 (07-ответ.md, инварианты): компакция сильнее бюджета
+        // не бывает — если резать нечего (саммари, последняя реальная реплика
+        // юзера и последний assistant защищены), цикл останавливается и промпт
+        // МОЖЕТ остаться сверх бюджета: вызывающий отдаёт честный отказ движка
+        // вместо тихой потери свежих сообщений (старое поведение дропало
+        // «недавнее»/«ответ» под крошечный budget=60).
         assert!(
-            char_tokens(&msgs) <= budget + 1,
-            "должны влезть после сжатия"
+            msgs.iter().any(|m| m.content == "недавнее"),
+            "последняя реальная реплика юзера выжила"
         );
+        assert!(msgs.iter().any(|m| m.content == "ответ"), "последний assistant выжил");
     }
 
     #[test]
@@ -680,7 +724,10 @@ mod tests {
         assert_eq!(msgs[1].content, before, "задание не тронуто");
     }
 
-    /// Т3: рекурсивное углубление усечения тоже не выбирает задание.
+    /// Т3: рекурсивное углубление усечения не выбирает задание И последнюю
+    /// реальную реплику юзера (спец 21.11.2026, 07-ответ.md) — мишень теперь
+    /// крупнейший незащищённый (assistant). Старое поведение резало
+    /// реплику юзера huge(2000): защищался только последний user (task).
     #[test]
     fn truncate_largest_deep_cut_still_skips_task() {
         let mut msgs = vec![msg("system", &huge(200)), msg("user", &huge(2000))];
@@ -689,7 +736,8 @@ mod tests {
         let cut = truncate_largest(&mut msgs, 1, char_tokens, |_| {});
         assert!(cut);
         assert!(msgs[3].content.contains("Задание"), "задание цело после углубления");
-        assert!(msgs[1].content.contains("свёрнуто"), "углубление применилось к крупнейшему не-task");
+        assert_eq!(msgs[1].content, huge(2000), "последняя реальная реплика юзера НЕ усечена");
+        assert!(msgs[2].content.contains("свёрнуто"), "углубление применилось к крупнейшему незащищённому");
     }
 
     /// Т4: слой 4 (жёсткий drop старейших) не дропает задание — последний
@@ -708,5 +756,68 @@ mod tests {
         assert!(rep.old_messages_dropped > 0, "слой 4 сработал");
         let last = msgs.last().expect("массив не пуст");
         assert!(last.content.contains("Задание"), "задание не дропнуто слоем 4");
+    }
+
+    /// Спец 21.11.2026 (07-ответ.md, инвариант (b)): закреплённый фрейм агента
+    /// (pinned сразу после system) переживает ВСЕ слои компакции — включая
+    /// last-resort дроп. Ход 09:53 21.11.2026: фрейм срезался первым →
+    /// «говорящий агент не видит ни одного сообщения юзера и своего фрейма».
+    #[test]
+    fn pinned_frame_survives_all_compaction_layers() {
+        let mut msgs = vec![
+            msg("system", "sys"),
+            msg("user", &huge(3000)).with_pinned(true),
+        ];
+        for i in 0..8 {
+            msgs.push(msg("user", &format!("старое сообщение {}", i)));
+            msgs.push(msg("assistant", &huge(900)));
+        }
+        msgs.push(msg("user", "Задание"));
+        let rep = compact_llm_messages(&mut msgs, 40, 4, char_tokens, |_| None, |_| {});
+        assert!(
+            rep.old_messages_dropped > 0 || rep.history_truncated > 0,
+            "компакция сработала"
+        );
+        assert_eq!(msgs[1].content, huge(3000), "pinned-фрейм не усечён и не удалён");
+        assert_eq!(msgs[1].role, "user");
+        assert_eq!(msgs.last().unwrap().content, "Задание", "task цел");
+    }
+
+    /// Спец 21.11.2026 (07-ответ.md, инвариант (d)): последняя РЕАЛЬНАЯ реплика
+    /// юзера не дропается слоем 4 — даже когда кроме неё и task резать нечего
+    /// (честный отказ вместо потери текста пользователя).
+    #[test]
+    fn layer4_never_drops_last_real_user_message() {
+        let mut msgs = vec![
+            msg("system", "sys"),
+            msg("user", "я мужчина, болит голова"),
+            msg("assistant", &huge(900)),
+            msg("user", "Задание"),
+        ];
+        let rep = compact_llm_messages(&mut msgs, 30, 2, char_tokens, |_| None, |_| {});
+        assert!(rep.old_messages_dropped >= 1, "слой 4 дропнул сообщение");
+        assert!(
+            msgs.iter().any(|m| m.content == "я мужчина, болит голова"),
+            "последняя реальная реплика юзера выжила"
+        );
+        assert_eq!(msgs.last().unwrap().content, "Задание", "task цел");
+    }
+
+    /// Инвариант (d): в графе последний user — заглушка «Выполни задачу.»;
+    /// реальная реплика юзера лежит РАНЬШЕ. Helper находит именно её.
+    #[test]
+    fn last_real_user_idx_finds_real_user_not_task_stub() {
+        let msgs = vec![
+            msg("system", "sys"),
+            msg("user", "реальная реплика юзера"),
+            msg("assistant", "ответ"),
+            msg("user", "Выполни задачу."),
+        ];
+        assert_eq!(last_real_user_idx(&msgs), Some(1));
+        // Нет реальной реплики (только заглушка-task) → None.
+        let only_task = vec![msg("system", "sys"), msg("user", "Выполни задачу.")];
+        assert_eq!(last_real_user_idx(&only_task), None);
+        // Пустой массив → None.
+        assert_eq!(last_real_user_idx(&[]), None);
     }
 }

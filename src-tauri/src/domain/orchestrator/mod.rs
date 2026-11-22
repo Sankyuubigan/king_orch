@@ -458,27 +458,66 @@ where
             .find(|a| a.id == agent_id)
             .is_some_and(|agent| agent.vision),
     };
-    // Слот движка = ТИР от потребности (PRP 26.11.20, Вариант B): need_ctx от истории
-    // (SSOT 2 симв/ток + 2×max_gen margin) → next_tier — удвоение от 16384,
-    // clamp к окну GGUF (SSOT: extract_context_length). Задание агента
-    // материализуется ПОЗЖЕ (run_agent_node собирает его из выходов тулов) —
-    // поэтому слот ниже окна безопасен ТОЛЬКО в связке с новой архитектурой:
-    // бюджет компакции считается от ЖЕЛЕЗНОГО потолка (hardware_ctx_limit), а
-    // переполнение слота ловит step-up движка (respawn на тир выше) — усечение
-    // истории включается только когда данные не влезают в железо в принципе
-    // (астро-баг 3dea2ed «данных нет» не воскрешается). Нехватку железа
-    // дополнительно режут RAM- и VRAM-гейты движка ДО спавна (их урезание
-    // согласовано с бюджетом хоста через hardware_ctx_limit и видно юзеру
-    // плашкой vram_notice).
+    // Слот движка = ТИР от потребности (PRP 26.11.20, Вариант B): need_ctx от
+    // истории + задания + МАКСИМУМА системных промптов графа (спец
+    // 21.11.2026, 07-ответ.md: без system-терма слот выбирался ниже
+    // фактического промпта — валидатор психотерапевта ~20k ток системы при
+    // потребности ~4k → HTTP 400 → лишний step-up-респавн на каждом ходу;
+    // коэффициент 10/27 ≈ 1/2.7 по факту кириллицы) → next_tier — удвоение от
+    // 16384, clamp к окну GGUF (SSOT: extract_context_length). Слот ниже окна
+    // безопасен: бюджет компакции считается от ЖЕЛЕЗНОГО потолка
+    // (hardware_ctx_limit), а переполнение слота ловит step-up движка
+    // (respawn на тир выше) — усечение истории включается только когда данные
+    // не влезают в железо в принципе (астро-баг 3dea2ed «данных нет» не
+    // воскрешается). Нехватку железа дополнительно режут RAM- и VRAM-гейты
+    // движка ДО спавна (их урезание согласовано с бюджетом хоста через
+    // hardware_ctx_limit и видно юзеру плашкой vram_notice).
     let model_window = crate::infra::extract_context_length(&model_path);
     let history_chars: usize = history
         .iter()
         .filter(|m| m.msg_type != "thought")
         .map(|m| m.content.chars().count())
         .sum();
+    // Максимум системных промптов llm_worker-нод графа: system_prompt агента +
+    // фрейм ноды (тот же источник, что и сборка в run_agent_node). Legacy —
+    // системный промпт единственного агента. Ошибку резолва фрейма здесь не
+    // разворачиваем: битый файл поймает fail-fast ноды при исполнении.
+    let max_system_chars: usize = match workflow_match.as_ref() {
+        Some(wf) => {
+            let wf_dir = std::path::Path::new(&wf.parent_dir);
+            wf.nodes
+                .iter()
+                .filter_map(|node| {
+                    let agent = node.agent.as_deref()?;
+                    let mut chars = agents
+                        .iter()
+                        .find(|a| a.id == agent)
+                        .map(|a| a.system_prompt.chars().count())
+                        .unwrap_or(0);
+                    if let Ok(Some(frame)) =
+                        crate::domain::workflow_engine::agent_frame::resolve_node_frame(
+                            node,
+                            Some(wf_dir),
+                            wf.config.as_ref(),
+                        )
+                    {
+                        chars += frame.content.chars().count();
+                    }
+                    Some(chars)
+                })
+                .max()
+                .unwrap_or(0)
+        }
+        None => agents
+            .iter()
+            .find(|a| a.id == agent_id)
+            .map(|a| a.system_prompt.chars().count())
+            .unwrap_or(0),
+    };
     let need_ctx_val = crate::infra::engine_slot::need_ctx(
         history_chars,
         user_text.chars().count(),
+        max_system_chars,
         max_gen_tokens,
     );
     let engine_ctx_limit = crate::infra::engine_slot::choose_slot(
@@ -486,9 +525,10 @@ where
         model_window.unwrap_or(context_size).max(2048),
     );
     log_cb(format!(
-        "📐 Слот движка: {} токенов (тир от потребности ~{}; окно GGUF{}); RAM- и VRAM-гейты урежут запрос при нехватке памяти, бюджет компакции считается от железного потолка",
+        "📐 Слот движка: {} токенов (тир от потребности ~{}: (история+задание+система {} симв)×10/27 + 2×max_gen; окно GGUF{}); RAM- и VRAM-гейты урежут запрос при нехватке памяти, бюджет компакции считается от железного потолка",
         engine_ctx_limit,
         need_ctx_val,
+        max_system_chars,
         if model_window.is_some() { "" } else { " недоступно — fallback на config.context_size" }
     ));
 
@@ -1792,8 +1832,13 @@ where
             let current_tokens = engine
                 .get_tokens_count(&ctx.llm_messages, format_type)
                 .unwrap_or(0);
-            ideal_ctx =
-                (current_tokens as u32 + max_gen_tokens as u32 + 128).min(engine.global_ctx_limit());
+            // Бюджет — от ЖЕЛЕЗНОГО потолка (спец 21.11.2026, 07-ответ.md),
+            // не от активного слота: слот ниже потолка — норма (тир-селекция
+            // ради экономии VRAM), переполнение слота ловит step-up движка.
+            // Усечение истории включается только когда данные не влезают в
+            // железо в принципе.
+            let ceiling = engine.hardware_ctx_limit();
+            ideal_ctx = (current_tokens as u32 + max_gen_tokens as u32 + 128).min(ceiling);
 
             if current_tokens + max_gen_tokens <= ideal_ctx as usize || ctx.llm_messages.len() <= 2
             {
@@ -1807,45 +1852,73 @@ where
                     );
                 } else {
                     log_cb(format!(
-                        "📊 Память: выделен KV-кэш на {} токенов (Промпт: {}, Резерв: {})",
-                        ideal_ctx, current_tokens, max_gen_tokens
+                        "📊 Память: промпт {} + резерв {} ≤ потолка железа {} (слот {} — переполнение слота ловит step-up движка, историю не трогаем)",
+                        current_tokens, max_gen_tokens, ceiling, engine.global_ctx_limit()
                     ));
                 }
                 break;
             }
             if ctx.llm_messages.len() > 2 {
-                // Не дропать узел [СЖАТАЯ ИСТОРИЯ] — сохраняем сжатую историю.
-                let mut idx = 1;
-                if ctx
-                    .llm_messages
-                    .get(1)
-                    .map_or(false, |m| m.content.contains("[СЖАТАЯ ИСТОРИЯ]"))
-                {
-                    idx = 2;
-                }
-                // Не рвать пару: если удаляемый — результат инструмента без вызова
-                // рядом, сместить на соседнего ассистента (или наоборот).
-                if idx < ctx.llm_messages.len()
-                    && ctx.llm_messages[idx]
-                        .content
-                        .contains("[РЕЗУЛЬТАТ ИНСТРУМЕНТА")
-                    && idx + 1 < ctx.llm_messages.len()
-                    && ctx.llm_messages[idx + 1].role == "assistant"
-                {
-                    idx += 1;
-                }
-                if idx < ctx.llm_messages.len() {
-                    let removed = &ctx.llm_messages[idx];
-                    let chars = removed.content.chars().count();
-                    let snippet: String = removed.content.chars().take(120).collect();
-                    log_cb(format!(
-                        "⚠️ Превышен лимит контекста: промпт {} + генерация {} > лимита {}. Удалено старое сообщение [{}], {} симв.: {}",
-                        current_tokens, max_gen_tokens, ideal_ctx, removed.role, chars,
-                        if chars > 120 { format!("{}…", snippet) } else { snippet }
-                    ));
-                    ctx.llm_messages.remove(idx);
-                } else {
+                // Кандидаты на удаление: НЕ закреплённые (pinned — фрейм
+                // агента), НЕ узел [СЖАТАЯ ИСТОРИЯ] (продукт сжатия), НЕ task
+                // текущего прогона (последний элемент) и НЕ последняя
+                // РЕАЛЬНАЯ реплика пользователя (спец 21.11.2026: в графе
+                // последний user — заглушка «Выполни задачу.», текст юзера —
+                // раньше). Не рвать пару: если удаляемый — результат
+                // инструмента, а сразу следующий — его ассистент, дропаем
+                // ассистента (сохранить результат без вызова нельзя, вызов
+                // идёт ПЕРЕД результатом).
+                let protected_head =
+                    1 + ctx
+                        .llm_messages
+                        .iter()
+                        .skip(1)
+                        .take_while(|m| m.is_pinned())
+                        .count();
+                let last_user = last_real_user_idx(&ctx.llm_messages);
+                let mut idx = None;
+                for i in protected_head..ctx.llm_messages.len().saturating_sub(1) {
+                    let m = &ctx.llm_messages[i];
+                    if m.is_pinned()
+                        || m.content.contains("[СЖАТАЯ ИСТОРИЯ]")
+                        || Some(i) == last_user
+                    {
+                        continue;
+                    }
+                    if m.content.contains("[РЕЗУЛЬТАТ ИНСТРУМЕНТА")
+                        && i + 1 < ctx.llm_messages.len() - 1
+                        && ctx.llm_messages[i + 1].role == "assistant"
+                        && !ctx.llm_messages[i + 1].is_pinned()
+                        && Some(i + 1) != last_user
+                    {
+                        idx = Some(i + 1);
+                    } else {
+                        idx = Some(i);
+                    }
                     break;
+                }
+                match idx {
+                    Some(i) => {
+                        let removed = &ctx.llm_messages[i];
+                        let chars = removed.content.chars().count();
+                        let snippet: String = removed.content.chars().take(120).collect();
+                        log_cb(format!(
+                            "⚠️ Превышен потолок железа: промпт {} + генерация {} > доступных {}. Удалено старое сообщение [{}], {} симв.: {}",
+                            current_tokens, max_gen_tokens, ceiling, removed.role, chars,
+                            if chars > 120 { format!("{}…", snippet) } else { snippet }
+                        ));
+                        ctx.llm_messages.remove(i);
+                    }
+                    None => {
+                        // Резать нечего — все инварианты живы. Честный выход
+                        // из цикла: дальше снапшот и честный отказ движка
+                        // при переполнении (тихой потери инвариантов нет).
+                        log_cb(
+                            "⚠️ Превышен потолок железа, но резать нечего: история защищена инвариантами (фрейм, сжатая история, последняя реплика юзера, task)."
+                                .to_string(),
+                        );
+                        break;
+                    }
                 }
             } else {
                 break;
@@ -2011,8 +2084,12 @@ where
                             "⚠️ Переполнение контекста при генерации ({}). Усечение крупнейшего сообщения и повтор.",
                             e
                         ));
+                        // Бюджет усечения — от ЖЕЛЕЗНОГО потолка (спец
+                        // 21.11.2026, 07-ответ.md), не от временного слота:
+                        // переполнение сюда доходит только когда данные не
+                        // влезают в потолок (step-up движка уже сработал).
                         let budget = engine
-                            .global_ctx_limit()
+                            .hardware_ctx_limit()
                             .saturating_sub(max_gen_tokens as u32)
                             as usize;
                         let tc = |msgs: &[LlmMessage]| -> usize {
@@ -2031,11 +2108,11 @@ where
                         // симптом кейса 1793228120713).
                         let total_tokens = tc(&ctx.llm_messages);
                         log::error!(
-                            "[{}] Промпт не помещается в контекст: ~{} ток при доступных {} (лимит слота {} − max_gen {}).",
+                            "[{}] Промпт не помещается в контекст: ~{} ток при доступных {} (потолок железа {} − max_gen {}).",
                             ctx_label,
                             total_tokens,
                             budget,
-                            engine.global_ctx_limit(),
+                            engine.hardware_ctx_limit(),
                             max_gen_tokens
                         );
                         return Err(format!(

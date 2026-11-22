@@ -196,16 +196,21 @@ where
     let Some(frame) = frame else {
         return;
     };
+    // Закрепление от компакции (спец 21.11.2026, 07-ответ.md): фрейм
+    // вставляется на позицию 1 без маркеров в тексте — единственный честный
+    // маркер это структурный `pinned` LlmMessage. Без него слои компакции
+    // срезали фрейм первым (ход 09:53 21.11.2026).
     llm_messages.insert(
         1,
         LlmMessage {
             role: frame.delivery.role().to_string(),
             content: frame.content.clone(),
             ..Default::default()
-        },
+        }
+        .with_pinned(true),
     );
     log_cb(format!(
-        "[frame] Добавлен промпт {} символов (role={}, файл-рамка, delivery={})",
+        "[frame] Добавлен промпт {} символов (role={}, файл-рамка, delivery={}, закреплён от компакции)",
         frame.content.chars().count(),
         frame.delivery.role(),
         frame.delivery.as_str()

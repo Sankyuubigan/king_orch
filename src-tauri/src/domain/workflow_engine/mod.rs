@@ -1068,7 +1068,10 @@ mod tests {
         let mut strict = ModelParams::default();
         strict.temperature = 0.0;
         strict.top_p = 1.0;
-        strict.repetition_penalty = 1.1;
+        // Спец 21.11.2026 (07-ответ.md, приоритет 2): Rep_Pen 1.1 в strict —
+        // источник «клейких» повторов при изменении темы реплики (твоеmu);
+        // пресет выровнен на 1.0, штраф повторов держат DRY/мин-P.
+        strict.repetition_penalty = 1.0;
         presets.insert("strict".to_string(), strict);
 
         let mut creative = ModelParams::default();
@@ -1290,7 +1293,7 @@ mod tests {
         let res = resolve_params_cascade(&presets, &user, &node_preset, &wf_config, Some(&agent));
         // Явный пресет узла "strict" пинит всё, включая temperature=0.0
         assert_eq!(res.temperature, 0.0);
-        assert_eq!(res.repetition_penalty, 1.1);
+        assert_eq!(res.repetition_penalty, 1.0);
     }
 
     #[test]
@@ -1307,7 +1310,7 @@ mod tests {
         let res = resolve_params_cascade(&presets, &user, &node_preset, &wf_config, Some(&agent));
         // База strict (rep_pen 1.1), но temperature перетерта на 0.1 из frontmatter
         assert_eq!(res.temperature, 0.1);
-        assert_eq!(res.repetition_penalty, 1.1);
+        assert_eq!(res.repetition_penalty, 1.0);
     }
 
     #[test]
@@ -1323,7 +1326,7 @@ mod tests {
 
         let res = resolve_params_cascade(&presets, &user, &node_preset, &wf_config, Some(&agent));
         assert_eq!(res.temperature, 0.0);
-        assert_eq!(res.repetition_penalty, 1.1);
+        assert_eq!(res.repetition_penalty, 1.0);
     }
 
     #[test]

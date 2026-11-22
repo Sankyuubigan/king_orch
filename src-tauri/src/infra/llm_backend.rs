@@ -471,9 +471,13 @@ impl LlmEngine {
         }
     }
 
+    /// Активный слот движка (SSOT — `engine.slot()` плагина). После
+    /// mid-turn step-up (C6) слот растёт — старое plain-поле
+    /// `global_ctx_limit` расходилось с реальностью (спец 21.11.2026,
+    /// 07-ответ.md): чтение только через слот.
     pub fn global_ctx_limit(&self) -> u32 {
         match &self.backend {
-            LlmBackend::Local(engine) => engine.global_ctx_limit,
+            LlmBackend::Local(engine) => engine.slot(),
             LlmBackend::Cloud(_) => 128_000,
         }
     }
@@ -489,7 +493,7 @@ impl LlmEngine {
         match &self.backend {
             LlmBackend::Local(engine) => {
                 let hw = engine.hardware_ctx_limit;
-                if hw > 0 { hw } else { engine.global_ctx_limit }
+                if hw > 0 { hw } else { engine.slot() }
             }
             LlmBackend::Cloud(_) => 128_000,
         }
