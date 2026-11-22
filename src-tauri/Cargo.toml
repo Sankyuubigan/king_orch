@@ -30,6 +30,12 @@ tauri-plugin-process = "2.0.0"
 plugin-log-collector = { path = "../../cross-app-plugins/plugin-log-collector" }
 # Переиспользуемый модуль «О приложении / Обновления» (общий репозиторий cross-app-plugins).
 plugin-about-updates = { path = "../../cross-app-plugins/plugin-about-updates" }
+# Обход пробела tauri/tao: taskbar ICON_BIG не выставляется (tao set_window_icon
+# захардкожен на IconType::Small) → кнопка панели задач в дев-сборке падала в
+# протухший фолбэк Explorer. Плагин ставит иконки окну в момент его создания,
+# до показа (SSOT репы cross-app-plugins; первый таури-специфичный плагин,
+# GPUI-хосту не нужен — у GPUI этого бага нет).
+plugin-tauri-window-icon = { path = "../../cross-app-plugins/plugin-tauri-window-icon" }
 # Движок llama.cpp — единый для всех хостов (SSOT): установка/обновление
 # бекендов, каталог моделей, список моделей, параметры сэмплинга, VRAM.
 # feature host-logs связывает телеметрию движка с единой аналитикой хоста.
@@ -88,6 +94,4 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 url = "2"
 log = "0.4"
 base64 = "0.22"
-[target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Networking_WinHttp", "Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
 

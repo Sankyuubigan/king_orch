@@ -108,6 +108,12 @@ async fn main() {
         .plugin(tauri_plugin_process::init())
         .plugin(plugin_about_updates::init())
         .plugin(plugin_log_collector::init())
+        // Обход пробела tauri/tao: taskbar ICON_BIG (таури выставляет только SMALL).
+        // Хук on_window_ready срабатывает в момент создания окна — до .setup ниже,
+        // где происходит show(), и до создания кнопки панели задач (доказательство
+        // цепочки: tasks/261121_0129-968f4939/21.11.2026 Перенос иконки панели
+        // задач в плагин.md).
+        .plugin(plugin_tauri_window_icon::init())
         // Единый движок скачивания (SSOT): engine, bin, app update, 9router.
         .plugin(plugin_downloader::init())
         // Движок llama.cpp — переиспользуемый плагин (SSOT). Регистрирует
@@ -132,15 +138,13 @@ async fn main() {
         .setup(move |app| {
             log::info!("[BOOT] setup begin {}ms", process_started.elapsed().as_millis());
 
-            // ── Окно: иконка панели задач → показ → страховка WebView2 ──
+            // ── Окно: показ → страховка WebView2 ──
             // Окно создаётся скрытым (visible: false в tauri.conf.json и в
-            // devWindow .build-config.json). Кнопка панели задач запрашивает
-            // иконки окна ОДИН РАЗ — в момент создания кнопки (показ окна) —
-            // и больше их не перечитывает: поэтому ДО show() на окно
-            // выставляются ICON_SMALL/ICON_BIG из ресурсов exe. Tauri сам
-            // выставляет только SMALL; пустой BIG → Explorer рисует фолбэк из
-            // своего кэша по пути exe (дев-exe заменяется каждой сборкой →
-            // плавающая заглушка, диагностика 06.11.26). Далее — страховка
+            // devWindow .build-config.json). Иконки панели задач (SMALL+BIG)
+            // выставляет плагин plugin-tauri-window-icon в момент создания
+            // окна — до этого .setup и до show() (обход пробела tauri/tao:
+            // кнопка панели запрашивает WM_GETICON один раз при создании,
+            // т.е. при показе окна; диагностика 06.11.26). Далее — страховка
             // белого экрана: события окна (фокус/закрытие) в лог и
             // принудительная перерисовка при возврате фокуса (глюк compositor
             // под нагрузкой GPU). Важно: on_window_event вешается на САМО окно
@@ -149,17 +153,6 @@ async fn main() {
             {
                 use tauri::Manager;
                 if let Some(win) = app.get_webview_window("main") {
-                    // Кнопка панели фиксует иконку при создании: выставляем
-                    // обе иконки строго до show(). Отказ иконки не фатален —
-                    // окно всё равно показываем (деградация = прежнее поведение).
-                    let icon_result = win
-                        .hwnd()
-                        .map(|hwnd| hwnd.0 as isize)
-                        .map_err(|e| format!("hwnd не получен: {e}"))
-                        .and_then(infra::apply_window_icons);
-                    if let Err(e) = icon_result {
-                        log::warn!("[WINDOW_ICON] иконки не выставлены: {e}");
-                    }
                     let _ = win.show();
                     let _ = win.set_focus();
 
