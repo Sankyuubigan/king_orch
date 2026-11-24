@@ -1,86 +1,110 @@
-# Бесплатные LLM API: репозитории-источники
+# Бесплатные LLM API и раздачи: источники и мониторинг
 
-> **ЧТО ЭТОТ ФАЙЛ.** GitHub-репозитории со списками бесплатных LLM API: какому можно верить,
-> как проверять живость, какой из них — спам. Только репозитории.
+> **ЧТО ЭТОТ ФАЙЛ.** Где искать новые бесплатные LLM API, следить за возвратом купонов ZCode
+> и ловить жирные временные акции: официальные каналы, трекеры раздач, Telegram, Reddit,
+> GitHub-репозитории (Tier 1–3) и чёрный список фейков.
 >
-> **ЧЕГО ЗДЕСЬ НЕТ.** Данных о самих провайдерах: лимитов, требований к телефону и карте,
-> привязки к IP. Это отдельный файл — `free_llm_api_providers.md`.
->
-> **НЕ ПУТАТЬ:** «источник» = репозиторий-список (`mnfst/awesome-free-llm-apis`).
-> «Провайдер» = API-сервис, куда идут запросы (Groq, Mistral).
+> **СВЯЗАННЫЕ ФАЙЛЫ:**
+> - Актуальный ТОП-рейтинг, профиль пользователя и правила отбора: `free_llm_coding_ranking.md`
+> - Полные досье всех провайдеров, харнессов и чёрный список худших API: `free_llm_api_providers.md`
 
-Baseline пересобран **2026-10-13**, звёзды/даты обновлены **2026-11-01** (GitHub API через `gh`).
-ЗВЁЗДЫ И ДАТЫ НИЖЕ — ЭТО ТОЧКА ОТСЧЁТА, А НЕ ИСТИНА.
-Перед любым ответом перепроверяй живость каждого репозитория инструментом.
-Метрика живости — ТОЛЬКО `pushed_at` (дата последнего коммита).
-Поле `updated_at` меняется от звёзд и Issues — для оценки живости НЕ годится.
+**Последнее обновление: 2026-11-24.** Добавлен блок живого мониторинга раздач/купонов
+(`aipromonow.com`, `freeaiapi.org`, `llm24.net`, `wool-gathering`, `t.me/AIUngated`, X/Reddit ZCode)
+и перепроверены Tier 1 репозитории.
+Метрика живости GitHub-репо — **ТОЛЬКО `pushed_at`** (дата последнего коммита; `updated_at`
+меняется от звёзд/Issues и не считается).
 
-## ⚠️ ГЛАВНАЯ ЛОВУШКА ЭТИХ СПИСКОВ — ПРОВЕРЕНО 2026-10-13
+## ⚠️ ГЛАВНАЯ ЛОВУШКА АГРЕГАТОРОВ
 
-Свежие и звёздные списки содержат **фактические ошибки**, и это не редкость:
+Даже свежие и звёздные списки систематически содержат **критичные ошибки**:
+- **Ложное «Credit Card: No»:** `open-free-llm-api/awesome-freellm-apis` числил **Cerebras** в
+  «Permanent Free, без карты», хотя доки Cerebras прямо требуют карту и не имеют постоянного free.
+- **Ложный «возобновляемый / годный для кодинга»:** в списках висят **`Gonka`** (на деле
+  одноразовые 3M на `gate.joingonka.ai` или 1.2M/мес на брокере + лаги) и **`AIHubMix`** (10 вызовов
+  без оплаты, а с $1 — всего 1M TPD).
+- **Слепая зона GitHub-списков:** Tier 1 репозитории ведут только *постоянные бесплатные API* и
+  **почти не ловят временные раздачи и ad-supported харнессы** (ZCode 300M, AMD Token Lab, Capy,
+  free-pi, packet.ai).
 
-- `open-free-llm-api/awesome-freellm-apis` (обновлён 2026-10-12) числит **Cerebras** в «Permanent Free
-  Tiers» с колонкой «Credit Card: **No**». Официальные доки Cerebras прямо говорят обратное: карта
-  обязательна, $5 кредитов горят за 30 дней, постоянного free-тарифа нет.
-  **Колонка «Credit Card?» в этих списках — не гарантия. Всегда сверяй с официальными доками.**
-- Тот же репозиторий корректно вычистил GitHub Models через 2 месяца после его закрытия — значит
-  список чинится, но с лагом, и на дату baseline мог быть неактуален.
+**Правило:** агрегаторы дают только *наводку*. Карта, `+7`, сброс квоты и реальный TPD всегда
+сверяются с первоисточником и живым тестом.
 
-## Tier 1 — эталон, проверять всегда
+---
 
-- https://github.com/open-free-llm-api/awesome-freellm-apis
-  ⭐ 5003 | pushed 2026-10-27 | Организация `open-free-llm-api`, НЕ путать с клоном `freellms/*` (см. чёрный список).
-  Дейли-синк README с freellm.net. Эталон по СВЕЖЕСТИ: единственный, кто вовремя вычистил мёртвый GitHub Models.
-  Имеет колонку «Credit Card?» — но см. предупреждение выше.
-- https://github.com/mnfst/awesome-free-llm-apis
-  ⭐ 11 898 | pushed 2026-11-01 | CC0. README генерится из `data.json` через GitHub Actions.
-  Единственный, у кого данные **структурированы в JSON** (`raw.githubusercontent.com/.../main/data.json`) —
-  парсится надёжнее, чем markdown. Эталон по широте и по наличию footnotes со ссылками на первоисточник.
-  ✅ **Ночной refresh снова работает [ПРОВЕРЕНО 2026-11-01]:** push в день проверки, `lastUpdated`
-  data.json = 2026-10-25. В data.json 2026-10-25 — 15 провайдеров, включая новых: **Gonka Broker**
-  (GLM-5.3-Flash бесплатно) и **Aion Labs**.
+## 1. МОНИТОРИНГ ЖИВЫХ РАЗДАЧ И КУПОНОВ (первый эшелон!)
 
-## Tier 2 — живые, вторичные
+### Официальный мониторинг ZCode / Z.ai (возврат 300M / Weekend Build)
+- **X (Twitter) ZCode и Z.ai:** `https://x.com/zcode_ai` и `https://x.com/Zai_org` — первоисточник
+  всех анонсов *Weekend Build* и *Global Build*.
+- **Reddit `r/ZaiGLM` (сортировка New):** `https://www.reddit.com/r/ZaiGLM/` — главный живой пульс
+  (исчезновение/возврат купонов, падения серверов всплывают в течение часа).
+- **GitHub баг-трекер ZCode:** `https://github.com/zai-org/feedback/issues` — диагностика сбоев
+  выдачи (`getManualClaimPlanPreviews`), капчи Aliyun и антифрода `405 / 3012`.
+- **Официальный Discord Z.ai:** ссылка в шапке `https://z.ai` / `https://zcode.z.ai` + релизноуты
+  ZCode там же.
 
-- https://github.com/guihuashaoxiang/FreeLLM-API-KeyHub — ⭐ 248 | pushed 2026-07-19. Hub с ключами, китайский уклон.
-- https://github.com/amardeeplakshkar/awesome-free-llm-apis — ⭐ 172 | pushed 2026-08-16. Проверенные $0-модели, лимиты, OpenAI-совместимость. PR висят неделями — не жди апдейта.
-  ⚠️ Занижает щедрость: пишет Groq 14 400 RPD и OpenRouter 200 RPD, тогда как официальные доки дают
-  1 000 RPD и 50 RPD. Не бери его цифры без сверки.
-- https://github.com/abbosaliboev/free-ai-bible — ⭐ 158 | pushed 2026-09-21. Обновляется регулярно,
-  но много устаревших моделей (Gemini 2.0/1.5, Llama 3.3) и кредитные предложения вроде «$5 free credit».
-- https://github.com/CYBIRD-D/FREE-LLM-API-Provider — ⭐ 109 | pushed 2026-09-23.
-- https://github.com/pacocartones/free-llm-api-hub — ⭐ 48 | pushed 2026-09-07. Датасет по провайдерам.
-- https://github.com/mvalentsev/awesome-free-ai-coding — ⭐ 33 | pushed 2026-09-26. Угол — бесплатные ИИ-тулы для кодинга.
+### Трекеры акций, промо-кредитов и новых бесплатных квот
+- **`https://aipromonow.com`** — ⭐ **лучший трекер именно временных раздач и халяв.** Есть
+  **RSS-лента** и голосование сообщества *Still works / Expired now* (именно здесь быстрее всего
+  видно статус ZCode 300M/500M, AMD Token Lab, Capy, packet.ai, Privatemode).
+- **`https://freeaiapi.org`** — живой трекер бесплатных LLM API, кодинг-агентов и релеев
+  (отслеживает `100milionseek`, OpenCode, AMD Token Lab и др.).
+- **`https://llm24.net`** — агрегатор бесплатных и промо AI-шлюзов/моделей.
+- **`https://github.com/jiuyuan233/wool-gathering`** — китайский авто-агрегатор всех акций и
+  купонов Zhipu/DeepSeek/Kimi/Alibaba/Tencent (ежедневные обновления, проверено 2026-11-23).
 
-## Tier 3 — слабые, брать только если нет альтернатив
+### Telegram и комьюнити
+- **`https://t.me/AIUngated` (AI Ungated)** — живой русскоязычный Telegram-канал с практическими
+  тестами бесплатных LLM API, AI-роутеров и реальных лимитов (разборы также выходят на Хабре).
+- **Reddit-ветки по бесплатному кодингу:** `https://www.reddit.com/r/ZaiGLM/`,
+  `https://www.reddit.com/r/opencode/`, `https://www.reddit.com/r/LocalLLaMA/`.
 
-- https://github.com/nherx/free-llm-api-resources — ⭐ 30 | pushed 2026-09-26.
-  ВНИМАНИЕ: формально жив, по сути полумёртвый — 2 содержательных коммита (февраль→май 2026),
-  «свежий» пуш = правка одной строки README. Помечен как «наследник» несуществующего
-  cheahjs/free-llm-api-resources. Используй только как запасной вариант и помечай в ответе.
-- https://github.com/ma-pony/awesome-free-llm-api — ⭐ 5 | pushed 2026-08-14. Молодой, малозвёздный.
+---
 
-## Дискавери: как находить новые репозитории
+## 2. GITHUB-РЕПОЗИТОРИИ: Tier 1 (эталон по постоянным API)
 
-- Страница топика (рабочая, 46 репо): https://github.com/topics/free-llm-api
-- Поиск через инструмент: `GithubSearch` с `query: "topic:free-llm-api"`, `type: "repositories"`, `sort: "stars"` и отдельно `sort: "updated"`.
+- **`https://github.com/mnfst/awesome-free-llm-apis`**
+  ⭐ ~11 900+ | активность PR/коммитов подтверждена в ноябре 2026 (~204 коммита) | CC0.
+  Структурированный **`data.json`** (`raw.githubusercontent.com/mnfst/awesome-free-llm-apis/main/data.json`)
+  и подробные footnotes со ссылками на первоисточники.
+- **`https://github.com/open-free-llm-api/awesome-freellm-apis`**
+  ⭐ ~5 000+ | свежая индексация **2026-11-21** (~254 коммита).
+  Организация `open-free-llm-api` (**НЕ путать** с фейк-клоном `freellms/*`). Ежедневный синк с
+  `freellm.net`, быстро вычищает мёртвых провайдеров, но колонку «Credit Card?» всегда перепроверять.
+- **`https://github.com/nejib1/Free-LLM`**
+  Свежий живой список бесплатных LLM API (обновлён **2026-11-17**), полезен как дополнительная сверка.
 
-## Чёрный список — НЕ ИСПОЛЬЗОВАТЬ (проверено 2026-10-13)
+## 3. Tier 2 — вторичные (baseline 2026-11-01, перепроверять `pushed_at`)
 
-- `cheahjs/free-llm-api-resources` — **HTTP 404, репозиторий не существует.** Ссылки на него в интернете (в т.ч. с якорем #opencode-zen) — галлюцинация. Не пытайся его открыть и не ссылайся.
-- **`freellms/*` — SEO-спам, НЕ ИСПОЛЬЗОВАТЬ КАК ИСТОЧНИК ФАКТОВ.** [ПРОВЕРЕНО 2026-10-13]
-  Владелец `freellms` — это **User** (не организация), который за ~25 минут 09-10.08.2026 набил шесть
-  пустых репо, рекламирующих `freellms.org` (открытый HTTP, без HTTPS).
-  - `freellms/free-llm-api-keys` (⭐22) — **один коммит**, размер репо 1 KB, единственный файл README,
-    все ~15 ссылок ведут на рекламный лендинг. Реальных API-ключей не содержит и содержать не может.
-    Заявления «updated daily» и «no expiry — permanently free tiers» ничем не подкреплены.
-  - `freellms/awesome-freellm-apis` (⭐32) — **клон одноимённой репы настоящего проекта**. Данные протухшие:
-    в нём на 2 месяца после закрытия GitHub Models всё ещё числится провайдер с мёртвой ссылкой,
-    при бейдже «Last updated: 2026-08-09». Прямо противоречит своему же обещанию daily-синка.
-  ⚠️ **НЕ ПУТАЙ `freellms/awesome-freellm-apis` с настоящей `open-free-llm-api/awesome-freellm-apis` (⭐4142).**
-  Одноимённые репы разных владельцев, свежая — только у организации `open-free-llm-api`.
-- `bradAGI/awesome-free-inference` — ⭐ 15, последний push 2026-03-23, 6 месяцев тишины, PR #1 висит с 2026-04-06 без ответа. Мёртв.
-- `github.com/topics/free-ai-api` — **HTTP 404**, страница топика не рендерится. Ловушка: search API находит 46 репо, а страница отдаёт 404.
-- `github.com/topics/free-ai-apis` — HTTP 200, но **репозиториев ноль** — пустая страница.
-- `0xzr/freellmpool` — это Python-код (пул бесплатных инстансов), не список API. Как источник данных бесполезен.
-- `Terafitzsing/freepik-ai-lab` — генератор изображений, к LLM API отношения не имеет.
+- `https://github.com/guihuashaoxiang/FreeLLM-API-KeyHub` — ⭐ 248 | pushed 2026-07-19. Китайский уклон.
+- `https://github.com/amardeeplakshkar/awesome-free-llm-apis` — ⭐ 172 | pushed 2026-08-16.
+  ⚠️ Завышает/искажает квоты (пишет Groq 14 400 RPD, OpenRouter 200 RPD) — цифры не брать без сверки.
+- `https://github.com/abbosaliboev/free-ai-bible` — ⭐ 158 | pushed 2026-09-21. Много устаревших
+  моделей и триальных «$5 credit».
+- `https://github.com/CYBIRD-D/FREE-LLM-API-Provider` — ⭐ 109 | pushed 2026-09-23.
+- `https://github.com/pacocartones/free-llm-api-hub` — ⭐ 48 | pushed 2026-09-07.
+- `https://github.com/mvalentsev/awesome-free-ai-coding` — ⭐ 33 | pushed 2026-09-26. Бесплатные ИИ-тулы для кодинга.
+
+## 4. Tier 3 — слабые (только если нет альтернатив)
+
+- `https://github.com/nherx/free-llm-api-resources` — ⭐ 30 | pushed 2026-09-26 (по сути полумёртвый,
+  косметические коммиты; позиционируется как наследник удалённого `cheahjs`).
+- `https://github.com/ma-pony/awesome-free-llm-api` — ⭐ 5 | pushed 2026-08-14.
+
+## 5. Дискавери: как находить новые репозитории
+
+- Страница топика: `https://github.com/topics/free-llm-api`
+- Поиск через GitHub API/поиск: `topic:free-llm-api` (отдельно `sort:stars` и `sort:updated`).
+
+## 6. ЧЁРНЫЙ СПИСОК ИСТОЧНИКОВ — НЕ ИСПОЛЬЗОВАТЬ
+
+- `cheahjs/free-llm-api-resources` — **HTTP 404, удалён.** Любые ссылки на него — галлюцинация.
+- **`freellms/*` — SEO-спам (`freellm` клон).** Владелец-юзер за 25 минут 09–10.08.2026 создал
+  пустые репо под рекламу `freellms.org`:
+  - `freellms/free-llm-api-keys` — 1 коммит, пустой рекламный README.
+  - `freellms/awesome-freellm-apis` — **фейковый клон** настоящей `open-free-llm-api/awesome-freellm-apis`,
+    протухшие данные (мертвый GitHub Models висит спустя месяцы).
+- `bradAGI/awesome-free-inference` — мёртв (последний push 2026-03-23).
+- `github.com/topics/free-ai-api` (HTTP 404) и `github.com/topics/free-ai-apis` (0 репо).
+- `0xzr/freellmpool` — Python-код, не каталог провайдеров.
+- `Terafitzsing/freepik-ai-lab` — генератор картинок, не LLM API.
