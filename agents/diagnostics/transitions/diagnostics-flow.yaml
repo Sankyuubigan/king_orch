@@ -39,7 +39,7 @@ nodes:
   # ── Ветка диагностики (терминальная) ──
   - id: run_diagnostics
     type: llm_worker
-    agent: diag_specialist
+    agent: backend/diag_specialist
     task: |
       Режим: диагностика компьютера.
 
@@ -53,7 +53,7 @@ nodes:
   # ── Не запрос на диагностику: помощник (ответ в чат, уточнение) ──
   - id: no_diagnostics_task
     type: llm_worker
-    agent: diag_helper
+    agent: backend/diag_helper
     task: |
       Классификатор НЕ распознал запрос как проблему с компьютером: пользователь
       либо спросил о возможностях команды, либо описал не-диагностическую задачу,

@@ -44,19 +44,19 @@ nodes:
 
 - id: call_collector
   type: llm_worker
-  agent: data_collector
+  agent: frontend/data_collector
   output_type: frontend
   inject_response:
-  - validator
-  - decomposer
-  - soma_translator
+  - backend/validator
+  - backend/decomposer
+  - backend/soma_translator
   ui_pos:
     x: 2744
     y: 781
 
 - id: call_soma_translator
   type: llm_worker
-  agent: soma_translator
+  agent: backend/soma_translator
   task: Пользователь описал боль. Дай ему расшифровку по НГМ.
   ui_pos:
     y: 219
@@ -66,7 +66,7 @@ nodes:
 - id: call_decomposer
   type: llm_worker
   group: group_1
-  agent: decomposer
+  agent: backend/decomposer
   task: |-
     Разбери кластер пользователя на мишени по своей инструкции.
     Если ниже есть секция «ИМПОРТИРОВАННЫЙ КЕЙС» — пользователь прикрепил экспорт кейса прошлой сессии: это продолжение работы, а не новая декомпозиция с нуля (правила работы с кейсом — в твоей инструкции). Если секции нет — работай по общим правилам.
@@ -78,14 +78,14 @@ nodes:
 
 - id: call_validator
   type: llm_worker
-  agent: validator
+  agent: backend/validator
   task: |-
     Проверь элементы проблемы пользователя по своей инструкции.
     Если ниже есть секция «ИМПОРТИРОВАННЫЙ КЕЙС» — её непустые элементы доказаны в прошлой сессии (экспорт кейса): переноси их в свой отчёт как доказанные данные пользователя (правило — в твоей инструкции). Если секции нет — работай по общим правилам.
 
     {{ nodes.import_cases.output.imported_cases_text }}
   inject_response:
-  - decomposer
+  - backend/decomposer
   ui_pos:
     y: 410
     x: 1349
@@ -135,7 +135,7 @@ nodes:
 
 - id: call_healer
   type: llm_worker
-  agent: neuro_healer
+  agent: frontend/neuro_healer
   task: |
     Данные переданы готовыми — вызывать инструменты не требуется.
     Ниже лечебные паттерны ТРЁХ этажей невроза из базы знаний (пайплайн прочитал секции по типам этажей выбранного Валидатором сквозного вектора; вектор проверен нодой compute_pattern) и чистый профиль валидации элементов.
@@ -149,22 +149,22 @@ nodes:
     Переведи паттерны на контекст проблемы пользователя, следуя ИНСТРУКЦИИ и формату вывода из системного промпта: каждому этажу — своя энергия Дара из его паттерна.
   output_type: frontend
   inject_response:
-  - decomposer
+  - backend/decomposer
   ui_pos:
     x: 2804
     y: 296
 
 - id: call_shadow_worker
   type: llm_worker
-  agent: shadow_worker
+  agent: frontend/shadow_worker
   task: |-
     Проведи диагностическое бурение до ядра проблемы по своей инструкции.
     Проверь в отчёте validator, какие элементы из {e3, e5, e8, e9} сейчас имеют статус false, и задай прицельные диагностические вопросы или проведи мысленный эксперимент с контрастной вилкой строго для их вскрытия.
     ЗАПРЕЩЕНО лечить, утешать, снижать напряжение, проводить рефрейминг, предлагать успокаивающие трактовки и разбирать физические симптомы — лечение выполняет следующий агент после вскрытия ядра.
   output_type: frontend
   inject_response:
-  - validator
-  - decomposer
+  - backend/validator
+  - backend/decomposer
   ui_pos:
     y: 536
     x: 2684
@@ -222,7 +222,7 @@ nodes:
     conditions:
     - field: somatic_presence
       equals: history
-    - field: reports.soma_translator
+    - field: reports.backend/soma_translator
       equals: false
   logic: any
   ui_pos:
@@ -271,7 +271,7 @@ nodes:
 
 - id: call_request_helper
   type: llm_worker
-  agent: request_helper
+  agent: frontend/request_helper
   output_type: frontend
   ui_pos:
     x: -808
@@ -290,7 +290,7 @@ nodes:
 - id: call_synthesizer
   type: llm_worker
   group: group_1
-  agent: synthesizer
+  agent: frontend/synthesizer
   task: |-
     Выбери стартовую мишень по своей инструкции.
     Если ниже есть секция «ИМПОРТИРОВАННЫЙ КЕЙС» — это продолжение работы над кейсом прошлой сессии: его мишень (target) — полноправный кандидат наряду с новыми мишенями декомпозитора (правила — в твоей инструкции). Если секции нет — работай по общим правилам.
@@ -298,7 +298,7 @@ nodes:
     {{ nodes.import_cases.output.imported_cases_text }}
   output_type: frontend
   inject_response:
-  - decomposer
+  - backend/decomposer
   ui_pos:
     y: 382
     x: 526

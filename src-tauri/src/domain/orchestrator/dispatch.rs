@@ -587,10 +587,16 @@ where
         let (output, tool_found, tool_succeeded) = self.run_tool_core(tool_name, arguments);
 
         if !tool_found {
-            if self
-                .agents
-                .iter()
-                .any(|a| a.id == tool_name && a.id != self.agent.id)
+            // Проверка «модель спутала tool и target»: ссылка обязана резолвиться
+            // как агент В КОМАНДЕ ВЫЗЫВАЮЩЕГО (legacy-режим адресует субагентов
+            // локально: `frontend/shadow_worker` или `planner`). Молчаливого
+            // сравнения по `id` больше нет — оно не отличило бы чужую команду.
+            if crate::domain::agent_manager::resolve_agent(
+                self.agents,
+                self.agent.folder.as_deref(),
+                tool_name,
+            )
+            .is_ok_and(|a| a.id != self.agent.id)
             {
                 (self.log_cb)(format!("🔄 Синтаксическая ошибка: '{}' использовал 'tool' для вызова сабагента '{}' вместо 'target'.", self.agent.name, tool_name));
                 if self.consecutive_failed_tools >= 3 {
@@ -1813,10 +1819,12 @@ where
                 call.name,
                 safe_truncate(&args_str, 200)
             ));
-            if self
-                .agents
-                .iter()
-                .any(|a| a.id == call.name && a.id != self.agent.id)
+            if crate::domain::agent_manager::resolve_agent(
+                self.agents,
+                self.agent.folder.as_deref(),
+                &call.name,
+            )
+            .is_ok_and(|a| a.id != self.agent.id)
             {
                 (self.log_cb)(format!("⚠️ Нативный вызов: '{}' использовал tool '{}' для сабагента — это ошибка синтаксиса (нужен target).", self.agent.name, call.name));
             }
@@ -1978,7 +1986,15 @@ where
             ..
         } = self;
 
-        if let Some(subagent) = (*agents).iter().find(|a| a.id == parsed.target) {
+        // Резолв сабагента в команде ВЫЗЫВАЮЩЕГО: `frontend/shadow_worker` и
+        // `planner` — локальные ссылки. Строгая ошибка вместо `.find()`:
+        // неудачный резолв уходит в ветку «невалидный target» с фидбэком модели.
+        let resolved_subagent = crate::domain::agent_manager::resolve_agent(
+            agents,
+            (*agent).folder.as_deref(),
+            &parsed.target,
+        );
+        if let Ok(subagent) = resolved_subagent {
             *consecutive_invalid_targets = 0;
             log_agent_thought(
                 &*log_cb,

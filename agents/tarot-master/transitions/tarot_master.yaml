@@ -50,7 +50,7 @@ nodes:
 
 - id: ask_helper
   type: llm_worker
-  agent: tarot_helper
+  agent: backend/tarot_helper
   task: |
     Запрос пользователя не готов к раскладу: либо это приветствие или вопрос
     о возможностях, либо формулировка вне языка колоды. Встреть кверента:
@@ -88,7 +88,7 @@ nodes:
 
 - id: interpret
   type: llm_worker
-  agent: tarot_reader
+  agent: frontend/tarot_reader
   task: |
     Прочитай расклад и ответь кверенту.
 

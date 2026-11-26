@@ -56,6 +56,7 @@ pub use config::{
     load_config, load_config_early, save_config, load_sampling_presets,
     set_engine_dirs,
     find_agents_dir, find_agents_dir_early, find_mcp_servers_dir, find_coding_tests_dir,
+    cleanup_stale_bundled_resources, runtime_layout, RuntimeLayout,
 };
 pub use session_manager::{get_session, get_sessions, save_session, delete_session, rename_session, open_session_folder, reveal_path};
 pub use permissions::{PermissionApprover, GrantDecision, global_approver};

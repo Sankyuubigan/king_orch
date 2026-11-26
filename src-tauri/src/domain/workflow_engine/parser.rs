@@ -48,6 +48,19 @@ pub struct WorkflowDef {
     pub file_stem: String,
     #[serde(skip)]
     pub parent_dir: String,
+    /// Команда графа — каталог над `transitions/` (`agents/psychotherapist/transitions/x.yaml`
+    /// → `Some("psychotherapist")`), `None` — файл не в структуре команды.
+    ///
+    /// Зачем: ссылки `agent:` внутри графа ЛОКАЛЬНЫ команде (`frontend/shadow_worker`,
+    /// `planner`), а не глобальны. Без этой привязки резолв обязан был бы угадывать
+    /// команду по имени, то есть снова стал бы лотереей (26.11.2026, Паттерн B).
+    ///
+    /// Выводится СТРУКТУРНО из пути, а не из содержимого: `agents_dir` при парсинге
+    /// одного файла неизвестен (`parse_workflow_file` зовётся и на тест-фикстурах
+    /// вне `agents/`), а правило «граф команды лежит в `<team>/transitions/`» —
+    /// соглашение раскладки, которое проверяет `all_workflow_graph_agent_refs_resolve`.
+    #[serde(skip)]
+    pub team: Option<String>,
     #[serde(default)]
     pub config: Option<WorkflowConfig>,
     /// ЯВНО объявленная точка входа графа — `nodes[].id`.
@@ -667,6 +680,7 @@ fn into_workflow(source: serde_yaml::Value, path: &Path) -> Result<WorkflowDef, 
         .unwrap_or(Path::new("."))
         .to_string_lossy()
         .to_string();
+    wf.team = team_of_workflow_path(path);
     // «Сломанный граф не должен выглядеть рабочим» (паттерн невалидного entry):
     // остатки сентинела END делают отказ загрузки явным с точной локацией,
     // а не тихой потерей ребра в визуальном редакторе.
@@ -820,11 +834,93 @@ pub fn parse_workflow_file(path: &Path) -> Result<WorkflowDef, String> {
     into_workflow(read_yaml_source(path)?, path)
 }
 
-pub fn find_workflow_by_stem<'a>(
+/// Канонический ID графа — тот же вид, что у `.md` агентов: путь от корня
+/// `agents/` без `.yaml` (`psychotherapist/transitions/main_conversation_flow`).
+///
+/// Считается из `parent_dir` + `file_stem`, а не из `agents_dir`: граф грузится
+/// и из тест-фикстур вне `agents/` (`parse_workflow_file`), где отрезать корень
+/// нечего. У фикстуры ID получается относительным путём от её собственного
+/// родителя — этого достаточно: фикстура не участвует в каталоге entry points.
+pub fn canonical_workflow_id(wf: &WorkflowDef) -> String {
+    let dir = Path::new(&wf.parent_dir);
+    let mut parts: Vec<String> = Vec::new();
+    for c in dir.components() {
+        match c {
+            std::path::Component::Normal(s) => {
+                parts.push(s.to_string_lossy().to_string());
+            }
+            std::path::Component::ParentDir => {
+                // `..` не раскрываем: ID фикстуры не обязан быть глобально уникальным.
+                parts.push("..".to_string());
+            }
+            _ => {}
+        }
+    }
+    // Корень `agents/` в ID не входит: последний сегмент пути перед `transitions`
+    // — команда, её оставляем.
+    if let Some(idx) = parts.iter().rposition(|p| p == "agents") {
+        parts.drain(..=idx);
+    }
+    parts.push(wf.file_stem.clone());
+    parts.join("/")
+}
+
+/// Резолв графа по каноническому ID или по имени (для совместимости с UI).
+///
+/// Порядок строгий: сначала точное совпадение канонического ID (это то, что
+/// отдаёт `AgentEntry.id`), затем — `file_stem`, затем — `name`. Фоллбэк по
+/// `file_stem`/`name` нужен ТОЛЬКО для ручного выбора из UI/тестов; в резолве
+/// агентов внутри графа такого фоллбэка нет и быть не должно.
+pub fn resolve_workflow<'a>(
     workflows: &'a [WorkflowDef],
-    stem: &str,
+    reference: &str,
 ) -> Option<&'a WorkflowDef> {
-    workflows.iter().find(|wf| wf.file_stem == stem)
+    let norm = reference.trim().replace('\\', "/");
+    let norm = norm
+        .trim_end_matches(".yaml")
+        .trim_end_matches(".yml")
+        .to_string();
+    workflows
+        .iter()
+        .find(|wf| canonical_workflow_id(wf) == norm)
+        .or_else(|| workflows.iter().find(|wf| wf.file_stem == norm))
+        .or_else(|| workflows.iter().find(|wf| wf.name == reference.trim()))
+}
+
+/// Команда графа по его пути: каталог над `transitions/`.
+///
+/// `agents/psychotherapist/transitions/main_conversation_flow.yaml` →
+/// `Some("psychotherapist")`; `test_cases/fixtures/x/workflow.yaml` → `None`
+/// (фикстура вне структуры команды — ссылки в ней резолвятся как глобальные).
+///
+/// Правило структурное: имя каталога-родителя обязано быть ровно `transitions`.
+/// Иначе `agents/<team>/experiments/validator_layers.yaml` (файл ДАННЫХ стенда,
+/// а не граф) получил бы команду и его ссылки резолвились бы как локальные —
+/// то есть проверка формы зависела бы от того, где файл лежит, а не от того,
+/// чем он является.
+pub(crate) fn team_of_workflow_path(path: &Path) -> Option<String> {
+    let parent = path.parent()?;
+    if parent.file_name()? != "transitions" {
+        return None;
+    }
+    parent
+        .parent()?
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+}
+
+/// Резолв ссылки на агента ВНУТРИ графа — единственная точка для нод и тестов.
+///
+/// `team` берётся из самого графа ([`WorkflowDef::team`]), а не передаётся
+/// вызывающим: иначе каждый call-site мог бы забыть её и тихо получить
+/// глобальный резолв (призрак из другой команды снова стал бы кандидатом).
+pub fn resolve_agent_in_workflow<'a>(
+    agents: &'a [crate::domain::agent_manager::AgentProfile],
+    workflow: &WorkflowDef,
+    reference: &str,
+) -> Result<&'a crate::domain::agent_manager::AgentProfile, crate::domain::agent_manager::AgentResolveError>
+{
+    crate::domain::agent_manager::resolve_agent(agents, workflow.team.as_deref(), reference)
 }
 
 /// Единственный способ узнать точку входа графа.
@@ -1231,6 +1327,120 @@ edges: []
                     .collect::<Vec<_>>()
                     .join("; ")
             );
+        }
+    }
+
+    /// ГЕЙТ ССЫЛОК НА АГЕНТОВ во всех боевых графах.
+    ///
+    /// Исходный баг (26.11.2026): в установленной копии отвечал призрак
+    /// `archive/shadow_worker.md`, а не `frontend/shadow_worker.md`. Причина —
+    /// молчаливый резолв по `file_stem`. Теперь ссылка, которой нет, обязана
+    /// падать, и этот тест падает ПЕРВЫМ: любая опечатка или забытая миграция
+    /// в `agent:` / `fused_agent:` / `inject_response` видна на сборке, а не у
+    /// пользователя. Проверяется ВСЕМИ тремя путями резолва — включая
+    /// `inject_response`, который иначе тихо печатал бы «[Ответ не найден]».
+    #[test]
+    fn all_workflow_graph_agent_refs_resolve() {
+        use crate::domain::agent_manager::load_agents;
+
+        let agents_dir = workspace_root().join("agents");
+        let agents = load_agents(&agents_dir).expect("агенты прочитаны");
+
+        let mut checked = 0usize;
+        for rel in PRODUCTION_GRAPHS {
+            let path = graph_path(rel);
+            let wf = parse_workflow_file(&path)
+                .unwrap_or_else(|e| panic!("Парсинг {:?} не удался: {}", path, e));
+            let team = wf.team.as_deref();
+            assert!(
+                team.is_some(),
+                "{:?}: граф обязан лежать в agents/<team>/transitions/ — иначе ссылки \
+                 резолвились бы глобально и призрак из другой папки снова стал бы кандидатом",
+                path
+            );
+
+            for node in &wf.nodes {
+                let mut refs: Vec<(&str, String)> = Vec::new();
+                if let Some(a) = node.agent.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
+                    refs.push(("agent", a.to_string()));
+                }
+                let injected: Vec<String> = node
+                    .inject_response
+                    .as_ref()
+                    .map(|refs| {
+                        refs.iter()
+                            .map(|a| a.trim())
+                            .filter(|a| !a.is_empty())
+                            .map(str::to_string)
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for reference in injected {
+                    refs.push(("inject_response", reference));
+                }
+                for (field, reference) in refs {
+                    resolve_agent_in_workflow(&agents, &wf, &reference).unwrap_or_else(|e| {
+                        panic!(
+                            "{:?} нода '{}' поле {}: {}",
+                            path, node.id, field, e
+                        )
+                    });
+                    checked += 1;
+                }
+            }
+
+            for group in &wf.groups {
+                if let Some(a) = group
+                    .fused_agent
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|a| !a.is_empty())
+                {
+                    resolve_agent_in_workflow(&agents, &wf, a).unwrap_or_else(|e| {
+                        panic!("{:?} группа '{}' fused_agent: {}", path, group.id, e)
+                    });
+                    checked += 1;
+                }
+            }
+        }
+        assert!(checked > 80, "проверено ссылок: {checked} — гейт смотрит не туда");
+    }
+
+    /// `reports.<ref>` / `report.<ref>` в полях нод — тожессылка на агента.
+    ///
+    /// Владелец бага 26.11.2026: `field: reports.soma_translator` (поле
+    /// `switch`/`condition`) читает отчёт по строке автора. Строка автора —
+    /// ровно то, что записано в `agent:` ноды, поэтому миграция обязана быть
+    /// согласованной; рассинхрон давал бы «отчёт не найден» в рантайме.
+    #[test]
+    fn workflow_report_references_match_agent_refs() {
+        for rel in PRODUCTION_GRAPHS {
+            let path = graph_path(rel);
+            let wf = parse_workflow_file(&path)
+                .unwrap_or_else(|e| panic!("Парсинг {:?} не удался: {}", path, e));
+            let declared: std::collections::HashSet<&str> = wf
+                .nodes
+                .iter()
+                .filter_map(|n| n.agent.as_deref().map(str::trim))
+                .collect();
+
+            for node in &wf.nodes {
+                let Some(field) = node.field.as_deref() else { continue };
+                for prefix in ["reports.", "report."] {
+                    let Some(rest) = field.strip_prefix(prefix) else { continue };
+                    // Поле может быть путём (`reports.x.pattern_type`) — берём агента.
+                    let reference = rest.split('.').next().unwrap_or(rest);
+                    assert!(
+                        declared.contains(reference),
+                        "{:?} нода '{}': поле '{}' читает отчёт '{}', а такого `agent:` в графе \
+                         нет — автор сообщения не совпадёт и отчёт будет 'не найден'",
+                        path,
+                        node.id,
+                        field,
+                        reference
+                    );
+                }
+            }
         }
     }
 
@@ -2062,7 +2272,7 @@ edges: []
         assert_eq!(call_web.output_type.as_deref(), Some("backend"));
 
         let eval = get("eval_answer");
-        assert_eq!(eval.agent.as_deref(), Some("answer_evaluator"));
+        assert_eq!(eval.agent.as_deref(), Some("backend/answer_evaluator"));
 
         let check = get("check_eval");
         assert_eq!(check.node_type, NodeType::Switch);
@@ -2077,11 +2287,11 @@ edges: []
         assert_eq!(check.default.as_deref(), Some("improve_web"));
 
         let improve = get("improve_web");
-        assert_eq!(improve.agent.as_deref(), Some("web_researcher"));
+        assert_eq!(improve.agent.as_deref(), Some("backend/web_researcher"));
         assert_eq!(improve.output_type.as_deref(), Some("backend"));
 
         let eval_again = get("eval_again");
-        assert_eq!(eval_again.agent.as_deref(), Some("answer_evaluator"));
+        assert_eq!(eval_again.agent.as_deref(), Some("backend/answer_evaluator"));
 
         let check2 = get("check_eval2");
         assert_eq!(check2.node_type, NodeType::Switch);
@@ -2096,7 +2306,7 @@ edges: []
         assert_eq!(check2.default.as_deref(), Some("honest_fail"));
 
         let honest = get("honest_fail");
-        assert_eq!(honest.agent.as_deref(), Some("web_researcher"));
+        assert_eq!(honest.agent.as_deref(), Some("backend/web_researcher"));
         assert_eq!(honest.output_type.as_deref(), Some("frontend"));
 
         let route = get("route");
@@ -2116,12 +2326,12 @@ edges: []
         // Deep-ветка инлайн (бывший deep_research.yaml): decompose → 3 подтемы → compile.
         let dec = get("decompose_topic");
         assert_eq!(dec.node_type, NodeType::LlmWorker);
-        assert_eq!(dec.agent.as_deref(), Some("topic_decomposer"));
+        assert_eq!(dec.agent.as_deref(), Some("backend/topic_decomposer"));
         assert_eq!(dec.output_type.as_deref(), Some("backend"));
 
         for i in 1..=3 {
             let sub = get(&format!("call_sub{}", i));
-            assert_eq!(sub.agent.as_deref(), Some("web_researcher"));
+            assert_eq!(sub.agent.as_deref(), Some("backend/web_researcher"));
             assert_eq!(sub.output_type.as_deref(), Some("backend"));
             assert!(
                 sub.task
@@ -2134,7 +2344,7 @@ edges: []
         }
 
         let comp = get("compile_research");
-        assert_eq!(comp.agent.as_deref(), Some("research_compiler"));
+        assert_eq!(comp.agent.as_deref(), Some("backend/research_compiler"));
         assert_eq!(
             comp.output_type.as_deref(),
             Some("backend"),
@@ -2146,18 +2356,18 @@ edges: []
 
         // Deep-цикл оценки качества
         let eval_deep = get("eval_deep");
-        assert_eq!(eval_deep.agent.as_deref(), Some("answer_evaluator"));
+        assert_eq!(eval_deep.agent.as_deref(), Some("backend/answer_evaluator"));
 
         let check_deep = get("check_eval_deep");
         assert_eq!(check_deep.node_type, NodeType::Switch);
         assert_eq!(check_deep.default.as_deref(), Some("improve_deep"));
 
         let improve_deep = get("improve_deep");
-        assert_eq!(improve_deep.agent.as_deref(), Some("research_compiler"));
+        assert_eq!(improve_deep.agent.as_deref(), Some("backend/research_compiler"));
         assert_eq!(improve_deep.output_type.as_deref(), Some("backend"));
 
         let eval_deep2 = get("eval_deep2");
-        assert_eq!(eval_deep2.agent.as_deref(), Some("answer_evaluator"));
+        assert_eq!(eval_deep2.agent.as_deref(), Some("backend/answer_evaluator"));
 
         let check_deep2 = get("check_eval_deep2");
         assert_eq!(check_deep2.node_type, NodeType::Switch);
@@ -2183,7 +2393,7 @@ edges: []
         );
 
         let honest_deep = get("honest_fail_deep");
-        assert_eq!(honest_deep.agent.as_deref(), Some("research_compiler"));
+        assert_eq!(honest_deep.agent.as_deref(), Some("backend/research_compiler"));
         assert_eq!(honest_deep.output_type.as_deref(), Some("frontend"));
 
         let final_web = get("final_web");
@@ -2507,6 +2717,7 @@ edges: []
             visible: true,
             file_stem: String::new(),
             parent_dir: String::new(),
+            team: None,
             entry: None,
             config: None,
             strategy: None,
@@ -2550,6 +2761,7 @@ edges: []
             visible: true,
             file_stem: String::new(),
             parent_dir: String::new(),
+            team: None,
             entry: None,
             config: None,
             strategy: None,
@@ -2600,6 +2812,7 @@ edges: []
             visible: true,
             file_stem: String::new(),
             parent_dir: String::new(),
+            team: None,
             entry: None,
             config: None,
             strategy: None,
@@ -2743,6 +2956,7 @@ edges: []
             visible: true,
             file_stem: String::new(),
             parent_dir: String::new(),
+            team: None,
             entry: None,
             config: Some(WorkflowConfig {
                 facts_file: Some("facts.yaml".to_string()),
@@ -3163,6 +3377,7 @@ edges: []
             visible: true,
             file_stem: String::new(),
             parent_dir: String::new(),
+            team: None,
             entry: None,
             config: None,
             strategy: None,

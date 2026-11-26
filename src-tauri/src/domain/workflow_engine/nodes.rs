@@ -435,11 +435,12 @@ where
                 .agent
                 .as_deref()
                 .ok_or_else(|| "llm_worker: не указан agent".to_string())?;
-            let agent = runner
-                .agents
-                .iter()
-                .find(|a| a.id == agent_id)
-                .ok_or_else(|| format!("llm_worker: агент '{}' не найден", agent_id))?;
+            // Резолв ВНУТРИ команды графа: ссылки `agent:` локальны команде
+            // (`frontend/shadow_worker`, `planner`). `resolve_agent_in_workflow`
+            // берёт team из самого графа — вызывающий не может её «забыть»,
+            // и фоллбэка по имени файла здесь нет по построению.
+            let agent = super::parser::resolve_agent_in_workflow(runner.agents, workflow, agent_id)
+                .map_err(|e| format!("llm_worker (нода '{}'): {}", node.id, e))?;
 
             let task = context.resolve_template(node.task.as_deref().unwrap_or(""));
             let task = if task.trim().is_empty() {
@@ -840,17 +841,14 @@ where
                 .as_deref()
                 .ok_or_else(|| "sub_workflow: не указан workflow".to_string())?;
 
-            // Ищем загруженный workflow по file_stem (имя файла без .yaml)
-            let clean = wf_name.trim_end_matches(".yaml").trim_end_matches(".yml");
-            let sub_wf = runner
-                .workflows
-                .iter()
-                .find(|w| w.file_stem == clean)
+            // Резолв подграфа: сначала канонический ID (как в `AgentEntry.id`),
+            // затем `file_stem`/`name` — ссылка из чужой команды задаётся
+            // глобально (`workflow: search-specialist` в `coder/analyst-team`).
+            let sub_wf = super::parser::resolve_workflow(runner.workflows, wf_name)
                 .ok_or_else(|| {
                     format!(
-                        "sub_workflow: '{}' (file_stem='{}') не найден среди {} загруженных workflow",
+                        "sub_workflow: '{}' не найден среди {} загруженных workflow",
                         wf_name,
-                        clean,
                         runner.workflows.len()
                     )
                 })?;

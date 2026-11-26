@@ -180,6 +180,43 @@ async fn main() {
 
             let app_handle = app.handle();
 
+            // ── Версии exe и рантайма обязаны сходиться ──
+            // Версионная раскладка ресурсов (`resources/<version>/`) держится на
+            // env!("CARGO_PKG_VERSION") внутри exe, а папку создаёт установщик по
+            // версии из tauri.conf.json. Расхождение = «агентов нет» у пользователя,
+            // поэтому фиксируем его в логе громко, а не молча.
+            {
+                let exe_version = app.package_info().version.to_string();
+                let build_version = env!("CARGO_PKG_VERSION");
+                if exe_version != build_version {
+                    log::error!(
+                        "[BOOT] версия exe {} ≠ версия сборки {} — ресурсы ищутся в resources/{}",
+                        exe_version,
+                        build_version,
+                        build_version
+                    );
+                }
+            }
+
+            // ── Ресурсы: режим запуска и уборка прошлых версий ──
+            // В установленной копии ресурсы читаются строго из resources/<version>/;
+            // папки прошлых версий и legacy-хвосты из корня $INSTDIR удаляются здесь,
+            // до старта воркеров (иначе старый агент успевает попасть в резолв).
+            // Ошибки удаления не фатальны — повторятся на следующем запуске.
+            match infra::runtime_layout() {
+                infra::RuntimeLayout::DevRepo { repo_root } => {
+                    log::info!("[resources] режим dev-репозитория: {}", repo_root.display());
+                }
+                infra::RuntimeLayout::Installed { exe_dir } => {
+                    log::info!(
+                        "[resources] установленная копия: {} (версия {})",
+                        exe_dir.display(),
+                        env!("CARGO_PKG_VERSION")
+                    );
+                    infra::cleanup_stale_bundled_resources();
+                }
+            }
+
             // Корни подтверждены штатным `app.path()`, данные разнесены из прежнего
             // каталога, недописанные записи проиграны из журнала.
             infra::storage::init(&app_handle);

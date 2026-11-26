@@ -64,7 +64,7 @@ nodes:
 
 - id: ask_helper
   type: llm_worker
-  agent: astrologist_helper
+  agent: backend/astrologist_helper
   task: |
     Запрос пользователя не готов к астрологическому разбору: либо это
     приветствие или вопрос о возможностях, либо формулировка вне языка
@@ -80,7 +80,7 @@ nodes:
 
 - id: answer_method
   type: llm_worker
-  agent: astrologist_helper
+  agent: backend/astrologist_helper
   task: |
     Пользователь спросил методологически — о том, что умеет Джйотиш и как
     это работает. Карту для такого ответа считать не нужно, и данных
@@ -141,7 +141,7 @@ nodes:
 
 - id: ask_attach
   type: llm_worker
-  agent: astrologist_helper
+  agent: backend/astrologist_helper
   task: |
     Пользователь задал вопрос, для которого нужна его натальная карта, но
     файла данных рождения (.jhd) среди вложений нет. Вежливо объясни, что
@@ -159,7 +159,7 @@ nodes:
 
 - id: interpret
   type: llm_worker
-  agent: astrologist_reader
+  agent: frontend/astrologist_reader
   task: |
     Ответь пользователю на его вопрос по карте. Порядок блоков задания —
     от жизни к справке: сначала вопрос человека, затем истина, рассчитанная

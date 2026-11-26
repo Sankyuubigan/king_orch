@@ -5,6 +5,82 @@ use regex::Regex;
 
 use super::workflow_engine::parser::load_workflows;
 
+/// Ошибка строгого резолва агента по ссылке.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AgentResolveError {
+    /// Ссылка не соответствует ни одному агенту.
+    ///
+    /// `team` — команда, внутри которой искали (`None` — глобальный вызов).
+    /// Сообщение обязано называть, что именно проверялось: «не найден» без
+    /// деталей не даёт починить ссылку.
+    NotFound { reference: String, team: Option<String> },
+}
+
+impl std::fmt::Display for AgentResolveError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AgentResolveError::NotFound { reference, team } => match team {
+                Some(team) => write!(
+                    f,
+                    "Агент '{}' не найден (искали '{}/{}', затем '{}')",
+                    reference, team, reference, reference
+                ),
+                None => write!(f, "Агент '{}' не найден", reference),
+            },
+        }
+    }
+}
+
+impl std::error::Error for AgentResolveError {}
+
+/// Нормализация ссылки на агента: `\` → `/`, срез ведущих `./` и `/`.
+fn normalize_agent_ref(reference: &str) -> String {
+    let mut r = reference.trim().replace('\\', "/");
+    loop {
+        if let Some(rest) = r.strip_prefix("./") {
+            r = rest.to_string();
+        } else if let Some(rest) = r.strip_prefix('/') {
+            r = rest.to_string();
+        } else {
+            break;
+        }
+    }
+    r
+}
+
+/// ЕДИНСТВЕННЫЙ резолв агента по ссылке (26.11.2026, Паттерн B).
+///
+/// Правила — строгие, без угадывания:
+/// * `team = Some(t)`: сначала `a.id == "{t}/{reference}"` (локальная ссылка
+///   внутри команды: `frontend/shadow_worker`, `planner`), затем `a.id == reference`
+///   (в графе уже передан полный ID или агент другой команды).
+/// * `team = None`: только точное `a.id == reference`.
+/// * Не найдено → [`AgentResolveError::NotFound`].
+///
+/// Запрещено: поиск по последнему сегменту пути и любой фоллбэк по `file_stem` —
+/// именно такая «доверчивость» позволяла призраку из `archive/` отвечать в чате
+/// вместо актуального агента.
+pub fn resolve_agent<'a>(
+    agents: &'a [AgentProfile],
+    team: Option<&str>,
+    reference: &str,
+) -> Result<&'a AgentProfile, AgentResolveError> {
+    let norm = normalize_agent_ref(reference);
+    if let Some(team) = team {
+        let scoped = format!("{}/{}", team, norm);
+        if let Some(agent) = agents.iter().find(|a| a.id == scoped) {
+            return Ok(agent);
+        }
+    }
+    agents
+        .iter()
+        .find(|a| a.id == norm)
+        .ok_or_else(|| AgentResolveError::NotFound {
+            reference: norm,
+            team: team.map(str::to_string),
+        })
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentProfile {
     pub id: String,
@@ -135,10 +211,56 @@ pub struct AgentEntry {
     pub fusable_groups: usize,
 }
 
+impl AgentProfile {
+    /// Локальный ID агента — путь ОТНОСИТЕЛЬНО его команды (`folder`).
+    ///
+    /// `psychotherapist/frontend/shadow_worker` → `frontend/shadow_worker`,
+    /// `coder/planner` → `planner`. Для агентов в корне `agents/` (`folder = None`)
+    /// совпадает с [`Self::id`].
+    ///
+    /// Зачем: грамматики (`agents/<team>/grammars/<local_id>.gbnf`) и
+    /// signal-контракты (`agents/<team>/signals/root.schema.json` → ключ агента)
+    /// адресуются ВНУТРИ команды, поэтому ключом там служит локальный путь, а не
+    /// глобальный ID (26.11.2026, Паттерн B).
+    pub fn local_id(&self) -> &str {
+        match self.folder.as_deref() {
+            Some(folder) if !folder.is_empty() => self
+                .id
+                .strip_prefix(folder)
+                .and_then(|rest| rest.strip_prefix('/'))
+                .unwrap_or(&self.id),
+            _ => &self.id,
+        }
+    }
+}
+
 /// Относительный путь файла внутри `agents/` через `/` (кроссплатформенно).
 fn rel_path_of(path: &Path, agents_dir: &Path) -> String {
     path.strip_prefix(agents_dir)
         .unwrap_or(path)
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().to_string())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Канонический ID агента: относительный путь от корня `agents/` без `.md`,
+/// разделитель `/` (26.11.2026, Паттерн B).
+///
+/// Почему путь, а не имя файла: раньше `id = file_stem()`, поэтому два файла с
+/// одинаковым именем в разных папках давали ОДИН id, и молчаливый `.find()`
+/// брал первый по порядку `read_dir`. Именно так старый
+/// `agents/psychotherapist/archive/shadow_worker.md` (призрак от прошлого
+/// обновления) побеждал актуальный `frontend/shadow_worker.md` в установленной
+/// копии. Путь делает коллизию невозможной по построению: у файлов в разных
+/// папках разные ID.
+///
+/// `agents/psychotherapist/frontend/shadow_worker.md` →
+/// `psychotherapist/frontend/shadow_worker`.
+fn canonical_agent_id(path: &Path, agents_dir: &Path) -> String {
+    let rel = path.strip_prefix(agents_dir).unwrap_or(path);
+    let without_ext = rel.with_extension("");
+    without_ext
         .components()
         .map(|c| c.as_os_str().to_string_lossy().to_string())
         .collect::<Vec<_>>()
@@ -213,11 +335,17 @@ fn process_includes(base_path: &Path, content: &str) -> String {
 /// Профили агентов вместе с фактическим путём их `.md`-файла — для каталога
 /// entry points. Восстановить путь по `folder + id` нельзя: файл бывает вложен
 /// глубже одного каталога (`agents/media/backend/image_editor.md` → folder
-///=`media`, а реконструкция `media/<id>.md` указывает мимо файла).
+/// =`media`, а реконструкция `media/<id>.md` указывает мимо файла).
+///
+/// Порядок обхода детерминирован (`sort`): `read_dir` не гарантирует порядок, а
+/// от него раньше зависело, кто из двух одноимённых агентов победит в
+/// молчаливом `.find()`. При канонических ID коллизия невозможна, но
+/// детерминизм остаётся: он делает поведение воспроизводимым.
 fn load_agents_with_files(agents_dir: &Path) -> Vec<(AgentProfile, PathBuf)> {
     if !agents_dir.exists() { return Vec::new(); }
     let mut md_files = Vec::new();
     collect_md_files(agents_dir, &mut md_files);
+    md_files.sort();
     md_files
         .into_iter()
         .filter_map(|path| parse_agent_file(&path, agents_dir).map(|agent| (agent, path)))
@@ -226,10 +354,34 @@ fn load_agents_with_files(agents_dir: &Path) -> Vec<(AgentProfile, PathBuf)> {
 
 pub fn load_agents(agents_dir: &Path) -> Result<Vec<AgentProfile>, String> {
     if !agents_dir.exists() { return Ok(Vec::new()); }
-    Ok(load_agents_with_files(agents_dir)
-        .into_iter()
-        .map(|(agent, _)| agent)
-        .collect())
+    let loaded = load_agents_with_files(agents_dir);
+    assert_unique_agent_ids(&loaded)?;
+    Ok(loaded.into_iter().map(|(agent, _)| agent).collect())
+}
+
+/// Страж коллизий ID: два агента с одинаковым ID (в нижнем регистре — NTFS
+/// регистронезависима) означают, что резолв снова стал лотереей.
+///
+/// При канонических ID (путь от `agents/`) это невозможно по построению; ошибка
+/// здесь означала бы баг в формировании ID, и тихо выбирать «первого» нельзя —
+/// именно так призрак побеждал актуального агента.
+fn assert_unique_agent_ids(loaded: &[(AgentProfile, PathBuf)]) -> Result<(), String> {
+    let mut seen: std::collections::HashMap<String, &PathBuf> = std::collections::HashMap::new();
+    for (agent, path) in loaded {
+        let key = agent.id.to_ascii_lowercase();
+        if let Some(first) = seen.get(&key) {
+            return Err(format!(
+                "Коллизия ID агентов: '{}' и '{}' дают одинаковый ID '{}'. \
+                 ID — относительный путь от agents/ без .md, поэтому совпадение означает ошибку \
+                 в формировании ID; молча выбрать одного нельзя.",
+                first.display(),
+                path.display(),
+                agent.id
+            ));
+        }
+        seen.insert(key, path);
+    }
+    Ok(())
 }
 
 fn parse_agent_file(path: &Path, agents_dir: &Path) -> Option<AgentProfile> {
@@ -237,7 +389,8 @@ fn parse_agent_file(path: &Path, agents_dir: &Path) -> Option<AgentProfile> {
         let base_dir = path.parent().unwrap_or_else(|| Path::new(""));
         let processed_content = process_includes(base_dir, &content);
         if let Some(mut agent) = parse_agent_markdown(&processed_content) {
-            agent.id = path.file_stem().unwrap().to_string_lossy().to_string();
+            // Канонический ID — путь от корня agents/ (см. canonical_agent_id).
+            agent.id = canonical_agent_id(path, agents_dir);
             agent.folder = team_folder_of(path, agents_dir);
             return Some(agent);
         }
@@ -416,7 +569,10 @@ pub fn load_entry_points(agents_dir: &Path) -> Vec<AgentEntry> {
                 agents_dir.join(&path)
             };
             entries.push(AgentEntry {
-                id: wf.file_stem.clone(),
+                // ID графа — тот же канонический вид, что у `.md` агентов: путь от
+                // корня agents/ без расширения. Иначе выбор графа в UI и
+                // legacy-фоллбэк «граф по имени файла» разъезжались бы с резолвом.
+                id: canonical_agent_id(&path, agents_dir),
                 name: wf.name.clone(),
                 description: wf.description.clone().unwrap_or_default(),
                 entry_type: "workflow".to_string(),
@@ -581,12 +737,17 @@ mod tests {
         }
 
         // Ключевые операторы существуют и объявили флаг (тест не проходит тихо
-        // при переименовании/удалении любого из них).
-        for id in ["video_maker", "image_generator", "image_editor", "image_upscaler", "excel_operator", "diag_specialist"] {
-            let agent = agents
-                .iter()
-                .find(|a| a.id == id)
-                .unwrap_or_else(|| panic!("оператор '{}' не найден в agents/", id));
+        // при переименовании/удалении любого из них). ID — канонические пути.
+        for id in [
+            "video-gen/backend/video_maker",
+            "image-gen/backend/image_generator",
+            "image-gen/backend/image_editor",
+            "image-gen/backend/image_upscaler",
+            "excel/backend/excel_operator",
+            "diagnostics/backend/diag_specialist",
+        ] {
+            let agent = resolve_agent(&agents, None, id)
+                .unwrap_or_else(|e| panic!("{}", e));
             assert!(
                 agent.require_tool_call,
                 "оператор '{}' обязан объявлять require_tool_call: true",
@@ -761,5 +922,224 @@ mod tests {
             checked += 1;
         }
         assert!(checked > 50, "проверено файлов: {checked}");
+    }
+
+    // ────────────────────────────────────────────────────────────────────
+    // Стражи канонических ID (26.11.2026, Паттерн B).
+    //
+    // Причина, по которой эти тесты существуют: в установленной копии в чате
+    // психотерапевта отвечал призрак `archive/shadow_worker.md` вместо
+    // актуального `frontend/shadow_worker.md`. Причина была не в одном файле,
+    // а в трёх молчаливых допущениях сразу: `id = file_stem()`, `read_dir` без
+    // сортировки и `.find()` без проверки единственности. Ниже — по стражу на
+    // каждое, чтобы вернуть любую из них можно было только уронив сборку.
+    // ────────────────────────────────────────────────────────────────────
+
+    fn agents_root() -> PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("корень проекта")
+            .join("agents")
+    }
+
+    /// ID агента — путь от `agents/` без расширения, а не имя файла.
+    ///
+    /// Проверяется на РЕАЛЬНОЙ раскладке: у каждого загруженного агента ID обязан
+    /// совпадать с его путём, а `folder` — с первым сегментом. Тест ловит возврат
+    /// к `file_stem` даже если кто-то «всего лишь» поменяет одну строку в
+    /// `parse_agent_file`.
+    #[test]
+    fn agent_ids_are_canonical_relative_paths() {
+        let root = agents_root();
+        let agents = load_agents(&root).expect("агенты прочитаны");
+        assert!(agents.len() > 50, "каталог агентов прочитан ({} шт.)", agents.len());
+
+        for agent in &agents {
+            let parts: Vec<&str> = agent.id.split('/').collect();
+            assert!(
+                !agent.id.is_empty(),
+                "пустой ID: агент без пути не может быть загружен"
+            );
+            assert!(
+                !agent.id.ends_with(".md"),
+                "ID '{}' содержит расширение — канонизация потеряна",
+                agent.id
+            );
+            assert!(
+                !agent.id.contains('\\'),
+                "ID '{}' содержит обратный слэш: разделитель обязан быть '/'",
+                agent.id
+            );
+            // Корневые агенты (`agents/basic.md`) легальны: id = file_stem, folder = None.
+            // У остальных первый сегмент пути — команда.
+            if parts.len() == 1 {
+                assert!(
+                    agent.folder.is_none(),
+                    "корневой агент '{}' не может иметь команду '{:?}'",
+                    agent.id,
+                    agent.folder
+                );
+            } else {
+                assert_eq!(
+                    agent.folder.as_deref(),
+                    Some(parts[0]),
+                    "folder '{}' не совпадает с первым сегментом ID '{}'",
+                    agent.folder.as_deref().unwrap_or("<none>"),
+                    agent.id
+                );
+            }
+            // local_id — ID без префикса команды (у корневых агентов совпадает с id).
+            let expected_local = if parts.len() == 1 { agent.id.clone() } else { parts[1..].join("/") };
+            assert_eq!(
+                agent.local_id(),
+                expected_local,
+                "local_id агента '{}' обязан быть его путём внутри команды",
+                agent.id
+            );
+        }
+    }
+
+    /// Одноимённые файлы в разных подпапках — РАЗНЫЕ агенты.
+    ///
+    /// Прямой страж исходного бага: раньше оба файла давали id `shadow_worker`
+    /// (по `file_stem`) и побеждал тот, который `read_dir` отдал первым.
+    /// В репозитории живут `archive/shadow_worker_old_version.md` и
+    /// `frontend/shadow_worker.md` — разные файлы, которые при старом правиле
+    /// были бы разными id, а при совпадении имён стали бы лотереей.
+    ///
+    /// Проверяются оба свойства сразу: (1) призрак и актуальный агент — разные
+    /// записи каталога; (2) одинаковый `local_id` у двух агентов возможен ТОЛЬКО
+    /// при разных путях.
+    #[test]
+    fn same_filename_in_different_subdirs_never_collides() {
+        let root = agents_root();
+        let agents = load_agents(&root).expect("агенты прочитаны");
+
+        // Реальный кейс инцидента: архивный и рабочий shadow-агент одной команды.
+        let ghosts: Vec<&str> = agents
+            .iter()
+            .filter(|a| a.folder.as_deref() == Some("psychotherapist"))
+            .filter(|a| a.local_id().starts_with("archive/shadow_worker"))
+            .map(|a| a.id.as_str())
+            .collect();
+        let actual: Vec<&str> = agents
+            .iter()
+            .filter(|a| a.id == "psychotherapist/frontend/shadow_worker")
+            .map(|a| a.id.as_str())
+            .collect();
+        assert_eq!(
+            ghosts.len(),
+            1,
+            "ожидался ровно один архивный shadow-агент, найдено {:?}",
+            ghosts
+        );
+        assert_eq!(
+            actual.len(),
+            1,
+            "актуальный shadow_worker обязан быть ровно один, найдено {:?}",
+            actual
+        );
+        assert_ne!(
+            ghosts[0], actual[0],
+            "архивный и рабочий агент обязаны иметь РАЗНЫЕ ID — иначе резолв снова лотерея"
+        );
+
+        // Общий инвариант: одинаковый local_id у разных агентов допустим ТОЛЬКО
+        // при разных путях (иначе это и есть та самая коллизия).
+        let mut by_local: std::collections::HashMap<&str, Vec<&str>> = std::collections::HashMap::new();
+        for a in &agents {
+            by_local.entry(a.local_id()).or_default().push(&a.id);
+        }
+        for (local, ids) in by_local {
+            let unique: std::collections::HashSet<&&str> = ids.iter().collect();
+            assert_eq!(
+                unique.len(),
+                ids.len(),
+                "local_id '{}' встречается дважды как один и тот же ID: {:?}",
+                local,
+                ids
+            );
+        }
+    }
+
+    /// Резолв строгий: нет фоллбэка по последнему сегменту пути.
+    ///
+    /// Именно «доверчивый» резолв (по file_stem, по basename) позволял призраку
+    /// из `archive/` подхватиться вместо актуального агента. Ссылка, которой нет,
+    /// обязана быть ОШИБКОЙ, а не «найдём что-нибудь похожее».
+    #[test]
+    fn resolve_agent_is_strict_and_team_scoped() {
+        let root = agents_root();
+        let agents = load_agents(&root).expect("агенты прочитаны");
+
+        // Локальная ссылка внутри команды резолвится в агента ИМЕННО этой команды.
+        let scoped = resolve_agent(&agents, Some("psychotherapist"), "frontend/shadow_worker")
+            .expect("актуальный shadow_worker резолвится");
+        assert_eq!(scoped.id, "psychotherapist/frontend/shadow_worker");
+
+        // Голое имя без пути — не резолвится вовсе (нет фоллбэка по basename).
+        let bare = resolve_agent(&agents, Some("psychotherapist"), "shadow_worker");
+        assert!(
+            bare.is_err(),
+            "ссылка 'shadow_worker' не может резолвиться: резолв обязан требовать путь \
+             (иначе призрак archive/ снова стал бы кандидатом)"
+        );
+
+        // Глобальный резолв по полному ID работает.
+        let global = resolve_agent(&agents, None, "psychotherapist/frontend/shadow_worker")
+            .expect("глобальный резолв по каноническому ID");
+        assert_eq!(global.id, scoped.id);
+
+        // Несуществующий агент — ошибка, называющая ссылку и команду.
+        match resolve_agent(&agents, Some("psychotherapist"), "frontend/nope_agent") {
+            Err(AgentResolveError::NotFound { reference, team }) => {
+                assert_eq!(reference, "frontend/nope_agent");
+                assert_eq!(team.as_deref(), Some("psychotherapist"));
+            }
+            Ok(a) => panic!("ожидалась ошибка, а резолв вернул '{}'", a.id),
+        }
+    }
+
+    /// Нормализация ссылки: `\`, ведущие `./` и `/` снимаются.
+    ///
+    /// Windows-путь в YAML (`frontend\shadow_worker`) не должен молча не
+    /// находиться: автор графа пишет в редакторе на Windows, и обратный слэш —
+    /// нормальный ввод.
+    #[test]
+    fn agent_ref_normalization_handles_windows_paths() {
+        let root = agents_root();
+        let agents = load_agents(&root).expect("агенты прочитаны");
+        for reference in [
+            "frontend/shadow_worker",
+            "frontend\\shadow_worker",
+            "./frontend/shadow_worker",
+            "/frontend/shadow_worker",
+            "  frontend/shadow_worker  ",
+        ] {
+            let a = resolve_agent(&agents, Some("psychotherapist"), reference)
+                .unwrap_or_else(|e| panic!("ссылка {:?} обязана резолвиться: {}", reference, e));
+            assert_eq!(a.id, "psychotherapist/frontend/shadow_worker");
+        }
+    }
+
+    /// Каталог UI: дублей ID нет.
+    ///
+    /// `load_entry_points` — то, что видит пользователь. Если два агента дадут
+    /// одинаковый ID, в списке будет один пункт, а запустится «какой-то» из двух.
+    #[test]
+    fn entry_point_ids_are_unique() {
+        let entries = load_entry_points(&agents_root());
+        assert!(entries.len() > 50, "каталог прочитан ({} записей)", entries.len());
+        let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for e in &entries {
+            let key = e.id.to_ascii_lowercase();
+            if let Some(prev) = seen.insert(key, e.source_path.clone()) {
+                panic!(
+                    "дубль ID '{}': '{}' и '{}' — в списке агентов это один пункт, а запустится \
+                     непредсказуемый из двух",
+                    e.id, prev, e.source_path
+                );
+            }
+        }
     }
 }

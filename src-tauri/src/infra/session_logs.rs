@@ -301,6 +301,26 @@ mod tests {
         assert_eq!(sanitize_filename_token(&long).chars().count(), 40);
     }
 
+    /// Канонический ID агента — путь со слэшами. В имени файла он обязан стать
+    /// ПЛОСКИМ токеном: иначе `prompt_logs/<agent_id>_<session>.jsonl` создавал бы
+    /// подкаталоги (и падал бы с «путь не существует»).
+    ///
+    /// Проверяется ровно тот ID, из-за которого затевалась миграция: призрак и
+    /// актуальный агент дают РАЗНЫЕ имена файлов, то есть логи разных агентов
+    /// больше не сливаются в один.
+    #[test]
+    fn canonical_agent_id_becomes_flat_filename_token() {
+        let ghost = sanitize_filename_token("psychotherapist/archive/shadow_worker");
+        let actual = sanitize_filename_token("psychotherapist/frontend/shadow_worker");
+        assert_eq!(ghost, "psychotherapist_archive_shadow_worker");
+        assert_eq!(actual, "psychotherapist_frontend_shadow_worker");
+        assert_ne!(ghost, actual, "логи призрака и актуального агента не должны сливаться");
+        for token in [&ghost, &actual] {
+            assert!(!token.contains('/') && !token.contains('\\'), "токен плоский: {token}");
+            assert_eq!(Path::new(token).components().count(), 1, "ровно один компонент пути: {token}");
+        }
+    }
+
     // ── append_entry ──
 
     #[test]

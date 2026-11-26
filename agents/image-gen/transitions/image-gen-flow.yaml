@@ -51,7 +51,7 @@ nodes:
 
   - id: enhance_prompt_edit
     type: llm_worker
-    agent: image_prompt_enhancer
+    agent: backend/image_prompt_enhancer
     task: |
       Режим: ПРАВКА изображения.
 
@@ -64,7 +64,7 @@ nodes:
 
   - id: edit_image
     type: llm_worker
-    agent: image_editor
+    agent: backend/image_editor
     task: |
       Отредактируй изображение, на которое пользователь указал в переписке или прикрепил к сообщению.
 
@@ -86,7 +86,7 @@ nodes:
 
   - id: upscale_image
     type: llm_worker
-    agent: image_upscaler
+    agent: backend/image_upscaler
     task: |
       Увеличь разрешение изображения, на которое пользователь указал в переписке или прикрепил к сообщению.
 
@@ -101,7 +101,7 @@ nodes:
 
   - id: enhance_prompt_gen
     type: llm_worker
-    agent: image_prompt_enhancer
+    agent: backend/image_prompt_enhancer
     task: |
       Режим: ГЕНЕРАЦИЯ изображения с нуля.
 
@@ -114,7 +114,7 @@ nodes:
 
   - id: generate_image
     type: llm_worker
-    agent: image_generator
+    agent: backend/image_generator
     task: |
       Сгенерируй изображение с нуля.
 
@@ -136,7 +136,7 @@ nodes:
 
   - id: enhance_prompt_compose
     type: llm_worker
-    agent: image_prompt_enhancer
+    agent: backend/image_prompt_enhancer
     task: |
       Режим: НОВАЯ КОМПОЗИЦИЯ (вложение — источник внешности/объекта, не холст;
       сцену описывай полностью по идее пользователя).
@@ -150,7 +150,7 @@ nodes:
 
   - id: compose_image
     type: llm_worker
-    agent: image_editor
+    agent: backend/image_editor
     task: |
       РЕЖИМ НОВАЯ КОМПОЗИЦИЯ: пользователь описал новую сцену, а вложение —
       только источник внешности/объекта. Холст — описанная сцена, НЕ само
@@ -174,7 +174,7 @@ nodes:
 
   - id: no_image_task
     type: llm_worker
-    agent: image_helper
+    agent: backend/image_helper
     task: |
       Классификатор НЕ распознал задачу для изображения (ни edit, ни upscale, ни
       generate): пользователь либо спрашивает о возможностях, либо описал задачу

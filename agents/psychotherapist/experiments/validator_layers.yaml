@@ -1,7 +1,7 @@
 # Порядок и состав слоёв иерархической проверки 9 элементов.
 #
-# Бизнес-логика слоёв живёт в агентах `backend/validator_surface.md`,
-# `validator_facade.md`, `validator_core.md`; форма ответа каждого слоя объявлена
+# Бизнес-логика слоёв живёт в агентах `experiments/validator_surface.md`,
+# `experiments/validator_facade.md`, `experiments/validator_core.md`; форма ответа каждого слоя объявлена
 # контрактом сигнала в `../signals/root.schema.json` (грамматика Method 3 строится
 # из него автоматически). Этот файл хранит то, чего нет в контрактах: ПОРЯДОК
 # слоёв и то, чей результат видит каждый слой.
@@ -17,18 +17,18 @@ version: 1
 
 layers:
   # Слой 1 — поверхность: что пациент прямо сказал о себе.
-  - agent: validator_surface
+  - agent: experiments/validator_surface
     elements: [e1, e2, e6, e7]
     context_from: []
 
   # Слой 2 — защитный фасад: правила, идол, самооценка, иллюзии.
   # Видит поверхность: защита объясняется в связи с ней.
-  - agent: validator_facade
+  - agent: experiments/validator_facade
     elements: [e4, e5, e8, e9]
-    context_from: [validator_surface]
+    context_from: [experiments/validator_surface]
 
   # Слой 3 — предел: единственный элемент 3 (катастрофа).
   # Видит защиту: катастрофа открывается там, где правила и идол не работают.
-  - agent: validator_core
+  - agent: experiments/validator_core
     elements: [e3]
-    context_from: [validator_surface, validator_facade]
+    context_from: [experiments/validator_surface, experiments/validator_facade]

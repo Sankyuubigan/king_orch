@@ -30,7 +30,7 @@ pub use agent_manager::load_agents;
 pub use agent_manager::load_entry_points;
 pub use catalog_cache::{catalog_snapshot, invalidate_catalog_cache};
 pub use workflow_engine::{
-    analyze_workflow_fidelity, find_workflow_by_stem, resolve_entry,
+    analyze_workflow_fidelity, resolve_entry,
     separate_top_level_fields, EdgeDef, FactsFile, GraphDiagnostic, GroupDef, NodeDef,
     WorkflowConfig, WorkflowDef,
 };

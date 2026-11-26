@@ -5,6 +5,8 @@
   "productName": "King Orch",
   "npmInstallArgs": ["--legacy-peer-deps"],
   "syncDirs": ["agents", "tasks_for_test_llm", "src-tauri/mcp_servers"],
+  "versionedResources": true,
+  "rootResources": ["redist/*", "resources/cloud-routers-gateway.exe"],
   "devWindow": {
     "title": "King Orch - Multi-Agent Studio",
     "width": 1100,

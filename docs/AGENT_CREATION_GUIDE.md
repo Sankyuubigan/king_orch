@@ -140,7 +140,7 @@ nodes:
 ## 📂 Расположение и формат файлов
 
 - Все агенты и workflow хранятся в папке `agents/` (и её подпапках). Подпапки (frontend/, backend/, transitions/, database/, grammars/, signals/, archive/) — это организационные группы команды, движку они не важны.
-- Движок **рекурсивно** сканирует `agents/` и собирает все `.md` (агенты) и `.yaml`/`.yml` (workflow графы). Поэтому ID (file_stem — имя файла без расширения) должен быть **уникальным** внутри всего проекта.
+- Движок **рекурсивно** сканирует `agents/` и собирает все `.md` (агенты) и `.yaml`/`.yml` (workflow графы). **ID агента = путь от `agents/` без расширения** (например `psychotherapist/frontend/shadow_worker`), а не имя файла: два одноимённых файла в разных подпапках — два разных агента, они не столкнутся. Полный ID обязан быть уникальным (дубль пути невозможен по определению, но регистронезависимый дубль на Windows — ошибка загрузки).
 - **Workflow графы кладутся в подпапку `transitions/`** (по конвенции King Orch; в архиве — вариант `workflows/` устарел).
 - Каждый агент — один `.md` файл: **Frontmatter** (шапка с метаданными YAML) + **Системный промпт** (тело агента).
 
@@ -424,7 +424,7 @@ edges:
 | `llm_fact_extractor` | Generic экстрактор фактов (один на граф, сразу после входа — см. «Главное правило №2»). Факты + критерии из `config.facts` / `config.facts_file`. Возвращает JSON `{"fact_id": true/false, ...}` | `input` (обязателен: `{{ nodes.user_message.output.text }}`) |
 | `llm_freeform` | Зовёт LLM без системного промпта (только история чата) — для off-topic | `input` |
 | `system_condition` | Rust-side проверка состояния сессии / агрегация отчётов | `action`, `required` |
-| `sub_workflow` | Рекурсивный вызов другого YAML графа (по file_stem) | `workflow` |
+| `sub_workflow` | Рекурсивный вызов другого YAML графа (по каноническому ID графа `команда/transitions/имя`; короткое имя — только если однозначно) | `workflow` |
 | `switch` | Маршрутизация (3 режима, ниже) | `input`/`input_object`, `switch_field`, `cases_priority`, `default` |
 | `llm_sequential_switch` | Запускает ВСЕ ветки, где факт истин (одна за другой — sequential) | `input_object`, `cases_priority`, `default` |
 | `condition_check` | Ветвление по bool-полю JSON: `true_to`/`false_to` + `sequential_to`. **`input_object` обязателен** — движок не знает id чужих нод и молча читать их не будет | `input_object`, `field`, `true_to`, `false_to`, `sequential_to` |
@@ -681,7 +681,7 @@ nodes: ...
   левой колонке и в списке чата: пользовательский выбор снимается только пользователем.
 
 **Диспетчеризация при отправке сообщения** (рантайм, не зависит от видимости):
-1. Есть ли workflow с `file_stem == ID` → `workflow_engine::run_workflow()` (режим графа).
+1. Есть ли workflow с каноническим ID `команда/transitions/имя` (или однозначным коротким именем) → `workflow_engine::run_workflow()` (режим графа).
 2. Иначе → legacy-режим: `.md` агент с этим ID запускается напрямую через
    `orchestrator::run_agent_node()`.
 
@@ -700,7 +700,7 @@ nodes: ...
 Система избегает бесконечного раздувания контекста:
 
 1. Запрос пользователя — сообщение `type: "message"`, `author: "user"` в `messages[]`.
-2. Результат воркера — сообщение `type: "thought"` с `namespace` и `author` (ID агента).
+2. Результат воркера — сообщение `type: "thought"` с `namespace` и `author` (строка ссылки из графа, напр. `frontend/synthesizer`).
 3. История (все non-thought сообщения) подставляется в `llm_messages` автоматически — агенту не нужно самому перечитывать чат.
 4. Точечное чтение отчётов коллег — через `inject_response` у ноды (см. «inject_response»): отдельный тул чтения отчётов (`batch_get_agent_report`) из движка удалён.
 
@@ -733,7 +733,7 @@ agents/psychotherapist/
 ├── database/                       # База знаний (подключается через <<INCLUDE>>)
 ├── grammars/                       # Per-agent GBNF-грамматики (<agent_id>.gbnf)
 ├── signals/                        # JSON-схемы сигналов
-└── archive/                        # Мёртвый код: исключён из сканирования
+└── archive/                        # СКАНИРУЕТСЯ (см. предупреждение ниже — не «мёртвая»)
 ```
 
 ### Пример entry-графа (`main_conversation_flow.yaml`)
@@ -894,7 +894,7 @@ facts:
 5. Воркеры создавай как `.md` с узкой задачей (папки `frontend/`/`backend/` по роли)
 6. Изоляцию контекстов делай структурой графа: ветки, `inject_response`, сигналы — поля namespace у нод графа нет (см. «Неймспейсы»).
 7. Факты выноси в `facts.yaml` рядом с workflow; `llm_fact_extractor` — **один на граф, сразу после входа**; mid-flow решения — воркер-вердикт (JSON в отчёте/сигнал) + `switch`/`condition_check`/`signal_router`; сложные маршруты разбивай на `note`/`switch`/`condition_check`/`signal_router`; циклы — рёбрами с `max_visits` + `config.max_steps` (см. «Циклы в графах»), или линейной схемой с оценщиком.
-8. Проверь, что file_stem'ы уникальны (движок ищет рекурсивно по `agents/`)
+8. Проверь, что полные ID (пути от `agents/`) уникальны и что ссылки внутри графа (`agent:`, `inject_response`, `reports.<id>`) записаны как локальные пути команды — напр. `backend/validator`, `frontend/shadow_worker`
 9. Проверь контракт точки входа: `entry` объявлен, нода-вход существует, из неё идёт ребро, а `llm_fact_extractor` читает `{{ nodes.user_message.output.text }}`. Эти проверки закрыты тестами `production_graphs_*` в `workflow_engine/parser.rs` — новый граф обязан им удовлетворять. **Боевой граф допиши в константу `PRODUCTION_GRAPHS`** (секция тестов `parser.rs`) — иначе тест-стражи его не увидят.
 10. Тул-оператору (media/excel/diag-тулы) — `require_tool_call: true`; агенту, читающему картинки из вложений, — `vision: true`; жёсткие JSON-формы на локальном движке — `disable_reasoning`/`think_budget` (см. таблицу frontmatter).
 11. Фронтенд-агенты — терминальные узлы: без исходящих рёбер (см. предупреждение в «Параметр `output_type`»).

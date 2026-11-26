@@ -1,15 +1,25 @@
 use super::*;
 use std::path::Path;
 
-/// Загружает per-agent GBNF-грамматику из `grammars_dir/<agent_id>.gbnf`.
+/// Загружает per-agent GBNF-грамматику из `grammars_dir/<agent_local_id>.gbnf`.
 /// Если файла нет — агент работает без per-agent грамматики (только база движка).
-pub(crate) fn load_agent_grammar(grammars_dir: &Path, agent_id: &str) -> Option<String> {
-    let path = grammars_dir.join(format!("{}.gbnf", agent_id));
+///
+/// Ключ — ЛОКАЛЬНЫЙ путь внутри команды (`backend/answer_evaluator`), потому что
+/// грамматики лежат в `<team>/grammars/` и адресуются от корня команды. Глобальный
+/// `agent.id` (`research/backend/answer_evaluator`) дал бы путь с лишним сегментом
+/// команды и грамматика молча не нашлась бы (26.11.2026, Паттерн B).
+pub(crate) fn load_agent_grammar(grammars_dir: &Path, agent: &crate::domain::agent_manager::AgentProfile) -> Option<String> {
+    let local_id = agent.local_id();
+    let path = grammars_dir.join(format!("{}.gbnf", local_id));
     match std::fs::read_to_string(&path) {
         Ok(content) if !content.trim().is_empty() => Some(content),
         Ok(_) => None,
-        Err(e) => {
-            eprintln!("[grammar] {}: {}", path.display(), e);
+        Err(_) => {
+            // Отсутствие файла — норма (у большинства агентов грамматики нет).
+            // Настоящую ошибку чтения видно по существующему пути.
+            if path.exists() {
+                eprintln!("[grammar] не удалось прочитать {}", path.display());
+            }
             None
         }
     }

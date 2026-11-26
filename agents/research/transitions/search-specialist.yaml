@@ -47,7 +47,7 @@ nodes:
 
 - id: call_quick
   type: llm_worker
-  agent: quick_finder
+  agent: backend/quick_finder
   task: |
     Ответь пользователю.
 
@@ -57,7 +57,7 @@ nodes:
 
 - id: eval_quick
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество черновика ответа на вопрос по чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность).
 
@@ -76,7 +76,7 @@ nodes:
 
 - id: improve_quick
   type: llm_worker
-  agent: quick_finder
+  agent: backend/quick_finder
   task: |
     Оценщик посчитал черновик недостаточно качественным. Улучши ответ: перепроверь факт через свои инструменты и учти замечания.
 
@@ -92,7 +92,7 @@ nodes:
 
 - id: eval_quick2
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество УЛУЧШЕННОГО черновика по тому же чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность). Учти, что первый вердикт уже был — оценивай именно исправленный черновик.
 
@@ -125,7 +125,7 @@ nodes:
 
 - id: honest_fail_quick
   type: llm_worker
-  agent: quick_finder
+  agent: backend/quick_finder
   task: |
     Твой черновик дважды не прошёл оценку качества. Верни пользователю честный ответ: возьми свой ЛУЧШИЙ черновик и добавь в конец секцию «Неотвеченные части / степень уверенности» — перечисли, что именно не удалось подтвердить и почему, на основе замечаний оценщика.
 
@@ -140,7 +140,7 @@ nodes:
 
 - id: call_docs
   type: llm_worker
-  agent: docs_researcher
+  agent: backend/docs_researcher
   task: |
     Ответь пользователю.
 
@@ -150,7 +150,7 @@ nodes:
 
 - id: eval_docs
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество черновика ответа на вопрос по чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность).
 
@@ -169,7 +169,7 @@ nodes:
 
 - id: improve_docs
   type: llm_worker
-  agent: docs_researcher
+  agent: backend/docs_researcher
   task: |
     Оценщик посчитал черновик недостаточно качественным. Улучши ответ: учти замечания и выполни план улучшения.
 
@@ -185,7 +185,7 @@ nodes:
 
 - id: eval_docs2
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество УЛУЧШЕННОГО черновика по тому же чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность). Учти, что первый вердикт уже был — оценивай именно исправленный черновик.
 
@@ -218,7 +218,7 @@ nodes:
 
 - id: honest_fail_docs
   type: llm_worker
-  agent: docs_researcher
+  agent: backend/docs_researcher
   task: |
     Твой черновик дважды не прошёл оценку качества. Верни пользователю честный ответ: возьми свой ЛУЧШИЙ черновик и добавь в конец секцию «Неотвеченные части / степень уверенности» — перечисли, что именно не удалось подтвердить и почему, на основе замечаний оценщика.
 
@@ -233,7 +233,7 @@ nodes:
 
 - id: call_github
   type: llm_worker
-  agent: github_researcher
+  agent: backend/github_researcher
   task: |
     Найди репозитории/библиотеки по потребности и дай точные факты о них.
 
@@ -243,7 +243,7 @@ nodes:
 
 - id: eval_github
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество черновика ответа на вопрос по чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность).
 
@@ -262,7 +262,7 @@ nodes:
 
 - id: improve_github
   type: llm_worker
-  agent: github_researcher
+  agent: backend/github_researcher
   task: |
     Оценщик посчитал черновик недостаточно качественным. Улучши ответ: учти замечания и выполни план улучшения.
 
@@ -278,7 +278,7 @@ nodes:
 
 - id: eval_github2
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество УЛУЧШЕННОГО черновика по тому же чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность). Учти, что первый вердикт уже был — оценивай именно исправленный черновик.
 
@@ -311,7 +311,7 @@ nodes:
 
 - id: honest_fail_github
   type: llm_worker
-  agent: github_researcher
+  agent: backend/github_researcher
   task: |
     Твой черновик дважды не прошёл оценку качества. Верни пользователю честный ответ: возьми свой ЛУЧШИЙ черновик и добавь в конец секцию «Неотвеченные части / степень уверенности» — перечисли, что именно не удалось подтвердить и почему, на основе замечаний оценщика.
 
@@ -326,7 +326,7 @@ nodes:
 
 - id: call_academic
   type: llm_worker
-  agent: academic_researcher
+  agent: backend/academic_researcher
   task: |
     Найди научные статьи/исследования по вопросу и дай точные факты о них.
 
@@ -336,7 +336,7 @@ nodes:
 
 - id: eval_academic
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество черновика ответа на вопрос по чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность).
 
@@ -355,7 +355,7 @@ nodes:
 
 - id: improve_academic
   type: llm_worker
-  agent: academic_researcher
+  agent: backend/academic_researcher
   task: |
     Оценщик посчитал черновик недостаточно качественным. Улучши ответ: учти замечания и выполни план улучшения.
 
@@ -371,7 +371,7 @@ nodes:
 
 - id: eval_academic2
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество УЛУЧШЕННОГО черновика по тому же чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность). Учти, что первый вердикт уже был — оценивай именно исправленный черновик.
 
@@ -404,7 +404,7 @@ nodes:
 
 - id: honest_fail_academic
   type: llm_worker
-  agent: academic_researcher
+  agent: backend/academic_researcher
   task: |
     Твой черновик дважды не прошёл оценку качества. Верни пользователю честный ответ: возьми свой ЛУЧШИЙ черновик и добавь в конец секцию «Неотвеченные части / степень уверенности» — перечисли, что именно не удалось подтвердить и почему, на основе замечаний оценщика.
 
@@ -419,7 +419,7 @@ nodes:
 
 - id: call_video
   type: llm_worker
-  agent: youtube_researcher
+  agent: backend/youtube_researcher
   task: |
     Найди подходящие видео на YouTube и дай точные факты о них.
 
@@ -429,7 +429,7 @@ nodes:
 
 - id: eval_video
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество черновика ответа на вопрос по чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность).
 
@@ -448,7 +448,7 @@ nodes:
 
 - id: improve_video
   type: llm_worker
-  agent: youtube_researcher
+  agent: backend/youtube_researcher
   task: |
     Оценщик посчитал черновик недостаточно качественным. Улучши ответ: учти замечания и выполни план улучшения.
 
@@ -464,7 +464,7 @@ nodes:
 
 - id: eval_video2
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество УЛУЧШЕННОГО черновика по тому же чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность). Учти, что первый вердикт уже был — оценивай именно исправленный черновик.
 
@@ -497,7 +497,7 @@ nodes:
 
 - id: honest_fail_video
   type: llm_worker
-  agent: youtube_researcher
+  agent: backend/youtube_researcher
   task: |
     Твой черновик дважды не прошёл оценку качества. Верни пользователю честный ответ: возьми свой ЛУЧШИЙ черновик и добавь в конец секцию «Неотвеченные части / степень уверенности» — перечисли, что именно не удалось подтвердить и почему, на основе замечаний оценщика.
 
@@ -512,7 +512,7 @@ nodes:
 
 - id: decompose_topic
   type: llm_worker
-  agent: topic_decomposer
+  agent: backend/topic_decomposer
   task: |
     Разбей вопрос пользователя на 3 подтемы для глубокого исследования.
 
@@ -522,7 +522,7 @@ nodes:
 
 - id: call_sub1
   type: llm_worker
-  agent: web_researcher
+  agent: backend/web_researcher
   task: |
     Проведи глубокое исследование ОДНОЙ подтемы.
 
@@ -537,7 +537,7 @@ nodes:
 
 - id: call_sub2
   type: llm_worker
-  agent: web_researcher
+  agent: backend/web_researcher
   task: |
     Проведи глубокое исследование ОДНОЙ подтемы.
 
@@ -552,7 +552,7 @@ nodes:
 
 - id: call_sub3
   type: llm_worker
-  agent: web_researcher
+  agent: backend/web_researcher
   task: |
     Проведи глубокое исследование ОДНОЙ подтемы.
 
@@ -567,7 +567,7 @@ nodes:
 
 - id: compile_research
   type: llm_worker
-  agent: research_compiler
+  agent: backend/research_compiler
   task: |
     Собери итоговый доклад из отчётов по подтемам.
 
@@ -587,7 +587,7 @@ nodes:
 
 - id: eval_deep
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество черновика ответа на вопрос по чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность).
 
@@ -606,7 +606,7 @@ nodes:
 
 - id: improve_deep
   type: llm_worker
-  agent: research_compiler
+  agent: backend/research_compiler
   task: |
     Оценщик посчитал итоговый доклад недостаточно качественным. Улучши доклад: опирайся на отчёты подтем, устрани замечания, улучши покрытие, структуру, точность цитат и сквозную нумерацию источников.
 
@@ -632,7 +632,7 @@ nodes:
 
 - id: eval_deep2
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество УЛУЧШЕННОГО черновика по тому же чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность). Учти, что первый вердикт уже был — оценивай именно исправленный черновик.
 
@@ -665,7 +665,7 @@ nodes:
 
 - id: honest_fail_deep
   type: llm_worker
-  agent: research_compiler
+  agent: backend/research_compiler
   task: |
     Твой доклад дважды не прошёл оценку качества. Верни пользователю честный ответ: возьми свой ЛУЧШИЙ черновик и добавь в конец секцию «Неотвеченные части / степень уверенности» — перечисли, что именно не удалось подтвердить и почему, на основе замечаний оценщика.
 
@@ -680,7 +680,7 @@ nodes:
 
 - id: call_web
   type: llm_worker
-  agent: web_researcher
+  agent: backend/web_researcher
   task: |
     Ответь пользователю.
 
@@ -690,7 +690,7 @@ nodes:
 
 - id: eval_answer
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество черновика ответа на вопрос по чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность).
 
@@ -709,7 +709,7 @@ nodes:
 
 - id: improve_web
   type: llm_worker
-  agent: web_researcher
+  agent: backend/web_researcher
   task: |
     Оценщик посчитал твой черновик недостаточно качественным. Улучши ответ: учти замечания и выполни план улучшения.
 
@@ -725,7 +725,7 @@ nodes:
 
 - id: eval_again
   type: llm_worker
-  agent: answer_evaluator
+  agent: backend/answer_evaluator
   task: |
     Оцени качество УЛУЧШЕННОГО черновика по тому же чеклисту (полнота, свежесть, релевантность, противоречия, источники, точность). Учти, что первый вердикт уже был — оценивай именно исправленный черновик.
 
@@ -753,7 +753,7 @@ nodes:
 
 - id: honest_fail
   type: llm_worker
-  agent: web_researcher
+  agent: backend/web_researcher
   task: |
     Твой черновик дважды не прошёл оценку качества. Верни пользователю честный ответ: возьми свой ЛУЧШИЙ черновик и добавь в конец секцию «Неотвеченные части / степень уверенности» — перечисли, что именно не удалось подтвердить и почему, на основе замечаний оценщика.
 

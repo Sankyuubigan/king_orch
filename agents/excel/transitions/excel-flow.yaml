@@ -39,7 +39,7 @@ nodes:
   # ── Ветка работы с таблицей (терминальная) ──
   - id: make_excel
     type: llm_worker
-    agent: excel_operator
+    agent: backend/excel_operator
     task: |
       Режим: работа с таблицей.
 
@@ -57,7 +57,7 @@ nodes:
   # ── Не задача про файл: помощник (ответ в чат, уточнение задачи) ──
   - id: no_excel_task
     type: llm_worker
-    agent: excel_helper
+    agent: backend/excel_helper
     task: |
       Классификатор НЕ распознал запрос как работу с файлом таблицы: пользователь
       либо задал вопрос про Excel (ответ — в чат), либо описал задачу неточно,

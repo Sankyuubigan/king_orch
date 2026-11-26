@@ -98,8 +98,8 @@ pub use context::WorkflowContext;
 pub use editor_fidelity::{analyze_workflow_fidelity, GraphDiagnostic};
 pub use parser::WorkflowConfig;
 pub use parser::{
-    find_workflow_by_stem, load_workflows, parse_workflow_file, resolve_entry,
-    separate_top_level_fields, EdgeDef, FactsFile, GroupDef, NodeDef, NodeType, WorkflowDef,
+    load_workflows, parse_workflow_file, resolve_entry, separate_top_level_fields, EdgeDef,
+    FactsFile, GroupDef, NodeDef, NodeType, WorkflowDef,
 };
 
 use crate::domain::agent_manager::AgentProfile;
@@ -605,7 +605,7 @@ where
                 llm_nodes.iter().map(|n| n.id.as_str()).collect::<Vec<_>>().join(", ")
             ));
             match run_fused_group(
-                workflow.config.as_ref(),
+                workflow,
                 group,
                 &system_prompt,
                 &grammar,
@@ -827,12 +827,13 @@ fn build_fused_system_prompt(
     let mut stages: Vec<groups::FusedStage> = Vec::with_capacity(ordered.len());
     for node in ordered {
         if let Some(agent_id) = node.agent.as_deref().map(str::trim).filter(|a| !a.is_empty()) {
-            let agent = agents.iter().find(|a| a.id == agent_id).ok_or_else(|| {
-                format!(
-                    "в группе '{}': нода '{}' ссылается на агента '{}', которого нет в каталоге",
-                    group.id, node.id, agent_id
-                )
-            })?;
+            let agent = parser::resolve_agent_in_workflow(agents, workflow, agent_id)
+                .map_err(|e| {
+                    format!(
+                        "в группе '{}': нода '{}': {}",
+                        group.id, node.id, e
+                    )
+                })?;
             if agent.system_prompt.trim().is_empty() {
                 return Err(format!(
                     "в группе '{}': у агента '{}` (нода '{}') пустой системный промпт — \
@@ -904,7 +905,7 @@ fn build_fused_system_prompt(
 /// JSON», «JSON без обязательного ключа» или «пропущенный этап» — честная ошибка
 /// с перечнем ключей, а не пустые all-false сигналы.
 fn run_fused_group<L, S, C>(
-    graph_config: Option<&WorkflowConfig>,
+    workflow: &WorkflowDef,
     group: &GroupDef,
     system_prompt: &str,
     grammar: &str,
@@ -930,7 +931,7 @@ where
         &runner.sampling_presets,
         runner.model_params,
         &None,
-        &graph_config.cloned(),
+        &workflow.config.clone(),
         None,
     );
     let (text, _reasoning) = runner.call_llm_direct(
@@ -989,20 +990,16 @@ where
             .fused_agent
             .clone()
             .unwrap_or_else(|| group.id.clone());
-        let author_name = runner
-            .agents
-            .iter()
-            .find(|a| a.id == author)
+        let author_name = parser::resolve_agent_in_workflow(runner.agents, workflow, &author)
             .map(|a| a.name.clone())
-            .or_else(|| {
+            .unwrap_or_else(|_| {
                 let title = group.title.trim();
                 if title.is_empty() {
-                    None
+                    "Схлопнутый шаг".to_string()
                 } else {
-                    Some(title.to_string())
+                    title.to_string()
                 }
-            })
-            .unwrap_or_else(|| "Схлопнутый шаг".to_string());
+            });
         let msg = ChatMessage {
             id: Some(format!("msg_{}", runner.msg_counter)),
             msg_type: "message".to_string(),
@@ -1160,6 +1157,7 @@ mod tests {
             visible: true,
             file_stem: String::new(),
             parent_dir: String::new(),
+            team: None,
             config: None,
             entry: None,
             strategy: Some("fused".to_string()),

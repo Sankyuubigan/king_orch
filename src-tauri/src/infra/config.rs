@@ -23,8 +23,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use tauri::path::BaseDirectory;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 
 /// Единые движковые типы — из плагина (SSOT), чтоб хостовый `AppConfig`
 /// сериализовался в тот же JSON, что и `EngineConfig` плагина.
@@ -372,127 +371,502 @@ pub fn set_engine_dirs(
     engine_config::save_config(app, &eng)
 }
 
-pub fn find_agents_dir(app: &AppHandle) -> PathBuf {
-    let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
+// ─────────────────────────────────────────────────────────────────────────────
+// Бандлимые ресурсы: единый резолвер (26.11.2026)
+//
+// До этой правки каждый ресурс (`agents/`, `mcp_servers/`, `tasks_for_test_llm/`,
+// `sampling_presets.json`) искался своим каскадом кандидатов, и в установленной
+// копии последним кандидатом всегда был корень `$INSTDIR`. Причина инцидента:
+// NSIS `/UPDATE` не удаляет файлы, которых нет в текущей сборке (`$UpdateMode = 1`
+// → `Goto reinst_done` минует старый uninstall.exe, а секция Uninstall статична
+// для своей сборки), поэтому призраки прошлых версий живут в корне вечно и
+// участвуют в резолве. Инцидент: старый `agents/psychotherapist/archive/
+// shadow_worker.md` побеждал актуальный `frontend/shadow_worker.md`.
+//
+// Теперь у ресурсов ОДНА раскладка и ОДИН резолвер:
+//   * dev-репозиторий  → файлы прямо из исходников;
+//   * установленная копия → строго `resources/<version>/` (никакого корня $INSTDIR).
+// Отсутствие `resources/<version>` — громкая ошибка в лог, а не тихий откат на
+// корень (откат и был механизмом подхвата мусора).
+// ─────────────────────────────────────────────────────────────────────────────
 
-    // Dev-чекout: исходники в корне репозитория (target/<profile>/../../agents).
-    // Приоритет исходников гарантирует, что в списке агентов всегда актуальный
-    // набор из agents/, а не устаревшая копия ресурсов в target/ (Tauri копирует
-    // ресурсы аддитивно и НЕ удаляет выпиленные из исходников файлы-призраки).
-    // Паттерн тот же, что в find_mcp_servers_dir ниже.
-    // 3 уровня вверх от exe_dir: target/release/ → target/ → src-tauri/ → корень проекта
-    let repo_agents = exe_dir.join("..").join("..").join("..").join("agents");
-    if repo_agents.exists() {
-        return repo_agents;
+/// Режим запуска: dev-репозиторий или установленная копия.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeLayout {
+    /// Запуск из дерева исходников: ресурсы читаются напрямую из репозитория.
+    DevRepo { repo_root: PathBuf },
+    /// Установленная копия: ресурсы строго из `resources/<version>/`.
+    Installed { exe_dir: PathBuf },
+}
+
+/// Бандлимый ресурс приложения (всё, что кладёт установщик).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundledResource {
+    Agents,
+    McpServers,
+    TasksForTestLlm,
+    SamplingPresets,
+    CloudRoutersGateway,
+}
+
+/// Папка exe через `current_exe()` — правило `rules.md:53` (не `app.path()`:
+/// путь должен вычисляться одинаково и там, где AppHandle недоступен).
+fn exe_dir_early() -> PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."))
+}
+
+/// Корень репозитория: `src-tauri/Cargo.toml` + `agents/` существуют вместе.
+fn is_repo_root(dir: &Path) -> bool {
+    dir.join("src-tauri").join("Cargo.toml").is_file() && dir.join("agents").is_dir()
+}
+
+/// Кандидаты корня репозитория для dev-запуска.
+///
+/// 1. `target/<profile>/../../..` — классическая раскладка (target внутри проекта).
+/// 2. `CARGO_MANIFEST_DIR` (путь крейта на машине сборки) — нужен на машинах с
+///    ОБЩИМ `target-dir` (`~/.cargo/config.toml → build.target-dir`): exe лежит в
+///    `D:/Programs/cargo-target/release`, и подъём на 3 уровня вверх даёт
+///    `D:/Programs`, а не репозиторий. Dev и установленная копия на такой машине
+///    сосуществуют, поэтому этот кандидат используется ТОЛЬКО когда маркеров
+///    установки рядом с exe нет (см. [`runtime_layout`]).
+fn repo_root_candidate(exe_dir: &Path) -> Option<PathBuf> {
+    let up3 = exe_dir.join("..").join("..").join("..");
+    if is_repo_root(&up3) {
+        return Some(up3);
     }
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    if let Some(root) = manifest_dir.parent() {
+        if is_repo_root(root) {
+            return Some(root.to_path_buf());
+        }
+    }
+    None
+}
 
-    for rel in ["agents", "../agents"] {
-        if let Ok(path) = app.path().resolve(rel, BaseDirectory::Resource) {
-            if path.exists() {
-                return path;
+/// Маркеры установленной копии рядом с exe.
+///
+/// `uninstall.exe` пишет NSIS-установщик, `resources/` создаёт версионная
+/// раскладка. Присутствие любого из них запрещает dev-детект: иначе запуск
+/// установленной копии на машине разработчика подхватил бы исходники.
+fn has_install_markers(exe_dir: &Path) -> bool {
+    exe_dir.join("uninstall.exe").is_file() || exe_dir.join("resources").is_dir()
+}
+
+/// Режим запуска. Определяется по фактам на диске, без догадок.
+pub fn runtime_layout() -> RuntimeLayout {
+    let exe_dir = exe_dir_early();
+    if !has_install_markers(&exe_dir) {
+        if let Some(repo_root) = repo_root_candidate(&exe_dir) {
+            return RuntimeLayout::DevRepo { repo_root };
+        }
+    }
+    RuntimeLayout::Installed { exe_dir }
+}
+
+/// Каталог ресурсов текущей версии в установленной копии.
+pub fn installed_version_dir(exe_dir: &Path) -> PathBuf {
+    exe_dir
+        .join("resources")
+        .join(env!("CARGO_PKG_VERSION"))
+}
+
+/// Абсолютный путь бандлимого ресурса (SSOT для всего приложения).
+///
+/// В `Installed`-режиме — строго `resources/<version>/…`; фоллбэка на корень
+/// `$INSTDIR` нет by design. Отсутствующий каталог версии означает сломанную
+/// (или чужую) установку: пишем `log::error!` с ожидаемым путём. Возвращаем тот
+/// же путь версии, а не корень — пустой каталог даст честный «агентов нет»
+/// вместо тихого подхвата призраков.
+pub fn bundled_resource(resource: BundledResource) -> PathBuf {
+    resolve_bundled_resource(runtime_layout(), resource)
+}
+
+/// Ядро [`bundled_resource`], отделённое от `current_exe()`.
+///
+/// Нужно для тестов: `runtime_layout()` в тестовом бинаре всегда даёт `DevRepo`
+/// (exe лежит в `target/<profile>/`), поэтому раскладку `Installed` иначе не
+/// проверить. Раскладка — контракт Фазы A, её обязан стеречь тест, а не память.
+pub(crate) fn resolve_bundled_resource(layout: RuntimeLayout, resource: BundledResource) -> PathBuf {
+    match layout {
+        RuntimeLayout::DevRepo { repo_root } => match resource {
+            BundledResource::Agents => repo_root.join("agents"),
+            BundledResource::McpServers => repo_root.join("src-tauri").join("mcp_servers"),
+            BundledResource::TasksForTestLlm => repo_root.join("tasks_for_test_llm"),
+            BundledResource::SamplingPresets => repo_root.join("sampling_presets.json"),
+            BundledResource::CloudRoutersGateway => {
+                repo_root.join("src-tauri").join("resources").join("cloud-routers-gateway.exe")
+            }
+        },
+        RuntimeLayout::Installed { exe_dir } => {
+            let version_dir = installed_version_dir(&exe_dir);
+            if !version_dir.is_dir() {
+                log::error!(
+                    "[resources] каталог ресурсов версии не найден: {} — установка повреждена или \
+                     версия exe не совпадает с версией установщика. Ресурсы в корне папки установки \
+                     НЕ читаются (это источник агентов-призраков). Переустановите приложение.",
+                    version_dir.display()
+                );
+            }
+            match resource {
+                BundledResource::Agents => version_dir.join("agents"),
+                BundledResource::McpServers => version_dir.join("mcp_servers"),
+                BundledResource::TasksForTestLlm => version_dir.join("tasks_for_test_llm"),
+                BundledResource::SamplingPresets => version_dir.join("sampling_presets.json"),
+                BundledResource::CloudRoutersGateway => {
+                    // Остаётся в корне: плагин cloud-routers ищет бинарь рядом с
+                    // exe хоста (кросс-апп контракт, менять его ради раскладки
+                    // незачем — файл не сканируется как каталог и призраком быть
+                    // не может, `/UPDATE` его перезаписывает).
+                    exe_dir.join("cloud-routers-gateway.exe")
+                }
             }
         }
     }
-    if exe_dir.join("agents").exists() {
-        return exe_dir.join("agents");
+}
+
+/// Удаление ресурсов прошлых версий и legacy-хвостов из корня установки.
+///
+/// Работает ТОЛЬКО в установленной копии и только при подтверждённой раскладке
+/// версии. Каждый guard — измеряемый факт на диске, не «наверное, это релиз».
+///
+/// Что делает:
+/// 1. `resources/<любая версия ≠ текущей>` → удалить (откат сам восстановит:
+///    старый установщик положит свою папку, старый exe прочитает её).
+/// 2. Одноразовая миграция с версий ≤ 26.11.11: удалить legacy-ресурсы из КОРНЯ
+///    `$INSTDIR` по явному белому списку (`agents/`, `mcp_servers/`,
+///    `tasks_for_test_llm/`, `sampling_presets.json`) — именно там жили призраки.
+///
+/// Что НЕ трогает: `redist/`, `resources/`, exe, `uninstall.exe`,
+/// `cloud-routers-gateway.exe`, `*_outputs/`, `session_logs/`, `*.log`,
+/// `crash_dump*`, `KingOrchData/`, `llamacpp/`, движковые папки.
+pub fn cleanup_stale_bundled_resources() {
+    let exe_dir = match runtime_layout() {
+        RuntimeLayout::Installed { exe_dir } => exe_dir,
+        RuntimeLayout::DevRepo { .. } => return,
+    };
+    cleanup_stale_in_dir(&exe_dir, env!("CARGO_PKG_VERSION"));
+}
+
+/// Тело очистки, отделённое от окружения: принимает каталог установки и версию
+/// явно. Так поведение доказывается тестом на временной папке, а не зависит от
+/// того, откуда запущен тестовый бинарь (он лежит в `target/<profile>/`, где
+/// `runtime_layout()` даёт DevRepo).
+fn cleanup_stale_in_dir(exe_dir: &Path, current_version: &str) {
+    // Guard: папка не должна быть деревом исходников (запуск релизной сборки из
+    // репозитория — легитимный сценарий, чистить там нечего и опасно).
+    if exe_dir.join("Cargo.toml").exists() || exe_dir.join(".git").exists() {
+        return;
     }
-    let path = PathBuf::from("agents");
-    if path.exists() {
-        return path;
+
+    let version_dir = exe_dir.join("resources").join(current_version);
+    if !version_dir.is_dir() {
+        // Ресурсы текущей версии не распакованы — удалять старые НЕЛЬЗЯ: останемся
+        // без ресурсов вообще.
+        return;
     }
-    app.path().resolve("agents", BaseDirectory::Resource)
-        .unwrap_or_else(|_| PathBuf::from("agents"))
+
+    let resources_root = exe_dir.join("resources");
+    if let Ok(entries) = fs::read_dir(&resources_root) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == current_version {
+                continue;
+            }
+            match fs::remove_dir_all(&path) {
+                Ok(()) => log::info!("[resources] удалена папка прошлой версии: {}", path.display()),
+                Err(e) => log::warn!(
+                    "[resources] не удалось удалить {}: {} (повторим на следующем запуске)",
+                    path.display(),
+                    e
+                ),
+            }
+        }
+    }
+
+    // Legacy-миграция: только для настоящей NSIS-установки (uninstall.exe).
+    if !exe_dir.join("uninstall.exe").is_file() {
+        return;
+    }
+    let legacy_dirs = ["agents", "mcp_servers", "tasks_for_test_llm"];
+    let legacy_files = ["sampling_presets.json"];
+    for dir in legacy_dirs {
+        let path = exe_dir.join(dir);
+        if path.is_dir() {
+            match fs::remove_dir_all(&path) {
+                Ok(()) => log::info!(
+                    "[resources] legacy-каталог из корня установки удалён: {}",
+                    path.display()
+                ),
+                Err(e) => log::warn!(
+                    "[resources] не удалось удалить legacy-каталог {}: {}",
+                    path.display(),
+                    e
+                ),
+            }
+        }
+    }
+    for file in legacy_files {
+        let path = exe_dir.join(file);
+        if path.is_file() {
+            match fs::remove_file(&path) {
+                Ok(()) => log::info!(
+                    "[resources] legacy-файл из корня установки удалён: {}",
+                    path.display()
+                ),
+                Err(e) => log::warn!(
+                    "[resources] не удалось удалить legacy-файл {}: {}",
+                    path.display(),
+                    e
+                ),
+            }
+        }
+    }
+}
+
+pub fn find_agents_dir(_app: &AppHandle) -> PathBuf {
+    bundled_resource(BundledResource::Agents)
 }
 
 /// agents-каталог БЕЗ AppHandle — для domain-слоя (инъекция `[ВЕТКА БАЗЫ]`,
-/// 01.11.26). Порядок приоритетов тот же, что у `find_agents_dir`, но путь
-/// exe — через `std::env::current_exe()` (правило rules.md:53), а Resource-
-/// ветка опущена: ресурсы Tauri резолвятся только с AppHandle.
+/// 01.11.26). Тот же SSOT-резолвер, что и у [`find_agents_dir`].
 pub fn find_agents_dir_early() -> std::path::PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(exe_dir) = exe.parent() {
-            // Dev-чекout: 3 уровня вверх от exe (target/<profile>/ → target/ →
-            // src-tauri/ → корень проекта) — приоритет исходников, как в
-            // `find_agents_dir`.
-            let repo_agents = exe_dir.join("..").join("..").join("..").join("agents");
-            if repo_agents.exists() {
-                return repo_agents;
-            }
-            if exe_dir.join("agents").exists() {
-                return exe_dir.join("agents");
-            }
-        }
-    }
-    PathBuf::from("agents")
+    bundled_resource(BundledResource::Agents)
 }
 
-pub fn find_mcp_servers_dir(app: &AppHandle) -> PathBuf {
-    let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
-    for dir in [
-        // Dev-чекout: исходники в корне репозитория — приоритет как в find_agents_dir.
-        exe_dir.join("..").join("..").join("src-tauri").join("mcp_servers"),
-        exe_dir.join("mcp_servers"),
-        resource_dir.join("mcp_servers"),
-        PathBuf::from("src-tauri").join("mcp_servers"),
-    ] {
-        if dir.exists() {
-            return dir;
-        }
-    }
-    resource_dir.join("mcp_servers")
+pub fn find_mcp_servers_dir(_app: &AppHandle) -> PathBuf {
+    bundled_resource(BundledResource::McpServers)
 }
 
 /// Директория с наборами задач для coding-бенчмарка LLM (tasks_for_test_llm/).
-/// Паттерн поиска тот же, что в find_agents_dir / find_mcp_servers_dir:
-/// сначала dev-чекout в корне репозитория, затем ресурсы приложения.
-pub fn find_coding_tests_dir(app: &AppHandle) -> PathBuf {
-    let exe_dir = app.path().executable_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let resource_dir = app.path().resource_dir().unwrap_or_else(|_| PathBuf::from("."));
-    for dir in [
-        exe_dir.join("..").join("..").join("tasks_for_test_llm"),
-        exe_dir.join("tasks_for_test_llm"),
-        resource_dir.join("tasks_for_test_llm"),
-        PathBuf::from("tasks_for_test_llm"),
-    ] {
-        if dir.exists() {
-            return dir;
-        }
-    }
-    app.path()
-        .resolve("tasks_for_test_llm", BaseDirectory::Resource)
-        .unwrap_or_else(|_| resource_dir.join("tasks_for_test_llm"))
+pub fn find_coding_tests_dir(_app: &AppHandle) -> PathBuf {
+    bundled_resource(BundledResource::TasksForTestLlm)
 }
 
 /// Именованные пресеты параметров сэмплинга (sampling_presets.json)
 pub type SamplingPresets = HashMap<String, ModelParams>;
 
-/// Загружает пресеты из sampling_presets.json, ища в нескольких местах.
-/// Если файл не найден — возвращает пустой HashMap (backward compatible).
+/// Загружает пресеты из `sampling_presets.json` через SSOT-резолвер.
+/// Отсутствие файла — не ошибка (поведение сохранено), но пишется в лог.
 pub fn load_sampling_presets(project_dir: &Path) -> SamplingPresets {
-    let possible_paths = vec![
-        project_dir.join("sampling_presets.json"),
-        project_dir.join("src-tauri").join("sampling_presets.json"),
-        project_dir.join("..").join("sampling_presets.json"),
-        PathBuf::from("sampling_presets.json"),
-    ];
+    let mut candidates = vec![bundled_resource(BundledResource::SamplingPresets)];
+    // Тестовые/доменные вызовы передают свой корень проекта явно (pipeline_test,
+    // стенды). В установленной копии этот кандидат не нужен и не должен
+    // подхватывать что-либо из корня установки — добавляем только в dev.
+    if matches!(runtime_layout(), RuntimeLayout::DevRepo { .. }) {
+        candidates.push(project_dir.join("sampling_presets.json"));
+    }
 
-    for path in &possible_paths {
+    for path in &candidates {
         if let Ok(data) = fs::read_to_string(path) {
             if let Ok(presets) = serde_json::from_str::<SamplingPresets>(&data) {
-                eprintln!("[config] sampling_presets.json загружен из {}", path.display());
+                log::info!("[config] sampling_presets.json загружен из {}", path.display());
                 return presets;
             }
         }
     }
-    eprintln!("[config] sampling_presets.json не найден (пробовали: {:?}), пресеты не загружены",
-        possible_paths.iter().map(|p| p.display().to_string()).collect::<Vec<_>>());
+    log::warn!(
+        "[config] sampling_presets.json не найден (проверено: {:?}), пресеты не загружены",
+        candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>()
+    );
     HashMap::new()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Очистка прошлых версий и legacy-хвостов: удаляется ТОЛЬКО чужое.
+    ///
+    /// Инцидент 26.11.26: NSIS `/UPDATE` не удаляет файлы, которых нет в текущей
+    /// сборке, поэтому призраки (`agents/psychotherapist/archive/shadow_worker.md`)
+    /// жили в корне установки вечно и побеждали в резолве. Тест фиксирует границу:
+    /// старые `resources/<ver>/` и legacy-корень уходят, ресурсы текущей версии и
+    /// пользовательские данные остаются.
+    #[test]
+    fn cleanup_stale_resources_removes_only_old_versions_and_legacy() {
+        let root = std::env::temp_dir().join(format!(
+            "king_orch_cleanup_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let touch = |rel: &str, body: &str| {
+            let p = root.join(rel);
+            fs::create_dir_all(p.parent().unwrap()).unwrap();
+            fs::write(&p, body).unwrap();
+        };
+
+        // Текущая версия — есть.
+        touch("resources/26.11.12/agents/frontend/shadow_worker.md", "new");
+        // Прошлая версия — должна исчезнуть целиком.
+        touch("resources/26.11.11/agents/archive/shadow_worker.md", "ghost");
+        // Legacy-корень (миграция с версий ≤ 26.11.11) — должен исчезнуть.
+        touch("agents/psychotherapist/archive/shadow_worker.md", "ghost");
+        touch("mcp_servers/time.ts", "x");
+        touch("tasks_for_test_llm/t1.json", "x");
+        touch("sampling_presets.json", "{}");
+        // Пользовательские данные и прочее — НЕ трогать.
+        touch("redist/vcruntime140.dll", "dll");
+        touch("image_outputs/1/a.png", "png");
+        touch("video_outputs/last_video_req.json", "{}");
+        touch("session_logs/1.log", "log");
+        touch("king_orch.log", "log");
+        touch("uninstall.exe", "stub");
+        touch("king_orch.exe", "stub");
+        touch("cloud-routers-gateway.exe", "stub");
+
+        cleanup_stale_in_dir(&root, "26.11.12");
+
+        let exists = |rel: &str| root.join(rel).exists();
+        assert!(!exists("resources/26.11.11"), "папка прошлой версии не удалена");
+        assert!(exists("resources/26.11.12/agents/frontend/shadow_worker.md"), "ресурсы текущей версии удалены");
+        assert!(!exists("agents"), "legacy-каталог agents/ из корня не удалён");
+        assert!(!exists("mcp_servers"), "legacy-каталог mcp_servers/ не удалён");
+        assert!(!exists("tasks_for_test_llm"), "legacy-каталог tasks_for_test_llm/ не удалён");
+        assert!(!exists("sampling_presets.json"), "legacy sampling_presets.json не удалён");
+        for keep in [
+            "redist/vcruntime140.dll",
+            "image_outputs/1/a.png",
+            "video_outputs/last_video_req.json",
+            "session_logs/1.log",
+            "king_orch.log",
+            "uninstall.exe",
+            "king_orch.exe",
+            "cloud-routers-gateway.exe",
+        ] {
+            assert!(exists(keep), "удалено то, что трогать нельзя: {}", keep);
+        }
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Cleanup обязан отказаться работать в дереве исходников: там `agents/` —
+    /// это репозиторий, а не legacy-хвост установки.
+    #[test]
+    fn cleanup_refuses_to_run_in_dev_repo() {
+        let root = std::env::temp_dir().join(format!(
+            "king_orch_cleanup_dev_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let agents = root.join("agents");
+        fs::create_dir_all(&agents).unwrap();
+        fs::write(agents.join("basic.md"), "agent").unwrap();
+        fs::write(root.join("Cargo.toml"), "[package]").unwrap();
+        // Даже при наличии resources/<версии> (иначе guard сработал бы по другой
+        // причине) дерево исходников не чистится.
+        let cur = root.join("resources").join(env!("CARGO_PKG_VERSION"));
+        fs::create_dir_all(&cur).unwrap();
+        let old = root.join("resources").join("1.0.0");
+        fs::create_dir_all(&old).unwrap();
+
+        cleanup_stale_in_dir(&root, env!("CARGO_PKG_VERSION"));
+
+        assert!(agents.join("basic.md").exists(), "в dev-репозитории удалены агенты");
+        assert!(old.exists(), "в dev-репозитории удалена папка чужой версии");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Без распакованных ресурсов текущей версии cleanup не удаляет НИЧЕГО:
+    /// иначе сломанная установка осталась бы вообще без ресурсов.
+    #[test]
+    fn cleanup_refuses_when_current_version_missing() {
+        let root = std::env::temp_dir().join(format!(
+            "king_orch_cleanup_nocur_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let old = root.join("resources").join("26.11.11");
+        fs::create_dir_all(&old).unwrap();
+        fs::write(old.join("a.md"), "x").unwrap();
+        let agents = root.join("agents");
+        fs::create_dir_all(&agents).unwrap();
+        fs::write(agents.join("basic.md"), "agent").unwrap();
+        fs::write(root.join("uninstall.exe"), "stub").unwrap();
+
+        cleanup_stale_in_dir(&root, "26.11.12");
+
+        assert!(old.exists(), "удалена прошлая версия, хотя ресурсы текущей не распакованы");
+        assert!(agents.join("basic.md").exists(), "удалён legacy-каталог при отсутствии ресурсов версии");
+
+        let _ = fs::remove_dir_all(&root);
+    }
+
+    /// Раскладка ресурсов — контракт Фазы A: в установленной копии ВСЁ, что
+    /// сканируется как каталог, живёт строго в `resources/<version>/`; в корне
+    /// остаётся только бинарь шлюза (кросс-апп контракт плагина cloud-routers).
+    ///
+    /// Страж ловит регресс «фоллбэк на корень $INSTDIR»: именно он воскрешал
+    /// призрака `agents/psychotherapist/archive/shadow_worker_old_version.md`.
+    #[test]
+    fn installed_layout_never_resolves_scanned_resources_from_install_root() {
+        let exe_dir = PathBuf::from("D:\\Programs\\nildencorp\\King Orch");
+        let layout = RuntimeLayout::Installed { exe_dir: exe_dir.clone() };
+        let version_dir = exe_dir.join("resources").join(env!("CARGO_PKG_VERSION"));
+
+        for (resource, tail) in [
+            (BundledResource::Agents, "agents"),
+            (BundledResource::McpServers, "mcp_servers"),
+            (BundledResource::TasksForTestLlm, "tasks_for_test_llm"),
+            (BundledResource::SamplingPresets, "sampling_presets.json"),
+        ] {
+            let resolved = resolve_bundled_resource(layout.clone(), resource);
+            assert_eq!(
+                resolved,
+                version_dir.join(tail),
+                "{:?} обязан читаться из папки версии, а не из корня установки",
+                resource
+            );
+            assert_ne!(
+                resolved,
+                exe_dir.join(tail),
+                "{:?} разрешён в корень установки — это и есть путь призрака",
+                resource
+            );
+        }
+
+        // Бинарь шлюза — исключение по контракту плагина: лежит рядом с exe хоста.
+        assert_eq!(
+            resolve_bundled_resource(layout, BundledResource::CloudRoutersGateway),
+            exe_dir.join("cloud-routers-gateway.exe"),
+            "шлюз обязан оставаться рядом с exe хоста (контракт plugin-cloud-routers)"
+        );
+    }
+
+    /// Dev-раскладка не знает про `resources/<version>/` вообще: ресурсы читаются
+    /// из дерева исходников. Иначе dev-сборка после `generate_installer.bat`
+    /// подхватила бы staged-копию вместо живых агентов.
+    #[test]
+    fn dev_layout_resolves_resources_from_repo_root() {
+        let repo_root = PathBuf::from("D:\\Projects\\king_orch_3");
+        let layout = RuntimeLayout::DevRepo { repo_root: repo_root.clone() };
+
+        assert_eq!(
+            resolve_bundled_resource(layout.clone(), BundledResource::Agents),
+            repo_root.join("agents")
+        );
+        assert_eq!(
+            resolve_bundled_resource(layout.clone(), BundledResource::McpServers),
+            repo_root.join("src-tauri").join("mcp_servers")
+        );
+        assert_eq!(
+            resolve_bundled_resource(layout, BundledResource::SamplingPresets),
+            repo_root.join("sampling_presets.json")
+        );
+    }
 
     #[test]
     fn test_tab_state_accepts_camel_and_snake_case() {

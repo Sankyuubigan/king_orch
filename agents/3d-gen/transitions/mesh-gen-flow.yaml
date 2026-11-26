@@ -48,7 +48,7 @@ nodes:
   #    анимацию это не добавляет. CPU: минуты до десятков минут.
   - id: mesh_rig
     type: llm_worker
-    agent: rig_operator
+    agent: backend/rig_operator
     task: |
       РЕЖИМ РИГГИНГА: пользователь просит поставить на готовую 3D-модель
       скелет и веса скиннинга. Действуй по разделу «Как работать» своего
@@ -71,7 +71,7 @@ nodes:
   # ── Ветка генерации из картинки (терминальная) ──
   - id: mesh_3d_generate
     type: llm_worker
-    agent: mesh_operator
+    agent: backend/mesh_operator
     task: |
       Сгенерируй 3D-модель (GLB) из изображения.
 
@@ -90,7 +90,7 @@ nodes:
   #    исходной КАРТИНКИ (edit_image) → регенерация (generate_mesh).
   - id: mesh_3d_edit
     type: llm_worker
-    agent: mesh_operator
+    agent: backend/mesh_operator
     task: |
       РЕЖИМ ПРАВКА 3D-МОДЕЛИ: пользователь просит изменить существующую 3D-модель.
       Действуй по разделу «Режим ПРАВКА» своего агента: правится исходная
@@ -115,7 +115,7 @@ nodes:
   #    в истории → needs_3d_generate → mesh_operator → generate_mesh.
   - id: mesh_text_concept
     type: llm_worker
-    agent: mesh_concept
+    agent: backend/mesh_concept
     task: |
       РЕЖИМ КОНЦЕПТА (текст→3D): пользователь описывает объект словами,
       изображения-источника нет. Действуй по своему агенту: английское
@@ -136,7 +136,7 @@ nodes:
   # ── Не 3D-запрос: помощник (объясняет возможности, уточняет задачу) ──
   - id: no_3d_task
     type: llm_worker
-    agent: mesh_helper
+    agent: backend/mesh_helper
     task: |
       Классификатор НЕ распознал задачу для 3D-моделей (ни generate, ни edit):
       пользователь либо спрашивает о возможностях, либо описал задачу неточно.

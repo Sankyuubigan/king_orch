@@ -78,10 +78,8 @@ pub async fn run_iterative_test(
     let bins_dir =
         infra::bin_downloader::get_bins_dir(&crate::infra::storage::app_data_root());
     let agents = domain::load_agents(&agents_dir)?;
-    let agent = agents
-        .iter()
-        .find(|a| a.id == agent_id)
-        .ok_or_else(|| format!("Агент '{}' не найден", agent_id))?;
+    let agent = domain::agent_manager::resolve_agent(&agents, None, &agent_id)
+        .map_err(|e| e.to_string())?;
 
     let log_cb = {
         let app_handle = app.clone();
@@ -837,9 +835,10 @@ pub async fn run_custom_prompt_test(
     let bins_dir =
         infra::bin_downloader::get_bins_dir(&crate::infra::storage::app_data_root());
     let agents = domain::load_agents(&agents_dir)?;
-    // .md-агент ИЛИ workflow-граф: у графа AgentEntry.id = file_stem yaml-файла
+    // .md-агент ИЛИ workflow-граф: у графа AgentEntry.id = канонический путь
     // (agent_manager::load_entry_points), в списке AgentProfile его нет.
-    let agent = agents.iter().find(|a| a.id == agent_id);
+    // `Err` не ошибка — значит выбран граф, а не .md-агент.
+    let agent = domain::agent_manager::resolve_agent(&agents, None, &agent_id).ok();
 
     let config = infra::load_config(&app);
     let model_params = config.model_params.get(&model_path).cloned().unwrap_or_default();
@@ -938,9 +937,7 @@ pub async fn run_custom_prompt_test(
         (outcome, current_chat_messages)
     } else {
         let workflows_owned = domain::workflow_engine::parser::load_workflows(&agents_dir)?;
-        let workflow = workflows_owned
-            .iter()
-            .find(|w| w.file_stem == agent_id || w.name == agent_id)
+        let workflow = domain::workflow_engine::parser::resolve_workflow(&workflows_owned, &agent_id)
             .ok_or_else(|| format!("Агент или пайплайн '{}' не найден", agent_id))?;
         let grammars_dir = domain::orchestrator::resolve_grammars_dir(&agents_dir, Some(workflow));
         let sampling_presets = crate::infra::load_sampling_presets(&project_root);

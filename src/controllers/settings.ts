@@ -356,7 +356,18 @@ export class SettingsController {
     try {
       const entries: any[] = await invoke("get_agents");
       store.agents = entries;
-      store.lastAgent = lastAgent ?? null;
+      // `last_agent` из конфига мог остаться от прошлой версии: агент переименован,
+      // переехал в другую папку или удалён. Канонический ID теперь = путь внутри
+      // команды, поэтому старый file_stem («shadow_worker») уже ни с чем не совпадёт.
+      // Молча оставлять его нельзя: список показал бы пустой выбор, а чат — ошибку
+      // «агент не найден». Сбрасываем на «не выбран» и честно пишем в лог.
+      let resolved: string | null = lastAgent ?? null;
+      if (resolved && !entries.some((e: any) => e.id === resolved)) {
+        logFront(`[settings] сохранённый агент '${resolved}' не найден среди ${entries.length} — выбор сброшен`);
+        resolved = null;
+        await invoke("set_config_value", { key: "last_agent", value: "" }).catch(() => {});
+      }
+      store.lastAgent = resolved;
       store.agentsReady = true;
       bus.emit("model-catalog-changed");
     } catch(e) { void trackError("settings.loadAgents", e); }

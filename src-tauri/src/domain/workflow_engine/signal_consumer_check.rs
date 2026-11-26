@@ -250,6 +250,7 @@ edges: []
         let mut wf: WorkflowDef =
             serde_yaml::from_str(yaml).expect("фикстурный YAML обязан парситься");
         wf.parent_dir = parent_dir.to_string_lossy().to_string();
+        wf.team = crate::domain::workflow_engine::parser::team_of_workflow_path(&parent_dir.join("wf.yaml"));
         wf
     }
 

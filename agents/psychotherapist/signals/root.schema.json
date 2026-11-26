@@ -3,7 +3,7 @@
   "title": "Единый контракт сигналов emit_signal",
   "description": "Единый источник правды (SSOT) для сигналов emit-агентов: маппинг agent_id → (сигнальный key + JSON Schema value). Агент вызывает emit_signal как инструмент внутри своего обычного ответа (ОДИН вызов LLM, второго вызова нет). Оркестратор парсит конверт и сохраняет сигнал. Форма конверта: {\"tool\":\"emit_signal\",\"arguments\":{\"key\":..,\"value\":..}}; допускается сплющенная форма без обёртки arguments ({\"tool\":\"emit_signal\",\"key\":..,\"value\":..}) — парсер нормализует её к canonical-виду. value подставляется инлайн, БЕЗ $ref — вложенные $ref сломаны в llama.cpp, ggml-org/llama.cpp#8073).",
   "agents": {
-    "validator": {
+    "backend/validator": {
       "key": "validator_report",
       "value": {
         "type": "object",
@@ -33,7 +33,7 @@
         "required": ["e1", "e1_text", "e2", "e2_text", "e3", "e3_text", "e4", "e4_text", "e5", "e5_text", "e6", "e6_text", "e7", "e7_text", "e8", "e8_text", "e9", "e9_text", "pattern_vector", "target"]
       }
     },
-    "validator_flat": {
+    "experiments/validator_flat": {
       "key": "validator_report",
       "value": {
         "type": "object",
@@ -52,7 +52,7 @@
         "required": ["e1", "e2", "e3", "e4", "e5", "e6", "e7", "e8", "e9"]
       }
     },
-    "validator_surface": {
+    "experiments/validator_surface": {
       "key": "validator_surface",
       "value": {
         "type": "object",
@@ -66,7 +66,7 @@
         "required": ["e1", "e2", "e6", "e7"]
       }
     },
-    "validator_facade": {
+    "experiments/validator_facade": {
       "key": "validator_facade",
       "value": {
         "type": "object",
@@ -80,7 +80,7 @@
         "required": ["e4", "e5", "e8", "e9"]
       }
     },
-    "validator_core": {
+    "experiments/validator_core": {
       "key": "validator_core",
       "value": {
         "type": "object",
@@ -91,7 +91,7 @@
         "required": ["e3"]
       }
     },
-    "focus_keeper": {
+    "archive/focus_keeper": {
       "key": "focus_keeper",
       "value": {
         "type": "string",

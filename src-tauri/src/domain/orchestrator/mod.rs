@@ -48,7 +48,7 @@ use crate::domain::signals::{
     think_slot_count, SignalContract,
 };
 use crate::domain::workflow_engine::{
-    find_workflow_by_stem, load_workflows, NodeType, WorkflowContext, WorkflowDef, WorkflowRunner,
+    load_workflows, NodeType, WorkflowContext, WorkflowDef, WorkflowRunner,
 };
 use crate::infra::llm_types::GenerationResult;
 // Формула авто-потолка think с контрактом-резервом — SSOT плагина (инфра-дверь).
@@ -303,7 +303,9 @@ pub fn build_worst_agent_prompt(
         .iter()
         .filter(|n| n.node_type == NodeType::LlmWorker)
         .filter_map(|n| n.agent.as_deref())
-        .filter_map(|aid| agents.iter().find(|a| a.id == aid))
+        .filter_map(|aid| {
+            crate::domain::workflow_engine::parser::resolve_agent_in_workflow(agents, wf, aid).ok()
+        })
         .map(|agent| {
             let mut tools = runtime::builtin_tools();
             tools.extend(runtime::agent_code_tool_schemas(agent));
@@ -400,7 +402,7 @@ where
     // автора «предлагать ли граф в КАТАЛОГЕ» (UI), а не разрешение на запуск.
     // Смешивать эти ответственности нельзя: скрытый граф обязан оставаться
     // исполнимым по прямому `agent_id` (иначе он «невидимый, но сломанный»).
-    let workflow_match = find_workflow_by_stem(&workflows, &agent_id);
+    let workflow_match = crate::domain::workflow_engine::parser::resolve_workflow(&workflows, &agent_id);
     let mut messages_store = history.clone();
     for (index, message) in messages_store.iter_mut().enumerate() {
         if message.id.is_none() {
@@ -424,17 +426,22 @@ where
     let uses_image_selection = if let Some(workflow) = workflow_match.as_ref() {
         workflow.nodes.iter().any(|node| {
             node.node_type == NodeType::LlmWorker
-                && node.agent.as_deref().and_then(|agent_id| {
-                    agents
-                        .iter()
-                        .find(|agent| agent.id == agent_id)
-                })
-                .is_some_and(agent_consumes_image_catalog)
+                && node
+                    .agent
+                    .as_deref()
+                    .and_then(|aid| {
+                        crate::domain::workflow_engine::parser::resolve_agent_in_workflow(
+                            &agents, workflow, aid,
+                        )
+                        .ok()
+                    })
+                    .is_some_and(agent_consumes_image_catalog)
         })
     } else {
-        agents
-            .iter()
-            .find(|agent| agent.id == agent_id)
+        // Legacy: `agent_id` пришёл из UI/API — ссылка ГЛОБАЛЬНАЯ (полный путь
+        // от корня agents/ либо плоский агент корня).
+        crate::domain::agent_manager::resolve_agent(&agents, None, &agent_id)
+            .ok()
             .is_some_and(agent_consumes_image_catalog)
     };
     let image_catalog_text = if uses_image_selection {
@@ -450,12 +457,16 @@ where
             .any(|node| {
                 node.agent
                     .as_deref()
-                    .and_then(|id| agents.iter().find(|a| a.id == id))
+                    .and_then(|aid| {
+                        crate::domain::workflow_engine::parser::resolve_agent_in_workflow(
+                            &agents, wf, aid,
+                        )
+                        .ok()
+                    })
                     .is_some_and(|agent| agent.vision)
             }),
-        None => agents
-            .iter()
-            .find(|a| a.id == agent_id)
+        None => crate::domain::agent_manager::resolve_agent(&agents, None, &agent_id)
+            .ok()
             .is_some_and(|agent| agent.vision),
     };
     // Слот движка = ТИР от потребности (PRP 26.11.20, Вариант B): need_ctx от
@@ -489,9 +500,10 @@ where
                 .iter()
                 .filter_map(|node| {
                     let agent = node.agent.as_deref()?;
-                    let mut chars = agents
-                        .iter()
-                        .find(|a| a.id == agent)
+                    let mut chars =
+                        crate::domain::workflow_engine::parser::resolve_agent_in_workflow(
+                            &agents, wf, agent,
+                        )
                         .map(|a| a.system_prompt.chars().count())
                         .unwrap_or(0);
                     if let Ok(Some(frame)) =
@@ -508,9 +520,7 @@ where
                 .max()
                 .unwrap_or(0)
         }
-        None => agents
-            .iter()
-            .find(|a| a.id == agent_id)
+        None => crate::domain::agent_manager::resolve_agent(&agents, None, &agent_id)
             .map(|a| a.system_prompt.chars().count())
             .unwrap_or(0),
     };
@@ -833,7 +843,13 @@ where
         });
     }
 
-    if let Some(primary_agent) = agents.iter().find(|a| a.id == agent_id) {
+    // Legacy-режим: `agent_id` пришёл из UI/API — ссылка ГЛОБАЛЬНАЯ (полный путь
+    // от корня `agents/` либо плоский агент корня). Строгий резолв без фоллбэка
+    // по имени файла: призрак из архива не может «победить» актуального агента.
+    // `None` здесь — не ошибка: `agent_id` мог быть ID графа (ветка выше).
+    if let Ok(primary_agent) =
+        crate::domain::agent_manager::resolve_agent(&agents, None, &agent_id)
+    {
         log_cb(format!("▶ Запуск агента: {}", primary_agent.name));
         log_cb(format!(
             "DEBUG run_chat: history.len={}, msg_0_author={:?}",
@@ -1166,6 +1182,9 @@ where
 
     // ── Определяем signal_contract РАНЬШЕ — нужен для корректного промпта (Method 3). ──
     let signal_contract: Option<SignalContract> = {
+        // Каталог контрактов — `<agents>/<team>/signals`, а ключ агента внутри
+        // `root.schema.json` — его ЛОКАЛЬНЫЙ путь (`backend/validator`), потому
+        // что схема живёт в корне команды (26.11.2026, Паттерн B).
         let signals_dir = agent
             .folder
             .as_ref()
@@ -1181,7 +1200,7 @@ where
                     .unwrap_or(grammars_dir)
                     .join("signals")
             });
-        load_signal_contract(&signals_dir, &agent.id)
+        load_signal_contract(&signals_dir, agent.local_id())
     };
     let uses_method_3 = signal_contract.is_some();
     if uses_method_3 {
@@ -1349,12 +1368,12 @@ where
     // Кэш ДО перемещения native_tools в ctx: нужен в closures цикла (enforce_tool_choice).
     let has_native_tools = native_tools.is_some();
 
-    // ── Per-agent грамматика: agents/<...>/grammars/<agent_id>.gbnf ──
+    // ── Per-agent грамматика: agents/<team>/grammars/<local_id>.gbnf ──
     // Вычисляем РАНО: is_hybrid нужен build_system_prompt ниже. Гибрид = native-агент
     // (coder/research) с per-agent GBNF: цикл живёт на native tools, строгий JSON — ТОЛЬКО
     // в финальном вердиктном grammar-пассе (в цикле grammar + tools[] конфликтуют).
     let agent_grammar = if signal_contract.is_none() {
-        load_agent_grammar(grammars_dir, &agent.id)
+        load_agent_grammar(grammars_dir, agent)
     } else {
         None
     };
@@ -3682,10 +3701,9 @@ mod tests {
     fn real_agent(id: &str) -> AgentProfile {
         let agents_dir = workspace_root().join("agents");
         let agents = load_agents(&agents_dir).expect("агенты должны загрузиться из agents/");
-        agents
-            .into_iter()
-            .find(|a| a.id == id)
-            .unwrap_or_else(|| panic!("агент '{id}' не найден в agents/"))
+        crate::domain::agent_manager::resolve_agent(&agents, None, id)
+            .unwrap_or_else(|e| panic!("{}", e))
+            .clone()
     }
 
     /// Имена инструментов, зарегистрированных MCP-сервером (парсинг tools-блока .ts-файла).
@@ -3726,7 +3744,7 @@ mod tests {
 
     #[test]
     fn docs_researcher_prompt_guarantees_webfetch_reaches_the_model() {
-        let agent = real_agent("docs_researcher");
+        let agent = real_agent("research/backend/docs_researcher");
         assert!(
             agent.mcp_servers.iter().any(|s| s == "docs_fetcher"),
             "docs_researcher обязан иметь mcp-сервер docs_fetcher, есть: {:?}",
@@ -3768,7 +3786,7 @@ mod tests {
 
     #[test]
     fn web_researcher_prompt_guarantees_webfetch_reaches_the_model() {
-        let agent = real_agent("web_researcher");
+        let agent = real_agent("research/backend/web_researcher");
         assert!(
             agent.mcp_servers.iter().any(|s| s == "docs_fetcher"),
             "web_researcher обязан иметь mcp-сервер docs_fetcher, есть: {:?}",
@@ -3794,7 +3812,7 @@ mod tests {
     fn docs_researcher_calls_tool_instead_of_guessing_version() {
         let model_path =
             std::env::var("TEST_MODEL_PATH").expect("Set TEST_MODEL_PATH to a GGUF file path");
-        let agent = real_agent("docs_researcher");
+        let agent = real_agent("research/backend/docs_researcher");
         let mut all_tools = tools_of_server_as_all_tools("docs_fetcher");
         all_tools.extend(crate::infra::web_tool_schemas(&agent.tools));
         all_tools.extend(runtime::builtin_tools());

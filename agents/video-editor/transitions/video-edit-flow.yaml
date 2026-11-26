@@ -39,7 +39,7 @@ nodes:
   # ── Ветка монтажа (терминальная) ──
   - id: video_edit
     type: llm_worker
-    agent: video_editor
+    agent: backend/video_editor
     task: |
       Режим: монтаж видео.
 
@@ -56,7 +56,7 @@ nodes:
   # ── Не задача монтажа: помощник (ответ в чат, уточнение задачи) ──
   - id: no_video_task
     type: llm_worker
-    agent: video_helper
+    agent: backend/video_helper
     task: |
       Классификатор НЕ распознал запрос как задачу монтажа: пользователь либо
       задал вопрос про монтаж видео (ответ — в чат), либо описал задачу неточно,

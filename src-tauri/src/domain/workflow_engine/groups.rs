@@ -1084,6 +1084,7 @@ mod tests {
             visible: true,
             file_stem: String::new(),
             parent_dir: String::new(),
+            team: None,
             config: None,
             entry: None,
             strategy: None,

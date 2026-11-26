@@ -1768,10 +1768,50 @@ mod tests {
         let root: Value = serde_json::from_str(&text).expect("root.schema.json — валидный JSON");
         let agents = root.get("agents").expect("ключ agents");
         // soma_translator исключён 03.11.2026: пользовательский агент без контракта.
-        for id in ["validator", "focus_keeper"] {
+        // Ключи — локальные пути внутри команды (26.11.2026, Паттерн B): плоский
+        // ключ не найдётся никогда, агент остался бы без грамматики сигнала.
+        for id in ["backend/validator", "archive/focus_keeper"] {
             let a = agents.get(id).unwrap_or_else(|| panic!("агент {id} в контракте"));
             assert!(a.get("key").is_some(), "{id}: key");
             assert!(a.get("value").is_some(), "{id}: value");
+        }
+    }
+
+    /// Ключи `agents` в `root.schema.json` обязаны быть `local_id()` живых агентов.
+    ///
+    /// Контракт ищется по локальному пути внутри команды
+    /// (`orchestrator/mod.rs` → `load_signal_contract(&signals_dir, agent.local_id())`).
+    /// Если ключ разойдётся с раскладкой файлов, контракт не найдётся НИКОГДА —
+    /// и агент молча работал бы без структурного принуждения к форме ответа
+    /// (ровно тот отказ, который грамматика обязана делать невозможным).
+    #[test]
+    fn signal_schema_keys_are_live_agent_local_ids() {
+        use crate::domain::agent_manager::load_agents;
+
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("корень проекта")
+            .join("agents");
+        let agents = load_agents(&root).expect("агенты прочитаны");
+        let contracts = load_all_signal_contracts(&root.join("psychotherapist").join("signals"));
+        assert!(!contracts.is_empty(), "схема сигналов психотерапевта не прочитана");
+
+        for key in contracts.keys() {
+            let full = format!("psychotherapist/{}", key);
+            let found = agents.iter().find(|a| a.id == full).unwrap_or_else(|| {
+                panic!(
+                    "у ключа сигнала '{}' нет агента '{}' — контракт никогда не будет найден \
+                     (load_signal_contract ищет по local_id)",
+                    key, full
+                )
+            });
+            assert_eq!(
+                found.local_id(),
+                key,
+                "ключ '{}' не совпадает с local_id агента '{}'",
+                key,
+                found.id
+            );
         }
     }
 
@@ -1779,7 +1819,7 @@ mod tests {
     fn load_contract_pulls_key_and_value() {
         let path = schema_path();
         let dir = path.parent().expect("папка signals");
-        let c = load_signal_contract(dir, "validator").expect("контракт валидатора");
+        let c = load_signal_contract(dir, "backend/validator").expect("контракт валидатора");
         assert_eq!(c.key, "validator_report");
         // Пары (план спеца 13.11.2026): канал решения — ЛИТЕРАЛ bool
         // (`eN`), текст — отдельная строка `eN_text` (minLength 0 —
@@ -2181,7 +2221,7 @@ mod tests {
         }
         // soma_translator исключён из контрактов 03.11.2026 (пользовательский
         // агент): enum-пример — focus_keeper.
-        for id in ["focus_keeper"] {
+        for id in ["archive/focus_keeper"] {
             let contract = map.get(id).unwrap_or_else(|| panic!("контракт {} не найден", id));
             assert_eq!(
                 drafts_count_of(&build_signal_envelope_grammar(contract)),
@@ -2192,7 +2232,7 @@ mod tests {
         }
         // Якорный режим (решение владельца 01.11.2026): валидатор обязан иметь
         // 9 слотов с метками Element 1..9, а не 9 свободных черновиков.
-        let validator = map.get("validator").expect("контракт validator");
+        let validator = map.get("backend/validator").expect("контракт backend/validator");
         let validator_grammar = build_signal_envelope_grammar(validator);
         for i in 1..=9 {
             assert!(
@@ -2251,9 +2291,9 @@ mod tests {
             .join("psychotherapist")
             .join("signals");
         let layer_keys: &[(&str, &[&str])] = &[
-            ("validator_surface", &["e1", "e2", "e6", "e7"]),
-            ("validator_facade", &["e4", "e5", "e8", "e9"]),
-            ("validator_core", &["e3"]),
+            ("experiments/validator_surface", &["e1", "e2", "e6", "e7"]),
+            ("experiments/validator_facade", &["e4", "e5", "e8", "e9"]),
+            ("experiments/validator_core", &["e3"]),
         ];
         for (id, keys) in layer_keys {
             let contract = load_signal_contract(&dir, id).expect("контракт прочитан");
@@ -2271,7 +2311,7 @@ mod tests {
         }
         // Конвертная ветка жива для не-e контрактов — там прежний литерал `"\"value\""`.
         // (soma_translator исключён из контрактов 03.11.2026; enum-пример — focus_keeper.)
-        let enum_contract = load_signal_contract(&dir, "focus_keeper").expect("контракт прочитан");
+        let enum_contract = load_signal_contract(&dir, "archive/focus_keeper").expect("контракт прочитан");
         let enum_grammar = build_signal_envelope_grammar(&enum_contract);
         assert!(
             enum_grammar.contains(
@@ -2299,10 +2339,10 @@ mod tests {
         let agents = crate::domain::agent_manager::load_agents(&agents_dir).expect("агенты прочитаны");
         // Плоская форма — та же граница из конфига, что и у слоёв: иначе плоский
         // вариант мерился бы на другом бюджете и сравнение было бы бессмысленным.
-        for id in ["validator_surface", "validator_facade", "validator_core", "validator_flat"] {
+        for id in ["experiments/validator_surface", "experiments/validator_facade", "experiments/validator_core", "experiments/validator_flat"] {
             let agent = agents
                 .iter()
-                .find(|agent| agent.id == id)
+                .find(|agent| agent.local_id() == id)
                 .unwrap_or_else(|| panic!("агент слоя {} не найден", id));
             assert_eq!(
                 agent.think_budget_chars, None,
@@ -2317,7 +2357,7 @@ mod tests {
         // от бюджета генерации выдало бы ~142 символа и резало все тела).
         let plain = agents
             .iter()
-            .find(|agent| agent.id == "validator")
+            .find(|agent| agent.id == "psychotherapist/backend/validator")
             .expect("плоский валидатор не найден");
         assert_eq!(
             plain.think_budget_chars, Some(350),
@@ -2350,12 +2390,12 @@ mod tests {
         // то, что каждый объявленный агент читается. Счётчик «5 сигналов» устарел
         // с появлением трёх слоёв воронки и молчал бы о битом контракте.
         for agent in [
-            "validator",
-            "validator_flat",
-            "validator_surface",
-            "validator_facade",
-            "validator_core",
-            "focus_keeper",
+            "backend/validator",
+            "experiments/validator_flat",
+            "experiments/validator_surface",
+            "experiments/validator_facade",
+            "experiments/validator_core",
+            "archive/focus_keeper",
             // soma_translator исключён 03.11.2026: пользовательский агент
             // (расшифровка в чат), рукость — факт handedness, не сигнал.
             // destructor_detector исключён 11.11.2026: архивный агент, контракт
@@ -2621,7 +2661,7 @@ mod tests {
     fn hybrid_grammar_for_validator_contract() {
         let path = schema_path();
         let dir = path.parent().expect("папка signals");
-        let c = load_signal_contract(dir, "validator").expect("контракт валидатора");
+        let c = load_signal_contract(dir, "backend/validator").expect("контракт валидатора");
         let grammar = build_signal_envelope_grammar(&c);
         // Все 9 элементов должны быть в грамматике
         for i in 1..=9 {
@@ -2639,7 +2679,7 @@ mod tests {
     fn validator_grammar_defines_bool_rule() {
         let path = schema_path();
         let dir = path.parent().expect("папка signals");
-        let c = load_signal_contract(dir, "validator").expect("контракт валидатора");
+        let c = load_signal_contract(dir, "backend/validator").expect("контракт валидатора");
         let grammar = build_signal_envelope_grammar(&c);
         // Правило `bool` ДОЛЖНО быть определено (а не только json-bool)
         assert!(
@@ -3053,7 +3093,7 @@ mod tests {
     fn contract_envelope_tokens_scales_with_verdict_texts() {
         let path = schema_path();
         let dir = path.parent().expect("папка signals");
-        let validator = load_signal_contract(dir, "validator").expect("контракт валидатора");
+        let validator = load_signal_contract(dir, "backend/validator").expect("контракт валидатора");
         let reserve = contract_envelope_tokens(&validator.value_schema);
         assert!(
             reserve > crate::infra::ENVELOPE_TOKENS,
@@ -3177,7 +3217,7 @@ mod tests {
     fn validator_contract_builds_pair_slot_grammar() {
         let path = schema_path();
         let dir = path.parent().expect("папка signals");
-        let c = load_signal_contract(dir, "validator").expect("контракт валидатора");
+        let c = load_signal_contract(dir, "backend/validator").expect("контракт валидатора");
         let grammar = build_signal_envelope_grammar(&c);
 
         // Дум-слоты-пары: bool-канал решения + текст с потолком схемы.

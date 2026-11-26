@@ -705,8 +705,8 @@ pub fn get_prompt_preview(
     // Системный промпт: либо конкретного .md-агента, либо — в режиме графа —
     // самого «тяжёлого» агента графа (worst-case для оценки VRAM).
     let (mut system_prompt, uses_image_selection, receives_bundle_marker) =
-        match agents.iter().find(|a| a.id == agent_id) {
-            Some(agent) => {
+        match crate::domain::agent_manager::resolve_agent(agents, None, &agent_id) {
+            Ok(agent) => {
                 let mut tools = crate::domain::builtin_tools();
                 tools.extend(crate::infra::image_tool_schemas(&agent.tools));
                 tools.extend(crate::infra::video_tool_schemas(&agent.tools));
@@ -727,21 +727,32 @@ pub fn get_prompt_preview(
                     crate::domain::agent_receives_bundle_marker(agent);
                 (prompt, uses_image_selection, receives_bundle_marker)
             }
-            None => {
-                let wf = crate::domain::find_workflow_by_stem(&catalog.workflows, &agent_id)
+            Err(_) => {
+                // Не .md-агент — возможно, это ID графа (канонический путь без .yaml).
+                let wf = crate::domain::workflow_engine::parser::resolve_workflow(&catalog.workflows, &agent_id)
                     .ok_or("Entry point не найден: нет ни .md агента, ни workflow с таким ID")?;
                 let (prompt, _) = crate::domain::build_worst_agent_prompt(agents, wf, &history);
                 let uses_image_selection = wf.nodes.iter().any(|node| {
-                    node.agent.as_deref().and_then(|agent_id| {
-                        agents.iter().find(|agent| agent.id == agent_id)
-                    })
-                    .is_some_and(crate::domain::agent_consumes_image_catalog)
+                    node.agent
+                        .as_deref()
+                        .and_then(|aid| {
+                            crate::domain::workflow_engine::parser::resolve_agent_in_workflow(
+                                agents, wf, aid,
+                            )
+                            .ok()
+                        })
+                        .is_some_and(crate::domain::agent_consumes_image_catalog)
                 });
                 let receives_bundle_marker = wf.nodes.iter().any(|node| {
-                    node.agent.as_deref().and_then(|agent_id| {
-                        agents.iter().find(|agent| agent.id == agent_id)
-                    })
-                    .is_some_and(crate::domain::agent_receives_bundle_marker)
+                    node.agent
+                        .as_deref()
+                        .and_then(|aid| {
+                            crate::domain::workflow_engine::parser::resolve_agent_in_workflow(
+                                agents, wf, aid,
+                            )
+                            .ok()
+                        })
+                        .is_some_and(crate::domain::agent_receives_bundle_marker)
                 });
                 (prompt, uses_image_selection, receives_bundle_marker)
             }
