@@ -8,6 +8,7 @@ import { showToast } from "../ui";
 import { setTelemetryEnabled, trackError } from "../telemetry";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { CLOUD_ROUTER_PREFIXES, isCloudModelPath } from "../utils";
+import { resolveVisibilityAgainstCatalog } from "../utils/agent-visibility";
 import { getActiveChatController } from "./tabs";
 
 export interface SettingsElements {
@@ -363,11 +364,48 @@ export class SettingsController {
       // «агент не найден». Сбрасываем на «не выбран» и честно пишем в лог.
       let resolved: string | null = lastAgent ?? null;
       if (resolved && !entries.some((e: any) => e.id === resolved)) {
-        logFront(`[settings] сохранённый агент '${resolved}' не найден среди ${entries.length} — выбор сброшен`);
-        resolved = null;
-        await invoke("set_config_value", { key: "last_agent", value: "" }).catch(() => {});
+        const migrated = resolveVisibilityAgainstCatalog([resolved], entries);
+        if (migrated.resolved.length === 1) {
+          // Старый плоский id однозначно соответствует одному агенту — это прообраз
+          // миграции, а не догадка. Переписываем конфиг: выбор пользователя не теряется.
+          resolved = migrated.resolved[0];
+          logFront(
+            `[settings] сохранённый агент '${migrated.migrated[0].from}' мигрирован в '${resolved}'`,
+          );
+          await invoke("set_config_value", { key: "last_agent", value: resolved }).catch(() => {});
+        } else {
+          logFront(`[settings] сохранённый агент '${resolved}' не найден среди ${entries.length} — выбор сброшен`);
+          resolved = null;
+          await invoke("set_config_value", { key: "last_agent", value: "" }).catch(() => {});
+        }
       }
       store.lastAgent = resolved;
+
+      // Список агентов в чате — та же миграция. До 26.11.2026 конфиг хранил
+      // file_stem, и после перехода на канонические ID все записи выглядели
+      // «несуществующими»: список пуст, а счётчик показывал длину конфига.
+      // Приводим к каталогу и пишем обратно только если что-то реально изменилось.
+      const visibility = resolveVisibilityAgainstCatalog(store.agentVisibility, entries);
+      if (visibility.migrated.length) {
+        logFront(
+          `[settings] agent_visibility: мигрировано ${visibility.migrated.length} устаревших id ` +
+            `(${visibility.migrated.map(m => `${m.from} → ${m.to}`).join(", ")})`,
+        );
+      }
+      if (visibility.unresolved.length) {
+        logFront(
+          `[settings] agent_visibility: нет однозначного соответствия для ` +
+            `${visibility.unresolved.length} id: ${visibility.unresolved.join(", ")}`,
+        );
+      }
+      store.agentVisibility = visibility.resolved;
+      if (visibility.migrated.length || visibility.unresolved.length) {
+        await invoke("set_config_value", {
+          key: "agent_visibility",
+          value: visibility.resolved,
+        }).catch(() => {});
+      }
+
       store.agentsReady = true;
       bus.emit("model-catalog-changed");
     } catch(e) { void trackError("settings.loadAgents", e); }

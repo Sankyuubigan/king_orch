@@ -159,6 +159,7 @@ async function initApp() {
     selectedTitle: $<HTMLElement>("agent-picker-selected-title"),
     selectedList: $<HTMLUListElement>("agent-picker-selected-list"),
     selectedEmpty: $<HTMLElement>("agent-picker-selected-empty"),
+    selectedStale: $<HTMLElement>("agent-picker-selected-stale"),
     clearBtn: $<HTMLButtonElement>("agent-picker-clear"),
     search: $<HTMLInputElement>("agent-picker-search"),
     addGraphsBtn: $<HTMLButtonElement>("agent-picker-add-graphs"),

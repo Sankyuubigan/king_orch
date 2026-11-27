@@ -11,6 +11,8 @@ export interface AgentPickerElements {
   selectedTitle: HTMLElement;
   selectedList: HTMLUListElement;
   selectedEmpty: HTMLElement;
+  /** Честное сообщение для случая «в конфиге id есть, в каталоге их нет». */
+  selectedStale: HTMLElement;
   clearBtn: HTMLButtonElement;
   search: HTMLInputElement;
   addGraphsBtn: HTMLButtonElement;
@@ -138,8 +140,19 @@ export class AgentPickerController {
       .map(id => store.agents.find(a => a.id === id))
       .filter((a): a is AgentEntry => Boolean(a));
 
-    this.el.selectedTitle.textContent = `В списке чата (${store.agentVisibility.length})`;
-    this.el.selectedEmpty.hidden = entries.length > 0;
+    // Счётчик — по ФАКТИЧЕСКИ отрисованным записям, а не по длине конфига.
+    // Длина конфига считала и те id, которых в каталоге нет: пользователь видел
+    // «(13)» рядом с пустым списком. Расхождение показываем честно, а не прячем.
+    const missingCount = store.agentVisibility.length - entries.length;
+    this.el.selectedTitle.textContent =
+      missingCount > 0
+        ? `В списке чата (${entries.length}) · не найдено в каталоге: ${missingCount}`
+        : `В списке чата (${entries.length})`;
+    // Два разных пустых состояния: «пользователь ничего не выбрал» и «выбрано, но
+    // не нашлось». Слить их в одно — значит соврать про причину пустоты.
+    const catalogLoaded = store.agentsReady;
+    this.el.selectedEmpty.hidden = entries.length > 0 || missingCount > 0;
+    this.el.selectedStale.hidden = !(catalogLoaded && entries.length === 0 && missingCount > 0);
 
     entries.forEach((entry, index) => {
       const item = document.createElement("li");

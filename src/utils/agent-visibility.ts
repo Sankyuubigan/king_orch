@@ -14,6 +14,86 @@ import { store } from "../store";
  * Один модуль, две функции — но не два предиката для одного и того же решения.
  */
 
+/**
+ * Результат приведения `agent_visibility` к текущему каталогу.
+ *
+ * Разделение на `resolved` и `unresolved` — не удобство, а требование честности:
+ * id, для которого нет РОВНО одного кандидата, нельзя «починить» догадкой.
+ * Такой id остаётся как есть, попадает в `unresolved` и называется пользователю.
+ */
+export interface VisibilityResolution {
+  /** Канонические id в исходном порядке (мигрированные + уже валидные). */
+  resolved: string[];
+  /** id, для которых не нашлось ровно одного кандидата — НЕ угадываем. */
+  unresolved: string[];
+  /** Переименования, которые были сделаны (нужно ли писать конфиг). */
+  migrated: Array<{ from: string; to: string }>;
+}
+
+/**
+ * Привести сохранённый список видимости к каноническим ID текущего каталога.
+ *
+ * ## Зачем
+ *
+ * До 26.11.2026 `agent.id` был `file_stem` (`main_conversation_flow`,
+ * `soma_translator`). После перехода на канонические ID (`путь от agents/`)
+ * старый конфиг пользователя перестал совпадать с каталогом: список видимости
+ * выглядел «пустым», хотя в конфиге лежало 13 записей. Это регресс миграции,
+ * и лечится он миграцией данных, а не молчаливым отбрасыванием.
+ *
+ * ## Почему суффикс, а не последний сегмент
+ *
+ * Старый ID — это ровно `file_stem`, то есть хвост канонического пути. Значит
+ * `e.id === legacy || e.id.endsWith("/" + legacy)` — это поиск прообраза
+ * миграции, а не эвристика «похожее имя». Суффикс строже последнего сегмента:
+ * legacy `frontend/shadow_worker` найдёт `psychotherapist/frontend/shadow_worker`
+ * и не спутает его с одноимённым агентом другой команды.
+ *
+ * ## Почему требуется единственность
+ *
+ * Два кандидата означают, что выбор неоднозначен. Выбрать «первого» — это тот
+ * самый тихий победитель, из-за которого и затевалась миграция. Поэтому
+ * неоднозначный и несуществующий id попадают в `unresolved`, а не теряются.
+ */
+export function resolveVisibilityAgainstCatalog(
+  ids: readonly string[],
+  entries: readonly AgentEntry[],
+): VisibilityResolution {
+  const known = new Set(entries.map(e => e.id));
+  const resolved: string[] = [];
+  const unresolved: string[] = [];
+  const migrated: Array<{ from: string; to: string }> = [];
+  const taken = new Set<string>();
+
+  for (const raw of ids) {
+    const id = raw.trim();
+    if (!id) continue;
+
+    let target: string | null = null;
+    if (known.has(id)) {
+      target = id;
+    } else {
+      const suffix = `/${id}`;
+      const candidates = entries.filter(e => e.id.endsWith(suffix)).map(e => e.id);
+      if (candidates.length === 1) {
+        target = candidates[0];
+        migrated.push({ from: id, to: target });
+      }
+    }
+
+    if (!target) {
+      unresolved.push(id);
+      continue;
+    }
+    // Два старых id могли сойтись в один канонический — дубль в списке не нужен.
+    if (taken.has(target)) continue;
+    taken.add(target);
+    resolved.push(target);
+  }
+
+  return { resolved, unresolved, migrated };
+}
+
 /** Запись каталога по id, если она ещё существует на диске. */
 export function findAgentEntry(id: string): AgentEntry | undefined {
   return store.agents.find(a => a.id === id);
