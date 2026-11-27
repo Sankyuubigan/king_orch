@@ -28,6 +28,18 @@ export interface VisibilityResolution {
   unresolved: string[];
   /** Переименования, которые были сделаны (нужно ли писать конфиг). */
   migrated: Array<{ from: string; to: string }>;
+  /**
+   * Полный список для ЗАПИСИ В КОНФИГ: исходный порядок, где найденные id
+   * заменены каноническими, а ненайденные ОСТАВЛЕНЫ как есть.
+   *
+   * Зачем отдельно от `resolved`: `resolved` — это то, что можно показать
+   * сейчас, а конфиг — долговременное хранилище выбора пользователя. Писать в
+   * конфиг только `resolved` значит НАВСЕГДА удалять id, которые не удалось
+   * сопоставить в данный момент (агент временно отсутствует, каталог не
+   * загрузился). Так `basic` и `media-flow` были потеряны 27.11.26 — и вернуть
+   * их было уже нечем: в конфиге от них не осталось следа.
+   */
+  preserved: string[];
 }
 
 /**
@@ -63,6 +75,7 @@ export function resolveVisibilityAgainstCatalog(
   const resolved: string[] = [];
   const unresolved: string[] = [];
   const migrated: Array<{ from: string; to: string }> = [];
+  const preserved: string[] = [];
   const taken = new Set<string>();
 
   for (const raw of ids) {
@@ -83,15 +96,19 @@ export function resolveVisibilityAgainstCatalog(
 
     if (!target) {
       unresolved.push(id);
+      // Не нашли — но выбор пользователя не наш, чтобы его стирать. Оставляем
+      // в конфиге: каталог мог не загрузиться, а агент — вернуться позже.
+      preserved.push(id);
       continue;
     }
     // Два старых id могли сойтись в один канонический — дубль в списке не нужен.
     if (taken.has(target)) continue;
     taken.add(target);
     resolved.push(target);
+    preserved.push(target);
   }
 
-  return { resolved, unresolved, migrated };
+  return { resolved, unresolved, migrated, preserved };
 }
 
 /** Запись каталога по id, если она ещё существует на диске. */

@@ -36,6 +36,7 @@ export {
   visibleAgentEntries,
   agentOptionLabel,
   getSelectedAgentName,
+  resolveVisibilityAgainstCatalog,
 } from './agent-visibility'
 
 export function formatBytes(bytes: number): string {

@@ -357,6 +357,22 @@ export class SettingsController {
     try {
       const entries: any[] = await invoke("get_agents");
       store.agents = entries;
+      // ПУСТОЙ каталог — это НЕ «у пользователя ничего не выбрано», это «ресурсы
+      // не доставлены / сканер ничего не нашёл». Резолвить и тем более ПИСАТЬ
+      // конфиг по такому каталогу нельзя: 27.11.26 релиз 26.11.13 приехал без
+      // ресурсов, `get_agents` вернул [], и миграция записала `agent_visibility: []`
+      // — стерев выбор пользователя безвозвратно (вернуть его было нечем, след
+      // в конфиге исчез). Пропускаем миграцию целиком: конфиг остаётся нетронутым,
+      // а следующий запуск с рабочими ресурсами приведёт его к каталогу.
+      if (entries.length === 0) {
+        logFront(
+          `[settings] каталог агентов пуст — миграция выбора пропущена, ` +
+            `конфиг оставлен как есть (${store.agentVisibility.length} id)`,
+        );
+        store.agentsReady = true;
+        bus.emit("model-catalog-changed");
+        return;
+      }
       // `last_agent` из конфига мог остаться от прошлой версии: агент переименован,
       // переехал в другую папку или удалён. Канонический ID теперь = путь внутри
       // команды, поэтому старый file_stem («shadow_worker») уже ни с чем не совпадёт.
@@ -398,11 +414,20 @@ export class SettingsController {
             `${visibility.unresolved.length} id: ${visibility.unresolved.join(", ")}`,
         );
       }
-      store.agentVisibility = visibility.resolved;
+      // Показываем только найденное, а храним ВЕСЬ список вместе с ненайденными.
+      //
+      // Store обязан совпадать с конфигом, иначе появляется второй источник правды:
+      // `agent-picker.persist()` пишет в конфиг именно `store.agentVisibility`, так
+      // что «store = только найденное» означало бы, что первое же действие в
+      // Настройках (добавить/убрать/переместить) снова стирает ненайденные id —
+      // ровно тот дефект, который чиним. «Что показать» — производное
+      // представление (`visibleAgentEntries` фильтрует по каталогу при чтении),
+      // а не отдельная копия состояния.
+      store.agentVisibility = visibility.preserved;
       if (visibility.migrated.length || visibility.unresolved.length) {
         await invoke("set_config_value", {
           key: "agent_visibility",
-          value: visibility.resolved,
+          value: visibility.preserved,
         }).catch(() => {});
       }
 

@@ -8,7 +8,7 @@ import type { Role, MessageMenuCallbacks, ImageAttachmentCallbacks, ProcessingIn
 import type { ThoughtMenuCallbacks, Attachment, AttachmentMetadata, ChatMessage, DragDropPayload } from "../types";
 import { saveSession, loadSession, countTokens } from "../services";
 import { getEngineStatus, getMmprojPath, ensureMmproj, getModelCapabilities, getModelsCatalog, getModelContextSize, estimatePromptMemory, type CatalogEntry } from "@my-tauri-plugins/plugin-llama-engine";
-import { renderMarkdown, stripStreamArtifacts, extractChannelThought, visibleStreamText, CLOUD_ROUTER_PREFIXES, isCloudModelPath, fillModelSelect, syncModelSelectTitle, fillAgentSelect, getAgentDisplayName, getSelectedAgentName, isGraphAgent, hasFusableGroups } from "../utils";
+import { renderMarkdown, stripStreamArtifacts, extractChannelThought, visibleStreamText, CLOUD_ROUTER_PREFIXES, isCloudModelPath, fillModelSelect, syncModelSelectTitle, fillAgentSelect, getAgentDisplayName, getSelectedAgentName, isGraphAgent, hasFusableGroups, resolveVisibilityAgainstCatalog } from "../utils";
 import { logFront } from "@my-tauri-plugins/plugin-logs";
 import { trackError, trackEvent } from "../telemetry";
 
@@ -1412,6 +1412,50 @@ export class ChatController {
     return Array.from(select.options).some(o => o.value === value);
   }
 
+  /**
+   * Восстановить выбор агента сессии в `<select>`.
+   *
+   * Три РАЗНЫХ состояния, которые нельзя сливать в одно (иначе пользователю
+   * сообщается ложная причина):
+   *  1. id сразу есть среди опций — восстанавливаем как есть;
+   *  2. id устаревший (`file_stem` вместо пути от `agents/`) — резолвим тем же
+   *     SSOT-резолвером, что и `agent_visibility`, и выбираем канонический;
+   *  3. агента нет среди опций и резолв не помог — каталог ещё грузится (ждём
+   *     `model-catalog-changed`) либо загружен (тогда ждать нечего).
+   *
+   * В состоянии 3 при загруженном каталоге `pendingSessionAgent` НЕ ставится:
+   * он не сбрасывается сам, а `sendReadiness()` из-за него отдаёт
+   * «Восстановление модели или агента сессии…» — то есть кнопка отправки
+   * заблокирована НАВСЕГДА. Именно так чат переставал работать в сессиях,
+   * сохранённых до перехода на канонические ID.
+   *
+   * Причина называется честно: «есть в каталоге, но не выбран в списке чата» и
+   * «нет в каталоге вовсе» требуют РАЗНЫХ действий пользователя.
+   */
+  private restoreSessionAgent(rawAgent: string): void {
+    if (this.hasOption(this.el.agentSelect, rawAgent)) {
+      this.el.agentSelect.value = rawAgent;
+      return;
+    }
+    const { resolved } = resolveVisibilityAgainstCatalog([rawAgent], store.agents);
+    const target = resolved[0];
+    if (target && this.hasOption(this.el.agentSelect, target)) {
+      this.el.agentSelect.value = target;
+      return;
+    }
+    if (!store.agentsReady) {
+      // Каталог ещё грузится — резолвить не во что, ждём model-catalog-changed.
+      this.pendingSessionAgent = rawAgent;
+      return;
+    }
+    logFront(
+      target
+        ? `[chat] агент сессии '${rawAgent}' есть в каталоге, но не выбран в списке чата — ` +
+          `добавьте его в Настройках или выберите агента вручную`
+        : `[chat] агент сессии '${rawAgent}' не найден в каталоге — выберите агента вручную`,
+    );
+  }
+
   private restoreSessionSelection(model?: string, agent?: string) {
     this.pendingSessionModel = null;
     this.pendingSessionAgent = null;
@@ -1425,13 +1469,7 @@ export class ChatController {
         this.pendingSessionModel = model;
       }
     }
-    if (agent) {
-      if (this.hasOption(this.el.agentSelect, agent)) {
-        this.el.agentSelect.value = agent;
-      } else {
-        this.pendingSessionAgent = agent;
-      }
-    }
+    if (agent) this.restoreSessionAgent(agent);
   }
 
   private applyPendingSessionSelection(): boolean {
@@ -1445,9 +1483,11 @@ export class ChatController {
       this.pendingSessionModel = null;
       modelRestored = true;
     }
-    if (agent && this.hasOption(this.el.agentSelect, agent)) {
-      this.el.agentSelect.value = agent;
+    if (agent) {
+      // Тот же путь, что и в restoreSessionSelection: сюда попадают сессии, чей
+      // agent не нашёлся на момент восстановления, а каталог догрузился позже.
       this.pendingSessionAgent = null;
+      this.restoreSessionAgent(agent);
     }
     return modelRestored;
   }
